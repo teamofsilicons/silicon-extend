@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use bridge_protocol::{ApiError, ErrorCode};
 
 #[derive(Debug)]
-pub struct AppError(pub ApiError);
+pub struct AppError(pub Box<ApiError>);
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -17,7 +17,7 @@ impl std::fmt::Display for AppError {
 
 impl AppError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self(ApiError::new(code, message))
+        Self(Box::new(ApiError::new(code, message)))
     }
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.0.hint = Some(hint.into());
@@ -63,7 +63,7 @@ tokio::task_local! {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let mut err = self.0;
+        let mut err = *self.0;
         if err.request_id.is_empty() {
             err.request_id = REQUEST_ID.try_with(Clone::clone).unwrap_or_default();
         }

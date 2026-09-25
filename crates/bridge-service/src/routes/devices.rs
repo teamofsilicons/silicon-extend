@@ -491,11 +491,10 @@ pub async fn access_revoke(State(state): State<Shared>, auth: Auth, Path((device
     if removed.rows_affected() > 0 {
         domain::log(&state, &auth.world, &device_id, &auth.p.member, "access_revoked", None, serde_json::json!({"silicon_id": silicon_id})).await;
     }
-    if d.in_use_silicon.as_deref() == Some(silicon_id.as_str()) {
-        if let Some(sid) = &d.in_use_session {
+    if d.in_use_silicon.as_deref() == Some(silicon_id.as_str())
+        && let Some(sid) = &d.in_use_session {
             domain::end_session(&state, &auth.world, sid, EndReason::AccessRemoved, &auth.p.member).await?;
         }
-    }
     Ok(no_content())
 }
 

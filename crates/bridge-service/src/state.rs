@@ -201,11 +201,10 @@ impl FromRequestParts<Shared> for Auth {
                 .hint("Sign in with `bridge login <slt>` (CLI) or at bridge.teamofsilicons.com, then send Authorization: Bearer <token>.")
         })?;
         let team = header(parts, TEAM_HEADER).map(str::trim).filter(|s| !s.is_empty());
-        if let Some(t) = team {
-            if t.len() > 128 || !t.bytes().all(|b| b.is_ascii_graphic()) {
+        if let Some(t) = team
+            && (t.len() > 128 || !t.bytes().all(|b| b.is_ascii_graphic())) {
                 return Err(AppError::invalid("X-Org-ID must be one team handle."));
             }
-        }
         let p = state.authorize(token, team, sel.as_ref()).await?;
         Ok(Self { world, sel, p })
     }

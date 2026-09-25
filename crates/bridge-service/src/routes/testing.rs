@@ -146,14 +146,13 @@ pub async fn apply(
             .bind(env)
             .fetch_optional(&state.pool)
             .await?;
-    if let Some((_, rev, generation)) = &existing {
-        if op.environment_revision < *rev || op.generation < *generation {
+    if let Some((_, rev, generation)) = &existing
+        && (op.environment_revision < *rev || op.generation < *generation) {
             return Err(AppError::new(ErrorCode::Conflict, format!(
                 "Stale instruction: revision {} / generation {} is older than the environment's {rev} / {generation}.",
                 op.environment_revision, op.generation
             )));
         }
-    }
     let world = World::test(env);
     let target = match op.action.as_str() {
         "prepare" => {

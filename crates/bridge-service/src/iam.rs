@@ -585,11 +585,10 @@ impl Iam for LocalIam {
 
     async fn logout(&self, token: &str, _sel: Option<&TestingSelection>) -> AppResult<()> {
         let mut t = self.tokens.write().await;
-        if let Some(found) = t.remove(token) {
-            if found.refresh {
+        if let Some(found) = t.remove(token)
+            && found.refresh {
                 t.retain(|_, x| x.member != found.member);
             }
-        }
         Ok(())
     }
 

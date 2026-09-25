@@ -1,5 +1,9 @@
 //! The Silicon Bridge service: pairing, access, sessions and the relay between Silicons and devices.
 
+// Row tuples from sqlx and handlers that thread world/principal/selection through are clearer
+// inline than behind one-off aliases or parameter structs.
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 /// Formats a query whose only dynamic parts are schema-qualified table names built by
 /// [`db::World::t`] (from UUIDs, never from caller input) and fixed column lists.
 macro_rules! sql {

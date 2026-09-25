@@ -121,11 +121,10 @@ impl Hub {
     /// Delivers a device's answer. Answers nobody waits for are dropped.
     pub async fn resolve(&self, route: &DeviceKey, outcome: CommandOutcome) {
         let mut pending = self.pending.lock().await;
-        if pending.get(&outcome.id).is_some_and(|(k, _)| k == route) {
-            if let Some((_, tx)) = pending.remove(&outcome.id) {
+        if pending.get(&outcome.id).is_some_and(|(k, _)| k == route)
+            && let Some((_, tx)) = pending.remove(&outcome.id) {
                 let _ = tx.send(outcome);
             }
-        }
     }
 
     /// Serialises commands within one session: they run one at a time, in order.

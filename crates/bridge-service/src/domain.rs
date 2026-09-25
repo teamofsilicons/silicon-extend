@@ -333,7 +333,7 @@ pub async fn end_session(state: &AppState, world: &World, session_id: &str, reas
     };
     state.session_principals.write().await.remove(&(world.schema.clone(), session_id.to_owned()));
     if let Some(d) = load_device(state, world, &row.device_id).await? {
-        let target = d.host_device_id.as_ref().map(|_| d.device_id.parse().ok()).flatten();
+        let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
         let _ = state
             .hub
             .send(&d.route(world), ServiceFrame::SessionEnded { target, session_id: row.session_id.parse().unwrap_or_else(|_| bridge_protocol::SessionId::from_parts(0, 3)), reason })

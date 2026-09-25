@@ -52,7 +52,7 @@ impl From<silicon_bridge_client::Error> for CliError {
     fn from(e: silicon_bridge_client::Error) -> Self {
         match e {
             silicon_bridge_client::Error::Api { error, .. } => {
-                let ApiError { code, message, hint, request_id, details, .. } = error;
+                let ApiError { code, message, hint, request_id, details, .. } = *error;
                 Self { code, message, hint, request_id: Some(request_id).filter(|r| !r.is_empty()), details }
             }
             silicon_bridge_client::Error::Transport { url, source } => Self::new(ErrorCode::ServiceUnavailable, format!("Could not reach Silicon Bridge at {url}: {source}"))
@@ -232,12 +232,11 @@ impl Ctx {
     async fn refresh(&mut self, client: &Client) -> R<Auth> {
         let _lock = store::Lock::acquire("refresh");
         // Another process may have refreshed while we waited.
-        if let Some(disk) = store::load_auth(&self.plane) {
-            if self.auth.as_ref().is_some_and(|a| a.access_token != disk.access_token) {
+        if let Some(disk) = store::load_auth(&self.plane)
+            && self.auth.as_ref().is_some_and(|a| a.access_token != disk.access_token) {
                 self.auth = Some(disk.clone());
                 return Ok(disk);
             }
-        }
         let auth = self.require_auth()?;
         let key = format!("refresh-{}", &bridge_protocol::ids::secret_digest(&auth.refresh_token)[..32]);
         let s = client.refresh(&auth.refresh_token, &key).await.map_err(|e| {
@@ -346,7 +345,7 @@ async fn run(argv: Vec<String>) -> i32 {
         match store::load_test(id) {
             Ok(env) => {
                 test_name = env.name.clone();
-                plane = Plane::Test { id: id.clone(), secret: env.secret.clone(), name: env.name.clone() };
+                plane = Plane::Test { id: id.clone(), secret: env.secret.clone() };
             }
             Err(e) => {
                 let err = CliError::new(ErrorCode::TestingSecretInvalid, format!("{e:#}")).hint(format!("printf %s \"$TEST_APP_SECRET\" | bridge config test add {id}"));
@@ -1333,17 +1332,15 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
             _ => args.push(a),
         }
     }
-    if ttl.is_none() {
-        if let Some(d) = ctx.cfg.get("self_destruct") {
+    if ttl.is_none()
+        && let Some(d) = ctx.cfg.get("self_destruct") {
             ttl = Some(parse_ttl(d)?);
         }
-    }
-    if name == "screenshot" && !args.iter().any(|a| a == "--scale") {
-        if let Some(s) = ctx.cfg.get("screenshot_scale") {
+    if name == "screenshot" && !args.iter().any(|a| a == "--scale")
+        && let Some(s) = ctx.cfg.get("screenshot_scale") {
             args.push("--scale".into());
             args.push(s.clone());
         }
-    }
     // Scripts and media are read here, on the caller's machine, and sent along.
     let mut attachments = Vec::new();
     let reads_files = matches!(name, "replay" | "test" | "install" | "reinstall" | "display" | "batch");

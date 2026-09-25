@@ -90,7 +90,7 @@ pub struct Auth {
 #[derive(Debug, Clone)]
 pub enum Plane {
     Production,
-    Test { id: String, secret: String, name: Option<String> },
+    Test { id: String, secret: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

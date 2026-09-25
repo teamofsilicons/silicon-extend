@@ -128,13 +128,12 @@ async fn request_id_layer(req: Request, next: Next) -> Response {
 
 /// Checks a client's version pin, advertises the version, and counts usage for sunset decisions.
 async fn version_layer(State(state): State<Shared>, req: Request, next: Next) -> Response {
-    if let Some(pin) = req.headers().get(API_VERSION_HEADER).and_then(|v| v.to_str().ok()) {
-        if pin.trim() != API_VERSION.to_string() && req.uri().path().starts_with("/api/v1/") {
+    if let Some(pin) = req.headers().get(API_VERSION_HEADER).and_then(|v| v.to_str().ok())
+        && pin.trim() != API_VERSION.to_string() && req.uri().path().starts_with("/api/v1/") {
             return AppError::new(ErrorCode::ApiVersionMismatch, format!("The client pinned API version {pin}, but this path is version {API_VERSION}."))
                 .hint("Negotiate with GET /api/version and use the matching path.")
                 .into_response();
         }
-    }
     if req.uri().path().starts_with("/api/v1/") {
         let pool = state.pool.clone();
         tokio::spawn(async move {

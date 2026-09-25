@@ -136,13 +136,11 @@ async fn greet(state: &AppState, world: &World, device_id: &str) -> Vec<ServiceF
     let mut frames = Vec::new();
     let sel = test_selection(state, world).await;
     frames.push(ServiceFrame::Environment { environment: env_view(state, sel.as_ref(), world).await });
-    if let Ok(Some(d)) = domain::load_device(state, world, device_id).await {
-        if let (Some(sid), Some(si), Some(since)) = (&d.in_use_session, &d.in_use_silicon, d.in_use_since) {
-            if let Ok(session_id) = sid.parse() {
+    if let Ok(Some(d)) = domain::load_device(state, world, device_id).await
+        && let (Some(sid), Some(si), Some(since)) = (&d.in_use_session, &d.in_use_silicon, d.in_use_since)
+            && let Ok(session_id) = sid.parse() {
                 frames.push(ServiceFrame::SessionStarted { target: None, session_id, silicon_id: si.clone(), since });
             }
-        }
-    }
     // Hosted devices: re-announce each, with its running session.
     let hosted: Vec<DeviceRow> = sqlx::query_as(sql!("{} WHERE d.host_device_id = $1 AND d.removed_at IS NULL", domain::device_select(world)))
         .bind(device_id)
@@ -152,11 +150,10 @@ async fn greet(state: &AppState, world: &World, device_id: &str) -> Vec<ServiceF
     for h in hosted {
         let Ok(id) = h.device_id.parse() else { continue };
         frames.push(ServiceFrame::Attach { device_id: id, os: h.os(), name: h.name.clone(), address: h.address.clone(), removed: false });
-        if let (Some(sid), Some(si), Some(since)) = (&h.in_use_session, &h.in_use_silicon, h.in_use_since) {
-            if let Ok(session_id) = sid.parse() {
+        if let (Some(sid), Some(si), Some(since)) = (&h.in_use_session, &h.in_use_silicon, h.in_use_since)
+            && let Ok(session_id) = sid.parse() {
                 frames.push(ServiceFrame::SessionStarted { target: h.device_id.parse().ok(), session_id, silicon_id: si.clone(), since });
             }
-        }
     }
     frames
 }
@@ -300,11 +297,10 @@ async fn handle(state: &AppState, world: &World, device_id: &str, key: &(String,
             }
         }
         DeviceFrame::TakeoverDone => {
-            if let Ok(Some(d)) = domain::load_device(state, world, device_id).await {
-                if let Some(sid) = &d.in_use_session {
+            if let Ok(Some(d)) = domain::load_device(state, world, device_id).await
+                && let Some(sid) = &d.in_use_session {
                     let _ = super::sessions::release(state, world, sid, &owner(&d)).await;
                 }
-            }
         }
         DeviceFrame::Attached(a) => {
             let child = a.device_id.to_string();

@@ -34,7 +34,7 @@ pub const SUPPORTED_API_VERSIONS: &[u32] = &[API_VERSION];
 pub enum Error {
     /// Bridge answered with an error envelope.
     #[error("{} ({}): {}", .error.message, .error.code.as_str(), .error.hint.clone().unwrap_or_default())]
-    Api { status: u16, error: ApiError },
+    Api { status: u16, error: Box<ApiError> },
     /// The request never got a usable answer.
     #[error("could not reach Silicon Bridge at {url}: {source}")]
     Transport { url: String, source: reqwest::Error },
@@ -140,7 +140,7 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
     if !status.is_success() || v.get("type").and_then(|t| t.as_str()) == Some("error") {
         let error: ApiError = serde_json::from_value(v.get("data").cloned().unwrap_or_default())
             .map_err(|e| Error::Decode { status: status.as_u16(), detail: format!("error body: {e}") })?;
-        return Err(Error::Api { status: status.as_u16(), error });
+        return Err(Error::Api { status: status.as_u16(), error: Box::new(error) });
     }
     let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
     serde_json::from_value(data).map_err(|e| Error::Decode { status: status.as_u16(), detail: e.to_string() })

@@ -26,13 +26,12 @@ pub fn spawn(state: Shared) {
                 if let Err(e) = sessions(&state, &world).await {
                     tracing::warn!(world = %world.schema, error = %e, "session upkeep failed");
                 }
-                if n % 15 == 0 {
-                    if let Err(e) = slow(&state, &world).await {
+                if n.is_multiple_of(15)
+                    && let Err(e) = slow(&state, &world).await {
                         tracing::warn!(world = %world.schema, error = %e, "device upkeep failed");
                     }
-                }
             }
-            if n % 30 == 0 {
+            if n.is_multiple_of(30) {
                 let _ = sqlx::query(
                     "DELETE FROM bridge_global.enrollments
                      WHERE (paired_device_id IS NULL AND last_seen_at < now() - interval '1 hour')

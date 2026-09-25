@@ -335,7 +335,7 @@ async fn pairing_sessions_commands_and_files() {
     assert!(frames.iter().any(|f| matches!(f, ServiceFrame::Takeover { .. })));
     assert!(matches!(frames.last(), Some(ServiceFrame::Unpaired { reason: EndReason::DeviceRemoved })));
     // The credential no longer works.
-    assert!(env.client.device_self(&"bdc_".to_owned()).await.is_err());
+    assert!(env.client.device_self("bdc_").await.is_err());
 }
 
 #[tokio::test]

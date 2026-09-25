@@ -53,11 +53,10 @@ pub async fn report(State(state): State<Shared>, auth: Auth, headers: HeaderMap,
     if n == 0 || n > 60_000 {
         return Err(AppError::invalid(format!("A report message must be 1–60000 characters; it is {n}.")));
     }
-    if let Some(pr) = &input.pr {
-        if !(pr.starts_with("https://") || pr.starts_with("http://")) {
+    if let Some(pr) = &input.pr
+        && !(pr.starts_with("https://") || pr.starts_with("http://")) {
             return Err(AppError::invalid("--pr must be a link to the pull request, like https://github.com/teamofsilicons/silicon-bridge/pull/12."));
         }
-    }
     state.rate_limit(format!("report:{}", auth.p.id()), 10, Duration::from_secs(3600), "bug reports").await?;
     let hash = hash_json(&input);
     let st = state.clone();
