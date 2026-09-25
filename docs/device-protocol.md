@@ -114,6 +114,14 @@ takes them (see `vendor/agent-device/website/docs/docs/commands.md` and `underst
 `device_commands`). The list of names is `COMMANDS` in `capability.rs`. Refs like `@e2` come from the
 latest `snapshot` in the same session.
 
+### Attachments (files the caller sends with a command)
+
+A command may carry `attachments: [{"name","content_type","content_base64"}]` (a replay script, an
+APK to install, an image or video to show on a TV). Write each one into the command's scratch
+directory, then replace every argument of the form `attachment:<name>` with that file's local path
+before running the command. Example: `display show --image attachment:cat.png` with an attachment
+named `cat.png`.
+
 ### Files
 
 For each file a command produces, upload it before sending the `result`, using the next unused id
