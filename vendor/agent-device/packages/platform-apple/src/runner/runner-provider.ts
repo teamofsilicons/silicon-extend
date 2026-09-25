@@ -1,0 +1,159 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { AppleRunnerRequestOptions } from '@agent-device/contracts/apple-runner-request';
+import type { DeviceInfo } from '@agent-device/kernel/device';
+import type { Deadline } from './host.ts';
+import type { RunnerCommand } from './runner-contract.ts';
+import type { RunnerXctestrunArtifactState, RunnerXctestrunCacheKind } from './runner-xctestrun.ts';
+
+export type AppleRunnerCommandOptions = AppleRunnerRequestOptions & {
+  signal?: AbortSignal;
+  cleanStaleBundles?: boolean;
+  startupTimeoutMs?: number;
+  /**
+   * Restricts a command to the already-owned durable runner session. Exact
+   * cleanup must never start, adopt, or dispatch to a replacement session.
+   */
+  expectedRunnerSessionId?: string;
+};
+
+export type AppleRunnerLifecycleOptions = AppleRunnerCommandOptions & {
+  buildTimeoutMs?: number;
+  forceRunnerXctestrunRebuild?: boolean;
+  /** The session is started ahead of any command that needs it (a prewarm). */
+  speculative?: boolean;
+};
+
+export type AppleRunnerPrewarmOptions = AppleRunnerLifecycleOptions & {
+  /** A false value starts the session and lets its first consumer prove readiness. */
+  healthCheck?: boolean;
+};
+
+export type AppleRunnerPrepareOptions = AppleRunnerLifecycleOptions & {
+  healthTimeoutMs: number;
+  prepareDeadline?: Deadline;
+};
+
+export type AppleRunnerPrepareResult = {
+  runner: Record<string, unknown>;
+  cache?: RunnerXctestrunCacheKind;
+  artifact?: RunnerXctestrunArtifactState;
+  buildMs?: number;
+  connectMs: number;
+  healthCheckMs: number;
+  xctestrunPath?: string;
+  recoveryReason?: string;
+  failureReason?: string;
+};
+
+export type AppleRunnerCommandExecutor = (
+  device: DeviceInfo,
+  command: RunnerCommand,
+  options: AppleRunnerCommandOptions,
+) => Promise<Record<string, unknown>>;
+
+export type AppleRunnerPrepareExecutor = (
+  device: DeviceInfo,
+  options: AppleRunnerPrepareOptions,
+) => Promise<AppleRunnerPrepareResult>;
+
+export type AppleRunnerPrewarmExecutor = (
+  device: DeviceInfo,
+  options: AppleRunnerPrewarmOptions,
+) => Promise<void>;
+
+export type AppleRunnerProvider = {
+  /**
+   * Executes a runner protocol command for an already resolved Apple target.
+   * Scoped providers may adapt this call to a request-local transport.
+   */
+  runCommand: AppleRunnerCommandExecutor;
+  /**
+   * Proves a runner can answer a cheap command after any required local setup.
+   * Command-only providers may omit this and let callers fall back to uptime.
+   */
+  prepare?: AppleRunnerPrepareExecutor;
+  /**
+   * Starts runner setup opportunistically. This must remain best-effort.
+   */
+  prewarm?: AppleRunnerPrewarmExecutor;
+  /**
+   * Whether a command sent now is answered without waiting for a runner startup. Every provider
+   * states it: registered is not ready, and a provider with no startup cost says so explicitly.
+   */
+  hasLiveSession: (device: DeviceInfo) => boolean;
+  /**
+   * Stops a session this provider started speculatively (a prewarm no command has used yet).
+   * A provider that never starts speculative work has nothing to release and omits this.
+   */
+  releaseSpeculativeSession?: (device: DeviceInfo) => Promise<boolean>;
+};
+
+export type AppleRunnerProviderScopeOptions = {
+  deviceId: string;
+  requestId?: string;
+};
+
+type AppleRunnerProviderScope = {
+  provider: AppleRunnerProvider;
+  deviceId: string;
+  requestId?: string;
+};
+
+const appleRunnerProviderScope = new AsyncLocalStorage<AppleRunnerProviderScope>();
+
+export function createLocalAppleRunnerProvider(
+  runCommand: AppleRunnerCommandExecutor,
+  lifecycle: Pick<
+    AppleRunnerProvider,
+    'prepare' | 'prewarm' | 'hasLiveSession' | 'releaseSpeculativeSession'
+  >,
+): AppleRunnerProvider {
+  return { runCommand, ...lifecycle };
+}
+
+export function resolveAppleRunnerProvider(
+  device: DeviceInfo,
+  fallback: AppleRunnerProvider | AppleRunnerCommandExecutor,
+  options: { requestId?: string } = {},
+): AppleRunnerProvider {
+  const scoped = resolveScopedAppleRunnerProvider(device, options);
+  return scoped
+    ? normalizeAppleRunnerProvider(scoped.provider)
+    : normalizeAppleRunnerProvider(fallback);
+}
+
+function resolveScopedAppleRunnerProvider(
+  device: DeviceInfo,
+  options: { requestId?: string } = {},
+): AppleRunnerProviderScope | undefined {
+  const scoped = appleRunnerProviderScope.getStore();
+  return scoped &&
+    scoped.deviceId === device.id &&
+    (scoped.requestId ? scoped.requestId === options.requestId : !options.requestId)
+    ? scoped
+    : undefined;
+}
+
+export async function withAppleRunnerProvider<T>(
+  provider: AppleRunnerProvider | AppleRunnerCommandExecutor | undefined,
+  options: AppleRunnerProviderScopeOptions,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!provider) return await fn();
+  const scope = {
+    provider: normalizeAppleRunnerProvider(provider),
+    deviceId: options.deviceId,
+    requestId: options.requestId,
+  };
+  return await appleRunnerProviderScope.run(scope, fn);
+}
+
+function normalizeAppleRunnerProvider(
+  provider: AppleRunnerProvider | AppleRunnerCommandExecutor,
+): AppleRunnerProvider {
+  if (typeof provider === 'function') {
+    // A bare executor has no session to start: every command it accepts is answered directly.
+    return { runCommand: provider, hasLiveSession: () => true };
+  }
+  return provider;
+}

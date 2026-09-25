@@ -1,0 +1,16 @@
+# Layer-3 device flow (bug class 4). A real tap on a real control of the lab app,
+# so the post-tap settle loop actually runs and the timing invariant is meaningful.
+# Use the always-visible Settings tab so scrolling is not an unrelated
+# precondition for the tap detector. open-inert-surface proves navigation finished.
+appId: com.callstack.agentdevicelab
+---
+- launchApp:
+    clearState: true
+- assertVisible: Agent Device Tester
+# Discharge launch stabilization before measuring the inline post-tap settle.
+- waitForAnimationToEnd
+- tapOn:
+    text: Settings
+    retryTapIfNoChange: true
+- assertVisible:
+    id: open-inert-surface

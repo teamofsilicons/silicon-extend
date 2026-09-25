@@ -1,0 +1,765 @@
+import { expect, test, vi } from 'vitest';
+
+vi.mock('./core/app-resolution.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./core/app-resolution.ts')>()),
+  listIosApps: vi.fn(async () => [{ bundleId: 'com.example.app', name: 'Example' }]),
+}));
+
+import { listIosApps } from './core/app-resolution.ts';
+import type { DeviceBinding, RuntimeFacts } from '@agent-device/contracts/platform-runtime';
+import type { PlatformRuntimeOperations } from '@agent-device/contracts/platform-runtime-operations';
+import type { SnapshotRuntimeHost } from '@agent-device/contracts/snapshot-runtime';
+import {
+  SESSION_SURFACES,
+  type MacOsSurfaceBackend,
+  type SessionSurface,
+} from '@agent-device/contracts/session';
+import { HOVER_UNAVAILABLE_HINT } from '@agent-device/contracts/touch-runtime';
+import type { AppleOS, DeviceInfo } from '@agent-device/kernel/device';
+import { createApplePlatformRuntime } from './runtime.ts';
+import { platformRuntimeHostFixture } from './runtime.fixtures.ts';
+
+const presentIosAcquisition: SnapshotRuntimeHost['presentIosAcquisition'] = async () => ({
+  backend: 'xctest',
+  producer: 'appium-source',
+  nodes: [],
+});
+
+function appleDevice(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
+  return {
+    platform: 'apple',
+    appleOs: 'ios',
+    id: 'apple-fact',
+    name: 'Apple',
+    kind: 'simulator',
+    target: 'mobile',
+    booted: true,
+    ...overrides,
+  };
+}
+
+const leaves = {
+  ios: appleDevice(),
+  ipados: appleDevice({ appleOs: 'ipados' }),
+  tvos: appleDevice({ appleOs: 'tvos', target: 'tv' }),
+  macos: appleDevice({ appleOs: 'macos', kind: 'device', target: 'desktop' }),
+  visionos: appleDevice({ appleOs: 'visionos' }),
+  watchos: appleDevice({ appleOs: 'watchos' }),
+} satisfies Record<AppleOS, DeviceInfo>;
+
+test('tvOS audio capture availability follows the exact host-owned runtime fact', async () => {
+  const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+    device: leaves.tvos,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+
+  expect(binding.facts.operations.audioProbeStart).toEqual(
+    process.platform === 'darwin'
+      ? { available: true }
+      : {
+          available: false,
+          reason: 'unsupported-device-backend',
+          hint: 'audio probe capture requires a macOS host.',
+        },
+  );
+});
+
+/**
+ * The runner reads the session app's state wherever it runs: every iOS-family leaf but the watchOS
+ * sentinel. macOS and watchOS keep the refusal that names the missing foreground probe.
+ */
+function expectAppStateFact(
+  device: DeviceInfo,
+  binding: Awaited<ReturnType<ReturnType<typeof createApplePlatformRuntime>['bind']>>,
+): void {
+  if (device.appleOs === 'macos' || device.appleOs === 'watchos') {
+    expect(binding.facts.operations.appState).toEqual({
+      available: false,
+      reason: 'unsupported-platform-leaf',
+      hint: expect.stringContaining('no sessionless foreground probe'),
+    });
+    expect(binding.operations.appState).toBeUndefined();
+    return;
+  }
+  expect(binding.facts.operations.appState).toEqual({ available: true });
+  expect(binding.operations.appState).toBeTypeOf('function');
+}
+
+test.each([
+  ['iOS simulator', leaves.ios, true, undefined],
+  [
+    'iOS physical CoreDevice',
+    appleDevice({ kind: 'device', iosPhysicalDeviceBackend: 'coredevice' }),
+    true,
+    undefined,
+  ],
+  [
+    'iOS physical XCTest',
+    appleDevice({ kind: 'device', iosPhysicalDeviceBackend: 'xctest' }),
+    false,
+    'CoreDevice-backed physical iOS device',
+  ],
+  ['iPadOS simulator', leaves.ipados, true, undefined],
+  ['tvOS simulator', leaves.tvos, true, undefined],
+  ['macOS host', leaves.macos, true, undefined],
+  ['visionOS simulator', leaves.visionos, true, undefined],
+  ['watchOS sentinel', leaves.watchos, false, 'watchOS app logs are not supported'],
+])('classifies the %s leaf explicitly', async (_name, device, available, hint) => {
+  const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+    device,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+  const { facts } = binding;
+  expect(facts.device.providerMode).toBe('local');
+  expectAppStateFact(device, binding);
+  expect(facts.operations.networkDump).toEqual({ available: true });
+  expect(facts.operations.listApps.available).toBe(
+    device.appleOs !== 'watchos' && device.iosPhysicalDeviceBackend !== 'xctest',
+  );
+  // R40/R41: touch and text ride the Apple interactor, which exists for the simulator and
+  // physical device kinds — every leaf in this table is one of those two, so both cells are
+  // available across it (parity with the retired buckets).
+  expect(facts.operations.focusPoint).toEqual({ available: true });
+  expect(facts.operations.typeText).toEqual({ available: true });
+  expect(binding.operations.focusPoint).toBeTypeOf('function');
+  expect(binding.operations.typeText).toBeTypeOf('function');
+  for (const operation of ['appLogInspect', 'appLogDoctor', 'appLogStart'] as const) {
+    const fact = facts.operations[operation];
+    expect(fact.available).toBe(available);
+    if (!available && hint) expect(fact).toHaveProperty('hint', expect.stringContaining(hint));
+  }
+  for (const operation of [
+    'screenRecordingStart',
+    'screenRecordingReattach',
+    'screenRecordingCleanup',
+  ] as const) {
+    expect(facts.operations[operation].available).toBe(available);
+  }
+  expectApplePerfAvailability(binding, available);
+  if (device.iosPhysicalDeviceBackend === 'xctest') {
+    expect(facts.operations.screenRecordingStart).toMatchObject({
+      hint: expect.stringContaining('CoreDevice-backed physical iOS device'),
+    });
+  }
+  if (device.appleOs === 'watchos') {
+    expect(facts.operations.screenRecordingStart).toMatchObject({
+      hint: 'watchOS recording is not supported.',
+    });
+  }
+  expect(facts.operations.ensureReady.available).toBe(device.appleOs !== 'watchos');
+  expect(facts.operations.bootTarget.available).toBe(
+    device.appleOs !== 'macos' && device.appleOs !== 'watchos',
+  );
+  expect(facts.operations.bootTargetHeadless.available).toBe(false);
+  expect(facts.operations.setViewport).toEqual({
+    available: false,
+    reason: 'unsupported-platform-leaf',
+    hint: 'viewport resizes web targets only (--platform web). Apple screen geometry is fixed by the selected simulator or device type — open a different simulator to test another screen size.',
+  });
+  expect(binding.operations.setViewport).toBeUndefined();
+  expectAppleCaptureAvailability(binding, device);
+  expectAppleSnapshotAvailability(binding, device);
+});
+
+function expectApplePerfAvailability(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  available: boolean,
+): void {
+  for (const operation of [
+    'perfFrames',
+    'perfMemorySample',
+    'perfMemorySnapshot',
+    'perfNativeCaptureStart',
+    'perfNativeCaptureReattach',
+    'perfNativeCaptureCleanup',
+    'perfProfileReport',
+  ] as const) {
+    expect(binding.facts.operations[operation].available).toBe(available);
+    expect(binding.operations[operation]).toBeTypeOf(available ? 'function' : 'undefined');
+  }
+}
+
+/**
+ * watchOS is admitted by no capture cell: the Apple interactor cannot even be constructed for it,
+ * so the refusal is a fact rather than a throw from inside the leaf.
+ */
+function expectAppleCaptureAvailability(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  device: DeviceInfo,
+): void {
+  const available = device.appleOs !== 'watchos';
+  expect(binding.facts.operations.captureScreenshot.available).toBe(available);
+  expect(binding.operations.captureScreenshot).toBeTypeOf(available ? 'function' : 'undefined');
+}
+
+function expectAppleSnapshotAvailability(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  device: DeviceInfo,
+): void {
+  const available = device.appleOs !== 'watchos';
+  expect(binding.facts.operations.captureSnapshot.available).toBe(available);
+  expect(binding.facts.operations.captureSnapshotWithCustomActions.available).toBe(
+    device.appleOs !== 'macos' && device.appleOs !== 'watchos' && device.kind === 'simulator',
+  );
+  expect(binding.facts.operations.captureSnapshotWithoutActiveApp.available).toBe(
+    device.appleOs === 'macos',
+  );
+  expect(binding.operations.captureSnapshot).toBeTypeOf(available ? 'function' : 'undefined');
+  // The live point read needs a driveable Apple UI, so it follows the same watchOS sentinel the
+  // capture does; every other supported leaf advertises and binds it.
+  expect(binding.facts.operations.readTextAtPoint.available).toBe(available);
+  expect(binding.operations.readTextAtPoint).toBeTypeOf(available ? 'function' : 'undefined');
+}
+
+test.each(Object.entries(leaves))(
+  'classifies back/home/app-switcher/orientation/tv-remote/keyboard facts for the %s leaf',
+  async (_name, device) => {
+    const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+      device,
+      intent: { kind: 'ordinary' },
+      scope: {
+        signal: new AbortController().signal,
+        diagnostics: { emit: () => {} },
+        progress: { report: () => {} },
+      },
+    });
+    expectNavigationAndKeyboardFacts(binding, device);
+  },
+);
+
+test('hover has no Apple interactor route on macOS, iOS, or tvOS; the touch family reports its typed denial', async () => {
+  for (const device of [leaves.macos, leaves.ios, leaves.tvos]) {
+    const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+      device,
+      intent: { kind: 'ordinary' },
+      scope: {
+        signal: new AbortController().signal,
+        diagnostics: { emit: () => {} },
+        progress: { report: () => {} },
+      },
+    });
+    const hoverDenial = {
+      available: false,
+      reason: 'unsupported-platform-leaf',
+      hint: HOVER_UNAVAILABLE_HINT,
+    };
+    expect(binding.facts.operations.hoverPoint).toEqual(hoverDenial);
+    expect(binding.facts.operations.hoverRef).toEqual(hoverDenial);
+    expect(binding.operations.hoverPoint).toBeTypeOf('undefined');
+    expect(binding.operations.hoverRef).toBeTypeOf('undefined');
+  }
+});
+
+test.each(Object.entries(leaves))(
+  'classifies the action-button fact for the %s leaf',
+  async (_name, device) => {
+    const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+      device,
+      intent: { kind: 'ordinary' },
+      scope: {
+        signal: new AbortController().signal,
+        diagnostics: { emit: () => {} },
+        progress: { report: () => {} },
+      },
+    });
+    expectActionButtonFact(binding, device);
+  },
+);
+
+test.each(Object.entries(leaves))(
+  'classifies the fold fact for the %s leaf',
+  async (_name, device) => {
+    const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+      device,
+      intent: { kind: 'ordinary' },
+      scope: {
+        signal: new AbortController().signal,
+        diagnostics: { emit: () => {} },
+        progress: { report: () => {} },
+      },
+    });
+    // A hinge can exist on the iPhone/iPad simulator leaf only: the macOS host is not a simulator,
+    // and no other simulator OS ships a foldable. Whether this simulator is actually a foldable is
+    // answered by the operation from CoreDevice's display table, not by the leaf fact.
+    const available =
+      device.kind === 'simulator' && (device.appleOs === 'ios' || device.appleOs === 'ipados');
+    expectOperationAvailability(binding, 'setFoldPose', available);
+    if (!available) {
+      expect(binding.facts.operations.setFoldPose).toHaveProperty(
+        'reason',
+        device.kind === 'simulator' ? 'unsupported-platform-leaf' : 'unsupported-device-kind',
+      );
+    }
+  },
+);
+
+// A simulator scoped to a non-default set is refused by the owner's own fact, before any display
+// probe or HID effect: CoreDevice's display inventory and hinge-angle readback cannot resolve it,
+// so ADR 0025's post-dispatch verification is impossible. The default-set iOS leaf stays admitted.
+test('refuses the fold fact for a scoped simulator set and binds no pose operation', async () => {
+  const scoped = appleDevice({ simulatorSetPath: '/tmp/scoped-set' });
+  const binding = await createApplePlatformRuntime(platformRuntimeHostFixture()).bind({
+    device: scoped,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+  expect(binding.facts.operations.setFoldPose).toMatchObject({
+    available: false,
+    reason: 'unsupported-device-scope',
+    hint: expect.stringContaining('/tmp/scoped-set'),
+  });
+  expect(binding.operations.setFoldPose).toBeUndefined();
+});
+
+/**
+ * The Action Button is a physical control on iPhone and iPad leaves only. visionOS is the leaf that
+ * separates this from `orientation`'s mobile-input reading: a headset has a Digital Crown and no
+ * Action Button, so it refuses here while orientation admits it.
+ */
+function expectActionButtonFact(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  device: DeviceInfo,
+): void {
+  const available = device.appleOs === 'ios' || device.appleOs === 'ipados';
+  expectOperationAvailability(binding, 'actionButton', available);
+  if (!available) {
+    expect(binding.facts.operations.actionButton).toHaveProperty(
+      'hint',
+      expect.stringContaining('Action Button is iPhone and iPad hardware'),
+    );
+  }
+}
+
+/** Both the fact and the bound operation function agree on availability, for one operation. */
+function expectOperationAvailability(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  operation: keyof PlatformRuntimeOperations,
+  available: boolean,
+): void {
+  expect(binding.facts.operations[operation].available).toBe(available);
+  expect(binding.operations[operation]).toBeTypeOf(available ? 'function' : 'undefined');
+}
+
+/**
+ * watchOS has no constructible Apple interactor (XCUITest cannot drive its UI, ADR-0009), so every
+ * interactor-backed operation here stays unavailable there regardless of what else gates it.
+ */
+function expectNavigationAndKeyboardFacts(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  device: DeviceInfo,
+): void {
+  // Every simulator/device leaf supports back except watchOS, tvOS's Menu remote press
+  // included — no apple-family closure ever gated it beyond device kind and interactor
+  // constructibility.
+  expectOperationAvailability(binding, 'back', device.appleOs !== 'watchos');
+
+  // home and app-switcher share one springboard reading (R56): both are unavailable on macOS,
+  // which drives an already-running app with no springboard, and on watchOS. That is parity, not
+  // convenience — the retired `supportsAppAndDeviceLifecycle` closure gated both off the same row.
+  const springboard = device.appleOs !== 'macos' && device.appleOs !== 'watchos';
+  expectOperationAvailability(binding, 'home', springboard);
+  expectOperationAvailability(binding, 'appSwitcher', springboard);
+
+  // orientation and keyboard dismiss/enter share mobile-input eligibility: unavailable on tvOS
+  // (focus-only XCUIRemote navigation), macOS (an AppKit desktop host), and watchOS.
+  const mobileInputEligible =
+    device.appleOs !== 'tvos' && device.appleOs !== 'macos' && device.appleOs !== 'watchos';
+  expectOperationAvailability(binding, 'setOrientation', mobileInputEligible);
+  expectOperationAvailability(binding, 'keyboardDismiss', mobileInputEligible);
+  expectOperationAvailability(binding, 'keyboardEnter', mobileInputEligible);
+
+  expectKeyboardStatusFact(binding, mobileInputEligible);
+  expectTvRemoteFact(binding, device);
+}
+
+/** Apple never had a live keyboard status read: every eligible leaf still refuses status/get with
+ * the retired in-handler hint; ineligible leaves fall through the outer cell instead. */
+function expectKeyboardStatusFact(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  mobileInputEligible: boolean,
+): void {
+  expect(binding.facts.operations.keyboardStatus.available).toBe(false);
+  if (mobileInputEligible) {
+    expect(binding.facts.operations.keyboardStatus).toHaveProperty(
+      'hint',
+      expect.stringContaining('keyboard status/get is currently supported only on Android'),
+    );
+  }
+  expect(binding.operations.keyboardStatus).toBeUndefined();
+}
+
+/** tv-remote is available only for tvOS, which drives navigation through XCUIRemote presses. */
+function expectTvRemoteFact(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  device: DeviceInfo,
+): void {
+  const tvRemoteAvailable = device.appleOs === 'tvos';
+  expectOperationAvailability(binding, 'tvRemote', tvRemoteAvailable);
+  if (!tvRemoteAvailable) {
+    expect(binding.facts.operations.tvRemote).toHaveProperty(
+      'hint',
+      'tv-remote is supported only on tvOS devices.',
+    );
+  }
+}
+
+const MACOS_SURFACE_BACKENDS: Record<SessionSurface, MacOsSurfaceBackend> = {
+  app: 'xctest',
+  'frontmost-app': 'macos-helper',
+  desktop: 'macos-helper',
+  menubar: 'macos-helper',
+};
+
+test.each([
+  ...SESSION_SURFACES.map((surface) => [surface, MACOS_SURFACE_BACKENDS[surface]] as const),
+  [undefined, 'xctest'] as const,
+])(
+  'the macOS %s surface captures and finds text through the %s backend',
+  async (surface, backend) => {
+    const host = platformRuntimeHostFixture();
+    const captureSurface = vi.fn(async () => ({
+      backend: 'macos-helper' as const,
+      producer: 'macos-helper' as const,
+      nodes: [],
+      truncated: false,
+    }));
+    const snapshot = vi.fn(async () => ({
+      backend: 'xctest' as const,
+      producer: 'apple-runner' as const,
+      nodes: [],
+      truncated: false,
+    }));
+    const findText = vi.fn(async () => ({ found: true }));
+    const resolve = vi.fn(async () => ({ snapshot, findText }) as never);
+    const binding = await createApplePlatformRuntime({
+      ...host,
+      localInteractors: { resolve },
+      snapshot: { captureSurface, presentIosAcquisition },
+    }).bind({
+      device: leaves.macos,
+      intent: { kind: 'ordinary' },
+      scope: {
+        signal: new AbortController().signal,
+        diagnostics: { emit: () => {} },
+        progress: { report: () => {} },
+      },
+    });
+    const options = { surface, appBundleId: 'com.example.app', depth: 3 };
+
+    await binding.operations.captureSnapshot?.({ options });
+    const found = await binding.operations.findText?.({ text: 'Settings', options });
+
+    const helperRouted = backend === 'macos-helper';
+    expect(captureSurface.mock.calls).toEqual(
+      helperRouted ? [[leaves.macos, options, expect.any(AbortSignal)]] : [],
+    );
+    expect(snapshot).toHaveBeenCalledTimes(helperRouted ? 0 : 1);
+    expect(findText).toHaveBeenCalledTimes(helperRouted ? 0 : 1);
+    expect(found).toEqual({ found: !helperRouted });
+  },
+);
+
+test('readiness and boot keep the Apple automation helper warm inside the platform runtime', async () => {
+  const host = platformRuntimeHostFixture();
+  const keepHot = vi.fn();
+  let state = 'Shutdown';
+  const runtime = createApplePlatformRuntime({
+    ...host,
+    appleTools: {
+      ...host.appleTools,
+      run: vi.fn(async (request) => {
+        if (request.args.includes('list')) {
+          return {
+            stdout: JSON.stringify({ devices: { ios: [{ udid: 'apple-fact', state }] } }),
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        if (request.args.includes('boot')) state = 'Booted';
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }),
+    },
+    deviceReadiness: {
+      ...host.deviceReadiness,
+      appleAutomation: {
+        keepHot,
+        markBooted: vi.fn(),
+        wasRecentlyObservedBooted: vi.fn(async () => false),
+      },
+    },
+  });
+  const device = appleDevice({ booted: false });
+  const binding = await runtime.bind({
+    device,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+
+  await binding.operations.ensureReady?.({});
+  await binding.operations.bootTarget?.({});
+
+  expect(keepHot).toHaveBeenCalledTimes(3);
+  expect(keepHot).toHaveBeenNthCalledWith(1, device);
+  expect(keepHot).toHaveBeenNthCalledWith(2, device);
+  expect(keepHot).toHaveBeenNthCalledWith(3, device);
+});
+
+test('macOS readiness is a no-op while boot remains unavailable', async () => {
+  const host = platformRuntimeHostFixture();
+  const ensureConnected = vi.fn(host.deviceReadiness.applePhysical.ensureConnected);
+  const binding = await createApplePlatformRuntime({
+    ...host,
+    deviceReadiness: {
+      ...host.deviceReadiness,
+      applePhysical: { ensureConnected },
+    },
+  }).bind({
+    device: leaves.macos,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+
+  await expect(binding.operations.ensureReady?.({})).resolves.toMatchObject({ booted: true });
+  expect(ensureConnected).not.toHaveBeenCalled();
+  expect(binding.operations.bootTarget).toBeUndefined();
+});
+
+test('lists Apple apps through the package-owned resolver', async () => {
+  const listApps = vi.mocked(listIosApps);
+  listApps.mockClear();
+  const runtime = createApplePlatformRuntime(platformRuntimeHostFixture());
+  const device = appleDevice();
+  const binding = await runtime.bind({
+    device,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+
+  await expect(binding.operations.listApps?.({ device, filter: 'all' })).resolves.toEqual([
+    { id: 'com.example.app', name: 'Example' },
+  ]);
+  expect(listApps).toHaveBeenCalledWith(device, 'all');
+});
+
+type LegacyLifecycleCell = Readonly<{
+  openTarget: boolean;
+  prepareAppleRunner: boolean;
+  closeTarget: boolean;
+  runtimeHints: boolean;
+  portReverse: boolean;
+}>;
+
+const LEGACY_IOS_SIMULATOR: LegacyLifecycleCell = {
+  openTarget: true,
+  prepareAppleRunner: true,
+  closeTarget: true,
+  runtimeHints: true,
+  portReverse: false,
+};
+const LEGACY_APPLE_DEVICE: LegacyLifecycleCell = {
+  openTarget: true,
+  prepareAppleRunner: true,
+  closeTarget: true,
+  runtimeHints: false,
+  portReverse: false,
+};
+const LEGACY_UNSUPPORTED: LegacyLifecycleCell = {
+  openTarget: false,
+  prepareAppleRunner: false,
+  closeTarget: false,
+  runtimeHints: false,
+  portReverse: false,
+};
+
+// The legacy descriptor/dispatch oracle is leaf- and kind-specific. Keep the full current
+// denominator here instead of deriving it from Apple family ownership or a sibling operation.
+const LEGACY_APPLE_LIFECYCLE_CELLS = {
+  ios: {
+    simulator: LEGACY_IOS_SIMULATOR,
+    emulator: LEGACY_UNSUPPORTED,
+    device: LEGACY_APPLE_DEVICE,
+  },
+  ipados: {
+    simulator: LEGACY_IOS_SIMULATOR,
+    emulator: LEGACY_UNSUPPORTED,
+    device: LEGACY_APPLE_DEVICE,
+  },
+  tvos: {
+    simulator: LEGACY_IOS_SIMULATOR,
+    emulator: LEGACY_UNSUPPORTED,
+    device: LEGACY_APPLE_DEVICE,
+  },
+  macos: {
+    simulator: LEGACY_APPLE_DEVICE,
+    emulator: LEGACY_UNSUPPORTED,
+    device: LEGACY_APPLE_DEVICE,
+  },
+  visionos: {
+    simulator: LEGACY_IOS_SIMULATOR,
+    emulator: LEGACY_UNSUPPORTED,
+    device: LEGACY_APPLE_DEVICE,
+  },
+  watchos: {
+    simulator: LEGACY_UNSUPPORTED,
+    emulator: LEGACY_UNSUPPORTED,
+    device: LEGACY_UNSUPPORTED,
+  },
+} satisfies Record<AppleOS, Record<DeviceInfo['kind'], LegacyLifecycleCell>>;
+
+const APPLE_LEAF_TARGETS = {
+  ios: 'mobile',
+  ipados: 'mobile',
+  tvos: 'tv',
+  macos: 'desktop',
+  visionos: 'mobile',
+  watchos: 'mobile',
+} satisfies Record<AppleOS, NonNullable<DeviceInfo['target']>>;
+
+const appleLifecycleDenominator = (
+  Object.entries(LEGACY_APPLE_LIFECYCLE_CELLS) as Array<
+    [AppleOS, Record<DeviceInfo['kind'], LegacyLifecycleCell>]
+  >
+).flatMap(([appleOs, cells]) =>
+  (Object.entries(cells) as Array<[DeviceInfo['kind'], LegacyLifecycleCell]>).map(
+    ([kind, legacy]) => ({
+      name: `${appleOs} ${kind}`,
+      device: appleDevice({
+        appleOs,
+        id: `apple-${appleOs}-${kind}`,
+        kind,
+        target: APPLE_LEAF_TARGETS[appleOs],
+      }),
+      legacy,
+    }),
+  ),
+);
+
+function expectLegacyLifecycleCell(
+  binding: DeviceBinding<PlatformRuntimeOperations>,
+  legacy: LegacyLifecycleCell,
+): void {
+  expectLegacyLifecycleFactCell(binding.facts, legacy);
+  const operations = [
+    ['openTarget', ['resolveOpenTarget', 'prepareApplicationOpen', 'openApplication']],
+    ['prepareAppleRunner', ['prepareAppleRunner']],
+    ['closeTarget', ['closeApplication', 'finalizeApplicationClose']],
+    ['runtimeHints', ['applyRuntimeHints', 'clearRuntimeHints']],
+    ['portReverse', ['configureProviderPortReverse']],
+  ] as const;
+  for (const [facet, names] of operations) {
+    for (const name of names) {
+      if (legacy[facet]) {
+        expect(binding.operations[name]).toBeTypeOf('function');
+      } else {
+        expect(binding.operations[name]).toBeUndefined();
+      }
+    }
+  }
+}
+
+test.each(appleLifecycleDenominator)(
+  'publishes independent lifecycle facts for every Apple $name descriptor/dispatch cell',
+  async ({ device, legacy }) => {
+    const runtime = createApplePlatformRuntime(platformRuntimeHostFixture());
+    expectLegacyLifecycleFactCell(await runtime.inspectFacts(device), legacy);
+    expectLegacyLifecycleCell(
+      await runtime.bind({
+        device,
+        intent: { kind: 'ordinary' },
+        scope: {
+          signal: new AbortController().signal,
+          diagnostics: { emit: () => {} },
+          progress: { report: () => {} },
+        },
+      }),
+      legacy,
+    );
+  },
+);
+
+function expectLegacyLifecycleFactCell(
+  facts: RuntimeFacts<PlatformRuntimeOperations>,
+  legacy: LegacyLifecycleCell,
+): void {
+  const operations = [
+    ['openTarget', ['resolveOpenTarget', 'prepareApplicationOpen', 'openApplication']],
+    ['prepareAppleRunner', ['prepareAppleRunner']],
+    ['closeTarget', ['closeApplication', 'finalizeApplicationClose']],
+    ['runtimeHints', ['applyRuntimeHints', 'clearRuntimeHints']],
+    ['portReverse', ['configureProviderPortReverse']],
+  ] as const;
+  for (const [facet, names] of operations) {
+    for (const name of names) {
+      expect(facts.operations[name].available).toBe(legacy[facet]);
+    }
+  }
+  const snapshotAvailable =
+    facts.device.appleOs !== 'watchos' &&
+    (facts.device.kind === 'simulator' || facts.device.kind === 'device');
+  expect(facts.operations.captureSnapshot.available).toBe(snapshotAvailable);
+  expect(facts.operations.readTextAtPoint.available).toBe(snapshotAvailable);
+}
+
+// The macOS non-app surface branch calls `captureSurface` directly instead of going through
+// `bindSnapshotInteractor`, so the shared composition does NOT cover it. If this branch drops the
+// per-capture signal, desktop-surface captures silently ignore a wait's poll deadline while every
+// other family honours it.
+test('the macOS surface branch composes the per-capture signal with the binding signal', async () => {
+  const host = platformRuntimeHostFixture();
+  const captureSurface = vi.fn<SnapshotRuntimeHost['captureSurface']>(async () => ({
+    backend: 'macos-helper' as const,
+    producer: 'macos-helper' as const,
+    nodes: [],
+    truncated: false,
+  }));
+  const binding = await createApplePlatformRuntime({
+    ...host,
+    localInteractors: { resolve: vi.fn(async () => ({}) as never) },
+    snapshot: { captureSurface, presentIosAcquisition },
+  }).bind({
+    device: leaves.macos,
+    intent: { kind: 'ordinary' },
+    scope: {
+      signal: new AbortController().signal,
+      diagnostics: { emit: () => {} },
+      progress: { report: () => {} },
+    },
+  });
+
+  const poll = new AbortController();
+  await binding.operations.captureSnapshot?.({
+    options: { surface: 'desktop', appBundleId: 'com.example.app' },
+    signal: poll.signal,
+  });
+
+  const passed = captureSurface.mock.calls[0]?.[2] as AbortSignal;
+  expect(passed.aborted).toBe(false);
+  poll.abort(new DOMException('Wait deadline exceeded', 'TimeoutError'));
+  expect(passed.aborted).toBe(true);
+});

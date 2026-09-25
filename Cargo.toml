@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/bridge-protocol",
+    "crates/silicon-bridge-client",
+    "crates/bridge-cli",
+    "crates/bridge-service",
+    "crates/bridge-agent",
+    "crates/bridge-driver",
+    "crates/bridge-hosted",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/teamofsilicons/silicon-bridge"
+
+[workspace.dependencies]
+bridge-protocol = { path = "crates/bridge-protocol", version = "1.0.0" }
+bridge-driver = { path = "crates/bridge-driver" }
+bridge-hosted = { path = "crates/bridge-hosted" }
+silicon-bridge-client = { path = "crates/silicon-bridge-client", version = "1.0.0" }
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+axum = { version = "0.8.9", features = ["http2", "json", "macros", "matched-path", "ws"] }
+base64 = "0.22.1"
+bytes = "1.11.0"
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+futures = "0.3.31"
+hex = "0.4.3"
+hmac = "0.12.1"
+http = "1.3.1"
+rand = "0.9"
+regex = "1.12.2"
+reqwest = { version = "0.13.4", default-features = false, features = ["form", "http2", "json", "rustls", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "migrate", "postgres", "runtime-tokio", "time", "tls-rustls-ring-native-roots", "uuid"] }
+subtle = "2.6.1"
+thiserror = "2.0.17"
+time = { version = "0.3.55", features = ["formatting", "macros", "parsing", "serde"] }
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-native-roots"] }
+tower = { version = "0.5.2", features = ["util", "timeout"] }
+tower-http = { version = "0.7.0", features = ["cors", "limit", "request-id", "trace", "fs"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+url = { version = "2.5.7", features = ["serde"] }
+uuid = { version = "1.26.0", features = ["serde", "v4", "v7"] }
+
+[profile.release]
+lto = "thin"
+strip = true

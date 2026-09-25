@@ -1,0 +1,32 @@
+import { definePathCoverage } from './coverage-manifest.ts';
+
+export const RUNTIME_SELECTOR_COVERAGE = definePathCoverage('runtime-selector', {
+  disambiguation: [
+    'runtime-selector disambiguation: one equivalent wrapper chain collapses to its actionable button',
+    'runtime-selector disambiguation: distinct subtrees reject without a geometry winner',
+  ],
+  occlusion: 'runtime-selector occlusion: covered button is refused',
+  keyboardOcclusion:
+    'runtime-selector keyboardOcclusion: a selector behind the visible keyboard is refused with tap_keyboard_occludes_target',
+  parentOwnedTouchPoint:
+    'runtime-selector parentOwnedTouchPoint: a fully tiled parent selector preserves selector context and refuses before dispatch',
+  offscreen: [
+    'runtime-selector offscreen: closed drawer refused with offscreen_selector',
+    'runtime-selector offscreen: edge-grazing container is still refused',
+  ],
+  nonHittable: 'runtime-selector nonHittable: non-hittable match is annotated but still tapped',
+  responseConstruction:
+    'runtime-selector responseConstruction: daemon press response carries the canonical selector field set',
+  responseIdentity:
+    'runtime-selector responseIdentity: result echoes selectorChain and the resolved node',
+  verifyEvidence:
+    'runtime-selector verifyEvidence: press --verify returns a digest with change detection',
+  settleObservation:
+    'runtime-selector settleObservation: press --settle returns the settled diff with fresh refs',
+  errorTaxonomy:
+    'runtime-selector errorTaxonomy: no-match failure carries the shared code and hint',
+  resolutionDisclosure: [
+    'runtime-selector resolutionDisclosure: a unique match discloses the unique runtime shape',
+    'runtime-selector resolutionDisclosure: an equivalent wrapper chain discloses matchCount, winnerDiagnostic, and structural equivalence',
+  ],
+});

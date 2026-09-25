@@ -1,0 +1,153 @@
+# Dependency graph report
+
+```sh
+pnpm depgraph                       # -> .tmp/depgraph/graph.json + a text summary
+pnpm depgraph --out /tmp/graph.json
+pnpm depgraph:test
+```
+
+Emits the dependency graph of every production file under `src/` (tests excluded) as JSON,
+plus a short summary of what the layering gate does not enforce. There is no renderer: the
+productive artifact is the JSON, queried directly.
+
+## Blast radius of one file
+
+```sh
+pnpm depgraph affected packages/host-kit/src/command.ts # bounded text
+pnpm depgraph affected src/daemon/ref-frame.ts --json --limit 25
+```
+
+Reverse reachability over the value-edge graph, plus the three lookups that used to follow it:
+the `scripts/check-affected/` gate plan for the dependent set, the public commands whose handler
+chain reaches the file (value + dynamic edges, because handlers load through `import()`) with
+their owning live iOS scenarios when that manifest is in the tree, and the ADR 0011
+guarantee-matrix cells the file implements. See docs/agents/testing.md § "Before editing a shared
+module".
+
+## When to reach for this
+
+It pays for itself on three questions, and misleads on a fourth.
+
+**"What am I about to break?"** `nodes[].in` is the dependent count — blast radius. Size the
+nodes by dependents and the files you should touch carefully are the big ones. Faster than
+grepping, and it counts type-only and dynamic edges that a grep for `from '...'` misses.
+
+**"Where is the debt actually concentrated?"** Zone-level counts (`zoneEdges`) answer "which
+boundary carries the most traffic" in one query. The pass that produced ADR-adjacent findings
+started here.
+
+**"What is wrong that the gate does not enforce?"** This is the part CI cannot give you. The
+gate rejects value-import cycles (R4) and spine back-edges (R5); the graph additionally reports:
+
+- **value edges whose target is also reachable at distance >= 2** — static module reachability,
+  and *only* that. It is **not** a removability claim, and the obvious reading is wrong:
+  reachability does not carry bindings (if `a` imports `{ c }` while `b` only re-exports it as
+  `{ c as b }`, the path exists and deleting `a -> c` still breaks `a`), it does not preserve when
+  a module's side effects run, and a direct import is often deliberately clearer than reaching
+  through a barrel. Deciding whether any given edge can go needs symbol-level analysis this does
+  not attempt. ~1300 of them: a place to look, never a work list.
+- **type-only and dynamic cycles** — 8 of them, all outside R4 by design (a type-only import is
+  free at runtime, a dynamic one is a deliberate cold-start seam). Worth reading when a module
+  feels hard to reason about.
+
+**Where it misleads: a cluster's size is not its difficulty.** This is worth stating plainly
+because it already cost a day. The `commands -> client` cluster looked like the obvious win — 28
+type-only inversions, all pointing at one file. Moving that file down took the gate from **42 to
+48**, because the vocabulary it holds *depends on* `commands/`, `metro/`, `core/` and `remote/`;
+declaring it in `contracts/` made the foundation depend on the layers above it. The picture shows
+you an edge's weight, not whether it can be reversed.
+
+So: use the render to find a candidate, then answer "can this move?" numerically before planning
+anything. The question is always *what does the target itself import, and what rank is that?*
+
+```sh
+pnpm depgraph
+# Zone pairs that invert the ranked spine. Read `typeInversions` rather than deriving it from
+# `zoneEdges`: those counts come from the COLLAPSED edge list, where one edge per file pair
+# survives and `dynamic` outranks `type`, so a module imported both lazily and for its types
+# would drop out. `typeInversions` is counted by the gate's own rule.
+node -e "const j=require('./.tmp/depgraph/graph.json');
+  Object.entries(j.typeInversions)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([pair, n]) => console.log(String(n).padStart(4), pair));"
+```
+
+
+Note `zoneEdges[].backEdge` flags **R5 value** back-edges only, and there are none — filtering on
+it returns an empty list, which is the gate passing, not a broken query.
+
+
+## What is authoritative
+
+`pnpm check:layering` is. The report reads the same model (`scripts/layering/model.ts`) and applies
+the gate's own counting rule — `typeInversionsByPair` counts once per file pair over the raw edges,
+exactly as `typeInversionCounts` in `scripts/layering/model.ts` does — so `typeInversions` reproduces
+the gate's R6 measurement by construction, not by a second measurement. The gate compares that
+measurement with the merge-base's; CI used to assert the report agreed with a recorded baseline,
+which was a duplicate detector of the same code path and was removed. In particular the count
+does NOT come from the collapsed edge list, where `dynamic` outranks `type` and a module imported
+both lazily and for its types would drop out.
+
+If the report ever disagrees with the gate, the gate is right.
+
+## Why it reuses the layering gate
+
+The graph is extracted with `scripts/layering/model.ts`, the same module
+`scripts/layering/check.ts` uses in CI. File set, zone partition, edge kinds
+(value / type-only / dynamic), and cycle definition are therefore identical to the rules
+the gate enforces — a separate extractor with its own resolution behaviour would draw a
+graph nobody is enforcing. Cross-checked once against `dependency-cruiser` 3.1.1 (at the commit it was written): same
+modules and edges, plus 88 dynamic/type-only edges dependency-cruiser fails to resolve.
+
+## What the JSON carries
+
+- `zones[]` — id, spine `rank` (`null` when intentionally unranked), `classification`, file
+  count, LOC.
+- `zoneEdges[]` — per zone pair: total `count`, `valueCount`, and `backEdge` (R5 value
+  back-edges only — see the note above).
+- `nodes[]` — per file: zone index, LOC, `in`/`out` degree, `lvl` (longest path to a sink over
+  value edges; R4 guarantees that subgraph is a DAG), and `cyc` (index into `cycles`, or `-1`).
+- `edges[]` — index-addressed `[from, to, kind, flags]`. Kind: `0` value, `1` type-only, `2`
+  dynamic. Flags bitfield: `1` spine back-edge, `2` target also reachable at distance >= 2, `4` type-only
+  inversion.
+- `cycles[]` — each with `kind` (`value` / `type` / `dynamic`) and its node path.
+
+## Declared-authority overlay
+
+The report also carries `edgeAuthorities[]`, aligned with `edges[]`. Each entry is a compact list
+of labels, so a collapsed edge may carry more than one label. The labels are derived from exact
+roots, exports, and named live-state symbols in `scripts/layering/architecture-ownership.ts`:
+
+- `vocabulary` — the target is a declared contract facade root.
+- `capability` — the target is a declared capability root and the import names a declared export.
+- `live-state-shape` — the edge names the exact `SessionState` type from `src/daemon/session-state.ts`.
+- `live-state-authority` — the edge names the exact `SessionStore` class from
+  `src/daemon/session-store.ts`.
+- `executable-policy` — the source is under a declared executable-policy root.
+- `ordinary` — no declared authority evidence matches the edge.
+
+`edges[][2]` remains the independent import-kind code (`0` value, `1` type-only, `2` dynamic), and
+`authorityCounts` reports stable counts of labels across the collapsed edges. This is a report-only
+overlay: it reports declared authority, not behavioral ownership quality, safe removability, or a
+composite score/pass threshold.
+
+For reproducible inspection outside the repository's `.tmp` directory:
+
+```sh
+pnpm depgraph --out /tmp/agent-device-2128-depgraph.json
+jq '{generated, authorityCounts}' /tmp/agent-device-2128-depgraph.json
+jq -r '
+  . as $graph
+  | range(0; ($graph.edges | length)) as $i
+  | select($graph.edgeAuthorities[$i] != ["ordinary"])
+  | [($graph.edgeAuthorities[$i] | join("+")),
+     $graph.nodes[$graph.edges[$i][0]].id,
+     $graph.nodes[$graph.edges[$i][1]].id,
+     ["value", "type", "dynamic"][$graph.edges[$i][2]]]
+  | @tsv
+' /tmp/agent-device-2128-depgraph.json
+```
+
+Bit `2` means the target is reachable from the source at distance >= 2 over value edges. That is
+module reachability, not removability — see the caveats above. Treat it as a question ("why is
+this imported directly as well?"), never as an instruction.

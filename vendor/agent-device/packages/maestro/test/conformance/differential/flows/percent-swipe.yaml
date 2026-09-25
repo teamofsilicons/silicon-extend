@@ -1,0 +1,12 @@
+# Layer-3 device flow. Percentage swipe endpoints must drive the same gesture on
+# both engines. Deliberately stays on the scrollable home screen: no navigation,
+# no off-screen controls, so the scenario tests the swipe and nothing else.
+appId: com.callstack.agentdevicelab
+---
+- launchApp:
+    clearState: true
+- assertVisible: Agent Device Tester
+- swipe:
+    start: 50%, 75%
+    end: 50%, 35%
+    duration: 300

@@ -1,0 +1,24 @@
+{
+  "name": "@agent-device/ad-replay",
+  "version": "0.0.0",
+  "private": true,
+  "sideEffects": false,
+  "type": "module",
+  "description": "Private native .ad replay engine for agent-device: manifest inspection (inspectAdReplay) and the step-loop execution engine (runAdReplay), plus the neutral AdReplayStepRuntime vocabulary the daemon adapter implements.",
+  "dependencies": {
+    "@agent-device/ad-script": "workspace:*",
+    "@agent-device/contracts": "workspace:*",
+    "@agent-device/kernel": "workspace:*",
+    "@agent-device/selectors": "workspace:*"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./divergence": {
+      "types": "./src/replay-divergence.ts",
+      "default": "./src/replay-divergence.ts"
+    }
+  }
+}

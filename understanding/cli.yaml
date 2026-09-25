@@ -1,0 +1,542 @@
+# Contract file. Agents: propose changes to a Carbon and get approval before editing.
+# Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Wire contract: api.yaml. Formats: TECHNICAL.md.
+#
+# How to read this file
+#   usage:   the exact grammar. <required>, [optional], ... repeats, a|b one of.
+#   who:     carbon, silicon, or both. Anything else gets exit 4 (forbidden) with the reason.
+#   needs:   login (signed in), session (a connected or --session session), capability (the device must have it).
+#   takes:   positional arguments and flags, with type and bounds.
+#   gives:   what is printed. "text" is the default; "json" is the single document printed with --json.
+#   api:     the endpoint in api.yaml it calls. The CLI has no feature the client crate does not.
+
+name: bridge
+summary: Let a Silicon use the devices a Carbon has paired, and let the Carbon manage them.
+install: honeycomb install 'bridge'
+links:
+  repository: https://github.com/teamofsilicons/silicon-bridge
+  docs: https://docs.bridge.teamofsilicons.com
+  website: https://bridge.teamofsilicons.com
+  client_crate: https://crates.io/crates/silicon-bridge-client
+  api: https://backend.bridge.teamofsilicons.com
+
+grammar:
+  - Commands are a tree, noun then verb (`bridge device ls`, `bridge session end a3f`). Every node answers `--help`/`-h`
+    with what it is for, how it is usually used with other commands, its arguments and flags, and the child commands
+    under it.
+  - Every agent-device command Bridge exposes is also a top-level `bridge` command (`bridge snapshot`, `bridge click @e2`)
+    and runs inside the selected session.
+  - Flags may come before or after positionals. `--` ends flag parsing; everything after it is positional.
+  - Global flags work on every command.
+  - Destructive commands need `--yes`. Without it they print what would happen and exit 2.
+  - Errors say exactly what failed, why, and the command to run next. Never "something went wrong".
+
+global_flags:
+  - {flag: '--json', gives: 'One JSON document on stdout: {"ok": true, "data": ...} or {"ok": false, "error": {code, message, hint, docs_url, request_id, details}}'}
+  - {flag: '--test <test_id>', takes: 'Honeycomb environment_id (UUID) previously added with `bridge config test add`', gives: 'Runs the command in that test environment. The environment is printed on stderr at the end, including on failure.'}
+  - {flag: '--session <session_id>', takes: '^[0-9a-f]{3,}$', gives: 'Uses this session instead of the connected one. Precedence: --session, then BRIDGE_SESSION, then the connected session.'}
+  - {flag: '--team <handle>', takes: IAM team handle, gives: 'Overrides the default team for this command (sent as X-Org-ID).'}
+  - {flag: '--timeout <ms>', takes: '1000–300000, default 30000', gives: 'Command deadline for session commands.'}
+  - {flag: '-h, --help', gives: 'Help for this node of the tree. While a session is connected, lists only the commands that work on its device.'}
+  - {flag: '-V, --version', gives: 'CLI version, client crate version, negotiated API version.'}
+  - {flag: '-v, --verbose', gives: 'Request ids, timings and HTTP status on stderr.'}
+
+environment:
+  SILICON_HOME: 'Base directory. State lives in $SILICON_HOME/.bridge/. Default ~.'
+  BRIDGE_SESSION: 'Session id to use when --session is not given.'
+  BRIDGE_API_URL: 'Override the service URL (development only).'
+  BRIDGE_TELEMETRY: 'on|off. Overrides the config value for this process.'
+  NO_COLOR: 'Disables colour in text output.'
+
+state_files:
+  - '{home}/.bridge/auth.json        tokens, member, default team (0600)'
+  - '{home}/.bridge/config.toml      settings from `bridge config`'
+  - '{home}/.bridge/sessions/current the connected session id'
+  - '{home}/.bridge/sessions/<id>.json  device and capabilities cached at connect'
+  - '{home}/.bridge/test/<test_id>.json test app secret and that environment''s tokens'
+
+exit_codes:
+  0: success
+  1: failed on the device (an assertion was false, a wait timed out on the device, a terminal command exited non-zero)
+  2: usage error (unknown command, bad argument, missing --yes)
+  3: not signed in, or the token expired and could not be refreshed
+  4: forbidden (not the owner, no access, wrong kind of member)
+  5: not found (device, session, file, request)
+  6: conflict (device in use, session ended, already paired, stale version)
+  7: device offline
+  8: session paused for a takeover
+  9: timed out waiting for the device
+  10: not supported on this device (missing capability)
+  11: test environment problem (secret invalid, environment not ready, test-only command without --test, device limit)
+  12: rate limited
+  13: incompatible versions (API sunset, app or CLI too old)
+  14: service unavailable
+
+errors:
+  # code: exit code, meaning. Every error prints message + hint; codes are stable.
+  not_signed_in: [3, 'No saved login. Run `bridge login <slt>`.']
+  token_expired: [3, 'Refresh failed; the IAM session ended. Get a new SLT and run `bridge login <slt>`.']
+  slt_invalid: [3, 'IAM rejected the short-lived token: expired, used, or for another application.']
+  not_a_team_member: [4, 'The signed-in member is not an active member of the team.']
+  carbon_only: [4, 'Only Carbons can do this (pairing and managing devices).']
+  silicon_only: [4, 'Only Silicons can do this (sessions and requests).']
+  not_owner: [4, 'Only the Carbon who paired the device can do this.']
+  no_access: [4, 'This Silicon has no access to the device. The owner can grant it with `bridge device access grant`.']
+  access_removed: [4, 'Access was removed during the session; the session has ended.']
+  not_session_owner: [4, 'The session belongs to another Silicon.']
+  device_not_found: [5, 'No device with that id is visible to you in this team and environment.']
+  session_not_found: [5, 'No session with that id.']
+  file_not_found: [5, 'The file does not exist or already self-destructed.']
+  pairing_code_invalid: [5, 'The code is wrong, expired or already used. Codes rotate every 5 minutes; use the one on screen now.']
+  unknown_command: [2, 'Not a Bridge command. If agent-device has it, the message says why Bridge leaves it out and what to use instead.']
+  invalid_input: [2, 'An argument is out of range or malformed; the message names it and the accepted form.']
+  confirmation_required: [2, 'Destructive; re-run with --yes.']
+  device_in_use: [6, 'Another Silicon is using the device. The message names it and since when; the hint is the `bridge request send` command.']
+  device_not_in_use: [6, 'Nothing is running on the device.']
+  device_not_ready: [6, 'The device has not finished setup; the message lists the steps left.']
+  session_ended: [6, 'The session has ended; details.end_reason says why.']
+  no_session: [2, 'No session selected. Run `bridge session new <device_id>` then `bridge session connect <session_id>`, or pass --session.']
+  version_conflict: [6, 'The device changed since you read it. Read it again and retry.']
+  test_device_limit: [11, 'In test environment you are limited to 5 paired devices per environment.']
+  test_environment_limit: [11, 'All 10 test environment slots are in use.']
+  test_only: [11, 'This action is only possible in a test environment. Add --test <test_id>.']
+  testing_secret_invalid: [11, 'The test secret is invalid, revoked, or its environment is not active. Nothing ran in production.']
+  testing_environment_not_ready: [11, 'Honeycomb has not confirmed every service is ready.']
+  device_offline: [7, 'The device is not connected to Bridge; the message gives when it was last seen and the usual causes for its OS.']
+  session_paused: [8, 'A takeover is in progress; the Carbon has the device. See `bridge takeover status`.']
+  command_timeout: [9, 'The device did not answer before the deadline. The command may still have run.']
+  unsupported_on_device: [10, 'The device lacks the capability; the message names it and why (OS, or a permission not granted).']
+  rate_limited: [12, 'Too many attempts; the message says when to retry.']
+  api_version_unsupported: [13, 'No API version in common. Update with `honeycomb install ''bridge''`.']
+  api_version_sunset: [13, 'This API version was retired. Update the CLI.']
+  service_unavailable: [14, 'Bridge or a service it depends on is down; the message names which.']
+
+commands:
+
+  # ───────────────────────────── Getting started ─────────────────────────────
+  - usage: bridge login <slt>
+    who: both
+    summary: Sign in with a short-lived token from Silicon IAM. Never asks for a password.
+    takes:
+      slt: 'The SLT from the IAM CLI or consent screen. In a test environment (with --test) an existing test member id such as c:alice or si:chef also works. Refused in production.'
+    gives:
+      text: 'Signed in as si:chef (Silicon) in teams: acme. Default team: acme.'
+      json: '{authenticated: true, member: {type, id}, teams: [..], team: "acme"}'
+    api: POST /api/v1/auth/login
+    notes: Tokens are saved to {home}/.bridge/auth.json (0600). With --test they are saved in that environment's file, never over the production login.
+
+  - usage: bridge login status [--json]
+    who: both
+    summary: Check who is signed in, verified live with IAM.
+    gives:
+      text: 'Authenticated as si:chef (Silicon) in team acme.'
+      json: '{authenticated: true, member: {type: "silicon", id: "si:chef"}, teams: ["acme"], team: "acme", team_role: null}. When not signed in: {authenticated: false, reason: "..."} and exit 3.'
+    api: GET /api/v1/auth/me
+
+  - usage: bridge logout
+    who: both
+    summary: Sign out and delete the saved tokens. A Silicon signing out ends its running sessions.
+    gives: {text: 'Signed out si:chef. Ended session a3f.'}
+    api: POST /api/v1/auth/logout
+
+  - usage: bridge iam [--json]
+    who: anyone, no login needed
+    summary: Show Bridge's public IAM application details.
+    gives:
+      text: 'app_id: bridge, IAM: https://backend.iam.teamofsilicons.com, API: https://backend.bridge.teamofsilicons.com'
+      json: '{app_id: "bridge", iam_base_url, api_base_url, website_url, docs_url, repository_url, testing_environment}'
+    api: GET /api/v1/iam
+
+  - usage: bridge team ls | bridge team use <handle>
+    who: both
+    summary: List the teams this login reaches, or set the default team for later commands.
+    gives: {text: 'acme (default), labs', json: '{teams: [..], default: "acme"}'}
+    api: GET /api/v1/auth/me
+
+  - usage: bridge config home <dir>
+    who: both
+    summary: Move where Bridge keeps its state. Default {SILICON_HOME or ~}/.bridge.
+    takes: {dir: 'An existing directory. Anything else fails with "not a directory: <dir>" (exit 2).'}
+    gives: {text: 'Bridge state now lives in /data/si-chef/.bridge'}
+
+  - usage: bridge config ls | get <key> | set <key> <value> | unset <key>
+    who: both
+    summary: Read and change settings.
+    takes:
+      keys:
+        telemetry: 'on|off (default on)'
+        output: 'text|json (default text); json makes --json the default'
+        team: default team handle
+        screenshot_scale: '0.01–1, default 1; applied to screenshot when --scale is not given'
+        self_destruct: 'default file self-destruct, e.g. 1d, 90m, 30d (1m–30d, default 1d)'
+        download_dir: 'where `--out` and `bridge file get` save by default (default current directory)'
+        color: 'auto|always|never'
+
+  - usage: bridge config test add <test_id> | ls | rm <test_id>
+    who: both
+    summary: Save a test environment's app_secret so `--test <test_id>` can use it.
+    takes:
+      test_id: Honeycomb environment_id (UUID)
+      secret: 'Read from stdin (never an argument, so it stays out of shell history). Must match ^ask_[A-Za-z0-9_-]{43}$. Validated with Bridge before saving.'
+    gives: {text: 'Added test environment "checkout-e2e" (9b3e…). Use: bridge --test 9b3e… <command>'}
+    api: GET /api/v1/testing-environment
+
+  # ───────────────────────────── Devices (Carbon manages, Silicon lists) ─────────────────────────────
+  - usage: bridge device ls [--online] [--os <os>] [--team-visible] [--json]
+    who: both
+    summary: 'Silicon: every device you have access to. Carbon: every device you paired (--team-visible: other Carbons'' team-visible devices).'
+    gives:
+      text: |
+        ID        NAME             OS          ONLINE  IN USE BY          DAYS LEFT
+        7c1e09ab  Saket's Pixel    android     yes     si:chef (a3f, 4m)  14
+        0d44e1f2  Living room TV   android_tv  no      —                  9
+      json: '{items: [Device], next_cursor}'
+    api: GET /api/v1/devices
+
+  - usage: bridge device show <device_id> [--json]
+    who: both
+    summary: One device, and what a Silicon can do on it given its OS and the permissions it has.
+    gives:
+      text: 'Name, OS, owner, online, who is using it, days left, then "You can:" with each capability and its commands, then "Missing:" with each unavailable capability and why.'
+      json: '{...Device, capabilities: [..], missing: [{capability, reason}], commands: [..]}'
+    api: GET /api/v1/devices/{device_id}
+
+  - usage: bridge device pair <pairing_code> --name <name> [--visibility team|personal] [--ttl-days <1-30>] [--access <silicon_id>]...
+    who: carbon
+    summary: Pair the device showing this code into your default team (or --team) and the current environment.
+    takes:
+      pairing_code: '6 hexadecimal characters, any case (4F9C2A = 4f9c2a). Rotates every 5 minutes; works once.'
+      --name: 1–64 characters
+      --visibility: 'team (default): other Carbons in the team see it exists. personal: only you.'
+      --ttl-days: 'Days without activity before the pair ends. 1–30, default 14.'
+      --access: 'Silicons to give access now; repeatable. Can be skipped and done later.'
+    gives:
+      text: 'Paired 7c1e09ab "Saket''s Pixel". Setup: 2 of 4 steps left on the device. Watch with: bridge device setup 7c1e09ab'
+      json: '{Device}'
+    api: POST /api/v1/pairings
+
+  - usage: bridge device attach <host_device_id> --os ios|ipados|tvos|samsung_tv|lg_tv --name <name>
+    who: carbon
+    summary: Pair an iPhone, iPad, Apple TV or Samsung/LG TV through a paired Mac or computer on the same network.
+    gives: {text: 'Created 51ab93c0 "Saket''s iPhone" through 2e7f00d1 (MacBook). Next: plug the iPhone into the Mac and tap Trust. Follow with: bridge device setup 51ab93c0'}
+    api: POST /api/v1/devices/{device_id}/attachments
+
+  - usage: bridge device setup <device_id> [--watch]
+    who: carbon
+    summary: The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete.
+    gives: {text: 'One line per step: ✓ done, … in progress, ! needs you (with where to find it on the device).', json: '{Setup}'}
+    api: GET /api/v1/devices/{device_id}/setup
+
+  - usage: bridge device setup-code <device_id> <code>
+    who: carbon
+    summary: Enter the 4-digit code an Apple TV shows during setup.
+    api: POST /api/v1/devices/{device_id}/setup/code
+
+  - usage: bridge device rename <device_id> <name>
+    who: carbon (owner)
+    api: PATCH /api/v1/devices/{device_id}
+
+  - usage: bridge device visibility <device_id> team|personal
+    who: carbon (owner)
+    api: PATCH /api/v1/devices/{device_id}
+
+  - usage: bridge device ttl <device_id> <days>
+    who: carbon (owner)
+    summary: Set how long the device stays paired without activity. 1–30 days.
+    gives: {text: 'Saket''s Pixel stays paired until 2026-10-10 unless used (14 days without activity).'}
+    api: PATCH /api/v1/devices/{device_id}
+
+  - usage: bridge device stop <device_id>
+    who: carbon (owner)
+    summary: Stop the Silicon using the device right now.
+    gives: {text: 'Stopped si:chef (session a3f) on Saket''s Pixel.'}
+    api: POST /api/v1/devices/{device_id}/stop
+
+  - usage: bridge device rm <device_id> --yes
+    who: carbon (owner)
+    summary: Remove the device. Ends any session and every Silicon's access, and unpairs it. Devices paired through it are removed too.
+    gives: {text: 'Without --yes: what would be removed, then exit 2. With --yes: "Removed 7c1e09ab."'}
+    api: DELETE /api/v1/devices/{device_id}
+
+  - usage: bridge device access ls <device_id>
+    who: carbon (owner)
+    gives: {text: 'SILICON  GRANTED BY  GRANTED  LAST USED', json: '{items: [AccessGrant]}'}
+    api: GET /api/v1/devices/{device_id}/access
+
+  - usage: bridge device access grant <device_id> <silicon_id>...
+    who: carbon (owner)
+    summary: Give one or more Silicons access. They must be in the same team.
+    api: PUT /api/v1/devices/{device_id}/access/{silicon_id}
+
+  - usage: bridge device access revoke <device_id> <silicon_id>...
+    who: carbon (owner)
+    summary: Take access away. A running session by that Silicon ends at once.
+    api: DELETE /api/v1/devices/{device_id}/access/{silicon_id}
+
+  - usage: bridge device activity <device_id> [--silicon <id>] [--session <id>] [--since <time>] [--until <time>] [--limit <n>]
+    who: carbon (owner)
+    summary: Every action on the device, which Silicon did it, and when. Typed text is redacted.
+    takes: {--since/--until: 'RFC 3339, or relative like 2h, 3d'}
+    gives: {text: 'TIME  SILICON  SESSION  ACTION  OUTCOME  FILES', json: '{items: [ActivityEntry], next_cursor}'}
+    api: GET /api/v1/devices/{device_id}/activity
+
+  - usage: bridge device requests <device_id>
+    who: carbon (owner)
+    summary: Requests Silicons sent each other for this device, with their reasons.
+    api: GET /api/v1/devices/{device_id}/requests
+
+  # ───────────────────────────── Sessions (Silicon) ─────────────────────────────
+  - usage: bridge session new <device_id> [--connect]
+    who: silicon
+    summary: Start using a device. Prints the session id. --connect also connects to it.
+    gives:
+      text: |
+        a3f
+        (stderr) Started session a3f on Saket's Pixel (android). Next: bridge session connect a3f. Ends after 5 minutes without a command.
+      json: '{Session}'
+    errors: [device_in_use, device_offline, device_not_ready, no_access]
+    api: POST /api/v1/sessions
+
+  - usage: bridge session connect <session_id>
+    who: silicon
+    summary: Make this the session later commands run in, and load its device's commands into --help.
+    gives: {text: 'Connected to a3f on Saket''s Pixel (android). Try: bridge snapshot -i'}
+    api: GET /api/v1/sessions/{session_id}
+
+  - usage: bridge session disconnect
+    who: silicon
+    summary: Forget the connected session locally. Does not end it.
+
+  - usage: bridge session status [<session_id>] [--json]
+    who: silicon
+    summary: State, device, started, last command, when it will end for inactivity.
+    gives: {text: 'a3f active on Saket''s Pixel since 10:00, 12 commands, idle end at 10:09:12', json: '{Session + device + capabilities}'}
+    api: GET /api/v1/sessions/{session_id}
+
+  - usage: bridge session ls [--device <device_id>] [--state active|paused|ended]
+    who: both
+    summary: 'Silicon: its sessions. Carbon: sessions on its devices.'
+    api: GET /api/v1/sessions
+
+  - usage: bridge session end [<session_id>]
+    who: silicon
+    summary: Finish and free the device for other Silicons. Defaults to the connected session.
+    gives: {text: 'Ended a3f after 14m (23 commands). Saket''s Pixel is free.'}
+    api: POST /api/v1/sessions/{session_id}/end
+
+  - usage: bridge takeover --reason "<text>" | bridge takeover status | bridge takeover release
+    who: silicon
+    needs: [session, capability takeover]
+    summary: Hand the device to its Carbon (Face ID, a payment, an admin prompt). Commands are refused until the Carbon taps Done or you release. Up to 30 minutes.
+    takes: {--reason: '1–300 characters, shown on the device and website'}
+    api: POST|GET|DELETE /api/v1/sessions/{session_id}/takeover
+
+  # ───────────────────────────── Requests (Silicon) ─────────────────────────────
+  - usage: bridge request send <device_id> --reason "<text>"
+    who: silicon
+    summary: Ask the Silicon using a device for it. Delivered through Ting with the reason exactly as written.
+    takes: {--reason: '1–300 characters, required'}
+    gives: {text: 'Sent to si:chef (using Saket''s Pixel since 09:58).', json: '{Request}'}
+    errors: [device_not_in_use, no_access]
+    api: POST /api/v1/devices/{device_id}/requests
+
+  - usage: bridge request ls [--sent|--received] [--device <device_id>]
+    who: silicon
+    api: GET /api/v1/requests
+
+  # ───────────────────────────── Files ─────────────────────────────
+  - usage: bridge file ls [--session <id>] [--device <id>] [--kind screenshot|recording|log|replay_script|diff]
+    who: both
+    summary: Files made in your sessions (Silicon) or on your devices (Carbon), with Briefcase links and self-destruct times.
+    api: GET /api/v1/files
+
+  - usage: bridge file show <file_id>
+    who: both
+    api: GET /api/v1/files/{file_id}
+
+  - usage: bridge file get <file_id> [--out <path>]
+    who: both
+    summary: Download a file from Briefcase to a local path.
+
+  - usage: bridge file keep <file_id>
+    who: silicon (that made it)
+    summary: Make a file permanent before it self-destructs.
+    api: POST /api/v1/files/{file_id}/keep
+
+  # ───────────────────────────── Help, versions, reports ─────────────────────────────
+  - usage: bridge --help | bridge <command> --help
+    summary: The documentation tree. Top level shows getting started, every branch with a one-line purpose, and links. While connected to a session, the device commands shown are only those that work on that device.
+
+  - usage: bridge version [--json]
+    summary: CLI version, client crate version, API version negotiated, and whether this CLI is deprecated (from the compatibility matrix).
+    api: GET /api/version, GET /api/v1/contracts
+
+  - usage: bridge docs
+    summary: Print the repository, docs, website and crate links, and where state is kept.
+
+  - usage: bridge report "<message>" [--pr <url>]
+    who: both
+    summary: Report a bug. Attach a PR if you already fixed it. Without --pr, prints the repository link and invites one.
+    gives: {text: 'Report 4e1b… sent to the Bridge team. You can also open a PR at https://github.com/teamofsilicons/silicon-bridge'}
+    api: POST /api/v1/reports
+
+  # ───────────────────────────── Test environment only ─────────────────────────────
+  - usage: bridge --test <test_id> env show
+    who: both
+    summary: The test environment's name, state, signed-in test identity, and paired devices out of 5. Without --test fails with test_only.
+    api: GET /api/v1/testing-environment
+
+# ───────────────────────────── Device commands (need a session) ─────────────────────────────
+# These are agent-device commands, run through Bridge on the session's device. Arguments and output are agent-device's;
+# `command` + `args` (the tokens after the name) is what the client sends in POST /api/v1/sessions/{session_id}/commands. Each needs the listed capability
+# (TECHNICAL.md §5). Flags every one of them accepts: --session, --timeout, --json.
+# Commands that make files also accept --ttl <1m–30d> (default 1d), --keep (permanent), and --out <path> (also save locally).
+# Files are returned with their Briefcase link.
+
+device_commands:
+
+  # See the screen
+  - usage: bridge snapshot [-i] [--diff] [-d <depth>] [-s <scope>] [--raw] [--actions]
+    capability: screen.read
+    takes: {-i: 'interactive elements only', -d: 'depth limit', -s: 'text or @ref; subtree of the first match', --raw: full provider tree, --diff: compare with the previous snapshot}
+    gives: {text: 'Element tree with refs, e.g. @e2 button "Continue". Refs stay valid until the next snapshot.', json: '{nodes, refs, truncated}'}
+  - usage: bridge get text|attrs <@ref|selector>
+    capability: screen.read
+    gives: {text: 'The element''s text, or its attributes'}
+  - usage: bridge find <text> [click|fill <text>|list] | bridge find label|role|text <value> <action>
+    capability: screen.read
+    summary: Find by meaning and act in one step.
+  - usage: bridge is visible|hidden|exists|absent|editable|selected|focused|text <selector> [<value>]
+    capability: screen.read
+    gives: {text: 'pass or fail with the reason', exit: '0 pass, 1 fail'}
+  - usage: bridge wait <ms> | wait text <text> [ms] | wait <@ref|selector> [ms] | wait absent <selector> [ms]
+    capability: screen.read
+    gives: {exit: '0 when met; 1 with reason wait_target_absent or wait_target_present when not'}
+  - usage: bridge screenshot [<name>] [--scale <0.01-1>] [--overlay-refs] [--crop-on <selector>] [--fullscreen]
+    capability: screen.capture
+    gives: {text: 'Briefcase link and size', json: '{files: [File], width, height}'}
+  - usage: bridge diff screenshot --baseline <file_id|path> [<current>] [--overlay-refs]
+    capability: screen.capture
+    gives: {text: 'Changed pixels percentage and a Briefcase link to the diff image'}
+  - usage: bridge record start [<name>] [--scope app|device] [--fps <n>] [--quality normal|high] | bridge record stop
+    capability: screen.record
+    gives: {text: 'On stop: Briefcase link to the video. Stops on its own at 30 minutes or 1 GiB.'}
+
+  # Act
+  - usage: bridge click <@ref|selector> [--button primary|secondary]
+    capability: input.pointer or input.touch
+  - usage: bridge press <x> <y> [--count <n>] [--hold-ms <ms>] [--interval-ms <ms>] | bridge press <@ref|selector>
+    capability: input.touch or input.pointer
+  - usage: bridge longpress <x> <y> [<ms>]
+    capability: input.touch
+  - usage: bridge fill <@ref|selector> <text> [--delay-ms <ms>]
+    capability: input.text
+    summary: Clear the field, then type. Logged as [redacted N chars].
+  - usage: bridge type <text> [--delay-ms <ms>]
+    capability: input.text
+    summary: Type into the focused field without clearing. Logged as [redacted N chars].
+  - usage: bridge focus <@ref|selector>
+    capability: input.text
+  - usage: bridge scroll up|down|left|right [<fraction>] [--pixels <n>]
+    capability: input.touch or input.pointer
+  - usage: bridge swipe <x1> <y1> <x2> <y2> [--count <n>] [--pause-ms <ms>]
+    capability: input.touch
+  - usage: bridge gesture pan|fling|drag|pinch|rotate|transform ...
+    capability: input.touch
+  - usage: bridge hover <@ref|selector>
+    capability: input.pointer
+  - usage: bridge back | bridge home | bridge app-switcher
+    capability: nav.system
+  - usage: bridge tv-remote press|longpress <up|down|left|right|select|back|home|menu|play-pause|volume-up|volume-down|mute|power> [--duration-ms <ms>]
+    capability: input.remote
+  - usage: bridge keyboard status|dismiss
+    capability: input.keyboard
+  - usage: bridge clipboard read | bridge clipboard write <text>
+    capability: clipboard
+    summary: Read output can contain secrets. Writes are logged as [redacted N chars].
+
+  # Apps
+  - usage: bridge open <app|url> [<url>] [--surface app|frontmost-app|desktop|menubar]
+    capability: apps.launch (links for a URL)
+    summary: Open an app by name or id, or a link. --surface is for computers.
+  - usage: bridge close [<app>]
+    capability: apps.launch
+  - usage: bridge apps [--all]
+    capability: apps.list
+  - usage: bridge appstate
+    capability: apps.launch
+  - usage: bridge install <app> <path|file_id> | bridge reinstall <app> <path|file_id>
+    capability: apps.install
+    summary: Install an .apk or .aab. A local path is uploaded through Bridge.
+
+  # Waiting for and handling pop-ups
+  - usage: bridge alert [get|wait <ms>|accept|dismiss]
+    capability: alerts
+
+  # Evidence
+  - usage: bridge logs start|stop|mark <label>|clear
+    capability: logs
+    gives: {text: 'On stop: Briefcase link to the saved log'}
+
+  # Replay
+  - usage: bridge replay <script.ad|file_id> [--from <n> --plan-digest <sha256>] [--keep-session]
+    capability: replay
+    summary: Run saved steps again. The script is read locally or from Briefcase and sent with the request.
+  - usage: bridge test <path|glob> [--retries <0-3>]
+    capability: replay
+    summary: Run several .ad scripts in order. (agent-device's `test`, not the --test flag.)
+  - usage: bridge batch --steps '<json>' | --steps-file <path>
+    capability: replay
+    summary: Several commands in one request; stops at the first error.
+  - usage: bridge close --save-script [<path>]
+    capability: replay
+    summary: Close the app and save the steps of this session as an .ad script, locally and in Briefcase.
+
+  # Bridge additions (not in agent-device)
+  - usage: bridge terminal run <command> [--cwd <dir>] [--env KEY=VALUE]...
+    capability: terminal
+    summary: Run a shell command on the computer as the signed-in user. Prints stdout and stderr; exits with the command's exit code (non-zero → 1, with details.exit_code).
+    gives: {json: '{stdout, stderr, exit_code, duration_ms}'}
+  - usage: bridge adb <args>...
+    capability: adb
+    summary: 'Android debugging on the device itself, e.g. `bridge adb shell dumpsys battery`, `bridge adb logcat -d`. Files it produces go to Briefcase.'
+  - usage: bridge notifications [--json]
+    capability: notifications
+    summary: Read the Android device's current notifications.
+    gives: {json: '{items: [{app, title, text, posted_at}]}'}
+  - usage: bridge display show --url <url> | --image <path|url|file_id> | --video <path|url|file_id> | --text <text>
+    capability: display
+    summary: 'Put something full screen on the TV. It stays until `bridge display clear` or someone presses back. Apple TV: images and videos only.'
+  - usage: bridge display clear
+    capability: display
+
+not_exposed:
+  summary: 'agent-device commands for app developers, and ones Bridge replaces. Sending one gives unknown_command naming the replacement.'
+  replaced: {devices: bridge device ls, connect: bridge session connect, disconnect: bridge session disconnect, 'session list': bridge session ls, help: bridge --help}
+  left_out: [boot, shutdown, web, viewport, react-native, react-devtools, metro, cdp, perf, trace, 'network dump', 'debug symbols',
+    'audio probe', push, trigger-app-event, install-from-source, settings, fold, orientation, action-button, 'prepare ios-runner', mcp, doctor]
+
+examples:
+  silicon_first_use: |
+    bridge login "$SLT"
+    bridge device ls
+    bridge device show 7c1e09ab
+    bridge session new 7c1e09ab --connect
+    bridge open com.whatsapp
+    bridge snapshot -i
+    bridge click @e4
+    bridge fill @e7 "On my way"
+    bridge screenshot --ttl 7d
+    bridge session end
+  device_busy: |
+    bridge session new 7c1e09ab
+    # exit 6: Device 7c1e09ab (Saket's Pixel) is being used by si:chef in session a3f since 09:58.
+    bridge request send 7c1e09ab --reason "Need 2 minutes to check an OTP for the vendor portal"
+  carbon_pairs_a_phone: |
+    bridge login "$SLT"
+    bridge device pair 4f9c2a --name "Saket's Pixel" --access si:chef
+    bridge device setup 7c1e09ab --watch
+  testing: |
+    printf %s "$TEST_APP_SECRET" | bridge config test add 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c
+    bridge --test 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c login si:chef
+    bridge --test 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c device ls
+    # stderr, always last: [test environment: checkout-e2e (9b3e0c1a…) as si:chef]

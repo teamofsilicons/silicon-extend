@@ -1,0 +1,315 @@
+import type { CloudWebDriverCapabilityOverrides } from './capabilities.ts';
+import { buildCloudWebDriverBaseCapabilities } from './runtime.ts';
+import {
+  readAwsArtifacts,
+  type AwsDeviceFarmArtifact,
+  type AwsDeviceFarmArtifactGroup,
+} from './aws-device-farm-artifacts.ts';
+import type {
+  CloudWebDriverPlatform,
+  CloudWebDriverRuntimeOptions,
+  CloudWebDriverPrepareSession,
+} from './runtime.ts';
+import type { DeviceLease, LeaseLifecycleContext } from '@agent-device/contracts/device';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { AppError } from '@agent-device/kernel/errors';
+import type { RunHostCommand } from './dependencies.ts';
+import { releaseOnFailure, resolveLeaseValue, type LeaseValue } from './webdriver-utils.ts';
+
+export const AWS_DEVICE_FARM_CAPABILITY_OVERRIDES = {
+  install: {
+    support: 'unsupported',
+    note: 'Pass appArn when creating the remote access session; local artifact upload/install is not implemented.',
+  },
+  portReverse: {
+    support: 'unsupported',
+    note: 'AWS Device Farm remote access does not expose agent-device port reverse.',
+  },
+  artifacts: {
+    support: 'supported',
+    note: 'AWS Device Farm remote access exposes provider-hosted video, Appium logs, and device logs after session completion.',
+  },
+} as const satisfies CloudWebDriverCapabilityOverrides;
+
+export {
+  listAwsDeviceFarmCloudArtifacts,
+  type AwsDeviceFarmArtifact,
+  type AwsDeviceFarmArtifactGroup,
+} from './aws-device-farm-artifacts.ts';
+
+export type AwsDeviceFarmRemoteAccessSession = {
+  arn: string;
+  status?: string;
+  result?: string;
+  remoteDriverEndpoint?: string;
+  endpoint?: string;
+  remoteDebugUrl?: string;
+  remoteRecordAppUrl?: string;
+  endpoints?: Record<string, string>;
+  device?: {
+    name?: string;
+    platform?: string;
+    os?: string;
+  };
+};
+
+export type AwsDeviceFarmClient = {
+  createRemoteAccessSession(
+    input: AwsCreateRemoteAccessSessionInput,
+  ): Promise<AwsDeviceFarmRemoteAccessSession>;
+  getRemoteAccessSession(arn: string): Promise<AwsDeviceFarmRemoteAccessSession>;
+  stopRemoteAccessSession(arn: string): Promise<AwsDeviceFarmRemoteAccessSession | undefined>;
+  listArtifacts(arn: string, type: AwsDeviceFarmArtifactGroup): Promise<AwsDeviceFarmArtifact[]>;
+};
+
+export type AwsCreateRemoteAccessSessionInput = {
+  projectArn: string;
+  deviceArn: string;
+  name: string;
+  appArn?: string;
+  interactionMode?: 'INTERACTIVE' | 'NO_VIDEO' | 'VIDEO_ONLY';
+  configuration?: Record<string, unknown>;
+};
+
+export type AwsDeviceFarmWebDriverRuntimeOptions = {
+  clientVersion: string;
+  projectArn: string;
+  deviceArn: string;
+  region?: string;
+  platform?: CloudWebDriverPlatform;
+  deviceName?: string;
+  appArn?: string;
+  sessionName?: LeaseValue<string>;
+  webdriverCapabilities?:
+    | Record<string, unknown>
+    | ((lease: DeviceLease) => Record<string, unknown>);
+  client?: AwsDeviceFarmClient;
+  pollIntervalMs?: number;
+  startupTimeoutMs?: number;
+  interactionMode?: AwsCreateRemoteAccessSessionInput['interactionMode'];
+  configuration?: AwsCreateRemoteAccessSessionInput['configuration'];
+  deviceId?: CloudWebDriverRuntimeOptions['deviceId'];
+  requestPolicy?: CloudWebDriverRuntimeOptions['requestPolicy'];
+  prepareSession?: CloudWebDriverRuntimeOptions['prepareSession'];
+};
+
+export type AwsCliDeviceFarmClientOptions = {
+  runHostCommand: RunHostCommand;
+  region?: string;
+  awsCommand?: string;
+};
+
+export function createAwsCliDeviceFarmClient(
+  options: AwsCliDeviceFarmClientOptions,
+): AwsDeviceFarmClient {
+  const runDeviceFarmJson = createAwsDeviceFarmCommandRunner(options);
+  return {
+    createRemoteAccessSession: async (input) => {
+      const json = await runDeviceFarmJson('create-remote-access-session', [
+        '--project-arn',
+        input.projectArn,
+        '--device-arn',
+        input.deviceArn,
+        '--name',
+        input.name,
+        ...(input.appArn ? ['--app-arn', input.appArn] : []),
+        ...(input.interactionMode ? ['--interaction-mode', input.interactionMode] : []),
+        ...(input.configuration ? ['--configuration', JSON.stringify(input.configuration)] : []),
+      ]);
+      return readRemoteAccessSession(json);
+    },
+    getRemoteAccessSession: async (arn) => {
+      const json = await runDeviceFarmJson('get-remote-access-session', ['--arn', arn]);
+      return readRemoteAccessSession(json);
+    },
+    stopRemoteAccessSession: async (arn) => {
+      const json = await runDeviceFarmJson('stop-remote-access-session', ['--arn', arn]);
+      return readRemoteAccessSession(json);
+    },
+    listArtifacts: async (arn, type) => {
+      const json = await runDeviceFarmJson('list-artifacts', ['--arn', arn, '--type', type]);
+      return readAwsArtifacts(json);
+    },
+  };
+}
+
+export function createAwsDeviceFarmPrepareSession(
+  options: Required<
+    Pick<
+      AwsDeviceFarmWebDriverRuntimeOptions,
+      'client' | 'platform' | 'deviceName' | 'projectArn' | 'deviceArn'
+    >
+  > &
+    Omit<
+      AwsDeviceFarmWebDriverRuntimeOptions,
+      'client' | 'platform' | 'deviceName' | 'clientVersion'
+    >,
+): CloudWebDriverPrepareSession {
+  return async ({ lease, req, base }) => {
+    const remoteAccess = await options.client.createRemoteAccessSession({
+      projectArn: options.projectArn,
+      deviceArn: options.deviceArn,
+      appArn: options.appArn,
+      name: resolveLeaseValue(options.sessionName, lease) ?? `agent-device-${lease.leaseId}`,
+      interactionMode: options.interactionMode,
+      configuration: options.configuration,
+    });
+    // The ARN is a billed session from here on; any failure short of RUNNING
+    // must stop it before surfacing, or it bills until AWS reaps it.
+    let running: AwsDeviceFarmRemoteAccessSession;
+    let endpoint: string | undefined;
+    try {
+      running = await waitForRunningRemoteAccessSession(remoteAccess.arn, options, req);
+      endpoint = selectAwsDeviceFarmWebDriverEndpoint(running);
+      if (!endpoint) {
+        throw new AppError(
+          'COMMAND_FAILED',
+          'AWS Device Farm did not expose a WebDriver endpoint.',
+          { sessionArn: running.arn, status: running.status },
+        );
+      }
+    } catch (error) {
+      await releaseOnFailure(error, () => options.client.stopRemoteAccessSession(remoteAccess.arn));
+      throw error;
+    }
+    const deviceName = running.device?.name ?? options.deviceName;
+    const configured =
+      typeof options.webdriverCapabilities === 'function'
+        ? options.webdriverCapabilities(lease)
+        : (options.webdriverCapabilities ?? {});
+    const awsDefaults = options.platform === 'android' ? { 'appium:autoLaunch': false } : {};
+    return {
+      ...base,
+      endpoint,
+      platform: options.platform,
+      deviceName,
+      webdriverCapabilities: buildCloudWebDriverBaseCapabilities(options.platform, deviceName, {
+        ...awsDefaults,
+        ...configured,
+      }),
+      cleanup: async () => {
+        await options.client.stopRemoteAccessSession(running.arn);
+        return { awsDeviceFarmSessionArn: running.arn };
+      },
+      providerSessionId: running.arn,
+      providerData: {
+        awsDeviceFarmSessionArn: running.arn,
+      },
+    };
+  };
+}
+
+function selectAwsDeviceFarmWebDriverEndpoint(
+  session: AwsDeviceFarmRemoteAccessSession,
+): string | undefined {
+  const endpointValues =
+    session.endpoints && typeof session.endpoints === 'object'
+      ? Object.values(session.endpoints)
+      : [];
+  const candidates = [
+    session.remoteDriverEndpoint,
+    session.endpoint,
+    ...endpointValues,
+    session.remoteDebugUrl,
+    session.remoteRecordAppUrl,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const endpoint = candidates.find((value) => !/^wss?:\/\//i.test(value));
+  return endpoint ? normalizeAwsDeviceFarmEndpoint(endpoint) : undefined;
+}
+
+function normalizeAwsDeviceFarmEndpoint(endpoint: string): string {
+  return /^https?:\/\//i.test(endpoint) ? endpoint : `http://${endpoint}`;
+}
+
+async function waitForRunningRemoteAccessSession(
+  arn: string,
+  options: {
+    client: AwsDeviceFarmClient;
+    pollIntervalMs?: number;
+    startupTimeoutMs?: number;
+  },
+  req: LeaseLifecycleContext | undefined,
+): Promise<AwsDeviceFarmRemoteAccessSession> {
+  const pollIntervalMs = options.pollIntervalMs ?? 5_000;
+  const startedAt = Date.now();
+  // The daemon's allocation deadline is the bound when present (real-device
+  // startup routinely needs the whole ~2 min); the standalone default only
+  // applies when no allocation budget was supplied.
+  const deadline = req?.deadline ?? startedAt + (options.startupTimeoutMs ?? 120_000);
+  const signal = req?.signal;
+  let last = await options.client.getRemoteAccessSession(arn);
+  while (Date.now() < deadline) {
+    signal?.throwIfAborted();
+    if (last.status === 'RUNNING') return last;
+    throwIfRemoteAccessSessionEnded(last);
+    // Wake early on cancellation; the typed reason is rethrown at the loop top.
+    await sleep(pollIntervalMs, undefined, { signal }).catch(() => signal?.throwIfAborted());
+    last = await options.client.getRemoteAccessSession(arn);
+  }
+  throw new AppError('COMMAND_FAILED', 'Timed out waiting for AWS Device Farm remote access.', {
+    sessionArn: arn,
+    status: last.status,
+    result: last.result,
+    timeoutMs: deadline - startedAt,
+  });
+}
+
+const ENDED_REMOTE_ACCESS_STATUSES = new Set(['ERRORED', 'STOPPED', 'COMPLETED']);
+
+function throwIfRemoteAccessSessionEnded(session: AwsDeviceFarmRemoteAccessSession): void {
+  if (!session.status || !ENDED_REMOTE_ACCESS_STATUSES.has(session.status)) return;
+  throw new AppError('COMMAND_FAILED', 'AWS Device Farm remote access session did not start.', {
+    sessionArn: session.arn,
+    status: session.status,
+    result: session.result,
+  });
+}
+
+async function runAwsJson(
+  runHostCommand: RunHostCommand,
+  command: string,
+  args: string[],
+): Promise<unknown> {
+  const result = await runHostCommand(command, args);
+  try {
+    return JSON.parse(result.stdout) as unknown;
+  } catch (error) {
+    throw new AppError(
+      'COMMAND_FAILED',
+      'AWS Device Farm returned invalid JSON.',
+      undefined,
+      error,
+    );
+  }
+}
+
+export function createAwsDeviceFarmCommandRunner(
+  options: AwsCliDeviceFarmClientOptions,
+): (subcommand: string, args: string[]) => Promise<unknown> {
+  const regionArgs = options.region ? ['--region', options.region] : [];
+  const awsCommand = options.awsCommand ?? 'aws';
+  return async (subcommand, args) =>
+    await runAwsJson(options.runHostCommand, awsCommand, [
+      'devicefarm',
+      subcommand,
+      ...regionArgs,
+      ...args,
+      '--output',
+      'json',
+    ]);
+}
+
+function readRemoteAccessSession(value: unknown): AwsDeviceFarmRemoteAccessSession {
+  if (!value || typeof value !== 'object') {
+    throw new AppError('COMMAND_FAILED', 'AWS Device Farm response was not an object.', {
+      response: value,
+    });
+  }
+  const session = (value as { remoteAccessSession?: unknown }).remoteAccessSession;
+  if (!session || typeof session !== 'object') {
+    throw new AppError('COMMAND_FAILED', 'AWS Device Farm response missed remoteAccessSession.', {
+      response: value,
+    });
+  }
+  return session as AwsDeviceFarmRemoteAccessSession;
+}

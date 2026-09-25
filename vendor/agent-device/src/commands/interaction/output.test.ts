@@ -1,0 +1,353 @@
+import { describe, expect, test } from 'vitest';
+import { interactionCliOutputFormatters } from './output.ts';
+
+const formatFind = (result: Record<string, unknown>) =>
+  interactionCliOutputFormatters.find({ input: {}, result });
+
+const formatPress = (result: Record<string, unknown>) =>
+  interactionCliOutputFormatters.press({ input: {}, result });
+
+const formatFill = (result: Record<string, unknown>) =>
+  interactionCliOutputFormatters.fill({ input: {}, result });
+
+const formatLongPress = (result: Record<string, unknown>) =>
+  interactionCliOutputFormatters.longpress({ input: {}, result });
+
+describe('find CLI output', () => {
+  test('click prints the same success line as a direct press', () => {
+    const output = formatFind({
+      ref: '@e2',
+      locator: 'any',
+      query: 'Catalog',
+      x: 100,
+      y: 50,
+      message: 'Tapped @e2 (100, 50)',
+    });
+    expect(output.text).toBe('Tapped @e2 (100, 50)');
+  });
+
+  test('fill prefers the success message over the raw filled text', () => {
+    const output = formatFind({
+      x: 100,
+      y: 50,
+      text: 'qa@example.com',
+      message: 'Filled 14 chars',
+    });
+    expect(output.text).toBe('Filled 14 chars');
+  });
+
+  test('focus prints the delegated focus confirmation', () => {
+    const output = formatFind({ x: 100, y: 50, message: 'Focused (100, 50)' });
+    expect(output.text).toBe('Focused (100, 50)');
+  });
+
+  test('get text still prints the extracted text', () => {
+    const output = formatFind({ ref: '@e2', text: 'Catalog' });
+    expect(output.text).toBe('Catalog');
+  });
+
+  test('exists still prints the found flag', () => {
+    const output = formatFind({ found: true });
+    expect(output.text).toBe('Found: true');
+  });
+
+  test('list renders every match with a pinned, paste-ready ref', () => {
+    const output = formatFind({
+      matches: [
+        { ref: '@e5', node: { ref: 'e5', type: 'Button', label: 'Add' } },
+        { ref: '@e9', node: { ref: 'e9', type: 'Cell', value: 'Add another account' } },
+        { ref: '@e12', node: { ref: 'e12', type: 'Other' } },
+      ],
+      refsGeneration: 500014,
+    });
+
+    expect(output.text).toBe(
+      [
+        '3 matches:',
+        '= @e5~s500014 [button] "Add"',
+        '= @e9~s500014 [cell] "Add another account"',
+        '= @e12~s500014 [other]',
+      ].join('\n'),
+    );
+  });
+
+  test('list without a generation still lists refs unpinned rather than hiding them', () => {
+    const output = formatFind({
+      matches: [{ ref: '@e5', node: { ref: 'e5', type: 'Button', label: 'Add' } }],
+    });
+
+    expect(output.text).toBe(['1 match:', '= @e5 [button] "Add"'].join('\n'));
+  });
+});
+
+describe('press CLI output', () => {
+  test('appends settle verdict and diff lines for selector/coordinate tap messages', () => {
+    const output = formatPress({
+      message: 'Tapped (278, 817)',
+      x: 278,
+      y: 817,
+      settle: {
+        settled: true,
+        waitedMs: 1200,
+        diff: {
+          summary: { additions: 1, removals: 1, unchanged: 8 },
+          lines: [
+            { kind: 'removed', text: '@e4 [button] "Search"' },
+            { kind: 'added', text: '@e9 [text] "Notifications"' },
+          ],
+        },
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Tapped (278, 817)',
+        'settled after 1200ms: +1 -1 (~8 unchanged)',
+        '- @e4 [button] "Search"',
+        '+ @e9 [text] "Notifications"',
+      ].join('\n'),
+    );
+  });
+
+  // ADR 0014: a settled diff activates a PARTIAL frame, so only the pinned form
+  // of the refs it issued is admitted. The diff has to hand the CLI caller that
+  // form directly or a copied `@e9` bounces with plain_ref_requires_complete_frame.
+  test('renders added-line refs pinned at the settle generation', () => {
+    const output = formatPress({
+      message: 'Tapped (278, 817)',
+      x: 278,
+      y: 817,
+      settle: {
+        settled: true,
+        waitedMs: 1200,
+        refsGeneration: 41,
+        diff: {
+          summary: { additions: 1, removals: 1, unchanged: 8 },
+          lines: [
+            { kind: 'removed', text: '@e4 [button] "Search"' },
+            { kind: 'added', text: '@e9 [text] "Notifications"', ref: 'e9' },
+          ],
+        },
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Tapped (278, 817)',
+        'settled after 1200ms: +1 -1 (~8 unchanged)',
+        // A removed line names an element that just left: rendered verbatim,
+        // never as a paste-ready target.
+        '- @e4 [button] "Search"',
+        '+ @e9~s41 [text] "Notifications"',
+      ].join('\n'),
+    );
+  });
+
+  // The warning itself is the dispatcher's output, not this formatter's (#2682);
+  // `cli-output.test.ts` asserts it lands on stdout for `press`.
+  test('leaves the response warning to the dispatcher', () => {
+    const output = formatPress({
+      message: 'Tapped (278, 817)',
+      x: 278,
+      y: 817,
+      warning:
+        'press id="request-mic" opened an Android permission dialog (com.google.android.permissioncontroller) over com.example.app. Use "alert get" to inspect it, then "alert accept" or "alert dismiss" to respond.',
+    });
+
+    expect(output.text).toBe('Tapped (278, 817)');
+    expect(output.stderr).toBeUndefined();
+  });
+
+  test('appends the unchanged interactive tail after a removals-only diff', () => {
+    const output = formatPress({
+      message: 'Tapped @e4 (100, 200)',
+      x: 100,
+      y: 200,
+      settle: {
+        settled: true,
+        waitedMs: 500,
+        diff: {
+          summary: { additions: 0, removals: 2, unchanged: 3 },
+          lines: [
+            { kind: 'removed', text: '@e4 [button] "OK"' },
+            { kind: 'removed', text: '@e5 [text] "Are you sure?"' },
+          ],
+        },
+        tail: [
+          { ref: 'e9', role: 'button', label: 'Add to cart' },
+          { ref: 'e10', role: 'button' },
+        ],
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Tapped @e4 (100, 200)',
+        'settled after 500ms: +0 -2 (~3 unchanged)',
+        '- @e4 [button] "OK"',
+        '- @e5 [text] "Are you sure?"',
+        'unchanged interactive (2):',
+        '= @e9 [button] "Add to cart"',
+        '= @e10 [button]',
+      ].join('\n'),
+    );
+  });
+
+  test('marks the unchanged interactive tail as truncated', () => {
+    const output = formatPress({
+      message: 'Tapped @e4 (100, 200)',
+      x: 100,
+      y: 200,
+      settle: {
+        settled: true,
+        waitedMs: 500,
+        diff: {
+          summary: { additions: 0, removals: 1, unchanged: 20 },
+          lines: [{ kind: 'removed', text: '@e4 [button] "OK"' }],
+        },
+        tail: [{ ref: 'e9', role: 'button', label: 'Add to cart' }],
+        tailTruncated: true,
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Tapped @e4 (100, 200)',
+        'settled after 500ms: +0 -1 (~20 unchanged)',
+        '- @e4 [button] "OK"',
+        'unchanged interactive (1):',
+        '= @e9 [button] "Add to cart"',
+        '… more interactive elements not shown, use snapshot -i',
+      ].join('\n'),
+    );
+  });
+
+  test('prints not-settled verdict without a dangling diff summary', () => {
+    const output = formatPress({
+      message: 'Tapped (278, 817)',
+      x: 278,
+      y: 817,
+      settle: {
+        settled: false,
+        waitedMs: 10000,
+        hint: 'The UI kept changing for the whole settle budget, so no settled diff is shown. Take a fresh snapshot.',
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Tapped (278, 817)',
+        'not settled after 10000ms',
+        'hint: The UI kept changing for the whole settle budget, so no settled diff is shown. Take a fresh snapshot.',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('fill CLI output', () => {
+  test('prints the fill success message without settle details by default', () => {
+    const output = formatFill({
+      text: 'alpenglow',
+      message: 'Filled 9 chars',
+    });
+
+    expect(output.text).toBe('Filled 9 chars');
+  });
+
+  test('appends settle verdict and diff lines when present', () => {
+    const output = formatFill({
+      text: 'alpenglow',
+      message: 'Filled 9 chars',
+      settle: {
+        settled: true,
+        waitedMs: 750,
+        diff: {
+          summary: { additions: 2, removals: 1, unchanged: 4 },
+          lines: [
+            { kind: 'removed', text: '@e4 [text-field] "Search"' },
+            { kind: 'added', text: '@e23 [text-field] "alpenglow"' },
+            { kind: 'added', text: '@e31 [static-text] "Alpenglow"' },
+          ],
+        },
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Filled 9 chars',
+        'settled after 750ms: +2 -1 (~4 unchanged)',
+        '- @e4 [text-field] "Search"',
+        '+ @e23 [text-field] "alpenglow"',
+        '+ @e31 [static-text] "Alpenglow"',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('longpress CLI output', () => {
+  test('appends settle verdict and diff lines when present', () => {
+    const output = formatLongPress({
+      message: 'Long pressed (60, 40)',
+      settle: {
+        settled: true,
+        waitedMs: 600,
+        diff: {
+          summary: { additions: 1, removals: 0, unchanged: 6 },
+          lines: [{ kind: 'added', text: '@e12 [button] "Copy"' }],
+        },
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Long pressed (60, 40)',
+        'settled after 600ms: +1 -0 (~6 unchanged)',
+        '+ @e12 [button] "Copy"',
+      ].join('\n'),
+    );
+  });
+});
+
+// #2682: the family's formatters render their own result and nothing else. Whether a response's
+// `Warning:` lines reach stdout is decided once, by `formatCliOutput`, from the command's descriptor
+// — so these tests pin the reachable inputs (the CLI reader always supplies `get`'s format) and the
+// dispatcher's routing lives in `cli-output.test.ts`.
+const REPAIR_WARNING =
+  'The session app was not foreground when this command arrived (prior state runningBackground), ' +
+  'so the runner activated it before answering (reason stale_target).';
+
+describe('formatter text stays free of warnings', () => {
+  test('get text renders the value with no format, no stderr', async () => {
+    const output = await interactionCliOutputFormatters.get({
+      input: { format: 'text' },
+      result: { text: 'General', warnings: [REPAIR_WARNING] },
+    });
+    expect(output.text).toBe('General');
+    expect(output.stderr).toBeUndefined();
+  });
+
+  test('get --format attrs keeps its JSON parseable', async () => {
+    const output = await interactionCliOutputFormatters.get({
+      input: { format: 'attrs' },
+      result: { node: { type: 'Cell', label: 'General' }, warnings: [REPAIR_WARNING] },
+    });
+    expect(() => JSON.parse(String(output.text))).not.toThrow();
+    expect(output.stderr).toBeUndefined();
+  });
+
+  test('a settle-capable command renders its tap line and settled diff only', async () => {
+    const output = await interactionCliOutputFormatters.press({
+      input: {},
+      result: {
+        message: 'Tapped (10, 20)',
+        x: 10,
+        y: 20,
+        warnings: [REPAIR_WARNING],
+        settle: { settled: true, waitedMs: 400, diff: { summary: { additions: 1, removals: 0 } } },
+      },
+    });
+    expect(output.text).toBe(
+      ['Tapped (10, 20)', 'settled after 400ms: +1 -0 (~0 unchanged)'].join('\n'),
+    );
+  });
+});

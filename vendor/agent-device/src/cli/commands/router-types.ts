@@ -1,0 +1,24 @@
+import type { CliFlags } from '@agent-device/contracts/command';
+import type { AgentDeviceClient } from '../../agent-device-client.ts';
+import type { CliCommandName } from '@agent-device/command-registry/catalog';
+import type { CommandProgressState } from '../../commands/command-progress.ts';
+import type { ReplayTestReporterRuntime } from '../replay-test/reporting.ts';
+
+export type ClientCommandParams = {
+  positionals: string[];
+  flags: CliFlags;
+  client: AgentDeviceClient;
+  debug?: boolean;
+  replayTestReporterRuntime?: ReplayTestReporterRuntime;
+  /** Progress this run's transport already rendered to stderr, read by the output formatters. */
+  commandProgress?: CommandProgressState;
+};
+
+/**
+ * Returns true after producing command output. Returning false means the handler
+ * intentionally produced no output and declined so the router can try the generic route.
+ */
+export type ClientCommandHandler = (params: ClientCommandParams) => Promise<boolean>;
+export type ClientCommandHandlerMap = Partial<
+  Record<CliCommandName, () => Promise<ClientCommandHandler>>
+>;

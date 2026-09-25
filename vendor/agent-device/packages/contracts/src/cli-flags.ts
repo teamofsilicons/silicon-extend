@@ -1,0 +1,174 @@
+import type { SessionSurface } from './session-surface.ts';
+import type { RecordingExportQuality } from './recording-export-quality.ts';
+import type { BackMode } from './back-mode.ts';
+import type { ClickButton } from './click-button.ts';
+import type { SwipePattern } from './scroll-gesture.ts';
+import type { DeviceTarget, PlatformSelector } from '@agent-device/kernel/device';
+import type { SnapshotPreferredBackend } from '@agent-device/kernel/snapshot';
+import type {
+  DaemonInstallSource,
+  DaemonServerMode,
+  DaemonTransportPreference,
+  LeaseBackend,
+  NetworkIncludeMode,
+  ResponseLevel,
+  SessionIsolationMode,
+  SessionRuntimeHints,
+} from '@agent-device/kernel/contracts';
+import type {
+  CloudProviderProfileFields,
+  RemoteConfigMetroOptions,
+} from './remote-config-fields.ts';
+import type { ScreenshotRequestFlags } from './screenshot.ts';
+import type { RecordingScope } from './recording-scope.ts';
+import type { ReplayRequestFields } from './replay-request-fields.ts';
+
+// This is the flag KEY vocabulary, not where an option is described: an
+// option's prose belongs to its one declaration (its `FlagDefinition`, which
+// carries both the `--help` and the tool/SDK audience), so a doc comment
+// repeated here would be a second copy that drifts. Comments below state only
+// facts this type alone knows — that a key has no CLI token, or how two keys
+// interact.
+export type CliFlags = CloudProviderProfileFields &
+  RemoteConfigMetroOptions &
+  ScreenshotRequestFlags &
+  ReplayRequestFields & {
+    json: boolean;
+    config?: string;
+    remoteConfig?: string;
+    stateDir?: string;
+    daemonBaseUrl?: string;
+    daemonAuthToken?: string;
+    daemonTransport?: DaemonTransportPreference;
+    daemonServerMode?: DaemonServerMode;
+    proxyHost?: string;
+    proxyPort?: number;
+    tenant?: string;
+    sessionIsolation?: SessionIsolationMode;
+    runId?: string;
+    leaseId?: string;
+    leaseBackend?: LeaseBackend;
+    provider?: string;
+    providerSessionId?: string;
+    force?: boolean;
+    clean?: boolean;
+    noLogin?: boolean;
+    kind?: string;
+    perfTemplate?: string;
+    sessionLock?: 'reject' | 'strip';
+    platform?: PlatformSelector;
+    target?: DeviceTarget;
+    device?: string;
+    udid?: string;
+    serial?: string;
+    stale?: boolean;
+    iosSimulatorDeviceSet?: string;
+    iosXctestrunFile?: string;
+    iosXctestDerivedDataPath?: string;
+    iosXctestEnvDir?: string;
+    testIme?: boolean;
+    androidDeviceAllowlist?: string;
+    remote?: boolean;
+    session?: string;
+    targetApp?: string;
+    metroHost?: string;
+    metroPort?: number;
+    bundleUrl?: string;
+    launchUrl?: string;
+    verbose?: boolean;
+    cost?: boolean;
+    responseLevel?: ResponseLevel;
+    snapshotInteractiveOnly?: boolean;
+    /** Internal (no CLI flag): pin the capture backend for same-backend evidence probes. */
+    snapshotPreferredBackend?: SnapshotPreferredBackend;
+    snapshotDiff?: boolean;
+    snapshotDepth?: number;
+    snapshotScope?: string;
+    snapshotRaw?: boolean;
+    snapshotCustomActions?: boolean;
+    snapshotForceFull?: boolean;
+    artifact?: string;
+    dsym?: string;
+    searchPath?: string;
+    networkInclude?: NetworkIncludeMode;
+    baseline?: string;
+    threshold?: string;
+    appsFilter?: 'user-installed' | 'all';
+    count?: number;
+    pointerCount?: number;
+    fps?: number;
+    quality?: RecordingExportQuality | string;
+    hideTouches?: boolean;
+    recordingScope?: RecordingScope;
+    intervalMs?: number;
+    delayMs?: number;
+    /** Fill: publish the live text as a late-bound ${VAR} in a recorded .ad script. */
+    recordAs?: string;
+    durationMs?: number;
+    keyframes?: string;
+    holdMs?: number;
+    jitterPx?: number;
+    pixels?: number;
+    /** Scroll: repeat passes until this selector is visible on screen. */
+    until?: string;
+    doubleTap?: boolean;
+    verify?: boolean;
+    settle?: boolean;
+    settleQuietMs?: number;
+    clickButton?: ClickButton;
+    backMode?: BackMode;
+    pauseMs?: number;
+    pattern?: SwipePattern;
+    activity?: string;
+    launchConsole?: string;
+    launchArgs?: string[];
+    header?: string[];
+    githubActionsArtifact?: string;
+    installSource?: DaemonInstallSource;
+    saveScript?: boolean | string;
+    shutdown?: boolean;
+    relaunch?: boolean;
+    foreground?: boolean;
+    surface?: SessionSurface;
+    headless?: boolean;
+    restart?: boolean;
+    noRecord?: boolean;
+    /**
+     * #1271 stage 2 (ADR 0012 amendment): opt-in that forces THIS action into
+     * a repair-armed heal even though its command is observation-only
+     * (`snapshot`/`get`/`is`/`find`) — the corrective-read case, where the
+     * diverged step's repair is itself a read. Mutually exclusive with
+     * `noRecord` (rejected as `INVALID_ARGS` if both are set); a no-op
+     * outside a repair-armed session and on any non-observation-only
+     * command.
+     */
+    record?: boolean;
+    retainPaths?: boolean;
+    retentionMs?: number;
+    waitMs?: number;
+    replayMaestro?: boolean;
+    reporter?: string[];
+    reportJunit?: string;
+    steps?: string;
+    stepsFile?: string;
+    findFirst?: boolean;
+    findLast?: boolean;
+    batchOnError?: 'stop';
+    batchMaxSteps?: number;
+    batchSteps?: Array<{
+      command: string;
+      input: Record<string, unknown>;
+      runtime?: SessionRuntimeHints;
+    }>;
+    out?: string;
+    help: boolean;
+    version: boolean;
+  };
+
+export type DaemonExcludedCliFlag =
+  | 'json'
+  | 'help'
+  | 'version'
+  | 'batchSteps'
+  | 'replayMaestro'
+  | 'daemonAuthToken';

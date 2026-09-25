@@ -1,0 +1,2060 @@
+# Contract file. Agents: propose changes to a Carbon and get approval before editing.
+# Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Identifier formats and flows: TECHNICAL.md.
+# Wire names `org_id` and `X-Org-ID` are Silicon IAM's names for a Team handle and are kept as IAM defines them.
+
+openapi: 3.1.0
+info:
+  title: Silicon Bridge API
+  version: 1.0.0-draft
+  description: |
+    Silicon Bridge lets a Silicon use a Carbon's personal devices. This API is used by the `bridge` CLI
+    (through the `silicon-bridge-client` crate), the configuration website, and the Bridge apps on devices.
+
+    Conventions
+    - Every JSON body is an envelope: `{"type": "<kind>", "data": {...}}`.
+    - Errors: `{"type": "error", "data": {"code", "message", "hint", "docs_url", "request_id", "details"}}`.
+      `code` is stable and machine-readable; `message` says what happened and why; `hint` says what to do next.
+    - Timestamps are RFC 3339 UTC with milliseconds. Durations carry their unit in the field name.
+    - Every response carries `X-Request-ID` and `Silicon-Bridge-API-Version`.
+    - Lists are paged with `limit` and `cursor`; the response gives `next_cursor`, null on the last page.
+    - Retry a POST after an uncertain result with the same `Idempotency-Key` and the identical body.
+    - Test environments: send the test application's `app_secret` in `X-Testing-Application-Secret`.
+      Omit it for production. An invalid secret is an error, never a silent fall back to production.
+servers:
+  - url: https://backend.bridge.teamofsilicons.com
+security:
+  - bearerAuth: []
+tags:
+  - {name: System, description: 'Health, version negotiation and contract discovery'}
+  - {name: Auth, description: Sign in with a short-lived token from Silicon IAM}
+  - {name: Enrollment, description: An unpaired Bridge app getting and rotating its pairing code}
+  - {name: Pairing, description: 'A Carbon claiming a pairing code, and devices paired through a host computer'}
+  - {name: Devices, description: 'Listing, inspecting and configuring paired devices'}
+  - {name: Access, description: Which Silicons can use a device}
+  - {name: Sessions, description: 'A Silicon using a device, one Silicon at a time'}
+  - {name: Commands, description: 'agent-device commands and Bridge additions, run inside a session'}
+  - {name: Requests, description: 'A Silicon asking the Silicon using a device for it, delivered through Ting'}
+  - {name: Activity, description: Every action taken on a device}
+  - {name: Files, description: 'Screenshots, recordings, logs and replay scripts, stored in Briefcase'}
+  - {name: Device app, description: 'Endpoints used only by a paired Bridge app, with its device credential'}
+  - {name: Testing, description: 'The selected test environment, and Honeycomb lifecycle instructions'}
+  - {name: IAM webhooks, description: Signed Silicon IAM callbacks}
+  - {name: Operations, description: Bug reports and telemetry}
+
+paths:
+  # ───────────────────────────── System ─────────────────────────────
+  /live:
+    get:
+      tags: [System]
+      operationId: live
+      summary: The process is running
+      security: []
+      responses:
+        '204': {description: Alive}
+  /ready:
+    get:
+      tags: [System]
+      operationId: ready
+      summary: Database, migrations and IAM reachable
+      security: []
+      responses:
+        '204': {description: Ready}
+        '503': {description: A dependency is unavailable; the body names it}
+  /api/version:
+    get:
+      tags: [System]
+      operationId: negotiateVersion
+      summary: Agree an API major version
+      description: |
+        Unversioned so an old client can always reach it. The client lists every major it supports; the
+        service answers with the highest both support. The client then pins that version on every request
+        with `Silicon-Bridge-API-Version`. No common version is `400 api_version_unsupported` listing both sides.
+      security: []
+      parameters:
+        - name: Silicon-Bridge-Supported-API-Versions
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]*(, ?[1-9][0-9]*)*$'}
+          example: '1, 2'
+      responses:
+        '200':
+          description: Agreed version
+          headers:
+            Silicon-Bridge-API-Version: {schema: {type: string}, description: The agreed major}
+            Vary: {schema: {type: string, const: Silicon-Bridge-Supported-API-Versions}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: version}
+                  data:
+                    type: object
+                    required: [api_version, supported, service_version]
+                    properties:
+                      api_version: {type: integer, example: 1}
+                      supported: {type: array, items: {type: integer}, example: [1]}
+                      service_version: {type: string, example: 1.0.0}
+                      deprecated: {type: array, items: {type: integer}}
+        '400': {$ref: '#/components/responses/Error'}
+  /api/v1/contracts:
+    get:
+      tags: [System]
+      operationId: contracts
+      summary: Compatibility matrix and deprecation state
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Every API major, its state, and the client, CLI and app versions that work with it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: contracts}
+                  data:
+                    type: object
+                    required: [versions]
+                    properties:
+                      versions:
+                        type: array
+                        items:
+                          type: object
+                          required: [api_version, state]
+                          properties:
+                            api_version: {type: integer}
+                            state: {type: string, enum: [current, deprecated, sunset]}
+                            deprecated_at: {type: [string, 'null'], format: date-time}
+                            sunset_rule: {type: string, example: 'Sunset after 7 consecutive days with zero requests'}
+                            compatible:
+                              type: object
+                              properties:
+                                client_crate: {type: string, example: '>=1.0.0, <2.0.0'}
+                                cli: {type: string, example: '>=1.0.0, <2.0.0'}
+                                device_app_min: {type: string, example: 1.0.0}
+  /api/v1/iam:
+    get:
+      tags: [System]
+      operationId: iamInformation
+      summary: Public IAM application details (what `bridge iam --json` prints)
+      security: []
+      description: Available before login. Never returns a secret.
+      parameters:
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Public configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: iam}
+                  data:
+                    type: object
+                    required: [app_id, iam_base_url, api_base_url, website_url, docs_url]
+                    properties:
+                      app_id: {type: string, example: bridge}
+                      iam_base_url: {type: string, format: uri, example: 'https://backend.iam.teamofsilicons.com'}
+                      api_base_url: {type: string, format: uri, example: 'https://backend.bridge.teamofsilicons.com'}
+                      website_url: {type: string, format: uri, example: 'https://bridge.teamofsilicons.com'}
+                      docs_url: {type: string, format: uri}
+                      repository_url: {type: string, format: uri}
+                      testing_environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
+        '401': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Auth ─────────────────────────────
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Exchange a Silicon IAM short-lived token for a Bridge session
+      description: |
+        The CLI and client never ask for a password. They take the short-lived token (SLT) a member generates
+        with the IAM CLI or the IAM consent screen. In a test environment `slt` may instead be an existing test
+        member id (`c:alice`, `si:chef`); that form is refused in production. Body at most 16 KiB. Responses are
+        `Cache-Control: no-store`.
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: login}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [slt]
+                  properties:
+                    slt: {type: string, writeOnly: true, minLength: 1, maxLength: 4096, description: Opaque. Never infer anything from its prefix.}
+            example: {type: login, data: {slt: 'oac_…'}}
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: login}
+                  data: {$ref: '#/components/schemas/AuthSession'}
+        '401': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refresh
+      summary: Rotate the refresh token
+      description: One refresh at a time per token. Store the returned pair atomically; a reused refresh token revokes the family.
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: refresh}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [refresh_token]
+                  properties:
+                    refresh_token: {type: string, writeOnly: true, pattern: '^ort_'}
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: refresh}
+                  data: {$ref: '#/components/schemas/AuthSession'}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Sign out
+      description: With the refresh token, revokes the whole family. A Silicon signing out ends its running sessions (`silicon_logged_out`).
+      security: []
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: logout}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [token]
+                  properties:
+                    token: {type: string, writeOnly: true}
+      responses:
+        '204': {description: Signed out}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      operationId: me
+      summary: Who is signed in (what `bridge login status --json` prints)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeaderOptional'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Live identity, checked with IAM
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: me}
+                  data:
+                    type: object
+                    required: [authenticated, member, teams]
+                    properties:
+                      authenticated: {type: boolean, const: true}
+                      member: {$ref: '#/components/schemas/Member'}
+                      teams: {type: array, items: {type: string}, example: [acme]}
+                      team: {type: [string, 'null'], description: 'The team named by X-Org-ID, if sent'}
+                      team_role: {type: [string, 'null'], description: Null when IAM does not disclose it}
+                      testing_environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
+        '401': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Enrollment (unpaired app) ─────────────────────────────
+  /api/v1/enrollments:
+    post:
+      tags: [Enrollment]
+      operationId: createEnrollment
+      summary: An unpaired Bridge app asks for a pairing code
+      description: |
+        No login. Rate-limited per IP. The app keeps `enrollment_secret` in memory or its secret store and shows
+        `pairing_code`. The code rotates every 300 s; the app follows rotations on the enrollment WebSocket or by
+        polling `GET /api/v1/enrollments/{enrollment_id}`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: enrollment}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [os, app_version]
+                  properties:
+                    os: {$ref: '#/components/schemas/DeviceOs'}
+                    os_version: {type: string, maxLength: 64, example: '15'}
+                    model: {type: string, maxLength: 128, example: Pixel 9}
+                    app_version: {type: string, maxLength: 32, example: 1.0.0}
+                    agent_device_version: {type: string, maxLength: 32}
+      responses:
+        '201':
+          description: Enrollment with its first code
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: enrollment}
+                  data:
+                    type: object
+                    required: [enrollment_id, enrollment_secret, pairing_code, code_expires_at, rotates_every_s]
+                    properties:
+                      enrollment_id: {type: string, format: uuid}
+                      enrollment_secret: {type: string, pattern: '^bes_[A-Za-z0-9_-]{43}$', description: Returned once}
+                      pairing_code: {$ref: '#/components/schemas/PairingCode'}
+                      code_expires_at: {type: string, format: date-time}
+                      rotates_every_s: {type: integer, const: 300}
+              example:
+                type: enrollment
+                data:
+                  enrollment_id: 01926f3a-5c1e-7b2d-9a40-3e5f8c7d1b22
+                  enrollment_secret: bes_Q2hhbmdlLW1lLXRoaXMtaXMtYS1zYW1wbGUtc2VjcmV
+                  pairing_code: 4F9C2A
+                  code_expires_at: '2026-09-26T10:05:00.000Z'
+                  rotates_every_s: 300
+        '426': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/v1/enrollments/{enrollment_id}:
+    parameters:
+      - {$ref: '#/components/parameters/EnrollmentId'}
+    get:
+      tags: [Enrollment]
+      operationId: getEnrollment
+      summary: Current code, or the device credential once paired
+      description: |
+        `state: waiting` returns the live code. `state: paired` returns `device_id` and `device_credential`
+        exactly once; the enrollment is then gone and later reads are 404.
+      security:
+        - enrollmentSecret: []
+      responses:
+        '200':
+          description: Enrollment state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: enrollment}
+                  data: {$ref: '#/components/schemas/EnrollmentState'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Enrollment]
+      operationId: discardEnrollment
+      summary: The app stops waiting to be paired
+      security:
+        - enrollmentSecret: []
+      responses:
+        '204': {description: Discarded; its code no longer works}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/v1/enrollments/{enrollment_id}/connect:
+    parameters:
+      - {$ref: '#/components/parameters/EnrollmentId'}
+    get:
+      tags: [Enrollment]
+      operationId: enrollmentSocket
+      summary: WebSocket that pushes code rotations and the pairing result
+      description: |
+        Upgrade to WebSocket. Frames are JSON `{"type", "data"}`:
+        `code` `{pairing_code, code_expires_at}` every 300 s; `paired` `{device_id, device_credential, environment}`
+        once, then the server closes with 1000. Heartbeat as on the device socket.
+      security:
+        - enrollmentSecret: []
+      responses:
+        '101': {description: Switching protocols}
+        '401': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Pairing (Carbon) ─────────────────────────────
+  /api/v1/pairings:
+    post:
+      tags: [Pairing]
+      operationId: claimPairingCode
+      summary: A Carbon enters a device's pairing code
+      description: |
+        Carbons only. Creates the device in the team named by X-Org-ID and in the selected world (production, or the
+        test environment named by X-Testing-Application-Secret), owned by the caller. The code works once.
+        A wrong code never reveals whether it existed. Rate-limited to 5 failures per Carbon per 10 minutes.
+        In a test environment with 5 devices already paired, answers 409 `test_device_limit` with the message
+        `In test environment you are limited to 5 paired devices per environment.`
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: pairing}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [pairing_code, name]
+                  properties:
+                    pairing_code: {$ref: '#/components/schemas/PairingCodeInput'}
+                    name: {$ref: '#/components/schemas/DeviceName'}
+                    visibility: {$ref: '#/components/schemas/Visibility'}
+                    pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+                    silicon_ids:
+                      type: array
+                      maxItems: 100
+                      uniqueItems: true
+                      items: {$ref: '#/components/schemas/SiliconId'}
+                      description: Optional; give access now. Can be skipped and done later.
+            example: {type: pairing, data: {pairing_code: 4f9c2a, name: Saket's Pixel, silicon_ids: ['si:chef']}}
+      responses:
+        '201':
+          description: Paired. The device is in `setup` until its own setup steps finish.
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data: {$ref: '#/components/schemas/Device'}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/v1/devices/{device_id}/attachments:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Pairing]
+      operationId: attachDevice
+      summary: Pair an iPhone, iPad, Apple TV or smart TV through a paired computer
+      description: |
+        `device_id` is the host: a paired Mac (for iPhone, iPad and Apple TV) or any paired computer (for Samsung and
+        LG TVs), owned by the caller and online. Creates the new device in `setup` with `host_device_id` set; the
+        host's app then walks the setup and reports each step. Counts toward the test environment limit.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: attachment}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [os, name]
+                  properties:
+                    os: {type: string, enum: [ios, ipados, tvos, samsung_tv, lg_tv]}
+                    name: {$ref: '#/components/schemas/DeviceName'}
+                    visibility: {$ref: '#/components/schemas/Visibility'}
+                    pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+      responses:
+        '201':
+          description: Attached device, in setup
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data: {$ref: '#/components/schemas/Device'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/v1/devices/{device_id}/setup:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Pairing]
+      operationId: getSetup
+      summary: The device's setup steps and where each one stands
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Setup state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: setup}
+                  data: {$ref: '#/components/schemas/Setup'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/devices/{device_id}/setup/code:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Pairing]
+      operationId: enterSetupCode
+      summary: Enter the code an Apple TV shows during setup
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: setup_code}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [code]
+                  properties:
+                    code: {type: string, pattern: '^[0-9]{4}$', example: '4821'}
+      responses:
+        '200':
+          description: Accepted; setup continues
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: setup}
+                  data: {$ref: '#/components/schemas/Setup'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Devices ─────────────────────────────
+  /api/v1/devices:
+    get:
+      tags: [Devices]
+      operationId: listDevices
+      summary: List devices
+      description: |
+        `scope` defaults to `mine` for a Carbon (devices they paired) and `accessible` for a Silicon (devices it has
+        access to; this is `bridge device ls`). `team` lists other Carbons' team-visible devices, read-only, with
+        limited fields.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - name: scope
+          in: query
+          schema: {type: string, enum: [mine, accessible, team]}
+        - name: online
+          in: query
+          schema: {type: boolean}
+        - name: os
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceOs'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Devices; empty is still 200
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: devices}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Device'}}
+                      next_cursor: {type: [string, 'null']}
+              example:
+                type: devices
+                data:
+                  items:
+                    - device_id: 7c1e09ab
+                      name: Saket's Pixel
+                      os: android
+                      os_version: '15'
+                      kind: phone
+                      owner: {type: carbon, id: 'c:saket'}
+                      visibility: team
+                      online: true
+                      last_seen_at: '2026-09-26T10:04:12.391Z'
+                      in_use: {silicon_id: 'si:chef', session_id: a3f, since: '2026-09-26T09:58:00.000Z'}
+                      last_used_at: '2026-09-26T10:04:10.002Z'
+                      pair_ttl_days: 14
+                      pair_expires_at: '2026-10-10T10:04:10.002Z'
+                      days_left: 14
+                      state: ready
+                  next_cursor: null
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/v1/devices/{device_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Devices]
+      operationId: getDevice
+      summary: One device, with what a Silicon can do on it (`bridge device show`)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Device with capabilities and the Bridge commands they unlock
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data:
+                    allOf:
+                      - {$ref: '#/components/schemas/Device'}
+                      - type: object
+                        required: [capabilities, commands]
+                        properties:
+                          capabilities: {type: array, items: {$ref: '#/components/schemas/Capability'}}
+                          missing:
+                            type: array
+                            description: Capabilities this kind of device supports but this one lacks right now, with why
+                            items:
+                              type: object
+                              required: [capability, reason]
+                              properties:
+                                capability: {$ref: '#/components/schemas/Capability'}
+                                reason: {type: string, example: Screen Recording permission is off on this Mac}
+                          commands: {type: array, items: {type: string}, example: [snapshot, screenshot, click, fill, type, open, close, terminal]}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [Devices]
+      operationId: updateDevice
+      summary: Rename, change visibility, or change how long it stays paired without activity
+      description: Owner only. Send only the fields that change.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: device}
+                data:
+                  type: object
+                  additionalProperties: false
+                  minProperties: 1
+                  properties:
+                    name: {$ref: '#/components/schemas/DeviceName'}
+                    visibility: {$ref: '#/components/schemas/Visibility'}
+                    pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+      responses:
+        '200':
+          description: Updated
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data: {$ref: '#/components/schemas/Device'}
+        '403': {$ref: '#/components/responses/Error'}
+        '412': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Devices]
+      operationId: removeDevice
+      summary: Remove the device (dangerous)
+      description: |
+        Owner only. Ends any running session (`device_removed`), removes every Silicon's access, unpairs the device,
+        and keeps the activity log readable. Clients must confirm with the Carbon first; the CLI needs `--yes`.
+        For a host computer, also removes every device paired through it.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '204': {description: Removed}
+        '403': {$ref: '#/components/responses/Error'}
+        '412': {$ref: '#/components/responses/Error'}
+  /api/v1/devices/{device_id}/stop:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Devices]
+      operationId: stopDevice
+      summary: Stop the Silicon using the device now
+      description: Owner only. Ends the running session with `stopped_by_carbon`. No running session is 409 `device_not_in_use`.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: The session that was ended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data: {$ref: '#/components/schemas/Session'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Access ─────────────────────────────
+  /api/v1/devices/{device_id}/access:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Access]
+      operationId: listAccess
+      summary: Silicons that can use the device
+      description: Owner only.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Access grants
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: access}
+                  data:
+                    type: object
+                    required: [items]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/AccessGrant'}}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/v1/devices/{device_id}/access/{silicon_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+      - {$ref: '#/components/parameters/SiliconIdPath'}
+    put:
+      tags: [Access]
+      operationId: grantAccess
+      summary: Give a Silicon access
+      description: Owner only. The Silicon must be an active member of the same team. Repeating is a no-op that returns the existing grant.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Granted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: access_grant}
+                  data: {$ref: '#/components/schemas/AccessGrant'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Access]
+      operationId: revokeAccess
+      summary: Take a Silicon's access away
+      description: Owner only. If that Silicon is using the device, its session ends at once (`access_removed`).
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '204': {description: 'Revoked, or there was no grant'}
+        '403': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Sessions ─────────────────────────────
+  /api/v1/sessions:
+    post:
+      tags: [Sessions]
+      operationId: startSession
+      summary: Start using a device (`bridge session new`)
+      description: |
+        Silicons only; the caller needs access and the device must be online and set up. Takes the device's lock:
+        only one Silicon at a time. If another Silicon holds it, 409 `device_in_use` with `details.in_use` naming it,
+        and `hint` giving the `bridge request send` command. The session ends on its own after 300 s without a command.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: session}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [device_id]
+                  properties:
+                    device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+      responses:
+        '201':
+          description: Started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data: {$ref: '#/components/schemas/Session'}
+              example:
+                type: session
+                data:
+                  session_id: a3f
+                  device_id: 7c1e09ab
+                  silicon_id: 'si:chef'
+                  state: active
+                  started_at: '2026-09-26T10:00:00.000Z'
+                  last_command_at: null
+                  idle_ends_at: '2026-09-26T10:05:00.000Z'
+                  ended_at: null
+                  end_reason: null
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: The caller's sessions (`bridge session ls`)
+      description: A Silicon sees its own sessions. A Carbon sees sessions on devices they own.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - name: device_id
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceIdValue'}
+        - name: state
+          in: query
+          schema: {type: string, enum: [active, paused, ended]}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Sessions, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: sessions}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Session'}}
+                      next_cursor: {type: [string, 'null']}
+  /api/v1/sessions/{session_id}:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: One session (used by `bridge session connect` and `status`)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Session with its device and capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data:
+                    allOf:
+                      - {$ref: '#/components/schemas/Session'}
+                      - type: object
+                        required: [device, capabilities, commands]
+                        properties:
+                          device: {$ref: '#/components/schemas/Device'}
+                          capabilities: {type: array, items: {$ref: '#/components/schemas/Capability'}}
+                          commands: {type: array, items: {type: string}}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/sessions/{session_id}/end:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [Sessions]
+      operationId: endSession
+      summary: Finish and free the device (`bridge session end`)
+      description: The Silicon that started it. Ending an ended session returns it unchanged. A command in flight is cancelled.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Ended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data: {$ref: '#/components/schemas/Session'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/sessions/{session_id}/takeover:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [Sessions]
+      operationId: startTakeover
+      summary: Pause and hand the device to its Carbon (`bridge takeover`)
+      description: |
+        The session becomes `paused`; commands get 423 `session_paused`. The device and website show the reason and a
+        Done button. The idle timer stops for up to 30 minutes.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: takeover}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [reason]
+                  properties:
+                    reason: {type: string, minLength: 1, maxLength: 300, example: Please approve the Face ID prompt}
+      responses:
+        '201':
+          description: Paused
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: takeover}
+                  data: {$ref: '#/components/schemas/Takeover'}
+        '409': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [Sessions]
+      operationId: getTakeover
+      summary: Whether the session is paused for the Carbon (`bridge takeover status`)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Current takeover, or `null`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: takeover}
+                  data: {oneOf: [{$ref: '#/components/schemas/Takeover'}, {type: 'null'}]}
+    delete:
+      tags: [Sessions]
+      operationId: releaseTakeover
+      summary: Resume the session (`bridge takeover release`)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '204': {description: Resumed}
+        '409': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Commands ─────────────────────────────
+  /api/v1/sessions/{session_id}/commands:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [Commands]
+      operationId: runCommand
+      summary: Run one command on the device
+      description: |
+        Every agent-device command Bridge exposes, plus Bridge's additions (`terminal`, `adb`, `display`,
+        `notifications`), goes through here. `command` is the top-level name as typed after `bridge`, and `args` are
+        the remaining command-line tokens exactly as agent-device's CLI accepts them, so agent-device's own parser stays
+        the authority on arguments. Flags that pick a device or session inside agent-device (`--platform`, `--device`,
+        `--udid`, `--serial`, `--target`, `--session`, `--remote`) are refused: Bridge picks those. `cli.yaml` lists
+        every command and its arguments.
+
+        Before running, Bridge re-checks with IAM that the caller still has access, that the session is theirs and
+        `active`, that the device is online, and that the command is in the device's capabilities. Commands in one
+        session run one at a time, in order. Resets the idle timer.
+
+        Files the command makes are stored in Briefcase for the Silicon, shared with the device's owner, and returned
+        in `files`. `self_destruct_minutes` (1 to 43,200; default 1,440) applies to every file this command makes;
+        `permanent: true` keeps them. Small inputs a command reads from the caller's machine (a replay script, an
+        image to show on a TV) travel in `attachments`.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: command}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [command]
+                  properties:
+                    command: {type: string, example: click, description: Top-level command name}
+                    args: {type: array, items: {type: string}, default: [], example: ['@e2']}
+                    attachments:
+                      type: array
+                      maxItems: 8
+                      items:
+                        type: object
+                        required: [name, content_type, content_base64]
+                        properties:
+                          name: {type: string}
+                          content_type: {type: string}
+                          content_base64: {type: string, description: At most 8 MiB decoded}
+                    timeout_ms: {type: integer, minimum: 1000, maximum: 300000, default: 30000}
+                    self_destruct_minutes: {type: integer, minimum: 1, maximum: 43200, default: 1440}
+                    permanent: {type: boolean, default: false}
+            examples:
+              snapshot: {value: {type: command, data: {command: snapshot, args: ['-i']}}}
+              click: {value: {type: command, data: {command: click, args: ['@e2']}}}
+              fill: {value: {type: command, data: {command: fill, args: ['@e3', hello]}}}
+              screenshot: {value: {type: command, data: {command: screenshot, args: ['--scale', '0.5'], self_destruct_minutes: 10080}}}
+              tvRemote: {value: {type: command, data: {command: tv-remote, args: [press, select]}}}
+              terminal: {value: {type: command, data: {command: terminal, args: [run, 'ls -la ~/Downloads', '--cwd', '~'], timeout_ms: 20000}}}
+      responses:
+        '200':
+          description: The command ran. `ok` false means it ran and failed on the device (for example `is visible` was false); see `error`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: command_result}
+                  data: {$ref: '#/components/schemas/CommandResult'}
+              example:
+                type: command_result
+                data:
+                  command_id: 01926f40-1b2c-7d3e-8f40-5a6b7c8d9e0f
+                  session_id: a3f
+                  command: screenshot
+                  ok: true
+                  output: {width: 540, height: 1200}
+                  text: 'Saved screenshot (540x1200)'
+                  files:
+                    - file_id: 6e1f2a9c-3b4d-4e5f-8a7b-9c0d1e2f3a4b
+                      name: screenshot-a3f-2026-09-26T10-04-12Z.png
+                      kind: screenshot
+                      content_type: image/png
+                      size_bytes: 184223
+                      url: 'https://briefcase.teamofsilicons.com/org/acme/apps/bridge/private/si:chef/screenshot-a3f-2026-09-26T10-04-12Z.png'
+                      self_destruct_at: '2026-09-27T10:04:12.391Z'
+                      permanent: false
+                  error: null
+                  started_at: '2026-09-26T10:04:12.001Z'
+                  duration_ms: 390
+                  idle_ends_at: '2026-09-26T10:09:12.391Z'
+        '403': {description: 'access_removed, not_session_owner', $ref: '#/components/responses/Error'}
+        '404': {description: 'unknown_command (names the Bridge replacement if any), session_not_found', $ref: '#/components/responses/Error'}
+        '409': {description: session_ended (details.end_reason), $ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input, unsupported_on_device (names the missing capability)', $ref: '#/components/responses/Error'}
+        '423': {description: session_paused, $ref: '#/components/responses/Error'}
+        '503': {description: device_offline, $ref: '#/components/responses/Error'}
+        '504': {description: command_timeout, $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Requests ─────────────────────────────
+  /api/v1/devices/{device_id}/requests:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Requests]
+      operationId: sendRequest
+      summary: Ask the Silicon using the device for it (`bridge request send`)
+      description: |
+        Silicons with access only, and only while another Silicon is using the device (otherwise 409
+        `device_not_in_use` with a hint to start a session). Delivered through Ting to the Silicon using the device,
+        with the reason exactly as sent. One open request per Silicon per device per 60 s; a repeat inside that
+        window returns the existing request.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: request}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [reason]
+                  properties:
+                    reason: {type: string, minLength: 1, maxLength: 300, description: Counted in Unicode scalar values after trimming}
+            example: {type: request, data: {reason: 'I need to check the order confirmation in the Swiggy app, 2 minutes'}}
+      responses:
+        '201':
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: request}
+                  data: {$ref: '#/components/schemas/Request'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '502': {description: 'Ting refused or is unreachable; the request is stored and retried, delivery is pending', $ref: '#/components/responses/Error'}
+    get:
+      tags: [Requests]
+      operationId: listDeviceRequests
+      summary: Requests Silicons sent for this device, with reasons (device page)
+      description: Owner only.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Requests, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RequestPage'}
+  /api/v1/requests:
+    get:
+      tags: [Requests]
+      operationId: listMyRequests
+      summary: Requests the calling Silicon sent or received (`bridge request ls`)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - name: direction
+          in: query
+          schema: {type: string, enum: [sent, received, all], default: all}
+        - name: device_id
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceIdValue'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Requests, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RequestPage'}
+
+  # ───────────────────────────── Activity ─────────────────────────────
+  /api/v1/devices/{device_id}/activity:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Activity]
+      operationId: listActivity
+      summary: Every action on the device, which Silicon did it, and when
+      description: Owner only. Typed text and clipboard writes are redacted to `[redacted N chars]`.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - name: silicon_id
+          in: query
+          schema: {$ref: '#/components/schemas/SiliconId'}
+        - name: session_id
+          in: query
+          schema: {$ref: '#/components/schemas/SessionIdValue'}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+        - name: until
+          in: query
+          schema: {type: string, format: date-time}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Entries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: activity}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/ActivityEntry'}}
+                      next_cursor: {type: [string, 'null']}
+        '403': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Files ─────────────────────────────
+  /api/v1/files:
+    get:
+      tags: [Files]
+      operationId: listFiles
+      summary: Files made in the caller's sessions (Silicon) or on the caller's devices (Carbon)
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - name: session_id
+          in: query
+          schema: {$ref: '#/components/schemas/SessionIdValue'}
+        - name: device_id
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceIdValue'}
+        - name: kind
+          in: query
+          schema: {$ref: '#/components/schemas/FileKind'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Files, newest first; files that already self-destructed are omitted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: files}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/File'}}
+                      next_cursor: {type: [string, 'null']}
+  /api/v1/files/{file_id}:
+    parameters:
+      - {$ref: '#/components/parameters/FileId'}
+    get:
+      tags: [Files]
+      operationId: getFile
+      summary: One file and its Briefcase link
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: File
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: file}
+                  data: {$ref: '#/components/schemas/File'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/files/{file_id}/keep:
+    parameters:
+      - {$ref: '#/components/parameters/FileId'}
+    post:
+      tags: [Files]
+      operationId: keepFile
+      summary: Make a file permanent before it self-destructs (`bridge file keep`)
+      description: |
+        The Silicon that made it. Done in Briefcase on the Silicon's behalf. A file already permanent is 409
+        `not_self_destructing`; one already gone is 404. Needs a Briefcase OBO endpoint that does not exist yet
+        (TECHNICAL.md, open question 2).
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Now permanent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: file}
+                  data: {$ref: '#/components/schemas/File'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Device app ─────────────────────────────
+  /api/v1/device:
+    get:
+      tags: [Device app]
+      operationId: deviceSelf
+      summary: What the Bridge app shows once paired
+      security:
+        - deviceCredential: []
+      responses:
+        '200':
+          description: Name, owner, who is using it, and the test environment if any
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device_self}
+                  data:
+                    type: object
+                    required: [device_id, name, owner, team, in_use, environment]
+                    properties:
+                      device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+                      name: {$ref: '#/components/schemas/DeviceName'}
+                      owner: {$ref: '#/components/schemas/Member'}
+                      team: {type: string}
+                      in_use: {oneOf: [{$ref: '#/components/schemas/InUse'}, {type: 'null'}]}
+                      takeover: {oneOf: [{$ref: '#/components/schemas/Takeover'}, {type: 'null'}]}
+                      setup: {$ref: '#/components/schemas/Setup'}
+                      environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
+        '401': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Device app]
+      operationId: revokePair
+      summary: Revoke pair, from the device (dangerous)
+      description: Removes the device from the Carbon's account and ends every Silicon's access. The app confirms with the Carbon first.
+      security:
+        - deviceCredential: []
+      responses:
+        '204': {description: Unpaired; the credential no longer works}
+  /api/v1/device/stop:
+    post:
+      tags: [Device app]
+      operationId: deviceStop
+      summary: The Carbon tapped Stop on the device
+      description: Same as the Stop frame on the socket, for when the socket is down.
+      security:
+        - deviceCredential: []
+      responses:
+        '204': {description: 'Stopped, or nothing was running'}
+  /api/v1/device/connect:
+    get:
+      tags: [Device app]
+      operationId: deviceSocket
+      summary: The paired device's WebSocket to Bridge
+      description: |
+        Upgrade to WebSocket with `Authorization: Bridge-Device <device_credential>`. JSON frames
+        `{"type", "id", "data"}`; frame types are listed in TECHNICAL.md §7. Ping every 15 s; offline after 45 s
+        without a pong. Close codes: 4401 credential invalid or unpaired, 4409 superseded by a newer connection,
+        4426 app too old (upgrade required).
+      security:
+        - deviceCredential: []
+      responses:
+        '101': {description: Switching protocols}
+        '401': {$ref: '#/components/responses/Error'}
+        '426': {$ref: '#/components/responses/Error'}
+  /api/v1/device/artifacts/{upload_id}:
+    put:
+      tags: [Device app]
+      operationId: uploadArtifact
+      summary: Upload a file a command produced
+      description: |
+        `upload_id` comes with the command. Single use, valid until the command's deadline, at most 1 GiB. Bridge
+        streams it to Briefcase and answers once Briefcase has it.
+      security:
+        - deviceCredential: []
+      parameters:
+        - name: upload_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Content-Type
+          in: header
+          required: true
+          schema: {type: string, example: image/png}
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+        - name: X-File-Name
+          in: header
+          required: true
+          schema: {type: string, maxLength: 255}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '201': {description: Stored}
+        '404': {description: 'Unknown, used or expired upload id'}
+        '413': {description: Larger than 1 GiB}
+        '422': {description: Digest does not match the bytes}
+
+  # ───────────────────────────── Testing ─────────────────────────────
+  /api/v1/testing-environment:
+    get:
+      tags: [Testing]
+      operationId: currentTestingEnvironment
+      summary: The test environment the secret selects (for the banner)
+      security: []
+      parameters:
+        - name: X-Testing-Application-Secret
+          in: header
+          required: true
+          schema: {$ref: '#/components/schemas/AppSecret'}
+      responses:
+        '200':
+          description: Environment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: testing_environment}
+                  data: {$ref: '#/components/schemas/TestingEnvironment'}
+        '401': {description: testing_secret_invalid, $ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready, $ref: '#/components/responses/Error'}
+  /internal/honeycomb/organizations/{org_id}/testing-environments/{environment_id}/operations/{operation_id}:
+    parameters:
+      - {name: org_id, in: path, required: true, schema: {type: string}}
+      - {name: environment_id, in: path, required: true, schema: {type: string, format: uuid}}
+      - {name: operation_id, in: path, required: true, schema: {type: string, format: uuid}}
+    put:
+      tags: [Testing]
+      operationId: applyHoneycombLifecycle
+      summary: Apply a Honeycomb lifecycle instruction
+      description: |
+        Plain JSON, no envelope, matching the other services. Safe to retry with the identical body. Works while the
+        environment is disabled. `clean` blocks access, ends sessions, unpairs every device in the environment and
+        clears its data; completes only when that is done. Stale `environment_revision` or `generation` is 409.
+      security:
+        - honeycombService: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HoneycombOperation'}
+      responses:
+        '200':
+          description: Receipt (new or replayed)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HoneycombReceipt'}
+        '400': {description: Invalid instruction or path/body mismatch}
+        '401': {description: Missing or invalid service credential}
+        '409': {description: 'Stale revision, conflicting retry, no free slot of the 10 active environments, or incompatible transition'}
+        '500': {description: Failed; inspect the receipt and retry the identical instruction}
+    get:
+      tags: [Testing]
+      operationId: getHoneycombReceipt
+      summary: Read a lifecycle receipt
+      security:
+        - honeycombService: []
+      responses:
+        '200':
+          description: Receipt, with no secrets
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HoneycombReceipt'}
+        '401': {description: Missing or invalid service credential}
+        '404': {description: Unknown operation}
+
+  # ───────────────────────────── IAM webhooks ─────────────────────────────
+  /webhook/:
+    post:
+      tags: [IAM webhooks]
+      operationId: iamWebhook
+      summary: Signed events from Silicon IAM
+      description: |
+        Verified with the official IAM client over the exact raw body (1 MiB limit, five-minute timestamp window,
+        key version from the header). Test deliveries are routed to their environment after verification.
+        De-duplicated on event id and applied only if newer than the last applied version. Bridge confirms with IAM
+        introspection before ending access. The raw body and any `testing_key` are never stored.
+        Handled: session revoked or logged out, membership removed, member deleted, application consent revoked,
+        test environment cleaned.
+      security: []
+      parameters:
+        - {name: X-Silicon-IAM-Event-ID, in: header, required: true, schema: {type: string}}
+        - {name: X-Silicon-IAM-Timestamp, in: header, required: true, schema: {type: string, pattern: '^[0-9]+$'}}
+        - {name: X-Silicon-IAM-Key-Version, in: header, required: true, schema: {type: string, pattern: '^[1-9][0-9]*$'}}
+        - {name: X-Silicon-IAM-Signature, in: header, required: true, schema: {type: string, pattern: '^v1=[0-9a-f]{64}$'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: true, description: 'IAM WebhookEvent, or a signed test envelope'}
+      responses:
+        '204': {description: 'Applied, or a duplicate acknowledged'}
+        '401': {description: Signature invalid}
+
+  # ───────────────────────────── Operations ─────────────────────────────
+  /api/v1/reports:
+    post:
+      tags: [Operations]
+      operationId: reportBug
+      summary: Report a bug, optionally with a PR that fixes it (`bridge report`)
+      description: Stored, then emailed through Postmark to the bug list. Simulated in a test environment. 10 reports per member per hour.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeaderOptional'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: report}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [message, client_version]
+                  properties:
+                    message: {type: string, minLength: 1, maxLength: 60000}
+                    pr: {type: [string, 'null'], format: uri}
+                    client_version: {type: string, maxLength: 100}
+                    context:
+                      type: object
+                      description: Optional; the CLI attaches OS, CLI version, last command, session id and request ids
+                      additionalProperties: true
+      responses:
+        '202':
+          description: Stored; email queued, sent or simulated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: report}
+                  data:
+                    type: object
+                    required: [report_id, notification, repository_url]
+                    properties:
+                      report_id: {type: string, format: uuid}
+                      notification: {type: string, enum: [queued, sent, simulated]}
+                      repository_url: {type: string, format: uri}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/v1/telemetry:
+    post:
+      tags: [Operations]
+      operationId: telemetry
+      summary: Forward a telemetry event to Space Station
+      description: |
+        So the CLI and apps never hold the Space Station ingest key. `X-Bridge-Telemetry: off` (or the member's
+        setting) drops it. Never accepts typed text, screen contents, tokens, codes or secrets.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeaderOptional'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - {name: X-Bridge-Telemetry, in: header, schema: {type: string, enum: ['on', 'off']}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: telemetry}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [source, event, step, success, duration_ms]
+                  properties:
+                    source: {type: string, enum: [cli, client, app, web]}
+                    event: {type: string, maxLength: 64, example: command}
+                    step: {type: string, maxLength: 128, example: session.command.relay}
+                    success: {type: boolean}
+                    duration_ms: {type: integer, minimum: 0}
+                    error_code: {type: [string, 'null'], maxLength: 64}
+                    command: {type: [string, 'null'], maxLength: 64}
+                    device_os: {oneOf: [{$ref: '#/components/schemas/DeviceOs'}, {type: 'null'}]}
+                    session_id: {oneOf: [{$ref: '#/components/schemas/SessionIdValue'}, {type: 'null'}]}
+                    request_id: {type: [string, 'null']}
+                    client_version: {type: string, maxLength: 32}
+      responses:
+        '204': {description: Accepted or dropped because telemetry is off}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Bridge application access token (oat_), from /api/v1/auth/login
+    enrollmentSecret:
+      type: http
+      scheme: bearer
+      bearerFormat: 'Enrollment secret (bes_). Sent as "Authorization: Bridge-Enrollment <secret>".'
+    deviceCredential:
+      type: http
+      scheme: bearer
+      bearerFormat: 'Device credential (bdc_). Sent as "Authorization: Bridge-Device <credential>".'
+    honeycombService:
+      type: http
+      scheme: bearer
+      description: Honeycomb's service credential. Independent of any test session.
+
+  parameters:
+    TeamHeader:
+      name: X-Org-ID
+      in: header
+      required: true
+      description: Team handle (IAM's wire name). Must be one of the member's selected, active teams.
+      schema: {type: string, minLength: 1, maxLength: 128}
+      example: acme
+    TeamHeaderOptional:
+      name: X-Org-ID
+      in: header
+      required: false
+      schema: {type: string, minLength: 1, maxLength: 128}
+    TestingSecret:
+      name: X-Testing-Application-Secret
+      in: header
+      required: false
+      description: The test application's app_secret. Selects that test environment. Omit for production. Never the Honeycomb testing_key.
+      schema: {$ref: '#/components/schemas/AppSecret'}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, pattern: '^[!-~]{8,255}$'}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: The device version from its ETag. Stale is 412.
+      schema: {type: string, pattern: '^"?[1-9][0-9]*"?$'}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string}
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/DeviceIdValue'}
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/SessionIdValue'}
+    SiliconIdPath:
+      name: silicon_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/SiliconId'}
+    EnrollmentId:
+      name: enrollment_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    FileId:
+      name: file_id
+      in: path
+      required: true
+      description: Briefcase entry id
+      schema: {type: string, format: uuid}
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [type, data]
+            properties:
+              type: {const: error}
+              data: {$ref: '#/components/schemas/Error'}
+          example:
+            type: error
+            data:
+              code: device_in_use
+              message: 'Device 7c1e09ab (Saket''s Pixel) is being used by si:chef in session a3f since 2026-09-26T09:58:00Z. Only one Silicon can use a device at a time.'
+              hint: 'Ask for it with: bridge request send 7c1e09ab --reason "<why, up to 300 characters>"'
+              docs_url: https://docs.bridge.teamofsilicons.com/errors#device_in_use
+              request_id: 01926f41-0a1b-7c2d-8e3f-4a5b6c7d8e9f
+              details: {in_use: {silicon_id: 'si:chef', session_id: a3f, since: '2026-09-26T09:58:00.000Z'}}
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: Stable. The full list is in cli.yaml under errors.
+          example: device_in_use
+        message: {type: string, description: 'What happened and why, in full'}
+        hint: {type: [string, 'null'], description: 'What to do next, often an exact command'}
+        docs_url: {type: [string, 'null'], format: uri}
+        request_id: {type: string}
+        details: {type: object, additionalProperties: true}
+
+    AppSecret: {type: string, pattern: '^ask_[A-Za-z0-9_-]{43}$', writeOnly: true}
+    PairingCode: {type: string, pattern: '^[0-9A-F]{6}$', example: 4F9C2A, description: 6 hexadecimal characters; rotates every 300 s; works once}
+    PairingCodeInput: {type: string, pattern: '^[0-9A-Fa-f]{6}$', example: 4f9c2a, description: Case-insensitive}
+    DeviceIdValue: {type: string, pattern: '^[0-9a-f]{8}$', example: 7c1e09ab}
+    SessionIdValue: {type: string, pattern: '^[0-9a-f]{3,}$', example: a3f, description: '3 hexadecimal characters, growing to 4 and more once every shorter id is used; never reused'}
+    CarbonId: {type: string, pattern: '^c:', example: 'c:alice'}
+    SiliconId: {type: string, pattern: '^si:', example: 'si:chef'}
+    DeviceName: {type: string, minLength: 1, maxLength: 64, example: Saket's Pixel}
+    Visibility: {type: string, enum: [team, personal], default: team, description: 'team: other Carbons in the team can see the device exists. personal: only its owner.'}
+    PairTtlDays: {type: integer, minimum: 1, maximum: 30, default: 14}
+    DeviceOs:
+      type: string
+      enum: [android, android_tv, macos, windows, linux, ios, ipados, tvos, samsung_tv, lg_tv]
+      description: android_tv covers Android TV, Google TV and Fire OS
+    Capability:
+      type: string
+      enum: [screen.read, screen.capture, screen.record, input.touch, input.pointer, input.text, input.keyboard, input.remote,
+        nav.system, apps.launch, apps.list, apps.install, alerts, clipboard, logs, replay, takeover, notifications, adb, terminal,
+        display, links]
+    FileKind: {type: string, enum: [screenshot, recording, log, replay_script, diff, other]}
+
+    Member:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [carbon, silicon]}
+        id: {type: string, example: 'c:alice'}
+        display_name: {type: [string, 'null']}
+
+    AuthSession:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in, member, teams]
+      properties:
+        access_token: {type: string, description: Starts oat_}
+        refresh_token: {type: string, description: Starts ort_}
+        token_type: {const: Bearer}
+        expires_in: {type: integer, minimum: 1}
+        member: {$ref: '#/components/schemas/Member'}
+        teams: {type: array, minItems: 1, items: {type: string}}
+        testing_environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
+
+    InUse:
+      type: object
+      required: [silicon_id, session_id, since]
+      properties:
+        silicon_id: {$ref: '#/components/schemas/SiliconId'}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        since: {type: string, format: date-time}
+        paused: {type: boolean, default: false}
+
+    Device:
+      type: object
+      required: [device_id, name, os, kind, owner, visibility, online, state]
+      description: Other Carbons listing `scope=team` receive only device_id, name, os, kind, owner, visibility and online.
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        name: {$ref: '#/components/schemas/DeviceName'}
+        os: {$ref: '#/components/schemas/DeviceOs'}
+        os_version: {type: [string, 'null']}
+        model: {type: [string, 'null']}
+        kind: {type: string, enum: [phone, tablet, tv, computer]}
+        owner: {$ref: '#/components/schemas/Member'}
+        team: {type: string}
+        visibility: {$ref: '#/components/schemas/Visibility'}
+        host_device_id: {oneOf: [{$ref: '#/components/schemas/DeviceIdValue'}, {type: 'null'}], description: Set for devices paired through a computer}
+        state: {type: string, enum: [setup, ready], description: 'setup: its own setup steps are not finished yet'}
+        online: {type: boolean}
+        last_seen_at: {type: [string, 'null'], format: date-time}
+        in_use: {oneOf: [{$ref: '#/components/schemas/InUse'}, {type: 'null'}]}
+        last_used_at: {type: [string, 'null'], format: date-time}
+        paired_at: {type: string, format: date-time}
+        pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+        pair_expires_at: {type: string, format: date-time}
+        days_left: {type: integer, minimum: 0}
+        access_count: {type: integer, minimum: 0}
+        app_version: {type: [string, 'null']}
+        version: {type: integer, minimum: 1}
+
+    Setup:
+      type: object
+      required: [state, steps]
+      properties:
+        state: {type: string, enum: [in_progress, needs_carbon, complete]}
+        steps:
+          type: array
+          items:
+            type: object
+            required: [key, title, status]
+            properties:
+              key: {type: string, example: wireless_debugging}
+              title: {type: string, example: Turn on wireless debugging}
+              status: {type: string, enum: [todo, in_progress, needs_carbon, done, failed]}
+              help: {type: [string, 'null'], description: Where to find it on this device}
+              error: {type: [string, 'null']}
+
+    EnrollmentState:
+      oneOf:
+        - type: object
+          required: [state, pairing_code, code_expires_at]
+          properties:
+            state: {const: waiting}
+            pairing_code: {$ref: '#/components/schemas/PairingCode'}
+            code_expires_at: {type: string, format: date-time}
+        - type: object
+          required: [state, device_id, device_credential]
+          properties:
+            state: {const: paired}
+            device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+            device_credential: {type: string, pattern: '^bdc_[A-Za-z0-9_-]{43}$', description: Returned once}
+            environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
+
+    AccessGrant:
+      type: object
+      required: [device_id, silicon_id, granted_by, granted_at]
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        silicon_id: {$ref: '#/components/schemas/SiliconId'}
+        granted_by: {$ref: '#/components/schemas/CarbonId'}
+        granted_at: {type: string, format: date-time}
+        last_used_at: {type: [string, 'null'], format: date-time}
+
+    Session:
+      type: object
+      required: [session_id, device_id, silicon_id, state, started_at, last_command_at, idle_ends_at, ended_at, end_reason]
+      properties:
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        silicon_id: {$ref: '#/components/schemas/SiliconId'}
+        state: {type: string, enum: [active, paused, ended]}
+        started_at: {type: string, format: date-time}
+        last_command_at: {type: [string, 'null'], format: date-time}
+        idle_ends_at: {type: [string, 'null'], format: date-time, description: Null once ended}
+        ended_at: {type: [string, 'null'], format: date-time}
+        end_reason:
+          type: [string, 'null']
+          enum: [ended_by_silicon, idle_timeout, stopped_by_carbon, access_removed, device_removed, pair_revoked, pair_expired,
+            silicon_logged_out, left_team, device_offline, environment_disabled, environment_cleaned, null]
+        command_count: {type: integer, minimum: 0}
+
+    Takeover:
+      type: object
+      required: [takeover_id, session_id, reason, started_at, expires_at]
+      properties:
+        takeover_id: {type: string, format: uuid}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        reason: {type: string, maxLength: 300}
+        started_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, description: started_at + 30 minutes; the session ends then}
+
+    CommandResult:
+      type: object
+      required: [command_id, session_id, command, ok, output, files, error, started_at, duration_ms, idle_ends_at]
+      properties:
+        command_id: {type: string, format: uuid}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        command: {type: string}
+        ok: {type: boolean}
+        output: {description: 'agent-device''s structured result for this command (for snapshot, the node tree and refs)'}
+        text: {type: [string, 'null'], description: 'agent-device''s plain-text rendering, what the CLI prints without --json'}
+        files: {type: array, items: {$ref: '#/components/schemas/File'}}
+        error:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [code, message]
+              properties:
+                code: {type: string, example: wait_target_absent}
+                message: {type: string}
+                details: {type: object, additionalProperties: true}
+        started_at: {type: string, format: date-time}
+        duration_ms: {type: integer}
+        idle_ends_at: {type: string, format: date-time}
+
+    File:
+      type: object
+      required: [file_id, name, kind, content_type, size_bytes, url, self_destruct_at, permanent]
+      properties:
+        file_id: {type: string, format: uuid, description: Briefcase entry id}
+        name: {type: string}
+        kind: {$ref: '#/components/schemas/FileKind'}
+        content_type: {type: string}
+        size_bytes: {type: integer}
+        url: {type: string, format: uri, description: Briefcase permanent URL; opens only for members with access}
+        self_destruct_at: {type: [string, 'null'], format: date-time}
+        permanent: {type: boolean}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        command_id: {type: string, format: uuid}
+        created_by: {$ref: '#/components/schemas/SiliconId'}
+        shared_with: {$ref: '#/components/schemas/CarbonId'}
+        created_at: {type: string, format: date-time}
+
+    Request:
+      type: object
+      required: [request_id, device_id, from, to, reason, created_at, delivery]
+      properties:
+        request_id: {type: string, format: uuid}
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        from: {$ref: '#/components/schemas/SiliconId'}
+        to: {$ref: '#/components/schemas/SiliconId'}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        reason: {type: string, maxLength: 300}
+        created_at: {type: string, format: date-time}
+        delivery: {type: string, enum: [pending, delivered, failed]}
+    RequestPage:
+      type: object
+      required: [type, data]
+      properties:
+        type: {const: requests}
+        data:
+          type: object
+          required: [items, next_cursor]
+          properties:
+            items: {type: array, items: {$ref: '#/components/schemas/Request'}}
+            next_cursor: {type: [string, 'null']}
+
+    ActivityEntry:
+      type: object
+      required: [id, at, actor, action]
+      properties:
+        id: {type: string, format: uuid}
+        at: {type: string, format: date-time}
+        actor: {$ref: '#/components/schemas/Member'}
+        action:
+          type: string
+          description: A command name, or one of the device events
+          example: click
+          examples: [paired, renamed, access_granted, access_revoked, session_started, session_ended, command, takeover_started,
+            takeover_released, stopped, request_sent, pair_revoked, removed, pair_expired]
+        session_id: {oneOf: [{$ref: '#/components/schemas/SessionIdValue'}, {type: 'null'}]}
+        command: {type: [string, 'null']}
+        args: {type: [array, "null"], items: {type: string}, description: Redacted}
+        outcome: {type: [string, 'null'], enum: [ok, failed, timeout, unknown, null]}
+        files: {type: array, items: {type: string, format: uuid}}
+        details: {type: object, additionalProperties: true}
+
+    TestingEnvironment:
+      type: object
+      required: [environment_id, name, state]
+      properties:
+        environment_id: {type: string, format: uuid}
+        name: {type: string}
+        state: {type: string, enum: [preparing, ready, cleaning, disabled, removed]}
+        paired_devices: {type: integer, minimum: 0, maximum: 5}
+        device_limit: {type: integer, const: 5}
+
+    HoneycombOperation:
+      type: object
+      additionalProperties: false
+      required: [operation_id, environment_id, org_id, app_id, environment_revision, generation, key_version, action, testing_key]
+      properties:
+        operation_id: {type: string, format: uuid}
+        environment_id: {type: string, format: uuid}
+        org_id: {type: string, minLength: 1, maxLength: 128}
+        app_id: {type: string}
+        environment_revision: {type: integer, minimum: 1}
+        generation: {type: integer, minimum: 1}
+        key_version: {type: integer, minimum: 1}
+        action: {type: string, enum: [prepare, rotate-key, clean, disable, restore, purge]}
+        testing_key: {type: string, pattern: '^[A-Za-z0-9]{32}$', writeOnly: true}
+        name: {type: [string, 'null'], minLength: 1, maxLength: 128}
+        reason: {type: string}
+    HoneycombReceipt:
+      type: object
+      required: [operation_id, environment_id, app_id, environment_revision, generation, key_version, state]
+      properties:
+        operation_id: {type: string, format: uuid}
+        environment_id: {type: string, format: uuid}
+        app_id: {type: string}
+        environment_revision: {type: integer, minimum: 1}
+        generation: {type: integer, minimum: 1}
+        key_version: {type: integer, minimum: 1}
+        state: {type: string, enum: [pending, completed, failed]}
+        target_state: {type: string}
+        error: {type: [string, 'null']}

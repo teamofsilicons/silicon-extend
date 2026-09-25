@@ -1,0 +1,13 @@
+/target
+node_modules
+dist
+.DS_Store
+*.log
+.env
+/e2e/.state
+/apps/android/.gradle
+/apps/android/**/build
+/apps/android/local.properties
+/apps/macos/build
+/apps/macos/*.xcodeproj
+/web/dist

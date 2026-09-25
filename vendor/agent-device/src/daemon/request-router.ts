@@ -1,0 +1,666 @@
+import { withResolveTargetDeviceCacheScope } from '@agent-device/device-selection/dispatch-resolve';
+import { withDeviceInventoryContext } from '@agent-device/device-selection/device-inventory-context';
+import type { LeaseLifecycleProvider, ProviderAppCatalog } from '@agent-device/contracts/device';
+import type { ComposedDeviceInventoryGateways } from '@agent-device/contracts/platform-module';
+import type { DeviceRuntimeGateway } from '@agent-device/contracts/platform-runtime';
+import type { PlatformRuntimeOperations } from '@agent-device/contracts/platform-runtime-operations';
+import {
+  AppError,
+  normalizeError,
+  retriableForErrorCode,
+  type DaemonError,
+} from '@agent-device/kernel/errors';
+import { timingSafeStringEqual } from '@agent-device/host-kit/transport';
+import {
+  type DaemonArtifactType,
+  type ResponseCost,
+  errorResponse,
+  noActiveSessionError,
+} from '@agent-device/kernel/contracts';
+import type { CloudArtifactProvider } from '@agent-device/contracts/observability';
+import type {
+  RequestPlatformProviderScope,
+  RequestPlatformProviders,
+} from '@agent-device/contracts/platform-providers';
+import type {
+  DaemonInvokeFn,
+  DaemonRequest,
+  DaemonResponse,
+  DaemonResponseData,
+} from './daemon-request.ts';
+import { RESPONSE_VIEWS } from './response-views.ts';
+import { SessionStore } from './session-store.ts';
+import { resolvePlatformProviderRequestContext } from './request-platform-provider-context.ts';
+import {
+  countDiagnosticEventsByPhase,
+  emitDiagnostic,
+  flushDiagnosticsToSessionFile,
+  getDiagnosticsMeta,
+  registerDiagnosticSensitiveValue,
+  withDiagnosticsScope,
+} from '@agent-device/host-kit/diagnostics';
+import type { LeaseRegistry } from './lease-registry.ts';
+import {
+  loadGenericRequestHandlerModule,
+  runRequestHandlerChain,
+} from './request-handler-chain.ts';
+import {
+  createRequestExecutionScope,
+  finalizeRequestExecutionScope,
+  type LockedRequestScope,
+  prepareLockedRequestScope,
+  type RequestExecutionScope,
+} from './request-execution-scope.ts';
+import { unsupportedSaveScriptFlagResponse } from './request-save-script-policy.ts';
+import { canRunReplayScopedAction } from './daemon-command-registry.ts';
+import { isWebSession } from './web-session-names.ts';
+import { inferFillText } from '@agent-device/ad-script';
+import { createPlatformRequestScope } from './platform-request-scope.ts';
+import { createOwnerScopedDeviceClaimReconciler } from './device/device-claim-owner-recovery.ts';
+import {
+  createAppLogAdmissionLedger,
+  type AppLogAdmissionLedger,
+} from './app-log-admission-ledger.ts';
+import {
+  type AudioProbeAdmissionLedger,
+  createAudioProbeAdmissionLedger,
+} from '@agent-device/capture-kit/audio-probe-admission-ledger';
+import {
+  createPerfCaptureAdmissionLedger,
+  type PerfCaptureAdmissionLedger,
+} from '@agent-device/capture-kit/perf-capture-admission-ledger';
+import {
+  createScreenRecordingAdmissionLedger,
+  type ScreenRecordingAdmissionLedger,
+} from '@agent-device/capture-kit/screen-recording-admission-ledger';
+import type { HostDiagnostics } from '@agent-device/contracts/host-diagnostics';
+import { resolveGenericRuntimeExecution } from './generic-runtime-execution.ts';
+import type { AndroidObservationAdapter } from '@agent-device/contracts/android-observation';
+import type { PlatformResourceCleanup } from './platform-resource-cleanup.ts';
+
+// ---------------------------------------------------------------------------
+// Request handler API
+// ---------------------------------------------------------------------------
+
+export type RequestRouterDeps = {
+  logPath: string;
+  token: string;
+  sessionStore: SessionStore;
+  leaseRegistry: LeaseRegistry;
+  requestPlatformProviders?: RequestPlatformProviders;
+  deviceInventoryGateways: ComposedDeviceInventoryGateways;
+  deviceRuntimeGateway: DeviceRuntimeGateway<PlatformRuntimeOperations>;
+  appLogAdmissionLedger?: AppLogAdmissionLedger;
+  audioProbeAdmissionLedger?: AudioProbeAdmissionLedger;
+  perfCaptureAdmissionLedger?: PerfCaptureAdmissionLedger;
+  screenRecordingAdmissionLedger?: ScreenRecordingAdmissionLedger;
+  hostDiagnostics?: HostDiagnostics;
+  providerRuntimeIds?: readonly string[];
+  providerRuntimeRequiredIds?: readonly string[];
+  leaseLifecycleProvider?: LeaseLifecycleProvider;
+  cloudArtifactProvider?: CloudArtifactProvider;
+  providerAppCatalog?: ProviderAppCatalog;
+  androidObservation?: AndroidObservationAdapter;
+  platformResourceCleanup?: PlatformResourceCleanup;
+  providerDeviceRuntimeScope?: <T>(task: () => Promise<T>) => Promise<T>;
+  trackDownloadableArtifact: (opts: {
+    artifactPath: string;
+    tenantId?: string;
+    artifactType: DaemonArtifactType | undefined;
+    fileName?: string;
+  }) => string;
+};
+
+const unavailableAndroidObservation = new Proxy({} as AndroidObservationAdapter, {
+  get() {
+    return async () => {
+      throw new AppError(
+        'INTERNAL_ERROR',
+        'Android observation was not supplied by root runtime composition',
+      );
+    };
+  },
+});
+
+function missingPlatformResourceCleanup(): AppError {
+  return new AppError(
+    'INTERNAL_ERROR',
+    'Platform resource cleanup was not supplied by root runtime composition',
+  );
+}
+
+const unavailablePlatformResourceCleanup: PlatformResourceCleanup = Object.freeze({
+  stopSnapshotHelper: async () => {
+    throw missingPlatformResourceCleanup();
+  },
+  closeManagedBrowser: async () => {
+    throw missingPlatformResourceCleanup();
+  },
+  cleanupSessionlessExecutionHost: async () => {
+    throw missingPlatformResourceCleanup();
+  },
+  retainExecutionHostAfterClose: () => {
+    throw missingPlatformResourceCleanup();
+  },
+});
+
+export function createRequestHandler(deps: RequestRouterDeps): DaemonInvokeFn {
+  const {
+    logPath,
+    token,
+    requestPlatformProviders = EMPTY_REQUEST_PLATFORM_PROVIDERS,
+    deviceInventoryGateways,
+    deviceRuntimeGateway,
+    appLogAdmissionLedger = createAppLogAdmissionLedger(),
+    audioProbeAdmissionLedger = createAudioProbeAdmissionLedger(),
+    perfCaptureAdmissionLedger = createPerfCaptureAdmissionLedger(),
+    screenRecordingAdmissionLedger = createScreenRecordingAdmissionLedger(),
+    hostDiagnostics,
+    providerRuntimeIds,
+    providerRuntimeRequiredIds,
+    leaseLifecycleProvider,
+    cloudArtifactProvider,
+    providerAppCatalog,
+    androidObservation = unavailableAndroidObservation,
+    platformResourceCleanup = unavailablePlatformResourceCleanup,
+    providerDeviceRuntimeScope,
+    trackDownloadableArtifact,
+  } = deps;
+  const { sessionStore, leaseRegistry } = deps;
+
+  async function handleRequest(req: DaemonRequest): Promise<DaemonResponse> {
+    const start = Date.now();
+    const debug = Boolean(req.meta?.debug || req.flags?.verbose);
+    return await withDiagnosticsScope(
+      {
+        session: req.session,
+        requestId: req.meta?.requestId,
+        command: req.command,
+        debug,
+        logPath,
+      },
+      async () => {
+        const response = await runRequestWithinScope(req);
+        if (!response.ok) {
+          // ADR 0012 decision 6, R7 (C5a): a command that finds no session but
+          // hits a live repair tombstone gets `REPAIR_SESSION_EXPIRED` with
+          // re-run guidance, never a bare SESSION_NOT_FOUND.
+          const error = repairExpiredIfTombstoned(req, response.error, sessionStore);
+          return { ok: false, error: enrichDaemonError(error) };
+        }
+        // Phase 4 (agent-cost) grafts on the success path. Runs inside the
+        // diagnostics scope so cost can read this request's runner-round-trip tally.
+        return applyAgentCostGrafts(req, response, start);
+      },
+    );
+  }
+
+  async function runRequestWithinScope(req: DaemonRequest): Promise<DaemonResponse> {
+    if (!timingSafeStringEqual(req.token, token)) {
+      return unauthorizedResponse();
+    }
+    registerParameterizedFillDiagnosticValue(req);
+    const invalidRecordingFlags = recordingFlagsResponse(req);
+    if (invalidRecordingFlags) return invalidRecordingFlags;
+    const invalidCustomActionFlags = customActionFlagsResponse(req);
+    if (invalidCustomActionFlags) return invalidCustomActionFlags;
+    // #1478: raw `flags.saveScript` on a non-owner command never reaches
+    // admission, device work, or a handler that could arm publication.
+    const unsupportedSaveScript = unsupportedSaveScriptFlagResponse(req);
+    if (unsupportedSaveScript) return unsupportedSaveScript;
+
+    let scope: RequestExecutionScope | undefined;
+    let response: DaemonResponse;
+    const platformRequestScope = createPlatformRequestScope(req);
+    try {
+      response = await withDeviceInventoryContext(
+        {
+          ...deviceInventoryGateways,
+          requestScope: platformRequestScope,
+        },
+        async () =>
+          await withResolveTargetDeviceCacheScope(async () => {
+            scope = await createRequestExecutionScope({
+              req,
+              sessionStore,
+              leaseRegistry,
+              deviceRuntimeGateway,
+              platformRequestScope,
+              platformResourceCleanup,
+              providerAppCatalog,
+            });
+            return await executeRequestScope(scope);
+          }),
+      );
+    } catch (error) {
+      response = finalizeThrownRequestError(error);
+    }
+    return await finalizeRequestBindingCleanup(scope, response);
+  }
+
+  async function executeRequestScope(
+    scope: RequestExecutionScope,
+    inheritedProviderScope?: RequestPlatformProviderScope,
+  ): Promise<DaemonResponse> {
+    const run = async (): Promise<DaemonResponse> => {
+      const locked = await prepareLockedRequestScope({
+        scope,
+        sessionStore,
+        trackDownloadableArtifact,
+      });
+      if (locked.type === 'response') return locked.response;
+      const lockedScope = locked.scope;
+      const executeLocked = async (providerScope: RequestPlatformProviderScope) => {
+        const runLockedRequest = async () =>
+          await executeLockedRequest({
+            lockedScope,
+            providerScope,
+            allowReplayActions: inheritedProviderScope === undefined,
+          });
+        return providerDeviceRuntimeScope
+          ? await providerDeviceRuntimeScope(runLockedRequest)
+          : await runLockedRequest();
+      };
+
+      if (inheritedProviderScope) return await executeLocked(inheritedProviderScope);
+      const useDefaultWebProvider = shouldUseDefaultWebProvider(lockedScope);
+      if (!requestPlatformProviders.hasConfiguredResolvers && !useDefaultWebProvider) {
+        return await executeLocked({});
+      }
+      const context = await resolvePlatformProviderRequestContext({
+        req: lockedScope.req,
+        existingSession: lockedScope.existingSession,
+        useDefaultWebProvider,
+      });
+      return context
+        ? await requestPlatformProviders.run(context, executeLocked)
+        : await executeLocked({});
+    };
+
+    return inheritedProviderScope ? await scope.runAdmitted(run) : await scope.runLocked(run);
+  }
+
+  async function executeLockedRequest(params: {
+    lockedScope: LockedRequestScope;
+    providerScope: RequestPlatformProviderScope;
+    allowReplayActions: boolean;
+  }): Promise<DaemonResponse> {
+    const { lockedScope, providerScope, allowReplayActions } = params;
+    const requestScope = createPlatformRequestScope(lockedScope.req);
+    const handlerResponse = await runRequestHandlerChain({
+      req: lockedScope.req,
+      sessionName: lockedScope.sessionName,
+      logPath: lockedScope.logPath,
+      sessionStore,
+      leaseRegistry,
+      leaseLifecycleProvider,
+      providerRuntimeIds,
+      providerRuntimeRequiredIds,
+      cloudArtifactProvider,
+      providerAppCatalog,
+      invoke: handleRequest,
+      invokeReplayAction: allowReplayActions
+        ? createReplayScopedActionInvoker(lockedScope, providerScope)
+        : undefined,
+      providerScope,
+      androidObservation,
+      platformResourceCleanup,
+      bindDevice: lockedScope.bindDevice,
+      inspectFacts: lockedScope.inspectFacts,
+      bindExactDevice: lockedScope.bindExactDevice,
+      reconcileOrphanedDeviceClaim: createOwnerScopedDeviceClaimReconciler(requestScope),
+      appLogAdmissionLedger,
+      audioProbeAdmissionLedger,
+      perfCaptureAdmissionLedger,
+      screenRecordingAdmissionLedger,
+      hostDiagnostics,
+      requestScope,
+      retainDeviceExecutionLock: lockedScope.retainDeviceExecutionLock,
+      throwIfCanceled: lockedScope.throwIfCanceled,
+      contextFromFlags: lockedScope.handlerContextFromFlags,
+    });
+    if (handlerResponse) return handlerResponse;
+
+    return await dispatchGenericForLockedScope({
+      lockedScope,
+      logPath: lockedScope.logPath,
+      sessionStore,
+      androidObservation,
+    });
+  }
+
+  function createReplayScopedActionInvoker(
+    parentScope: LockedRequestScope,
+    providerScope: RequestPlatformProviderScope,
+  ): DaemonInvokeFn {
+    return async (req) => {
+      if (!canRunReplayActionInCurrentScope(req, parentScope)) return await handleRequest(req);
+      if (!timingSafeStringEqual(req.token, token)) {
+        return unauthorizedResponse();
+      }
+      registerParameterizedFillDiagnosticValue(req);
+
+      let childScope: RequestExecutionScope | undefined;
+      let response: DaemonResponse;
+      try {
+        const scopedReq = bindReplayDeviceExecutionLock(req, parentScope);
+        childScope = await createRequestExecutionScope({
+          req: scopedReq,
+          sessionStore,
+          leaseRegistry,
+          deviceRuntimeGateway,
+          platformRequestScope: createPlatformRequestScope(scopedReq),
+          platformResourceCleanup,
+          providerAppCatalog,
+        });
+        // The outer replay keeps its stable session lock plus the device lock
+        // from the first device binding through response projection and ref
+        // finalization. A same-session replay action reuses that admitted scope
+        // instead of reacquiring the non-reentrant locks. Nested changes remain
+        // visible to capture lineage through snapshot/frame/runtime/store state.
+        response =
+          childScope.sessionName === parentScope.sessionName
+            ? await executeRequestScope(childScope, providerScope)
+            : await executeRequestScope(childScope);
+      } catch (error) {
+        response = finalizeThrownRequestError(error);
+      }
+      return await finalizeRequestBindingCleanup(childScope, response);
+    };
+  }
+
+  return handleRequest;
+}
+
+const EMPTY_REQUEST_PLATFORM_PROVIDERS: RequestPlatformProviders = Object.freeze({
+  hasConfiguredResolvers: false,
+  run: async (_context, task) => await task({}),
+});
+
+function shouldUseDefaultWebProvider(scope: LockedRequestScope): boolean {
+  return (
+    (scope.existingSession !== undefined && isWebSession(scope.existingSession)) ||
+    scope.req.flags?.platform === 'web'
+  );
+}
+
+function unauthorizedResponse(): DaemonResponse {
+  return {
+    ok: false,
+    error: normalizeError(new AppError('UNAUTHORIZED', 'Invalid token')),
+  };
+}
+
+/**
+ * #1271 stage 2 (ADR 0012 amendment): `--record` and `--no-record` express
+ * opposite recording intents for the same action — force it into a
+ * repair-armed heal versus opt it out entirely — so both together is a
+ * contradiction the daemon rejects up front, uniformly for every surface
+ * (CLI/Node client/MCP all funnel through this same request entry point),
+ * rather than silently letting one win.
+ */
+function mutuallyExclusiveRecordFlagsResponse(): DaemonResponse {
+  return errorResponse(
+    'INVALID_ARGS',
+    '--record and --no-record are mutually exclusive; pass at most one.',
+  );
+}
+
+function recordingFlagsResponse(req: DaemonRequest): DaemonResponse | undefined {
+  if (req.flags?.record && req.flags?.noRecord) return mutuallyExclusiveRecordFlagsResponse();
+  if (req.flags?.recordAs !== undefined && req.command !== 'fill') {
+    return errorResponse('INVALID_ARGS', '--record-as is supported only by fill.');
+  }
+  return undefined;
+}
+
+/**
+ * `--actions` reads custom actions through the private-AX snapshot path, which
+ * a raw capture deliberately does not take (ADR 0004: raw preserves the tree
+ * backend's own errors). Asking for both is a contradiction, and answering it
+ * with a capture that structurally cannot carry actions would be a requested
+ * capability silently no-opped. Rejected at the request seam so CLI, Node
+ * client, and MCP all get the same answer before any device work.
+ */
+function customActionFlagsResponse(req: DaemonRequest): DaemonResponse | undefined {
+  if (req.flags?.snapshotCustomActions !== true) return undefined;
+  if (req.flags?.snapshotRaw === true) {
+    return errorResponse(
+      'INVALID_ARGS',
+      '--actions and --raw are mutually exclusive: custom actions are only readable through the private-AX snapshot path, which a raw capture does not use.',
+    );
+  }
+  return undefined;
+}
+
+function registerParameterizedFillDiagnosticValue(req: DaemonRequest): void {
+  if (req.command !== 'fill' || typeof req.flags?.recordAs !== 'string') return;
+  registerDiagnosticSensitiveValue(
+    inferFillText({
+      ts: 0,
+      command: 'fill',
+      positionals: req.positionals ?? [],
+      flags: req.flags,
+    }),
+  );
+}
+
+async function dispatchGenericForLockedScope(params: {
+  lockedScope: LockedRequestScope;
+  logPath: string;
+  sessionStore: SessionStore;
+  androidObservation: AndroidObservationAdapter;
+}): Promise<DaemonResponse> {
+  const { lockedScope, logPath, sessionStore, androidObservation } = params;
+  const session = sessionStore.get(lockedScope.sessionName);
+  if (!session) {
+    return noActiveSessionError();
+  }
+
+  const runtimeExecution = await resolveGenericRuntimeExecution({
+    req: lockedScope.req,
+    session,
+    // `scroll` parses its distance/timing flags during admission, so the resolved context is
+    // needed before the dispatcher builds its own.
+    context: lockedScope.contextFromFlags(
+      lockedScope.req.flags,
+      session.appBundleId,
+      session.trace?.outPath,
+    ),
+    inspectFacts: lockedScope.inspectFacts,
+    bindDevice: lockedScope.bindDevice,
+  });
+  if (!runtimeExecution.ok) return runtimeExecution.response;
+
+  const { dispatchGenericCommand } = await loadGenericRequestHandlerModule();
+  const dispatchResponse = await dispatchGenericCommand({
+    req: lockedScope.req,
+    session,
+    sessionName: lockedScope.sessionName,
+    logPath,
+    sessionStore,
+    contextFromFlags: lockedScope.contextFromFlags,
+    executePlatformCommand: runtimeExecution.execute,
+    androidObservation,
+    ...(runtimeExecution.recorded ? { recordedRequest: runtimeExecution.recorded } : {}),
+  });
+  return dispatchResponse;
+}
+
+function bindReplayDeviceExecutionLock(
+  req: DaemonRequest,
+  parentScope: LockedRequestScope,
+): DaemonRequest {
+  if (req.command !== 'open') return req;
+  const retainDeviceExecutionLock = req.internal?.retainDeviceExecutionLock;
+  return {
+    ...req,
+    internal: {
+      ...req.internal,
+      retainDeviceExecutionLock: async (deviceId) => {
+        await parentScope.retainDeviceExecutionLock(deviceId);
+        await retainDeviceExecutionLock?.(deviceId);
+      },
+    },
+  };
+}
+
+function canRunReplayActionInCurrentScope(
+  req: DaemonRequest,
+  parentScope: LockedRequestScope,
+): boolean {
+  return req.session === parentScope.sessionName && canRunReplayScopedAction(req.command);
+}
+
+function finalizeThrownRequestError(error: unknown): DaemonResponse {
+  emitDiagnostic({
+    level: 'error',
+    phase: 'request_failed',
+    data: {
+      error: error instanceof Error ? error.message : String(error),
+    },
+  });
+  const details = getDiagnosticsMeta();
+  const flushed = flushDiagnosticsToSessionFile({ force: true });
+  const normalizedError = normalizeError(error, {
+    diagnosticId: details.diagnosticId,
+    logPath: flushed?.path,
+    diagnosticsRecord: flushed?.ref,
+  });
+  return { ok: false, error: normalizedError };
+}
+
+async function finalizeRequestBindingCleanup(
+  scope: RequestExecutionScope | undefined,
+  response: DaemonResponse,
+): Promise<DaemonResponse> {
+  if (!scope) return response;
+  let finalResponse = response;
+  try {
+    await scope[Symbol.asyncDispose]();
+  } catch (cleanupError) {
+    if (response.ok) {
+      finalResponse = finalizeThrownRequestError(cleanupError);
+    } else {
+      emitDiagnostic({
+        level: 'error',
+        phase: 'request_binding_cleanup_failed',
+        data: {
+          primaryCode: response.error.code,
+          cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        },
+      });
+      flushDiagnosticsToSessionFile({ force: true });
+    }
+  }
+  return finalizeRequestExecutionScope(scope, finalResponse);
+}
+
+/**
+ * ADR 0012 decision 6, R7 (C5a, BLOCKER 2): when a request finds no session
+ * (SESSION_NOT_FOUND) but a live repair tombstone exists for its session key,
+ * rewrite the error to an actionable recovery error. Any other error, or the
+ * absence of a (non-expired) tombstone, passes through untouched.
+ *
+ * BLOCKER 2: a tombstone carrying `commitFailure` means the transaction
+ * actually COMPLETED and a commit was attempted at teardown but FAILED (e.g.
+ * no-clobber refusal, a filesystem error) — that is a materially different,
+ * more specific situation than "reaped before it ever finished", so it gets
+ * its own `REPAIR_COMMIT_FAILED` code carrying the real cause, rather than
+ * being folded into the generic `REPAIR_SESSION_EXPIRED` expiry message.
+ */
+function repairExpiredIfTombstoned(
+  req: DaemonRequest,
+  error: DaemonError,
+  sessionStore: SessionStore,
+): DaemonError {
+  if (error.code !== 'SESSION_NOT_FOUND') return error;
+  const tombstone = sessionStore.readRepairTombstone(req.session);
+  if (!tombstone) return error;
+  const reRun = tombstone.sourcePath
+    ? `re-run: replay ${tombstone.sourcePath} --save-script`
+    : 're-run your replay <script> --save-script from the start';
+  if (tombstone.commitFailure) {
+    return normalizeError(
+      new AppError(
+        'REPAIR_COMMIT_FAILED',
+        `The repair transaction for session "${req.session}" completed, but committing its healed script failed at teardown: ${tombstone.commitFailure.message}. ${reRun}.`,
+      ),
+    );
+  }
+  return normalizeError(
+    new AppError(
+      'REPAIR_SESSION_EXPIRED',
+      `The --save-script repair session "${req.session}" was reaped before it was finalized (idle-reap); ${reRun}.`,
+    ),
+  );
+}
+
+// Phase 2 typed-error graft: add machine-readable signals to an error response.
+// Returns the error unchanged unless a signal applies, so the default wire shape
+// is preserved for the common codes.
+function enrichDaemonError(error: DaemonError): DaemonError {
+  // A throw-site classification (lifted from details by normalizeError) wins
+  // over the conservative code-level policy.
+  const retriable = error.retriable ?? retriableForErrorCode(error.code);
+  if (retriable === undefined) return error;
+  return {
+    ...error,
+    retriable,
+  };
+}
+
+// Phase 4 (agent-cost) success-path grafts: a leveled response view and an
+// opt-in cost block, both purely additive. With responseLevel `default` (or
+// unset) AND no registered view AND no --cost, the original `response` object is
+// returned unchanged — byte-identical to today (Maestro `.ad` recompare safe).
+function applyAgentCostGrafts(
+  req: DaemonRequest,
+  response: Extract<DaemonResponse, { ok: true }>,
+  startedAt: number,
+): DaemonResponse {
+  const viewed = applyResponseLevelView(req, response);
+  if (!req.meta?.includeCost) return viewed;
+  const cost = buildResponseCost(response.data, startedAt);
+  return { ok: true, data: { ...(viewed.data ?? {}), cost } };
+}
+
+// Returns the response untouched when responseLevel is `default` (or unset) or no
+// view is registered for the command — preserving today's byte-exact wire shape.
+function applyResponseLevelView(
+  req: DaemonRequest,
+  response: Extract<DaemonResponse, { ok: true }>,
+): Extract<DaemonResponse, { ok: true }> {
+  const level = req.meta?.responseLevel ?? 'default';
+  if (level === 'default') return response;
+  const view = RESPONSE_VIEWS[req.command];
+  return view ? { ok: true, data: view(response.data ?? {}, level) } : response;
+}
+
+// Diagnostic phases emitted once per real iOS-runner round-trip. `..._command_send`
+// is the command itself; `..._readiness_preflight` is the pre-command uptime probe
+// (a real network round-trip). The `..._skipped` / `..._recovered` markers do NOT
+// hit the runner and are intentionally excluded.
+const RUNNER_ROUND_TRIP_PHASES = [
+  'ios_runner_command_send',
+  'ios_runner_readiness_preflight',
+] as const;
+
+function buildResponseCost(
+  originalData: DaemonResponseData | undefined,
+  startedAt: number,
+): ResponseCost {
+  const cost: ResponseCost = {
+    wallClockMs: Date.now() - startedAt,
+    // Counts this request's real runner round-trips from the flush-surviving
+    // diagnostics phase tally. Reads 0 when no runner was hit (e.g. a no-op or a
+    // command served entirely from the daemon). Must run inside the request's
+    // diagnostics scope (see `applyAgentCostGrafts` call site).
+    runnerRoundTrips: countDiagnosticEventsByPhase(RUNNER_ROUND_TRIP_PHASES),
+  };
+  // nodeCount reads the ORIGINAL node tree (the digest view may have already
+  // collapsed `data.nodes`), so the count stays accurate.
+  const nodes = originalData?.nodes;
+  if (Array.isArray(nodes)) cost.nodeCount = nodes.length;
+  return cost;
+}

@@ -1,0 +1,652 @@
+import type { CommandFlags, InternalRequestOptions } from '@agent-device/contracts/command';
+import {
+  readSerializedSnapshotCaptureAnnotations,
+  readSnapshotDiagnosticsSummary,
+} from '@agent-device/contracts/capture';
+import type {
+  AgentDeviceClientConfig,
+  AgentDeviceDaemonTransport,
+  AppCloseOptions,
+  AppDeployOptions,
+  AppInstallFromSourceOptions,
+  AppInstallOptions,
+  AppListOptions,
+  AppOpenOptions,
+  CaptureScreenshotOptions,
+  CaptureScreenshotResult,
+  CaptureSnapshotOptions,
+  CaptureSnapshotResult,
+  DragOptions,
+  FlingOptions,
+  MaterializationReleaseOptions,
+  PanOptions,
+  PinchOptions,
+  RotateGestureOptions,
+  SessionSaveScriptOptions,
+  SessionSaveScriptResult,
+  SwipeGestureOptions,
+  TransformGestureOptions,
+} from '@agent-device/contracts/client';
+import type { AgentArtifactsResult } from '@agent-device/contracts/observability';
+import type { MetroPrepareOptions } from '@agent-device/contracts/remote';
+import {
+  isNonDefaultResponseLevel,
+  type ResponseLevel,
+  type SessionRuntimeHints,
+} from '@agent-device/kernel/contracts';
+import { AppError, throwDaemonError } from '@agent-device/kernel/errors';
+import {
+  buildMeta,
+  normalizeDeployResult,
+  normalizeDevice,
+  normalizeDeviceSelection,
+  normalizeOpenForegroundComposition,
+  normalizeInstallFromSourceResult,
+  normalizeMaterializationReleaseResult,
+  normalizeOpenDevice,
+  normalizeRuntimeHints,
+  normalizeSession,
+  normalizeStartupSample,
+  normalizeTargetShutdownResult,
+  readOptionalString,
+  readRequiredString,
+  readSnapshotNodes,
+  resolveSessionName,
+} from './client/client-normalizers.ts';
+import type { AgentDeviceClient, MetroPrepareResult } from './client/client-types.ts';
+import { INTERNAL_COMMANDS } from '@agent-device/command-registry/catalog';
+import { buildRequestFlags } from './commands/command-flags.ts';
+import {
+  prepareDaemonCommandRequest,
+  type DaemonCommandName,
+} from './commands/command-projection.ts';
+import type { CommandResult } from '@agent-device/command-registry/command-result';
+import { sendToDaemon } from './daemon-client/daemon-client.ts';
+import { resolveDaemonPaths } from './daemon-resolution.ts';
+import { prepareMetroRuntime, reloadMetro } from './metro/client-metro.ts';
+import {
+  clearMetroSessionHints,
+  readMetroSessionHints,
+  writeMetroSessionHints,
+  type MetroSessionHints,
+} from './metro/metro-session-hints.ts';
+import { isRecord, readSnapshotKeyboardBandFact } from '@agent-device/kernel/record';
+import { readResponseWarnings } from '@agent-device/kernel/success-text';
+import { createLeaseClient } from './client/lease-client.ts';
+import { normalizeScreenshotCaptureResult } from './client/screenshot-result.ts';
+
+export function createAgentDeviceClient(
+  config: AgentDeviceClientConfig = {},
+  deps: { transport?: AgentDeviceDaemonTransport } = {},
+): AgentDeviceClient {
+  const transport = deps.transport ?? sendToDaemon;
+
+  // A non-default responseLevel (digest/full) makes the daemon return a leveled
+  // shape; the per-command client normalizers assume the default shape, so the
+  // capture methods pass the leveled payload through unnormalized instead.
+  const isLeveledResponse = (options: { responseLevel?: ResponseLevel }): boolean =>
+    isNonDefaultResponseLevel(options.responseLevel ?? config.responseLevel);
+
+  const execute = async (
+    command: string,
+    positionals: string[] = [],
+    options: InternalRequestOptions = {},
+    metadataFlags?: Partial<CommandFlags>,
+    input?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const merged = mergeClientOptions(config, options);
+    const request = {
+      session: resolveSessionName(merged.session),
+      command,
+      positionals,
+      ...(input ? { input } : {}),
+      flags: buildRequestFlags(merged, metadataFlags),
+      runtime: merged.runtime,
+      meta: buildMeta(merged),
+    };
+    const response = await transport(request, { authToken: merged.daemonAuthToken });
+    if (!response.ok) {
+      throwDaemonError(response.error);
+    }
+    return (response.data ?? {}) as Record<string, unknown>;
+  };
+
+  const listSessions = async (options = {}) => {
+    const data = await execute(INTERNAL_COMMANDS.sessionList, [], options);
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    return sessions.map(normalizeSession);
+  };
+
+  const executeCommand = async <T>(
+    command: DaemonCommandName,
+    options: InternalRequestOptions = {},
+  ): Promise<T> => {
+    const request = await prepareDaemonCommandRequest(command, options);
+    return (await execute(
+      request.command,
+      request.positionals,
+      request.options,
+      request.metadataFlags,
+      request.input,
+    )) as T;
+  };
+
+  const resolveRequestSession = (options: InternalRequestOptions = {}) =>
+    resolveSessionName(mergeClientOptions(config, options).session);
+
+  return {
+    command: {
+      wait: async (options) => await executeCommand<CommandResult<'wait'>>('wait', options),
+      alert: async (options = {}) => await executeCommand('alert', options),
+      appState: async (options = {}) =>
+        await executeCommand<CommandResult<'appstate'>>('appstate', options),
+      back: async (options = {}) => await executeCommand<CommandResult<'back'>>('back', options),
+      home: async (options = {}) => await executeCommand<CommandResult<'home'>>('home', options),
+      orientation: async (options) =>
+        await executeCommand<CommandResult<'orientation'>>('orientation', options),
+      fold: async (options) => await executeCommand<CommandResult<'fold'>>('fold', options),
+      appSwitcher: async (options = {}) =>
+        await executeCommand<CommandResult<'app-switcher'>>('app-switcher', options),
+      actionButton: async (options = {}) =>
+        await executeCommand<CommandResult<'action-button'>>('action-button', options),
+      keyboard: async (options = {}) =>
+        await executeCommand<CommandResult<'keyboard'>>('keyboard', options),
+      clipboard: async (options) =>
+        await executeCommand<CommandResult<'clipboard'>>('clipboard', options),
+      tvRemote: async (options) =>
+        await executeCommand<CommandResult<'tv-remote'>>('tv-remote', options),
+      reactNative: async (options) => await executeCommand('react-native', options),
+      doctor: async (options = {}) =>
+        await executeCommand<CommandResult<'doctor'>>('doctor', options),
+      prepare: async (options) =>
+        await executeCommand<CommandResult<'prepare'>>('prepare', options),
+      viewport: async (options) =>
+        await executeCommand<CommandResult<'viewport'>>('viewport', options),
+    },
+    devices: {
+      list: async (options = {}) => {
+        const data = await executeCommand<Record<string, unknown>>('devices', options);
+        const devices = Array.isArray(data.devices) ? data.devices : [];
+        return devices.map(normalizeDevice);
+      },
+      capabilities: async (options = {}) => {
+        const data = await executeCommand<Record<string, unknown>>('capabilities', options);
+        const availableCommands = Array.isArray(data.availableCommands)
+          ? data.availableCommands.filter(
+              (command): command is string => typeof command === 'string',
+            )
+          : [];
+        return {
+          device: normalizeDevice(data.device),
+          availableCommands,
+        };
+      },
+      boot: async (options = {}) => await executeCommand<CommandResult<'boot'>>('boot', options),
+      shutdown: async (options = {}) =>
+        await executeCommand<CommandResult<'shutdown'>>('shutdown', options),
+    },
+    sessions: {
+      list: async (options = {}) => await listSessions(options),
+      // Pure local resolution; mirrors how the daemon client picks its state dir.
+      stateDir: async (options = {}) => {
+        const merged = mergeClientOptions(config, options);
+        return resolveDaemonPaths(merged.stateDir ?? process.env.AGENT_DEVICE_STATE_DIR).baseDir;
+      },
+      close: async (options = {}) => {
+        const session = resolveRequestSession(options);
+        try {
+          const data = await executeCommand<Record<string, unknown>>('close', options);
+          return {
+            session,
+            shutdown: normalizeTargetShutdownResult(data.shutdown),
+            provider: readObject(data.provider),
+            savedScript: readOptionalString(data, 'savedScript'),
+            identifiers: { session },
+          };
+        } finally {
+          // Close is teardown intent: drop the dev-server binding even if the daemon call fails.
+          clearMetroSessionHintsQuietly(config, options);
+        }
+      },
+      saveScript: async (
+        options: SessionSaveScriptOptions = {},
+      ): Promise<SessionSaveScriptResult> => {
+        const data = await execute(
+          INTERNAL_COMMANDS.sessionSaveScript,
+          options.path !== undefined ? [options.path] : [],
+          options,
+          { force: options.force },
+        );
+        const actionCount = data.actionCount;
+        if (typeof actionCount !== 'number' || !Number.isInteger(actionCount) || actionCount < 0) {
+          throw new AppError(
+            'COMMAND_FAILED',
+            'Daemon returned an invalid saved-script action count.',
+          );
+        }
+        const publishedSession = readRequiredString(data, 'session');
+        return {
+          session: publishedSession,
+          savedScript: readRequiredString(data, 'savedScript'),
+          actionCount,
+          identifiers: { session: publishedSession },
+        };
+      },
+      artifacts: async (options = {}) =>
+        await executeCommand<AgentArtifactsResult>('artifacts', options),
+    },
+    apps: {
+      install: async (options: AppInstallOptions) =>
+        normalizeDeployResult(
+          await executeCommand('install', options),
+          resolveRequestSession(options),
+        ),
+      reinstall: async (options: AppDeployOptions) =>
+        normalizeDeployResult(
+          await executeCommand('reinstall', options),
+          resolveRequestSession(options),
+        ),
+      installFromSource: async (options: AppInstallFromSourceOptions) =>
+        normalizeInstallFromSourceResult(
+          await executeCommand('install-from-source', options),
+          resolveRequestSession(options),
+        ),
+      list: async (options: AppListOptions = {}) => {
+        const data = await executeCommand<Record<string, unknown>>('apps', options);
+        return Array.isArray(data.apps)
+          ? data.apps.filter((app): app is string => typeof app === 'string')
+          : [];
+      },
+      open: async (options: AppOpenOptions) => {
+        const session = resolveRequestSession(options);
+        const data = await executeCommand<Record<string, unknown>>('open', options);
+        recordMetroSessionHintsAfterOpen({
+          config,
+          options,
+          runtime: mergeClientOptions(config, options).runtime,
+          sessionReused: data.sessionReused === true,
+        });
+        const device = normalizeOpenDevice(data);
+        const appBundleId = readOptionalString(data, 'appBundleId');
+        const appId = appBundleId;
+        const warnings = readResponseWarnings(data);
+        return {
+          session,
+          ...(warnings.length > 0 ? { warnings } : {}),
+          sessionStateDir: readOptionalString(data, 'sessionStateDir'),
+          runnerLogPath: readOptionalString(data, 'runnerLogPath'),
+          requestLogPath: readOptionalString(data, 'requestLogPath'),
+          eventLogPath: readOptionalString(data, 'eventLogPath'),
+          appName: readOptionalString(data, 'appName'),
+          appBundleId,
+          appId,
+          selection: normalizeDeviceSelection(data.selection),
+          startup: normalizeStartupSample(data.startup),
+          runtime: normalizeRuntimeHints(data.runtime),
+          device,
+          ...normalizeOpenForegroundComposition(data),
+          identifiers: {
+            session,
+            deviceId: device?.id,
+            deviceName: device?.name,
+            udid: device?.ios?.udid,
+            serial: device?.android?.serial,
+            appId,
+            appBundleId,
+          },
+        };
+      },
+      close: async (options: AppCloseOptions = {}) => {
+        const session = resolveRequestSession(options);
+        const data = await executeCommand<Record<string, unknown>>('close', options);
+        return {
+          session,
+          closedApp: options.app,
+          shutdown: normalizeTargetShutdownResult(data.shutdown),
+          savedScript: readOptionalString(data, 'savedScript'),
+          identifiers: { session },
+        };
+      },
+      push: async (options) => await executeCommand<CommandResult<'push'>>('push', options),
+      triggerEvent: async (options) =>
+        await executeCommand<CommandResult<'trigger-app-event'>>('trigger-app-event', options),
+    },
+    materializations: {
+      release: async (options: MaterializationReleaseOptions) =>
+        normalizeMaterializationReleaseResult(
+          await execute(INTERNAL_COMMANDS.releaseMaterializedPaths, [], {
+            ...options,
+            materializationId: options.materializationId,
+          }),
+        ),
+    },
+    leases: createLeaseClient(execute),
+    metro: {
+      prepare: async (options: MetroPrepareOptions) => {
+        const result = await prepareMetroRuntime({
+          projectRoot: options.projectRoot ?? config.cwd,
+          kind: options.kind,
+          publicBaseUrl: options.publicBaseUrl,
+          proxyBaseUrl: options.proxyBaseUrl,
+          proxyBearerToken: options.bearerToken,
+          bridgeScope: options.bridgeScope,
+          launchUrl: options.launchUrl,
+          companionProfileKey: options.companionProfileKey,
+          companionConsumerKey: options.companionConsumerKey,
+          metroPort: options.port,
+          listenHost: options.listenHost,
+          statusHost: options.statusHost,
+          startupTimeoutMs: options.startupTimeoutMs,
+          probeTimeoutMs: options.probeTimeoutMs,
+          reuseExisting: options.reuseExisting,
+          installDependenciesIfNeeded: options.installDependenciesIfNeeded,
+          runtimeFilePath: options.runtimeFilePath,
+          logPath: options.logPath,
+        });
+        persistMetroSessionHints(config, result);
+        return result;
+      },
+      reload: async (options = {}) =>
+        await reloadMetro({
+          metroHost: options.metroHost,
+          metroPort: options.metroPort,
+          bundleUrl: options.bundleUrl,
+          runtime: config.runtime ?? resolveMetroSessionHints(config),
+          timeoutMs: options.timeoutMs,
+        }),
+    },
+    capture: {
+      snapshot: async (options: CaptureSnapshotOptions = {}) => {
+        const session = resolveRequestSession(options);
+        const data = await executeCommand<Record<string, unknown>>('snapshot', options);
+        // A non-default responseLevel returns the leveled snapshot digest
+        // ({ nodeCount, refs, … }); normalizeSnapshotResult expects the full
+        // `nodes` tree and would collapse it to an empty snapshot. Pass the
+        // leveled payload through verbatim. (Mirrors capture.screenshot; the
+        // caller opted into the level, so the runtime value is the leveled shape.)
+        if (isLeveledResponse(options)) return data as unknown as CaptureSnapshotResult;
+        return normalizeSnapshotResult(data, session);
+      },
+      screenshot: async (options: CaptureScreenshotOptions = {}) => {
+        const session = resolveRequestSession(options);
+        const data = await executeCommand<Record<string, unknown>>('screenshot', options);
+        // A non-default responseLevel returns a leveled (digest) screenshot shape
+        // — `overlayCount`, leveled `overlayRefs`, `artifacts` — that the default
+        // normalizer below would drop. Pass the leveled payload through verbatim.
+        // (The caller opted into a non-default level, so the static type is the
+        // default shape; the runtime value is the leveled payload.)
+        if (isLeveledResponse(options)) return data as unknown as CaptureScreenshotResult;
+        return normalizeScreenshotCaptureResult(data, session);
+      },
+      diff: async (options) => await executeCommand<CommandResult<'diff'>>('diff', options),
+    },
+    interactions: {
+      click: async (options) => await executeCommand('click', options),
+      press: async (options) => await executeCommand('press', options),
+      longPress: async (options) => await executeCommand('longpress', options),
+      hover: async (options) => await executeCommand('hover', options),
+      swipe: async (options) => await executeCommand('swipe', options),
+      pan: async (options) => await executeCommand('gesture', panGestureInput(options)),
+      drag: async (options) => await executeCommand('gesture', dragGestureInput(options)),
+      fling: async (options) => await executeCommand('gesture', flingGestureInput(options)),
+      swipeGesture: async (options) =>
+        await executeCommand('gesture', swipePresetGestureInput(options)),
+      focus: async (options) => await executeCommand('focus', options),
+      type: async (options) => await executeCommand('type', options),
+      fill: async (options) => await executeCommand('fill', options),
+      scroll: async (options) => await executeCommand('scroll', options),
+      pinch: async (options) => await executeCommand('gesture', pinchGestureInput(options)),
+      rotateGesture: async (options) =>
+        await executeCommand('gesture', rotateGestureInput(options)),
+      transformGesture: async (options) =>
+        await executeCommand('gesture', transformGestureInput(options)),
+      get: async (options) => await executeCommand('get', options),
+      is: async (options) => await executeCommand('is', options),
+      find: async (options) => await executeCommand('find', options),
+    },
+    replay: {
+      run: async (options) => await executeCommand<CommandResult<'replay'>>('replay', options),
+      test: async (options) => await executeCommand<CommandResult<'test'>>('test', options),
+    },
+    batch: {
+      run: async (options) => await executeCommand('batch', options),
+    },
+    observability: {
+      perf: async (options) => await executeCommand('perf', options),
+      logs: async (options = {}) => await executeCommand('logs', options),
+      events: async (options = {}) => await executeCommand('events', options),
+      network: async (options = {}) => await executeCommand('network', options),
+      audio: async (options = {}) => await executeCommand('audio', options),
+    },
+    debug: {
+      symbols: async (options) => {
+        const { symbolicateCrashArtifact } =
+          await import('@agent-device/platform-apple/debug-symbols');
+        return symbolicateCrashArtifact({ cwd: options.cwd ?? config.cwd, ...options });
+      },
+    },
+    recording: {
+      record: async (options) => await executeCommand<CommandResult<'record'>>('record', options),
+      trace: async (options) => await executeCommand<CommandResult<'trace'>>('trace', options),
+    },
+    settings: {
+      update: async (options) => await executeCommand('settings', options),
+    },
+  };
+}
+
+function panGestureInput(options: PanOptions): InternalRequestOptions & Record<string, unknown> {
+  const { x, y, dx, dy, ...common } = options;
+  return { ...common, kind: 'pan', origin: { x, y }, delta: { x: dx, y: dy } };
+}
+
+function dragGestureInput(options: DragOptions): InternalRequestOptions & Record<string, unknown> {
+  return { ...options, kind: 'drag' };
+}
+
+function flingGestureInput(
+  options: FlingOptions,
+): InternalRequestOptions & Record<string, unknown> {
+  const { x, y, ...common } = options;
+  return { ...common, kind: 'fling', origin: { x, y } };
+}
+
+function swipePresetGestureInput(
+  options: SwipeGestureOptions,
+): InternalRequestOptions & Record<string, unknown> {
+  return { ...options, kind: 'swipe' };
+}
+
+function pinchGestureInput(
+  options: PinchOptions,
+): InternalRequestOptions & Record<string, unknown> {
+  const { x, y, ...common } = options;
+  assertCompleteGestureCenter(x, y, 'pinch');
+  return {
+    ...common,
+    kind: 'pinch',
+    ...(x === undefined && y === undefined ? {} : { origin: { x, y } }),
+  };
+}
+
+function rotateGestureInput(
+  options: RotateGestureOptions,
+): InternalRequestOptions & Record<string, unknown> {
+  const { x, y, ...common } = options;
+  assertCompleteGestureCenter(x, y, 'rotate');
+  return {
+    ...common,
+    kind: 'rotate',
+    ...(x === undefined && y === undefined ? {} : { origin: { x, y } }),
+  };
+}
+
+function transformGestureInput(
+  options: TransformGestureOptions,
+): InternalRequestOptions & Record<string, unknown> {
+  const { x, y, dx, dy, ...common } = options;
+  return { ...common, kind: 'transform', origin: { x, y }, delta: { x: dx, y: dy } };
+}
+
+function assertCompleteGestureCenter(
+  x: number | undefined,
+  y: number | undefined,
+  gesture: 'pinch' | 'rotate',
+): void {
+  if ((x === undefined) !== (y === undefined)) {
+    throw new AppError('INVALID_ARGS', `gesture ${gesture} center requires both x and y`);
+  }
+}
+
+function normalizeSnapshotResult(
+  data: Record<string, unknown>,
+  session: string | undefined,
+): CaptureSnapshotResult {
+  const appBundleId = readOptionalString(data, 'appBundleId');
+  return {
+    nodes: readSnapshotNodes(data.nodes),
+    ...(typeof data.truncated === 'boolean' ? { truncated: data.truncated } : {}),
+    appName: readOptionalString(data, 'appName'),
+    appBundleId,
+    ...optionalSnapshotResponseFields(data),
+    identifiers: {
+      session,
+      appId: appBundleId,
+      appBundleId,
+    },
+  };
+}
+
+function optionalSnapshotResponseFields(
+  data: Record<string, unknown>,
+): Partial<
+  Pick<
+    CaptureSnapshotResult,
+    | 'androidSnapshot'
+    | 'unchanged'
+    | 'visibility'
+    | 'keyboard'
+    | 'warnings'
+    | 'snapshotQuality'
+    | 'snapshotDiagnostics'
+    | 'fallbackScreenshotPath'
+    | 'refsGeneration'
+  >
+> {
+  const visibility = readObject(data.visibility);
+  const unchanged = readObject(data.unchanged);
+  const keyboard = readSnapshotKeyboardBandFact(data.keyboard);
+  const snapshotDiagnostics = readSnapshotDiagnosticsSummary(data.snapshotDiagnostics);
+  return {
+    ...(keyboard ? { keyboard } : {}),
+    ...(visibility ? { visibility: visibility as CaptureSnapshotResult['visibility'] } : {}),
+    ...readSerializedSnapshotCaptureAnnotations(data),
+    ...(unchanged ? { unchanged: unchanged as CaptureSnapshotResult['unchanged'] } : {}),
+    ...(snapshotDiagnostics ? { snapshotDiagnostics } : {}),
+    ...(typeof data.fallbackScreenshotPath === 'string'
+      ? { fallbackScreenshotPath: data.fallbackScreenshotPath }
+      : {}),
+    // ADR 0014: keep the response-level ref-frame generation on Node.js results
+    // so callers can pin refs (`@e12~s<refsGeneration>`) before a mutation.
+    ...(typeof data.refsGeneration === 'number' ? { refsGeneration: data.refsGeneration } : {}),
+  };
+}
+
+function readObject(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function mergeClientOptions(
+  config: AgentDeviceClientConfig,
+  options: InternalRequestOptions,
+): InternalRequestOptions {
+  return { ...config, ...options };
+}
+
+function metroSessionHintsScope(
+  config: AgentDeviceClientConfig,
+  options: InternalRequestOptions = {},
+): { stateDir: string; session: string } {
+  const merged = mergeClientOptions(config, options);
+  return {
+    stateDir: resolveDaemonPaths(merged.stateDir ?? process.env.AGENT_DEVICE_STATE_DIR).baseDir,
+    session: resolveSessionName(merged.session),
+  };
+}
+
+// The metro-sessions file is the session's dev-server binding; see MetroSessionHints.
+function persistMetroSessionHints(
+  config: AgentDeviceClientConfig,
+  result: Pick<MetroPrepareResult, 'statusUrl' | 'bridge' | 'iosRuntime' | 'androidRuntime'>,
+): void {
+  try {
+    const url = new URL(result.statusUrl);
+    const port = Number.parseInt(url.port, 10);
+    if (!url.hostname || !Number.isInteger(port)) return;
+    // Bridge runtimes carry remote bundle URLs; persist local-flow bundle URLs only.
+    const bundleUrl = result.bridge
+      ? undefined
+      : (result.iosRuntime.bundleUrl ?? result.androidRuntime.bundleUrl);
+    writeMetroSessionHints({
+      ...metroSessionHintsScope(config),
+      hints: { metroHost: url.hostname, metroPort: port, bundleUrl },
+    });
+  } catch {
+    // Session-hint persistence is best-effort; reload still works with explicit flags.
+  }
+}
+
+function resolveMetroSessionHints(config: AgentDeviceClientConfig): MetroSessionHints | undefined {
+  try {
+    return readMetroSessionHints(metroSessionHintsScope(config));
+  } catch {
+    return undefined;
+  }
+}
+
+function metroHintsFromRuntime(
+  runtime: SessionRuntimeHints | undefined,
+): MetroSessionHints | undefined {
+  if (!runtime) return undefined;
+  const { metroHost, metroPort, bundleUrl } = runtime;
+  if (metroHost === undefined && metroPort === undefined && bundleUrl === undefined) {
+    return undefined;
+  }
+  return { metroHost, metroPort, bundleUrl };
+}
+
+// Hint flags rebind the session's dev server; a hintless open that created the session clears
+// any leftover binding from a previous same-name session.
+function recordMetroSessionHintsAfterOpen(params: {
+  config: AgentDeviceClientConfig;
+  options: InternalRequestOptions;
+  runtime: SessionRuntimeHints | undefined;
+  sessionReused: boolean;
+}): void {
+  try {
+    const scope = metroSessionHintsScope(params.config, params.options);
+    const hints = metroHintsFromRuntime(params.runtime);
+    if (hints) {
+      writeMetroSessionHints({ ...scope, hints });
+      return;
+    }
+    if (!params.sessionReused) {
+      clearMetroSessionHints(scope);
+    }
+  } catch {
+    // Session-hint sync is best-effort; reload still works with explicit flags.
+  }
+}
+
+function clearMetroSessionHintsQuietly(
+  config: AgentDeviceClientConfig,
+  options: InternalRequestOptions,
+): void {
+  try {
+    clearMetroSessionHints(metroSessionHintsScope(config, options));
+  } catch {
+    // Session-hint cleanup is best-effort; close must not fail on local file state.
+  }
+}
+
+export type * from './client/client-types.ts';

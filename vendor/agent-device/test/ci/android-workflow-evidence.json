@@ -1,0 +1,7 @@
+{
+  "purpose": "Pins the exact Android smoke-replay invocation android.yml must carry, verbatim, so the PR lane cannot silently drop or drift the replay step (test/ci/trusted-fixture-artifact.test.mjs asserts this line appears in the named job/step). Update it together with the workflow.",
+  "workflow": ".github/workflows/android.yml",
+  "job": "smoke-android",
+  "step": "Run Android smoke checks",
+  "invocation": "node --experimental-strip-types src/bin.ts test test/integration/replays/android/emulator/01-settings.ad --retries 2 --report-junit test/artifacts/replays-android-smoke.junit.xml"
+}

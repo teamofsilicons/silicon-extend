@@ -1,0 +1,195 @@
+// The public API vocabulary for app install, deploy, open, close and inventory.
+
+import type { AppsFilter } from './app-inventory.ts';
+import type { JsonObject } from './json.ts';
+import type { SessionSurface } from './session-surface.ts';
+import type { TargetShutdownResult } from './target-shutdown-contract.ts';
+import type { DaemonInstallSource, SessionRuntimeHints } from '@agent-device/kernel/contracts';
+import type { DaemonError } from '@agent-device/kernel/errors';
+import type { PublicPlatform } from '@agent-device/kernel/device';
+import type {
+  AgentDeviceIdentifiers,
+  AgentDeviceRequestOverrides,
+  AgentDeviceSelectionOptions,
+  DeviceCommandBaseOptions,
+} from './client-connection.ts';
+import type { AgentDeviceSessionDevice, StartupPerfSample } from './client-device-view.ts';
+
+export type DeviceSelectionReason =
+  | 'explicit-selector'
+  | 'existing-session'
+  | 'single-booted-local'
+  | 'single-bootable-local'
+  | 'single-app-installed-local'
+  | 'preferred-local'
+  | 'single-provider-device';
+
+export type DeviceSelectionSource = 'session' | 'local' | 'provider';
+
+/** Deterministic device-selection evidence shared by daemon responses and the published client. */
+export type DeviceSelectionMetadata = {
+  reason: DeviceSelectionReason;
+  source: DeviceSelectionSource;
+  candidateCount: number;
+  /** Whether this request booted a previously stopped local virtual target during open. */
+  bootOccurred: boolean;
+};
+
+export type AppInstallOptions = AgentDeviceRequestOverrides &
+  AgentDeviceSelectionOptions & {
+    app?: string;
+    appPath: string;
+  };
+
+export type AppDeployOptions = AgentDeviceRequestOverrides &
+  AgentDeviceSelectionOptions & {
+    app: string;
+    appPath: string;
+  };
+
+export type AppDeployResult = {
+  app: string;
+  appPath: string;
+  platform: PublicPlatform;
+  appId?: string;
+  bundleId?: string;
+  package?: string;
+  identifiers: AgentDeviceIdentifiers;
+};
+
+export type AppOpenOptions = AgentDeviceRequestOverrides &
+  AgentDeviceSelectionOptions & {
+    app?: string;
+    url?: string;
+    surface?: SessionSurface;
+    activity?: string;
+    launchConsole?: string;
+    launchArgs?: string[];
+    relaunch?: boolean;
+    /** Startup budget in milliseconds: bounds the Simulator boot wait on a cold device. */
+    timeoutMs?: number;
+    /**
+     * Block this open for up to n milliseconds (100-120000) while another session holds the device,
+     * then fail with DEVICE_IN_USE naming that session. Only session contention is waited for: a
+     * device claim held by another workspace is refused at once with its recovery command. A device
+     * that never frees, or is taken again while this open waits, costs the full budget, which
+     * extends this command's timeout envelope rather than eating into it.
+     */
+    waitMs?: number;
+    // Editor documentation for a public type: a `.d.ts` is read where no
+    // FlagDefinition resolves, and nothing generates these docs. It is not a second
+    // statement of what the option does — it is the option's ONE declaration (the
+    // `--foreground` FlagDefinition's `inputDescription`) verbatim, pinned to it by
+    // `commands/command-input-option-field.test.ts`.
+    /**
+     * Include an initial interactive snapshot in a fresh open response. With no
+     * app argument, discover the sole running app on the sole booted iOS
+     * simulator; ambiguous environments fail closed.
+     */
+    foreground?: boolean;
+    saveScript?: boolean | string;
+    /** #1258: overwrite an existing --save-script target instead of refusing. Alias: --overwrite. */
+    force?: boolean;
+    testIme?: boolean;
+    noRecord?: boolean;
+    runtime?: SessionRuntimeHints;
+  };
+
+export type AppOpenResult = {
+  session: string;
+  warnings?: string[];
+  sessionStateDir?: string;
+  runnerLogPath?: string;
+  requestLogPath?: string;
+  eventLogPath?: string;
+  appName?: string;
+  appBundleId?: string;
+  appId?: string;
+  startup?: StartupPerfSample;
+  runtime?: SessionRuntimeHints;
+  selection?: DeviceSelectionMetadata;
+  device?: AgentDeviceSessionDevice;
+  /**
+   * Initial interactive snapshot captured immediately after an open that
+   * requested `foreground`, composed from the same snapshot-runtime dispatch
+   * `agent-device snapshot -i` uses. It stays loosely typed rather than reusing
+   * `CaptureSnapshotResult` because the daemon-side composition does not attach
+   * client-only fields like `identifiers`.
+   */
+  snapshot?: Record<string, unknown>;
+  /**
+   * open --foreground: present when the session opened successfully but the
+   * composed initial snapshot capture failed. Carries the FULL daemon error
+   * shape (code, message, hint, details, diagnosticId, logPath) so recovery
+   * guidance survives to the caller; the session itself is open and usable —
+   * a `warnings` entry says so and points at `snapshot -i`.
+   */
+  initialSnapshotError?: DaemonError;
+  identifiers: AgentDeviceIdentifiers;
+};
+
+export type AppCloseOptions = AgentDeviceRequestOverrides & {
+  app?: string;
+  shutdown?: boolean;
+  saveScript?: boolean | string;
+  /** #1258: overwrite an existing --save-script target instead of refusing. Alias: --overwrite. */
+  force?: boolean;
+};
+
+export type AppCloseResult = {
+  session: string;
+  closedApp?: string;
+  shutdown?: TargetShutdownResult;
+  /**
+   * #1258: absolute path of the committed session/healed script when this close
+   * published one (`close --save-script`, or a repair-armed session's finalize)
+   * — so a client that requested publication learns where the file landed.
+   */
+  savedScript?: string;
+  identifiers: AgentDeviceIdentifiers;
+};
+
+export type AppInstallFromSourceOptions = AgentDeviceRequestOverrides &
+  AgentDeviceSelectionOptions & {
+    source: DaemonInstallSource;
+    retainPaths?: boolean;
+    retentionMs?: number;
+  };
+
+export type AppInstallFromSourceResult = {
+  appName?: string;
+  appId?: string;
+  bundleId?: string;
+  packageName?: string;
+  launchTarget: string;
+  installablePath?: string;
+  archivePath?: string;
+  materializationId?: string;
+  materializationExpiresAt?: string;
+  identifiers: AgentDeviceIdentifiers;
+};
+
+export type AppListOptions = AgentDeviceRequestOverrides &
+  AgentDeviceSelectionOptions & {
+    appsFilter?: AppsFilter;
+  };
+
+export type AppPushOptions = DeviceCommandBaseOptions & {
+  app: string;
+  payload: string | JsonObject;
+};
+
+export type AppTriggerEventOptions = DeviceCommandBaseOptions & {
+  event: string;
+  payload?: JsonObject;
+};
+
+export type MaterializationReleaseOptions = AgentDeviceRequestOverrides & {
+  materializationId: string;
+};
+
+export type MaterializationReleaseResult = {
+  released: boolean;
+  materializationId: string;
+  identifiers: AgentDeviceIdentifiers;
+};

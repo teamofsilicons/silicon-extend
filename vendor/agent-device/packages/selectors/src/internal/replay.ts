@@ -1,0 +1,194 @@
+import type { Platform, PublicPlatform } from '@agent-device/kernel/device';
+import type { SnapshotNode } from '@agent-device/kernel/snapshot';
+import type { DisambiguationTiebreak } from '@agent-device/contracts/interaction';
+import type { ReplayDivergenceSuggestionBasis } from '@agent-device/contracts/divergence';
+import { splitIsSelectorArgs, splitSelectorFromArgs } from './arguments.ts';
+import { buildSelectorChainForNode } from './build.ts';
+import { tryParseSelectorChain } from './parse.ts';
+import { selectorResolutionKnobs } from './resolution-policy.ts';
+import { resolveSelectorChain, resolveSelectorChainDomain } from './resolve.ts';
+
+/**
+ * Which selector-bearing positional grammar a replay action uses. `is` puts a
+ * predicate beside the selector and so needs its own split; every other
+ * command — `wait`, `click`, `fill`, a bare recorded token — carries the
+ * selector as a plain leading positional and shares one rule. Two variants,
+ * because there are two splits: naming each command's grammar separately would
+ * advertise a distinction this module does not make.
+ */
+export type ReplaySelectorGrammar = 'is' | 'positional';
+
+export type ReplaySelectorExpressionOutcome =
+  | {
+      readonly kind: 'expression';
+      readonly expression: string;
+      readonly rest: readonly string[];
+    }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'not-applicable' };
+
+export type ReplayRecordedTargetPolicy = Readonly<{
+  readonly platform: Platform | PublicPlatform;
+  readonly requireRect: boolean;
+  readonly allowDisambiguation: boolean;
+}>;
+
+export type ReplayRecordedTargetDisambiguation = Readonly<{
+  readonly tiebreak: DisambiguationTiebreak;
+  readonly matchCount: number;
+  readonly alternatives: readonly SnapshotNode[];
+}>;
+
+export type ReplayRecordedTargetResolved = Readonly<{
+  readonly kind: 'resolved';
+  readonly winner: SnapshotNode;
+  readonly matchedNodes: readonly SnapshotNode[];
+  readonly matchCount: number;
+  readonly disambiguation?: ReplayRecordedTargetDisambiguation;
+}>;
+
+export type ReplayRecordedTargetUnresolved = Readonly<{
+  readonly kind: 'unresolved';
+  readonly reason: 'parse-invalid' | 'no-match' | 'ambiguous';
+  readonly matchedNodes: readonly SnapshotNode[];
+}>;
+
+export type ReplayRecordedTargetResolution =
+  | ReplayRecordedTargetResolved
+  | ReplayRecordedTargetUnresolved;
+
+export type ReplaySelectorCandidateAction = 'click' | 'fill' | 'get';
+
+export type ReplaySelectorCandidateOptions = Readonly<{
+  readonly action?: ReplaySelectorCandidateAction;
+  readonly nodes?: readonly SnapshotNode[];
+}>;
+
+/** Resolve one selector expression against the same argument grammar as dispatch. */
+export function readSelectorExpression(
+  grammar: ReplaySelectorGrammar,
+  positionals: readonly string[],
+): ReplaySelectorExpressionOutcome {
+  const split =
+    grammar === 'is'
+      ? splitIsSelectorArgs([...positionals]).split
+      : splitSelectorFromArgs([...positionals]);
+  if (!split) return { kind: 'not-applicable' };
+  if (!tryParseSelectorChain(split.selectorExpression)) return { kind: 'invalid' };
+  return { kind: 'expression', expression: split.selectorExpression, rest: split.rest };
+}
+
+/**
+ * A replay policy states its ambiguity contract per request rather than per
+ * caller, so it names an ambiguity KIND from the same vocabulary the static
+ * matrix uses and derives its engine knobs through the same function (#1630) —
+ * `selectorResolutionKnobs` stays the only place `requireUnique` and
+ * `disambiguateAmbiguous` are named.
+ */
+function recordedTargetResolutionOptions(policy: ReplayRecordedTargetPolicy) {
+  return {
+    platform: policy.platform,
+    ...selectorResolutionKnobs({
+      ambiguity: policy.allowDisambiguation ? 'disambiguate' : 'fail-closed',
+      requireRect: policy.requireRect,
+    }),
+  };
+}
+
+/** Resolve a recorded target and return the winning node plus its same-alternative domain. */
+export function resolveRecordedTarget(
+  expression: string,
+  nodes: SnapshotNode[],
+  policy: ReplayRecordedTargetPolicy,
+): ReplayRecordedTargetResolution {
+  const chain = tryParseSelectorChain(expression);
+  if (!chain) return { kind: 'unresolved', reason: 'parse-invalid', matchedNodes: [] };
+  // One matching pass answers both legs. The winner's alternative and the
+  // recorded-identity set it must be checked against are the same question
+  // asked of the same tree, so resolution reports the domain it decided over
+  // instead of the caller re-deriving it node by node.
+  const { resolution, matchedNodes } = resolveSelectorChainDomain(
+    nodes,
+    chain,
+    recordedTargetResolutionOptions(policy),
+  );
+  if (resolution) {
+    return {
+      kind: 'resolved',
+      winner: resolution.node,
+      matchedNodes,
+      matchCount: matchedNodes.length,
+      ...(resolution.disambiguation
+        ? {
+            disambiguation: {
+              tiebreak: resolution.disambiguation.tiebreak,
+              matchCount: resolution.disambiguation.matchCount,
+              alternatives: resolution.disambiguation.alternatives,
+            },
+          }
+        : {}),
+    };
+  }
+  return {
+    kind: 'unresolved',
+    reason: matchedNodes.length > 0 ? 'ambiguous' : 'no-match',
+    matchedNodes,
+  };
+}
+
+/** Build the ordered replay/repair selector candidates for a captured node. */
+export function buildSelectorCandidates(
+  node: SnapshotNode,
+  platform: Platform | PublicPlatform,
+  options: ReplaySelectorCandidateOptions = {},
+): readonly string[] {
+  return buildSelectorChainForNode(node, platform, options);
+}
+
+export type ReplaySuggestionCandidateMatch = Readonly<{
+  readonly node: SnapshotNode;
+  readonly basis: ReplayDivergenceSuggestionBasis;
+}>;
+
+/** Resolve a divergence suggestion candidate and classify its winning selector basis. */
+export function resolveReplaySuggestionCandidate(
+  candidate: string,
+  nodes: SnapshotNode[],
+  policy: ReplayRecordedTargetPolicy,
+): ReplaySuggestionCandidateMatch | undefined {
+  const chain = tryParseSelectorChain(candidate);
+  if (!chain) return undefined;
+  const resolved = resolveSelectorChain(nodes, chain, recordedTargetResolutionOptions(policy));
+  if (!resolved) return undefined;
+  return { node: resolved.node, basis: classifySuggestionBasis(resolved.selector) };
+}
+
+/** Read one stable label/text/id value for replay progress without exposing selector terms. */
+export function readReplaySelectorDisplayValue(selector: string | undefined): string | undefined {
+  if (!selector) return undefined;
+  const parsed = tryParseSelectorChain(selector);
+  if (!parsed) return undefined;
+  const values = parsed.selectors.flatMap((entry) =>
+    entry.terms.flatMap((term) =>
+      (term.key === 'label' || term.key === 'text' || term.key === 'id') &&
+      typeof term.value === 'string'
+        ? [term.value]
+        : [],
+    ),
+  );
+  if (values.length === 0) return undefined;
+  const first = values[0];
+  return first && values.every((value) => value === first) ? first : undefined;
+}
+
+function classifySuggestionBasis(selector: {
+  terms: readonly { key: string }[];
+}): ReplayDivergenceSuggestionBasis {
+  const keys = new Set(selector.terms.map((term) => term.key));
+  if (keys.has('id')) return 'id';
+  const hasRole = keys.has('role');
+  const hasLabelLike = keys.has('label') || keys.has('text');
+  if (hasRole && hasLabelLike) return 'role-label';
+  if (hasLabelLike || keys.has('value')) return 'label';
+  return 'other';
+}

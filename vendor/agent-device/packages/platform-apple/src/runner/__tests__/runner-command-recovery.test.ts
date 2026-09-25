@@ -1,0 +1,260 @@
+import assert from 'node:assert/strict';
+import { afterEach, test, vi } from 'vitest';
+import { AppError } from '@agent-device/kernel/errors';
+import { IOS_SIMULATOR } from './device-fixtures.ts';
+import type { ExecResult } from '@agent-device/host-kit/command';
+import { handleRunnerTransportErrorAfterCommandSend } from '../runner-command-recovery.ts';
+import type { RunnerCommand } from '../runner-contract.ts';
+import type { RunnerSession } from '../runner-session.ts';
+import {
+  startFakeRunnerServer,
+  type FakeRunnerResponse,
+  type FakeRunnerServer,
+} from './fake-runner-server.ts';
+
+// Recovery driven through the REAL stack: real executeRunnerCommandWithSession,
+// real transport fetch, a scripted fake runner on localhost, and the
+// invalidateSession parameter the module already exposes as its seam. The only
+// faked thing is the runner process itself (#1631).
+
+let server: FakeRunnerServer | undefined;
+
+afterEach(async () => {
+  await server?.close();
+  server = undefined;
+});
+
+function makeRunnerSession(port: number): RunnerSession {
+  return {
+    sessionId: `fake:${port}`,
+    device: IOS_SIMULATOR,
+    deviceId: IOS_SIMULATOR.id,
+    port,
+    xctestrunPath: '/tmp/fake.xctestrun',
+    jsonPath: '/tmp/fake.json',
+    testPromise: new Promise<ExecResult>(() => {}),
+    child: { pid: process.pid, exitCode: null },
+    state: 'ready',
+    inFlightCommands: 0,
+    hasAbandonedCommands: false,
+  };
+}
+
+function tapCommand(commandId = 'cmd-1'): RunnerCommand {
+  return { command: 'tap', x: 10, y: 10, commandId } as RunnerCommand;
+}
+
+async function runRecovery(params: {
+  script: FakeRunnerResponse[];
+  command?: RunnerCommand;
+  transportError?: AppError;
+}): Promise<{
+  result: Promise<Record<string, unknown>>;
+  session: RunnerSession;
+  invalidate: ReturnType<typeof vi.fn>;
+  transportError: AppError;
+}> {
+  server = await startFakeRunnerServer(params.script);
+  const session = makeRunnerSession(server.port);
+  const invalidate = vi.fn(async () => {});
+  const transportError = params.transportError ?? new AppError('COMMAND_FAILED', 'socket hang up');
+  const result = handleRunnerTransportErrorAfterCommandSend({
+    device: IOS_SIMULATOR,
+    session,
+    command: params.command ?? tapCommand(),
+    transportError,
+    options: {},
+    signal: undefined,
+    invalidationReason: 'transport_error_after_command_send',
+    invalidateSession: invalidate,
+  });
+  return { result, session, invalidate, transportError };
+}
+
+test('a completed command with a retained response recovers without invalidation', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [
+      {
+        kind: 'ok',
+        data: {
+          lifecycleState: 'completed',
+          lifecycleResponseJson: JSON.stringify({ ok: true, data: { tapped: true } }),
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(await result, { tapped: true });
+  assert.equal(invalidate.mock.calls.length, 0);
+  assert.equal(server?.requests[0]?.command, 'status');
+  assert.equal(server?.requests[0]?.body.statusCommandId, 'cmd-1');
+});
+
+test('a runner-reported failure surfaces without invalidating the session', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [
+      { kind: 'ok', data: { lifecycleState: 'failed', lifecycleErrorMessage: 'tap failed' } },
+    ],
+  });
+
+  await assert.rejects(result, (error: unknown) => error instanceof AppError);
+  assert.equal(invalidate.mock.calls.length, 0);
+});
+
+test('a command still in flight surfaces without invalidating the session', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [{ kind: 'ok', data: { lifecycleState: 'started' } }],
+  });
+
+  await assert.rejects(result, (error: unknown) => error instanceof AppError);
+  assert.equal(invalidate.mock.calls.length, 0);
+});
+
+test('an unknown lifecycle state invalidates the session and says so', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [{ kind: 'ok', data: { lifecycleState: 'zombie' } }],
+  });
+
+  await assert.rejects(result, (error: unknown) => {
+    return error instanceof AppError && error.message.includes('invalidated the runner session');
+  });
+  assert.equal(invalidate.mock.calls.length, 1);
+  assert.equal(invalidate.mock.calls[0]?.[1], 'transport_error_after_command_send');
+});
+
+test('a failing status probe retains the invalidation and rethrows the transport error', async () => {
+  const { result, invalidate, transportError } = await runRecovery({
+    script: [{ kind: 'runnerError', code: 'COMMAND_FAILED', message: 'status probe exploded' }],
+  });
+
+  await assert.rejects(result, (error: unknown) => error === transportError);
+  assert.equal(invalidate.mock.calls.length, 1);
+});
+
+test('a command without an id cannot be probed: invalidate and rethrow', async () => {
+  const { result, invalidate, transportError } = await runRecovery({
+    script: [],
+    command: { command: 'tap', x: 10, y: 10 } as RunnerCommand,
+  });
+
+  await assert.rejects(result, (error: unknown) => error === transportError);
+  assert.equal(invalidate.mock.calls.length, 1);
+  assert.equal(server?.requests.length, 0);
+});
+
+test('a completed read-only command without a retained response rethrows without invalidation', async () => {
+  const { result, invalidate, transportError } = await runRecovery({
+    script: [{ kind: 'ok', data: { lifecycleState: 'completed' } }],
+    command: { command: 'snapshot', commandId: 'cmd-ro' } as RunnerCommand,
+  });
+
+  await assert.rejects(result, (error: unknown) => error === transportError);
+  assert.equal(invalidate.mock.calls.length, 0);
+});
+
+/**
+ * #2484 follow-up: the journal's code means exactly what the same code means on a live response.
+ * `RUNNER_BUSY` is diagnostic-only — it stays `COMMAND_FAILED` and survives as
+ * `details.runnerErrorCode` — and the retriability it carries is what a polling `wait` rides out
+ * rather than surrendering its budget to a condition that clears on its own.
+ */
+test('a journaled RUNNER_BUSY is classified exactly like a live one', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [
+      {
+        kind: 'ok',
+        data: {
+          lifecycleState: 'failed',
+          lifecycleErrorCode: 'RUNNER_BUSY',
+          lifecycleErrorMessage: 'The iOS runner is still finishing a previous command.',
+          lifecycleErrorHint: 'Wait a few seconds and retry.',
+        },
+      },
+    ],
+  });
+
+  await assert.rejects(result, (error: unknown) => {
+    assert.ok(error instanceof AppError);
+    assert.equal(error.code, 'COMMAND_FAILED');
+    assert.equal(error.details?.runnerErrorCode, 'RUNNER_BUSY');
+    assert.equal(error.details?.retriable, true);
+    assert.equal(error.details?.recovery, 'runner_reported_failure');
+    return true;
+  });
+  assert.equal(invalidate.mock.calls.length, 0);
+});
+
+test('a journaled RUNNER_WEDGED keeps its fatal code and stays unretriable', async () => {
+  const { result } = await runRecovery({
+    script: [
+      {
+        kind: 'ok',
+        data: {
+          lifecycleState: 'failed',
+          lifecycleErrorCode: 'RUNNER_WEDGED',
+          lifecycleErrorMessage: 'The iOS runner main thread has been stuck.',
+        },
+      },
+    ],
+  });
+
+  await assert.rejects(result, (error: unknown) => {
+    assert.ok(error instanceof AppError);
+    assert.equal(error.code, 'RUNNER_WEDGED');
+    assert.equal(error.details?.runnerErrorCode, 'RUNNER_WEDGED');
+    assert.equal(error.details?.retriable, undefined);
+    return true;
+  });
+});
+
+/**
+ * #2662: the `status` read has no decoder of its own, so it accepts what the one
+ * decoder accepts. A stringly-typed `ok` used to be the seam: a private truthiness
+ * rule read this retained body as the command's own result.
+ */
+test('a retained response whose ok is not the boolean true is not recovered', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [
+      {
+        kind: 'ok',
+        data: {
+          lifecycleState: 'completed',
+          lifecycleResponseJson: '{"ok":"true","data":{"tapped":true}}',
+        },
+      },
+    ],
+  });
+
+  await assert.rejects(result, (error: unknown) => {
+    assert.ok(error instanceof AppError);
+    assert.equal(error.details?.recovery, 'completed_without_retained_response');
+    return true;
+  });
+  assert.equal(invalidate.mock.calls.length, 0);
+});
+
+/**
+ * A retained body cut off mid-write answers nothing. The session is kept — the
+ * runner is reachable, it proved that by serving `status` — but the truncated
+ * command result is not handed back.
+ */
+test('a truncated retained response is not recovered', async () => {
+  const { result, invalidate } = await runRecovery({
+    script: [
+      {
+        kind: 'ok',
+        data: {
+          lifecycleState: 'completed',
+          lifecycleResponseJson: '{"ok":true,"data":{"nodes":[{"label":"Sign In"',
+        },
+      },
+    ],
+  });
+
+  await assert.rejects(result, (error: unknown) => {
+    assert.ok(error instanceof AppError);
+    assert.equal(error.details?.recovery, 'completed_without_retained_response');
+    return true;
+  });
+  assert.equal(invalidate.mock.calls.length, 0);
+});

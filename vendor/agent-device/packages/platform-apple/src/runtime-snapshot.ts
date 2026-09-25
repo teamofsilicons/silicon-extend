@@ -1,0 +1,134 @@
+import {
+  type CaptureSnapshotInput,
+  bindLocalSnapshotInteractor,
+  captureSnapshotSignal,
+} from '@agent-device/contracts/snapshot-runtime';
+import type {
+  FindTextInput,
+  FindTextResult,
+} from '@agent-device/contracts/selector-observation-runtime';
+import type {
+  PlatformRuntimeHost,
+  PlatformRuntimeOperations,
+} from '@agent-device/contracts/platform-runtime-operations';
+import { macOsSurfaceBackend, type SessionSurface } from '@agent-device/contracts/session';
+import { isMacOs, type DeviceInfo } from '@agent-device/kernel/device';
+import { hasSimulatorBridge } from './snapshot-observability.ts';
+import type { AppleSnapshotRoute } from './snapshot-route.ts';
+
+/** Apple-owned selection between app snapshots and explicit macOS surface snapshots. */
+export function bindAppleSnapshotRuntime(
+  host: PlatformRuntimeHost,
+  request: Readonly<{ device: DeviceInfo; signal: AbortSignal }>,
+  route?: AppleSnapshotRoute,
+): SnapshotRuntimeOperation {
+  const appSnapshot = bindLocalSnapshotInteractor({
+    device: request.device,
+    signal: request.signal,
+    resolveInteractor: host.localInteractors.resolve,
+  });
+  const captureSnapshot = async (input: CaptureSnapshotInput) => {
+    if (isMacOs(request.device) && macOsSurfaceBackend(input.options?.surface) === 'macos-helper') {
+      return await host.snapshot.captureSurface(
+        request.device,
+        input.options,
+        captureSnapshotSignal(request.signal, input),
+      );
+    }
+    if (!route) return await appSnapshot.captureSnapshot(input);
+    const signal = captureSnapshotSignal(request.signal, input);
+    return await route.capture(
+      request.device,
+      input,
+      signal,
+      async (fallbackInput) => await appSnapshot.captureSnapshot(fallbackInput),
+    );
+  };
+  return Object.freeze({
+    captureSnapshot,
+    captureSnapshotWithCustomActions: captureSnapshot,
+    captureSnapshotWithoutActiveApp: captureSnapshot,
+  });
+}
+
+type SnapshotRuntimeOperation = Pick<
+  PlatformRuntimeOperations,
+  'captureSnapshot' | 'captureSnapshotWithCustomActions' | 'captureSnapshotWithoutActiveApp'
+>;
+
+/**
+ * The runner's native text reading. Every condition under which Apple cannot answer lives here
+ * rather than in the daemon, which is the point of the migration: no caller inspects the family,
+ * the surface, or the session to decide whether to consult it.
+ *
+ * - No tracked app bundle id: the runner query is scoped to an application, so there is nothing
+ *   to ask about.
+ * - macOS on a helper-routed surface: the runner reads the *application*, so a positive
+ *   answer would describe the wrong surface. Reporting `false` sends the poll to the desktop
+ *   surface capture, which is the reading that matches the request.
+ *
+ * - Local Simulator without a live runner: the runner's answer would cost its startup, which an
+ *   observation never needs while the canonical tree comes from the host AX bridge. A runner that
+ *   is already alive keeps answering.
+ *
+ * These admission refusals report `found: false`. Native execution can fail; the shared wait
+ * observation boundary defers those failures to canonical capture (ADR 0019 section 2).
+ */
+export function bindAppleFindTextRuntime(
+  host: PlatformRuntimeHost,
+  request: Readonly<{ device: DeviceInfo; signal: AbortSignal }>,
+): Pick<PlatformRuntimeOperations, 'findText'> {
+  return Object.freeze({
+    findText: async (input: FindTextInput): Promise<FindTextResult> => {
+      const admitted = await admitAppleNativeFind(host, request, input);
+      if (!admitted) return { found: false };
+      const interactor = await host.localInteractors.resolve(request.device, {
+        ...input.execution,
+        ...admitted,
+      });
+      if (!interactor.findText) return { found: false };
+      return await interactor.findText(input.text, admitted);
+    },
+  });
+}
+
+type AdmittedAppleNativeFind = Readonly<{ appBundleId: string; signal: AbortSignal }>;
+
+/**
+ * Native text observation admission (conditions listed on `bindAppleFindTextRuntime`).
+ * `undefined` means "not proven here"; an admitted find carries the app scope and the composed
+ * request/poll signal the runner call needs.
+ */
+async function admitAppleNativeFind(
+  host: Pick<PlatformRuntimeHost, 'appleApplications'>,
+  request: Readonly<{ device: DeviceInfo; signal: AbortSignal }>,
+  input: Readonly<{
+    options?: Readonly<{ appBundleId?: string; surface?: SessionSurface }>;
+    execution?: Readonly<{ requestId?: string }>;
+    signal?: AbortSignal;
+  }>,
+): Promise<AdmittedAppleNativeFind | undefined> {
+  const appBundleId = input.options?.appBundleId;
+  if (appBundleId === undefined) return undefined;
+  if (isMacOs(request.device) && macOsSurfaceBackend(input.options?.surface) === 'macos-helper') {
+    return undefined;
+  }
+  const signal = input.signal ? AbortSignal.any([request.signal, input.signal]) : request.signal;
+  signal.throwIfAborted();
+  if (!(await runnerCanAnswerNow(host, request.device, input.execution))) return undefined;
+  return { appBundleId, signal };
+}
+
+/**
+ * Whether the runner can answer a native find without a startup wait. Without the Simulator
+ * bridge the runner is the only reader, so it always answers; with it, only a ready session does
+ * (see the find-runtime doc above).
+ */
+async function runnerCanAnswerNow(
+  host: Pick<PlatformRuntimeHost, 'appleApplications'>,
+  device: DeviceInfo,
+  execution: Readonly<{ requestId?: string }> | undefined,
+): Promise<boolean> {
+  if (!hasSimulatorBridge(device)) return true;
+  return await host.appleApplications.hasLiveRunnerSession(device, execution ?? {});
+}

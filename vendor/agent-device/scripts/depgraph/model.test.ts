@@ -1,0 +1,463 @@
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { ARCHITECTURE_OWNERSHIP } from '../layering/architecture-ownership.ts';
+import { resolveImportEdges } from '../layering/model.ts';
+import {
+  AUTHORITY_LABELS,
+  authorityLabelsForEdge,
+  buildGraph,
+  collapseEdges,
+  collectCycles,
+  markTransitivelyReachableEdges,
+  typeInversionsByPair,
+} from './model.ts';
+
+function sources(entries: Record<string, string>): Map<string, string> {
+  return new Map(Object.entries(entries));
+}
+
+function authorityWorkspaceTargets(): Map<string, string> {
+  return new Map([
+    ['@agent-device/contracts/client', 'packages/contracts/src/facades/client.ts'],
+    ['@agent-device/contracts/capture', 'packages/contracts/src/facades/capture.ts'],
+    ['@agent-device/contracts/replay', 'packages/contracts/src/facades/replay.ts'],
+    ['@agent-device/contracts/progress', 'packages/contracts/src/facades/progress.ts'],
+  ]);
+}
+
+function authorityFixture(): Map<string, string> {
+  return sources({
+    'src/core/vocabulary-consumer.ts': [
+      "import type { ClientShape } from '@agent-device/contracts/client';",
+      "import type { CaptureShape } from '@agent-device/contracts/capture';",
+      "import type { ReplayShape } from '@agent-device/contracts/replay';",
+      "import type { ProgressShape } from '@agent-device/contracts/progress';",
+    ].join('\n'),
+    'src/daemon/capability-consumer.ts': [
+      "import { createRequestRuntimeBindings } from './request-runtime-binding.ts';",
+      "import { isSessionRecording } from './session-script-publication-capability.ts';",
+    ].join('\n'),
+    'src/daemon/state-consumer.ts': [
+      "import type { SessionState } from './session-state.ts';",
+      "import { SessionStore } from './session-store.ts';",
+    ].join('\n'),
+    'src/daemon/type-consumer.ts': "import type { SessionStore } from './session-store.ts';\n",
+    'packages/capture-kit/src/snapshot/policy-consumer.ts': [
+      "import type { SessionState } from '../../../../src/daemon/session-state.ts';",
+      "import type { SessionRef } from '../../../../src/daemon/session-state.ts';",
+      "import './ordinary-target.ts';",
+    ].join('\n'),
+    'src/daemon/ordinary-consumer.ts': [
+      "import { SessionState } from './session-state-store.ts';",
+      "import { createRequestRuntimeBindingsExtra } from './request-runtime-binding.ts';",
+    ].join('\n'),
+    'src/daemon/session-state.ts':
+      'export type SessionState = { name: string };\nexport type SessionRef = unknown;\n',
+    'src/daemon/session-store.ts': 'export class SessionStore {}\n',
+    'src/daemon/request-runtime-binding.ts': 'export function createRequestRuntimeBindings() {}\n',
+    'src/daemon/session-script-publication-capability.ts':
+      'export function isSessionRecording() {}\n',
+    'src/daemon/session-state-store.ts': 'export const SessionState = 1;\n',
+    'packages/capture-kit/src/snapshot/ordinary-target.ts': 'export const ordinary = 1;\n',
+    'packages/contracts/src/facades/client.ts': 'export type ClientShape = string;\n',
+    'packages/contracts/src/facades/capture.ts': 'export type CaptureShape = string;\n',
+    'packages/contracts/src/facades/replay.ts': 'export type ReplayShape = string;\n',
+    'packages/contracts/src/facades/progress.ts': 'export type ProgressShape = string;\n',
+  });
+}
+
+function graphEdge(
+  graph: ReturnType<typeof buildGraph>,
+  from: string,
+  to: string,
+): { kind: string; labels: readonly string[] } {
+  const index = graph.edges.findIndex((edge) => edge.from === from && edge.to === to);
+  assert.notEqual(index, -1, `${from} -> ${to} was not found`);
+  return { kind: graph.edges[index]!.kind, labels: graph.edgeAuthorities[index]! };
+}
+
+test('authority overlay uses declared roots and symbols, keeps kind separate, and collapses labels', () => {
+  const files = authorityFixture();
+  const graph = buildGraph(files, resolveImportEdges(files, authorityWorkspaceTargets()));
+
+  assert.deepEqual(
+    graphEdge(graph, 'src/core/vocabulary-consumer.ts', 'packages/contracts/src/facades/client.ts'),
+    { kind: 'type', labels: ['vocabulary'] },
+  );
+  assert.deepEqual(
+    graphEdge(graph, 'src/daemon/capability-consumer.ts', 'src/daemon/request-runtime-binding.ts'),
+    { kind: 'value', labels: ['capability'] },
+  );
+  assert.deepEqual(
+    graphEdge(graph, 'src/daemon/state-consumer.ts', 'src/daemon/session-state.ts'),
+    {
+      kind: 'type',
+      labels: ['live-state-shape'],
+    },
+  );
+  assert.deepEqual(
+    graphEdge(graph, 'src/daemon/state-consumer.ts', 'src/daemon/session-store.ts'),
+    { kind: 'value', labels: ['live-state-authority'] },
+  );
+  assert.deepEqual(graphEdge(graph, 'src/daemon/type-consumer.ts', 'src/daemon/session-store.ts'), {
+    kind: 'type',
+    labels: ['live-state-authority'],
+  });
+  assert.deepEqual(
+    graphEdge(
+      graph,
+      'packages/capture-kit/src/snapshot/policy-consumer.ts',
+      'packages/capture-kit/src/snapshot/ordinary-target.ts',
+    ),
+    { kind: 'value', labels: ['executable-policy'] },
+  );
+  assert.deepEqual(
+    graphEdge(graph, 'src/daemon/ordinary-consumer.ts', 'src/daemon/session-state-store.ts'),
+    { kind: 'value', labels: ['ordinary'] },
+  );
+  assert.deepEqual(
+    graphEdge(graph, 'src/daemon/ordinary-consumer.ts', 'src/daemon/request-runtime-binding.ts'),
+    { kind: 'value', labels: ['ordinary'] },
+  );
+
+  const stateEdges = resolveImportEdges(files, authorityWorkspaceTargets()).filter(
+    (edge) =>
+      edge.file === 'packages/capture-kit/src/snapshot/policy-consumer.ts' &&
+      edge.target === 'src/daemon/session-state.ts',
+  );
+  assert.equal(stateEdges.length, 2, 'the fixture must exercise raw same-pair imports');
+  assert.deepEqual(
+    graphEdge(
+      graph,
+      'packages/capture-kit/src/snapshot/policy-consumer.ts',
+      'src/daemon/session-state.ts',
+    ),
+    {
+      kind: 'type',
+      labels: ['live-state-shape', 'executable-policy'],
+    },
+  );
+  assert.deepEqual(graph.edgeAuthorities.length, graph.edges.length);
+  assert.deepEqual(Object.keys(graph.authorityCounts), AUTHORITY_LABELS);
+  assert.deepEqual(graph.authorityCounts, {
+    vocabulary: 4,
+    capability: 2,
+    'live-state-shape': 2,
+    'live-state-authority': 2,
+    'executable-policy': 2,
+    ordinary: 2,
+  });
+  assert.equal(authorityLabelsForEdge(stateEdges[0]!).includes('live-state-shape'), true);
+});
+
+test('live-state labels follow shared declarations and reject lookalike targets', () => {
+  for (const declaration of ARCHITECTURE_OWNERSHIP.liveState) {
+    assert.deepEqual(
+      authorityLabelsForEdge({
+        file: 'src/core/live-state-consumer.ts',
+        target: declaration.root,
+        spec: `./${declaration.root.split('/').at(-1)}`,
+        dynamic: false,
+        typeOnly: true,
+        line: 1,
+        symbols: [...declaration.exports],
+        fromZone: 'core',
+        toZone: 'daemon-server',
+      }),
+      [declaration.kind],
+    );
+  }
+
+  const sessionState = ARCHITECTURE_OWNERSHIP.liveState.find(
+    ({ kind }) => kind === 'live-state-shape',
+  )!;
+  assert.deepEqual(
+    authorityLabelsForEdge({
+      file: 'src/core/live-state-consumer.ts',
+      target: 'src/daemon/session-state-store.ts',
+      spec: './session-state-store.ts',
+      dynamic: false,
+      typeOnly: true,
+      line: 1,
+      symbols: [...sessionState.exports],
+      fromZone: 'core',
+      toZone: 'daemon-server',
+    }),
+    ['ordinary'],
+  );
+});
+
+test('collapseEdges keeps one edge per pair at the strongest kind', () => {
+  const edges = resolveImportEdges(
+    sources({
+      'src/core/a.ts': [
+        "import type { Shape } from './b.ts';",
+        "import { run } from './b.ts';",
+        "import type { Other } from './c.ts';",
+        "void import('./d.ts');",
+      ].join('\n'),
+      'src/core/b.ts': 'export const run = 1;',
+      'src/core/c.ts': 'export type Other = string;',
+      'src/core/d.ts': 'export const lazy = 1;',
+    }),
+  );
+
+  assert.deepEqual(
+    collapseEdges(edges).map((edge) => ({ to: edge.to, kind: edge.kind })),
+    [
+      { to: 'src/core/b.ts', kind: 'value' },
+      { to: 'src/core/c.ts', kind: 'type' },
+      { to: 'src/core/d.ts', kind: 'dynamic' },
+    ],
+  );
+});
+
+test('flags only value edges whose target is already reachable at distance >= 2', () => {
+  const edges = collapseEdges(
+    resolveImportEdges(
+      sources({
+        // a -> b -> c means c is reachable from a at distance 2, so the direct a -> c edge is
+        // FLAGGED. Note it is not removable: `b` re-exports c's binding under a different name,
+        // so deleting a -> c would break a's `c` import. That gap is the point of the rename —
+        // this measures module reachability, not safe removal. a -> d is the only route to d.
+        'src/core/a.ts': [
+          "import { b } from './b.ts';",
+          "import { c } from './c.ts';",
+          "import { d } from './d.ts';",
+        ].join('\n'),
+        'src/core/b.ts': "export { c as b } from './c.ts';",
+        'src/core/c.ts': 'export const c = 1;',
+        'src/core/d.ts': 'export const d = 1;',
+      }),
+    ),
+  );
+  markTransitivelyReachableEdges(edges);
+
+  const flagged = edges
+    .filter((edge) => edge.transitivelyReachable)
+    .map((edge) => `${edge.from} -> ${edge.to}`);
+  assert.deepEqual(flagged, ['src/core/a.ts -> src/core/c.ts']);
+});
+
+test('a type-only shortcut is never flagged against a value path', () => {
+  const edges = collapseEdges(
+    resolveImportEdges(
+      sources({
+        'src/core/a.ts': ["import { b } from './b.ts';", "import type { C } from './c.ts';"].join(
+          '\n',
+        ),
+        'src/core/b.ts': "export { c as b } from './c.ts';",
+        'src/core/c.ts': 'export type C = string;\nexport const c = 1;',
+      }),
+    ),
+  );
+  markTransitivelyReachableEdges(edges);
+
+  assert.deepEqual(
+    edges.filter((edge) => edge.transitivelyReachable),
+    [],
+  );
+});
+
+test('collectCycles separates gate-rejected value cycles from type-only and dynamic loops', () => {
+  const valueCycle = collectCycles(
+    resolveImportEdges(
+      sources({
+        'src/core/a.ts': "import { b } from './b.ts';\nexport const a = 1;",
+        'src/core/b.ts': "import { a } from './a.ts';\nexport const b = 1;",
+      }),
+    ),
+  );
+  assert.deepEqual(
+    valueCycle.map((cycle) => cycle.kind),
+    ['value'],
+  );
+
+  const typeCycle = collectCycles(
+    resolveImportEdges(
+      sources({
+        'src/core/a.ts': "import type { B } from './b.ts';\nexport type A = B;",
+        'src/core/b.ts': "import type { A } from './a.ts';\nexport type B = A | null;",
+      }),
+    ),
+  );
+  assert.deepEqual(
+    typeCycle.map((cycle) => cycle.kind),
+    ['type'],
+  );
+
+  const dynamicCycle = collectCycles(
+    resolveImportEdges(
+      sources({
+        'src/core/a.ts': "export const a = () => import('./b.ts');",
+        'src/core/b.ts': "export const b = () => import('./a.ts');",
+      }),
+    ),
+  );
+  assert.deepEqual(
+    dynamicCycle.map((cycle) => cycle.kind),
+    ['dynamic'],
+  );
+});
+
+test('buildGraph reports zone membership, degrees, and cross-zone edge counts', () => {
+  const files = sources({
+    'packages/kernel/src/errors.ts': 'export const fail = 1;\n',
+    'src/core/interactors/tap.ts': "import { fail } from '@agent-device/kernel/errors';\n",
+    'src/commands/tap.ts': [
+      "import { fail } from '@agent-device/kernel/errors';",
+      "import '../core/interactors/tap.ts';",
+    ].join('\n'),
+  });
+  const graph = buildGraph(files, resolveImportEdges(files));
+
+  const kernel = graph.nodes.find((node) => node.id === 'packages/kernel/src/errors.ts')!;
+  assert.equal(kernel.zone, 'kernel');
+  assert.equal(kernel.fanIn, 2);
+  assert.equal(kernel.fanOut, 0);
+
+  // A non-root zone member resolves to its folder, not to `(root)`.
+  const interactor = graph.nodes.find((node) => node.id === 'src/core/interactors/tap.ts')!;
+  assert.equal(interactor.zone, 'core');
+
+  assert.deepEqual(
+    graph.zoneEdges.map((edge) => `${edge.from} -> ${edge.to} (${edge.count})`),
+    ['commands -> core (1)', 'commands -> kernel (1)', 'core -> kernel (1)'],
+  );
+  assert.deepEqual(
+    graph.zones.map((zone) => `${zone.id}:${zone.classification}`),
+    ['kernel:unranked', 'core:ranked', 'commands:ranked'],
+  );
+});
+
+// `typeInversions` is the report's view of R6 over the RAW edges: a module imported both lazily
+// and for its types keeps its type-only edge, where `collapseEdges` ranks `dynamic` above `type`
+// and would lose it.
+test('typeInversionsByPair counts raw type-only edges once per file pair', () => {
+  const files = sources({
+    'src/commands/tap.ts': 'export type TapOptions = { retries: number };\n',
+    'src/core/interactors/tap.ts': [
+      "import type { TapOptions } from '../../commands/tap.ts';",
+      "import type { TapOptions as Again } from '../../commands/tap.ts';",
+      'export type Both = TapOptions | Again;',
+    ].join('\n'),
+    'src/core/interactors/lazy.ts': [
+      "import type { TapOptions } from '../../commands/tap.ts';",
+      "export const load = (): Promise<unknown> => import('../../commands/tap.ts');",
+      'export type Options = TapOptions;',
+    ].join('\n'),
+    'src/core/interactors/value.ts': "import '../../commands/tap.ts';\n",
+  });
+  const edges = resolveImportEdges(files);
+
+  assert.deepEqual(typeInversionsByPair(edges), { 'core -> commands': 2 });
+  assert.deepEqual(buildGraph(files, edges).typeInversions, { 'core -> commands': 2 });
+});
+
+// A raw NUL byte in a source file makes Git classify it as binary, which hides the whole diff
+// behind `- -` and leaves the file unreviewable. This module used a literal NUL as a map-key
+// delimiter and shipped that way through a review; it is now the escape sequence, identical at
+// runtime and textual on disk. Guarded repo-wide rather than for this one file, because nothing
+// else would catch a recurrence and the failure mode is silent: the code works, the review does not.
+test('no tracked TypeScript source contains a raw NUL byte', () => {
+  const tracked = execFileSync('git', ['ls-files', 'src/*.ts', 'src/**/*.ts', 'scripts/**/*.ts'], {
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .filter(Boolean);
+
+  const binary = tracked.filter((file) => readFileSync(file).includes(0));
+  assert.deepEqual(
+    binary,
+    [],
+    'these files contain a raw NUL byte, so Git treats them as binary and hides their diff. ' +
+      'Use a unicode escape instead of a literal control character.',
+  );
+});
+
+// build.ts had no coverage at all: every test above exercises model.ts, so the CLI could break its
+// output path, JSON shape or summary without anything failing. These run it as a subprocess, which
+// is the only way to cover argument handling and the file it actually writes.
+
+function runBuild(args: readonly string[]): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-strip-types', 'scripts/depgraph/build.ts', ...args],
+    { encoding: 'utf8' },
+  );
+  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
+test('build.ts writes the default path and a summary consistent with the JSON', () => {
+  const { status, stdout } = runBuild([]);
+  assert.equal(status, 0, stdout);
+
+  const payload = JSON.parse(readFileSync('.tmp/depgraph/graph.json', 'utf8')) as {
+    generated: { commit: string; files: number; edges: number };
+    zones: { id: string; rank: number | null }[];
+    nodes: unknown[];
+    edges: [number, number, number, number][];
+    edgeAuthorities: string[][];
+    authorityCounts: Record<string, number>;
+    typeInversions: Record<string, number>;
+  };
+
+  // Wire shape: the fields a consumer queries. A rename here is a breaking change for any script
+  // following README.md, so it is pinned rather than assumed.
+  for (const field of [
+    'generated',
+    'zones',
+    'zoneEdges',
+    'nodes',
+    'edges',
+    'cycles',
+    'typeInversions',
+  ]) {
+    assert.ok(field in payload, `legacy payload field ${field} disappeared`);
+  }
+  assert.equal(payload.nodes.length, payload.generated.files);
+  assert.equal(payload.edges.length, payload.generated.edges);
+  assert.equal(payload.edgeAuthorities.length, payload.edges.length);
+  assert.equal(
+    payload.edges.every((edge) => edge.length === 4),
+    true,
+  );
+  assert.deepEqual(Object.keys(payload.authorityCounts), AUTHORITY_LABELS);
+  assert.ok(payload.zones.length > 0);
+  assert.ok(Object.keys(payload.typeInversions).length > 0);
+
+  // The printed summary must agree with the payload it was derived from.
+  const inversions = Object.values(payload.typeInversions).reduce((sum, n) => sum + n, 0);
+  assert.match(
+    stdout,
+    new RegExp(`${payload.generated.files} files, ${payload.generated.edges} edges`),
+  );
+  assert.match(stdout, new RegExp(`type-only spine inversions \\(R6\\): ${inversions}`));
+  const reachable = payload.edges.filter(([, , , flags]) => (flags & 2) !== 0).length;
+  assert.match(stdout, new RegExp(`reachable at distance >= 2: ${reachable}`));
+});
+
+test('build.ts honours --out and reports the path it wrote', () => {
+  const out = join(mkdtempSync(join(tmpdir(), 'depgraph-')), 'custom.json');
+  const { status, stdout } = runBuild(['--out', out]);
+  assert.equal(status, 0, stdout);
+  assert.ok(existsSync(out), `expected ${out} to exist`);
+  JSON.parse(readFileSync(out, 'utf8'));
+  assert.ok(stdout.includes('custom.json'), stdout);
+});
+
+test('build.ts falls back to the default path when --out has no value', () => {
+  // Not an error path today: a trailing `--out` is ignored rather than rejected. Pinned so the
+  // behaviour is a decision rather than an accident, and so changing it is a visible diff.
+  const { status, stdout } = runBuild(['--out']);
+  assert.equal(status, 0, stdout);
+  assert.ok(stdout.includes('.tmp/depgraph/graph.json'), stdout);
+});

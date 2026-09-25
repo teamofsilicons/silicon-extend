@@ -1,0 +1,89 @@
+import { describe, expect, test } from 'vitest';
+import type { CliFlags } from '@agent-device/contracts/command';
+import { getCliCommandSchema } from '../schema/command-schema.ts';
+import {
+  recordCliReader,
+  recordCommandFacet,
+  recordCommandMetadata,
+  recordDaemonWriter,
+  traceCliReader,
+  traceCommandFacet,
+  traceCommandMetadata,
+  traceDaemonWriter,
+} from './index.ts';
+
+const NO_FLAGS = {} as CliFlags;
+
+function expectInvalidArgs(fn: () => unknown, messageFragment: string) {
+  expect(fn).toThrow(
+    expect.objectContaining({
+      code: 'INVALID_ARGS',
+      message: expect.stringContaining(messageFragment),
+    }),
+  );
+}
+
+describe('recording command interface', () => {
+  test('owns record and trace public metadata', () => {
+    expect(recordCommandMetadata.name).toBe('record');
+    expect(recordCommandFacet.definition.name).toBe('record');
+    expect(traceCommandMetadata.name).toBe('trace');
+    expect(traceCommandFacet.definition.name).toBe('trace');
+  });
+
+  test('reads record CLI input with recording flags', () => {
+    expect(
+      recordCliReader(['start', './capture.mp4'], {
+        fps: 30,
+        quality: 'high',
+        hideTouches: true,
+        recordingScope: 'device',
+      } as CliFlags),
+    ).toEqual({
+      action: 'start',
+      path: './capture.mp4',
+      fps: 30,
+      quality: 'high',
+      hideTouches: true,
+      recordingScope: 'device',
+    });
+  });
+
+  test('leaves export quality unset when the flag is omitted', () => {
+    expect(recordCliReader(['start'], NO_FLAGS).quality).toBeUndefined();
+  });
+
+  test('reads trace CLI input', () => {
+    expect(traceCliReader(['stop', './diagnostics.trace'], NO_FLAGS)).toEqual({
+      action: 'stop',
+      path: './diagnostics.trace',
+    });
+  });
+
+  test('rejects unsupported recording actions', () => {
+    expectInvalidArgs(() => recordCliReader(['pause'], NO_FLAGS), 'record requires start|stop');
+    expectInvalidArgs(() => traceCliReader(['pause'], NO_FLAGS), 'trace requires start|stop');
+  });
+
+  test('writes record and trace daemon request positionals', () => {
+    expect(recordDaemonWriter({ action: 'start', path: './capture.mp4' })).toMatchObject({
+      command: 'record',
+      positionals: ['start', './capture.mp4'],
+    });
+    expect(traceDaemonWriter({ action: 'stop', path: './diagnostics.trace' })).toMatchObject({
+      command: 'trace',
+      positionals: ['stop', './diagnostics.trace'],
+    });
+  });
+});
+
+describe('record CLI option declaration', () => {
+  test('hands the parser the table of which action reads which option', () => {
+    // The parser is what refuses an option its action cannot read, on the keys the caller typed. That
+    // holds only while this family's table reaches the schema the parser reads.
+    const reads = getCliCommandSchema('record').flagsByAction;
+
+    expect(reads?.['stop']).toEqual([]);
+    expect(reads?.['contact-sheet']).toContain('out');
+  });
+});

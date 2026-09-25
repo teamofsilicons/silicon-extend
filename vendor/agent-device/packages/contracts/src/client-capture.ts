@@ -1,0 +1,116 @@
+// The public API vocabulary for snapshot, screenshot and diff capture.
+
+import type { SessionSurface } from './session-surface.ts';
+import type { PublicSnapshotCaptureAnnotations } from './snapshot-capture-annotations.ts';
+import type { SnapshotDiagnosticsSummary } from './snapshot-diagnostics.ts';
+import type {
+  SnapshotCommandOptionFields,
+  SnapshotKeyboardBandFact,
+  SnapshotNode,
+  SnapshotUnchanged,
+  SnapshotVisibility,
+} from '@agent-device/kernel/snapshot';
+import type { ScreenshotResultData } from './snapshot-types.ts';
+import type {
+  AgentDeviceIdentifiers,
+  AgentDeviceRequestOverrides,
+  AgentDeviceSelectionOptions,
+  DeviceCommandBaseOptions,
+} from './client-connection.ts';
+
+// The snapshot capture keys and their value types come from the one snapshot
+// option declaration (`SnapshotCommandOptionFields`). `customActions` is lifted
+// out of that spread only to carry its editor documentation — a `.d.ts` is read
+// where no FlagDefinition resolves, and nothing generates these docs. Its type
+// still comes from the declaration, and the prose is the option's ONE
+// declaration (the `--actions` FlagDefinition's `inputDescription`) verbatim,
+// pinned to it by `commands/command-input-option-field.test.ts`.
+export type CaptureSnapshotOptions = AgentDeviceRequestOverrides &
+  AgentDeviceSelectionOptions &
+  Omit<SnapshotCommandOptionFields, 'customActions'> & {
+    /**
+     * Name the affordances an element merged away (iOS UIAccessibilityCustomAction,
+     * React Native accessibilityActions) — a card whose reply/options controls are not
+     * separate elements still lists them here. The names are for PLANNING, not
+     * invocation: there is no API to trigger them, so reach the affordance through the
+     * element detail screen, through the same control exposed as a labeled element
+     * elsewhere, or by coordinates from its rect. iOS simulator only; costs one
+     * accessibility round trip per merged element.
+     */
+    customActions?: SnapshotCommandOptionFields['customActions'];
+    timeoutMs?: number;
+    /**
+     * #1271 stage 2 (ADR 0012 amendment): `snapshot` is observation-only and
+     * excluded from a repair-armed heal by default; `record` forces it
+     * through. Mutually exclusive with `noRecord`.
+     */
+    noRecord?: boolean;
+    record?: boolean;
+  };
+
+export type CaptureSnapshotResult = {
+  nodes: SnapshotNode[];
+  /** Present only when the capture owner establishes whether the tree was truncated. */
+  truncated?: boolean;
+  appName?: string;
+  appBundleId?: string;
+  visibility?: SnapshotVisibility;
+  unchanged?: SnapshotUnchanged;
+  snapshotDiagnostics?: SnapshotDiagnosticsSummary;
+  /**
+   * The keyboard band this capture's producer measured (#2660), in the same orientation space as the
+   * node rects. The acting commands read it off the session state they act with; it is published so a
+   * caller can see the band a `tap_keyboard_occludes_target` refusal measured against. Absent means
+   * the producer measured no band and the tap guard derived one from the tree.
+   */
+  keyboard?: SnapshotKeyboardBandFact;
+  /**
+   * Screenshot captured automatically when the semantic snapshot was sparse.
+   * Remote clients receive a materialized local path through the daemon artifact channel.
+   */
+  fallbackScreenshotPath?: string;
+  identifiers: AgentDeviceIdentifiers;
+  /**
+   * ADR 0014: the response-level ref-frame epoch the plain node refs were minted
+   * from. A ref-issuing snapshot carries it ONCE (nodes stay plain `@e12` for the
+   * token budget); pair a ref with it (`@e12~s<refsGeneration>`) before a mutation.
+   */
+  refsGeneration?: number;
+  /**
+   * Digest response view only: a capped list of `{ ref, label? }` pairs taken
+   * from the full `nodes` tree so the MCP layer can still pin refs when the
+   * default-level `nodes` payload is intentionally omitted.
+   */
+  refs?: Array<{ ref: string; label?: string }>;
+} & PublicSnapshotCaptureAnnotations;
+
+export type CaptureScreenshotOptions = AgentDeviceRequestOverrides & {
+  path?: string;
+  overlayRefs?: boolean;
+  /** Crop the capture to the frame of the selector resolved on the same screen. */
+  cropOn?: string;
+  pixelDensity?: number;
+  fullscreen?: boolean;
+  scale?: number;
+  stabilize?: boolean;
+  normalizeStatusBar?: boolean;
+  surface?: SessionSurface;
+};
+
+export type CaptureScreenshotResult = ScreenshotResultData & {
+  path: string;
+  identifiers: AgentDeviceIdentifiers;
+};
+
+export type CaptureDiffOptions = DeviceCommandBaseOptions &
+  Pick<CaptureSnapshotOptions, 'interactiveOnly' | 'depth' | 'scope' | 'raw'> & {
+    kind: 'snapshot';
+    out?: string;
+  };
+
+export type SelectorSnapshotCommandOptions = Pick<
+  CaptureSnapshotOptions,
+  'depth' | 'scope' | 'raw'
+>;
+
+export type FindSnapshotCommandOptions = Pick<CaptureSnapshotOptions, 'depth' | 'raw'>;

@@ -1,0 +1,9 @@
+# Dogfood iOS Settings flow through the replay suite runner.
+context platform=ios target=mobile
+open com.apple.Preferences --relaunch
+appstate
+click "role=cell label=General || role=button label=General"
+wait "label=About || label=\"Software Update\" || text=\"Manage your overall setup and preferences\"" 5000
+is exists "label=About || label=\"Software Update\" || text=\"Manage your overall setup and preferences\""
+find text "Software Update" exists
+back

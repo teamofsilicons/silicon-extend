@@ -1,0 +1,56 @@
+node_modules/
+.env
+.env.*
+!.env.example
+scripts/perf/.results/
+.pnpm-store/
+.fallow/
+dist/
+coverage/
+.tmp/
+# Per-project agent-device output: test artifacts, metro and tunnel logs
+/.agent-device/
+.device-evidence/
+.DS_Store
+
+# Host-local Codex state and embedded worktree clones
+/.codex/
+/.worktrees/
+
+__pycache__/
+*.pyc
+*.log
+test/screenshots/*.png
+test/artifacts/
+*.gesture-telemetry.json
+.build/
+.swiftpm/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.xcuserdatad/
+*.xcuserdata/
+*.xcsettings
+*.xcresult
+*.ipa
+*.apk
+*.dSYM
+*.dSYM.zip
+*.app
+*.xctestrun
+*.xcarchive
+android/snapshot-helper/build/
+android/snapshot-helper/dist/
+android/ime-helper/build/
+android/ime-helper/dist/
+
+# Workspace package declaration output (tsc -b project references)
+packages/*/dist-types/
+*.tsbuildinfo
+
+# Reproducible AX bridge captures are published on the evidence branch.
+docs/evidence/ios-simulator-ax-bridge-*.json.gz

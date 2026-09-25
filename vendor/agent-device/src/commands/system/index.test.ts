@@ -1,0 +1,287 @@
+import { describe, expect, expectTypeOf, test } from 'vitest';
+import type {
+  ActionButtonCommandOptions,
+  AgentDeviceCommandClient,
+  AppSwitcherCommandOptions,
+  BackCommandOptions,
+  FoldCommandOptions,
+  HomeCommandOptions,
+  OrientationCommandOptions,
+  TvRemoteCommandOptions,
+} from '../../client/client-types.ts';
+import type { CommandResult } from '@agent-device/command-registry/command-result';
+import { readInputFromCli } from '../cli-grammar/registry.ts';
+import type { CliFlags } from '@agent-device/contracts/command';
+import {
+  backCliReader,
+  backDaemonWriter,
+  clipboardCliReader,
+  clipboardDaemonWriter,
+  foldCliReader,
+  foldDaemonWriter,
+  keyboardCliReader,
+  keyboardDaemonWriter,
+  orientationCliReader,
+  orientationDaemonWriter,
+  tvRemoteCliReader,
+  tvRemoteDaemonWriter,
+  systemCommandFamily,
+} from './index.ts';
+import { systemCliOutputFormatters } from './output.ts';
+
+function flags(overrides: Partial<CliFlags> = {}): CliFlags {
+  return overrides as CliFlags;
+}
+
+function expectInvalidArgs(fn: () => unknown, messageFragment: string) {
+  expect(fn).toThrow(
+    expect.objectContaining({
+      code: 'INVALID_ARGS',
+      message: expect.stringContaining(messageFragment),
+    }),
+  );
+}
+
+describe('system command interface', () => {
+  test('navigation commands declare the public client signatures', () => {
+    expectTypeOf<AgentDeviceCommandClient['back']>().toEqualTypeOf<
+      (options?: BackCommandOptions) => Promise<CommandResult<'back'>>
+    >();
+    expectTypeOf<AgentDeviceCommandClient['home']>().toEqualTypeOf<
+      (options?: HomeCommandOptions) => Promise<CommandResult<'home'>>
+    >();
+    expectTypeOf<AgentDeviceCommandClient['orientation']>().toEqualTypeOf<
+      (options: OrientationCommandOptions) => Promise<CommandResult<'orientation'>>
+    >();
+    expectTypeOf<AgentDeviceCommandClient['fold']>().toEqualTypeOf<
+      (options: FoldCommandOptions) => Promise<CommandResult<'fold'>>
+    >();
+    expectTypeOf<AgentDeviceCommandClient['appSwitcher']>().toEqualTypeOf<
+      (options?: AppSwitcherCommandOptions) => Promise<CommandResult<'app-switcher'>>
+    >();
+    expectTypeOf<AgentDeviceCommandClient['actionButton']>().toEqualTypeOf<
+      (options?: ActionButtonCommandOptions) => Promise<CommandResult<'action-button'>>
+    >();
+    expectTypeOf<AgentDeviceCommandClient['tvRemote']>().toEqualTypeOf<
+      (options: TvRemoteCommandOptions) => Promise<CommandResult<'tv-remote'>>
+    >();
+  });
+
+  const parameterless = ['appstate', 'home', 'app-switcher', 'action-button'] as const;
+
+  test('parameterless readers project common selection flags through', () => {
+    for (const command of parameterless) {
+      expect(systemCommandFamily.cliReaders[command]([], flags({ platform: 'ios' }))).toEqual({
+        platform: 'ios',
+      });
+    }
+  });
+
+  test('parameterless daemon writers emit command names with no positionals', () => {
+    for (const command of parameterless) {
+      expect(systemCommandFamily.daemonWriters?.[command]?.({})).toMatchObject({
+        command,
+        positionals: [],
+      });
+    }
+  });
+
+  test('back reader and writer normalize back mode', () => {
+    expect(backCliReader([], flags({ backMode: 'system' }))).toMatchObject({
+      mode: 'system',
+    });
+    expect(backDaemonWriter({ mode: 'in-app' }).options).toMatchObject({
+      backMode: 'in-app',
+    });
+    expect(
+      (
+        backDaemonWriter({ mode: 'teleport' } as unknown as Record<string, unknown>)
+          .options as Record<string, unknown>
+      ).backMode,
+    ).toBeUndefined();
+  });
+
+  // #1638: --settle has to survive BOTH back seams — the reader seam that
+  // builds the input (`readInputFromCli`, which merges the trait-derived
+  // settle triple since #1652) and the writer that turns it into daemon
+  // request options.
+  test('back reader and writer carry the settle request through to daemon flags', () => {
+    const input = readInputFromCli(
+      'back',
+      [],
+      flags({ settle: true, settleQuietMs: 250, timeoutMs: 8_000 }),
+    );
+    expect(input).toMatchObject({ settle: true, settleQuietMs: 250, timeoutMs: 8_000 });
+    expect(backDaemonWriter(input).options).toMatchObject({
+      settle: true,
+      settleQuietMs: 250,
+      timeoutMs: 8_000,
+    });
+    expect(readInputFromCli('back', [], flags()).settle).toBeUndefined();
+  });
+
+  test('back CLI output renders the settled observation', () => {
+    const output = systemCliOutputFormatters.back({
+      input: {},
+      result: {
+        action: 'back',
+        mode: 'in-app',
+        message: 'Back',
+        settle: {
+          settled: true,
+          waitedMs: 300,
+          diff: {
+            summary: { additions: 1, removals: 2, unchanged: 5 },
+            lines: [
+              { kind: 'removed', text: '@e9 [button] "Save"' },
+              { kind: 'added', text: '@e3 [button] "Edit"', ref: 'e3' },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(output.text).toBe(
+      [
+        'Back',
+        'settled after 300ms: +1 -2 (~5 unchanged)',
+        '- @e9 [button] "Save"',
+        '+ @e3 [button] "Edit"',
+      ].join('\n'),
+    );
+  });
+
+  test('orientation reader and writer normalize orientation', () => {
+    expect(orientationCliReader(['left'], flags())).toMatchObject({
+      orientation: 'landscape-left',
+    });
+    expect(orientationDaemonWriter({ orientation: 'portrait' }).positionals).toEqual(['portrait']);
+  });
+
+  test('orientation reader and writer reject missing orientation', () => {
+    expectInvalidArgs(
+      () => orientationCliReader([], flags()),
+      'orientation requires an orientation',
+    );
+    expectInvalidArgs(() => orientationDaemonWriter({}), 'orientation requires orientation');
+  });
+
+  test('fold reader and writer normalize the pose', () => {
+    expect(foldCliReader(['book'], flags())).toMatchObject({ pose: 'half-open' });
+    expect(foldCliReader(['Unfolded'], flags({ platform: 'ios' }))).toMatchObject({
+      platform: 'ios',
+      pose: 'open',
+    });
+    expect(foldDaemonWriter({ pose: 'closed' })).toMatchObject({
+      command: 'fold',
+      positionals: ['closed'],
+    });
+  });
+
+  test('fold reader and writer reject a missing or unknown pose', () => {
+    expectInvalidArgs(() => foldCliReader([], flags()), 'fold requires a pose');
+    expectInvalidArgs(() => foldCliReader(['sideways'], flags()), 'Invalid fold pose');
+    expectInvalidArgs(() => foldDaemonWriter({}), 'fold requires a pose');
+  });
+
+  test('keyboard reader maps aliases and validates arguments', () => {
+    expect(keyboardCliReader(['get'], flags())).toMatchObject({ action: 'status' });
+    expect(keyboardCliReader([], flags())).not.toHaveProperty('action');
+    expectInvalidArgs(
+      () => keyboardCliReader(['dismiss', 'extra'], flags()),
+      'at most one action argument',
+    );
+    expectInvalidArgs(() => keyboardCliReader(['wiggle'], flags()), 'keyboard action must be');
+  });
+
+  test('keyboard writer forwards action when present', () => {
+    expect(keyboardDaemonWriter({ action: 'dismiss' }).positionals).toEqual(['dismiss']);
+    expect(keyboardDaemonWriter({}).positionals).toEqual([]);
+  });
+
+  test('clipboard reader parses read and write subcommands', () => {
+    expect(clipboardCliReader(['read'], flags())).toMatchObject({ action: 'read' });
+    expect(clipboardCliReader(['write', 'hello', 'world'], flags())).toMatchObject({
+      action: 'write',
+      text: 'hello world',
+    });
+  });
+
+  test('clipboard reader rejects invalid subcommands', () => {
+    expectInvalidArgs(() => clipboardCliReader([], flags()), 'read or write');
+    expectInvalidArgs(
+      () => clipboardCliReader(['read', 'oops'], flags()),
+      'does not accept additional arguments',
+    );
+    expectInvalidArgs(
+      () => clipboardCliReader(['write'], flags()),
+      'clipboard write requires text',
+    );
+  });
+
+  test('clipboard writer serializes read and write subcommands', () => {
+    expect(clipboardDaemonWriter({ action: 'read' }).positionals).toEqual(['read']);
+    expect(clipboardDaemonWriter({ action: 'write', text: 'copied' }).positionals).toEqual([
+      'write',
+      'copied',
+    ]);
+  });
+
+  test('tv-remote reader parses button and optional press subcommand', () => {
+    expect(tvRemoteCliReader(['down'], flags({ durationMs: 250 }))).toMatchObject({
+      button: 'down',
+      durationMs: 250,
+    });
+    expect(tvRemoteCliReader(['press', 'select'], flags())).toMatchObject({
+      button: 'select',
+    });
+    expect(tvRemoteCliReader(['ok'], flags())).toMatchObject({ button: 'select' });
+    expect(tvRemoteCliReader(['center'], flags())).toMatchObject({ button: 'select' });
+    expect(tvRemoteCliReader(['enter'], flags())).toMatchObject({ button: 'select' });
+  });
+
+  test('tv-remote reader maps longpress subcommand to duration preset', () => {
+    expect(tvRemoteCliReader(['longpress', 'select'], flags())).toMatchObject({
+      button: 'select',
+      durationMs: 500,
+    });
+    expect(tvRemoteCliReader(['longpress', 'back'], flags({ durationMs: 900 }))).toMatchObject({
+      button: 'back',
+      durationMs: 900,
+    });
+  });
+
+  test('tv-remote reader and writer validate button arguments', () => {
+    expect(
+      tvRemoteDaemonWriter({ button: 'right' } as Record<string, unknown>).positionals,
+    ).toEqual(['right']);
+    expectInvalidArgs(
+      () => tvRemoteCliReader([], flags()),
+      'tv-remote requires exactly one button',
+    );
+    expectInvalidArgs(
+      () => tvRemoteCliReader(['press', 'left', 'extra'], flags()),
+      'tv-remote requires exactly one button',
+    );
+    expectInvalidArgs(
+      () => tvRemoteCliReader(['longpress', 'left', 'extra'], flags()),
+      'tv-remote requires exactly one button',
+    );
+    expectInvalidArgs(() => tvRemoteCliReader(['blue'], flags()), 'button must be one of');
+  });
+});
+
+test('fold keyframes survive CLI and daemon projection without a preset', () => {
+  const keyframes = [
+    { atMs: 0, angle: 0 },
+    { atMs: 5000, angle: 180 },
+  ];
+  const input = foldCliReader([], flags({ keyframes: JSON.stringify(keyframes) }));
+  expect(input).toMatchObject({ keyframes });
+  expect(foldDaemonWriter(input)).toMatchObject({
+    command: 'fold',
+    positionals: [],
+    options: { keyframes: JSON.stringify(keyframes) },
+  });
+  expect(() => foldCliReader(['open'], flags({ keyframes: JSON.stringify(keyframes) }))).toThrow();
+});

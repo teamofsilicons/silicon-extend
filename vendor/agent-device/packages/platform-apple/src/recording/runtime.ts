@@ -1,0 +1,512 @@
+import { isIosFamily, type DeviceInfo } from '@agent-device/kernel/device';
+import { AppError, asAppError } from '@agent-device/kernel/errors';
+import { execFailureDetails } from '@agent-device/host-kit/command';
+import type { CleanupOutcome, FinishOutcome } from '@agent-device/contracts/durable-resource';
+import type { HostCommandResult } from '@agent-device/contracts/platform-runtime-host';
+import type { RuntimeOwnerRef } from '@agent-device/contracts/platform-runtime';
+import type { ScreenRecordingRuntimeHost } from '@agent-device/contracts/screen-recording-runtime-host';
+import {
+  RECORDING_OUTPUT_UNPLAYABLE_REASON,
+  type ScreenRecordingCompletion,
+  type ScreenRecordingLiveHandle,
+  type ScreenRecordingLiveSnapshot,
+  type ScreenRecordingRuntimeOperations,
+  type ScreenRecordingStartInput,
+} from '@agent-device/contracts/screen-recording-runtime';
+import { PendingTransferGuard } from '@agent-device/contracts/async-lifecycle';
+import { createScreenRecordingLiveHandle } from '@agent-device/capture-kit';
+import {
+  nativeRecordingPath,
+  type RecorderStop,
+  stopAndExportScreenRecording,
+} from '@agent-device/capture-kit/recording-stop-sequence';
+import {
+  completeAppleRecording as completion,
+  finalizeAppleRecordingFromCollected,
+} from './completion.ts';
+import {
+  cleanupAppleRecording,
+  createAppleRecordingEnvelope,
+  reattachAppleRecording,
+  simulatorExportCoordinates,
+  type AppleRecordingDescriptor,
+  type AppleScreenRecordingOperationHost,
+  type AppleSimulatorExportRestore,
+} from './recovery.ts';
+import { validateAppleSimulatorRecording } from './validation.ts';
+
+const SIMULATOR_TARGET_LABEL = 'iOS recording';
+const SIMULATOR_BACKEND_LABEL = 'simctl recordVideo';
+
+export function appleScreenRecordingFacts(device: DeviceInfo) {
+  if (device.appleOs === 'watchos')
+    return unavailable('unsupported-platform-leaf', 'watchOS recording is not supported.');
+  if (
+    isIosFamily(device) &&
+    device.kind === 'device' &&
+    device.iosPhysicalDeviceBackend === 'xctest'
+  ) {
+    return unavailable(
+      'unsupported-device-backend',
+      'This command requires a CoreDevice-backed physical iOS device. The selected XCTest backend supports open, close, interactions, snapshots, and screenshots.',
+    );
+  }
+  return Object.freeze({ available: true } as const);
+}
+
+export function createAppleScreenRecordingOperations(params: {
+  host: AppleScreenRecordingOperationHost;
+  device: DeviceInfo;
+  owner: RuntimeOwnerRef;
+  signal: AbortSignal;
+}): ScreenRecordingRuntimeOperations {
+  const { host, device, owner, signal } = params;
+  return Object.freeze({
+    screenRecordingStart: async (input) =>
+      await startAppleRecording({ host, device, owner, input, signal }),
+    screenRecordingReattach: async (input) => {
+      const reattached = await reattachAppleRecording({ host, device, envelope: input.envelope });
+      return reattached.status === 'restore-export'
+        ? { status: 'active', handle: simulatorExportHandle({ host, restored: reattached }) }
+        : reattached;
+    },
+    screenRecordingCleanup: async (input) =>
+      await cleanupAppleRecording(
+        host,
+        device,
+        input.envelope.descriptor.body,
+        input.envelope.sessionId,
+      ),
+  } satisfies ScreenRecordingRuntimeOperations);
+}
+
+type AppleRecordingStartParams = Readonly<{
+  host: AppleScreenRecordingOperationHost;
+  device: DeviceInfo;
+  owner: RuntimeOwnerRef;
+  input: ScreenRecordingStartInput;
+  signal: AbortSignal;
+}>;
+
+async function startAppleRecording(params: AppleRecordingStartParams) {
+  params.signal.throwIfAborted();
+  return params.device.kind === 'simulator'
+    ? await startAppleSimulatorRecording(params)
+    : await startAppleRunnerRecording(params);
+}
+
+async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
+  const { host, device, owner, input, signal } = params;
+  await validateAppleSimulatorRecording(device, input, host.screenRecording.apple.isRunnerBundleId);
+  const clockAnchor = input.activeSessionApp
+    ? await host.screenRecording.apple.captureClockAnchor(
+        device,
+        input.activeSessionApp.bundleId,
+        signal,
+      )
+    : undefined;
+  // The recorder owns its own file and the export is produced from a copy of it (ADR 0024 2.3), so a
+  // stop that fails midway cannot leave the caller's path holding bytes the next attempt has to guess
+  // about. `simctl` is told where to write; the caller's path is written once, from the copy.
+  const nativePath = nativeRecordingPath(input.outputPath);
+  await host.screenRecording.outputs.prepare(nativePath);
+  const nativeProcess = await host.screenRecording.apple.startSimulator(device, nativePath, signal);
+  const processes = nativeProcess.markers;
+  if (!processes || processes.length === 0) {
+    await settleAppleSimulatorProcess(nativeProcess).catch(() => {});
+    throw new Error('simctl recordVideo did not expose durable process identity');
+  }
+  try {
+    signal.throwIfAborted();
+    host.screenRecording.ownedProcesses.replace(
+      { kind: 'session', sessionId: input.sessionId },
+      processes.map((process) => ({ ...process, purpose: 'simctl-screen-recording' })),
+    );
+  } catch (error) {
+    try {
+      host.screenRecording.ownedProcesses.clear({ kind: 'session', sessionId: input.sessionId });
+    } catch {
+      // Preserve the spawn/publication error; startup cleanup still has the process handle.
+    }
+    await settleAppleSimulatorProcess(nativeProcess).catch(() => {});
+    throw error;
+  }
+  // The exit stays in scope because it is the one thing that explains an unreadable file: naming it
+  // turns a permanent condition into a way out instead of a retry loop on the same bytes.
+  let recorderExit: string | undefined;
+  let recorderResult: HostCommandResult | undefined;
+  const stopSimulatorRecorder = async (): Promise<RecorderStop> => {
+    // An exited recorder is an observation about the recorder, not about the export: simctl wrote
+    // whatever it wrote, and the playability rule is what answers whether that is a video
+    // (ADR 0024 2.2). Refusing by exit code alone threw away a finished recording and left a retry
+    // that could only re-read the same settled exit, so the exit is disclosed and collection proceeds.
+    await nativeProcess.terminate();
+    const result = await nativeProcess.wait;
+    recorderResult = result;
+    recorderExit = describeSimctlRecorderExit(result);
+    host.screenRecording.ownedProcesses.clear({ kind: 'session', sessionId: input.sessionId });
+    return {
+      observation: { recorder: 'confirmed' },
+      ...(recorderExit === undefined
+        ? {}
+        : {
+            warning: `${recorderExit} before record stop; the video covers only what the recorder wrote before it stopped.`,
+          }),
+    };
+  };
+  const startedSnapshot = snapshot(input, SIMULATOR_BACKEND_LABEL, {}, clockAnchor);
+  return startResult({
+    device,
+    owner,
+    input,
+    descriptor: {
+      backend: 'simctl',
+      outputPath: nativePath,
+      processes,
+      recording: simulatorExportCoordinates(startedSnapshot),
+    },
+    snapshot: startedSnapshot,
+    finish: (current, progress) =>
+      stopAndExportScreenRecording({
+        snapshot: current,
+        progress,
+        steps: {
+          stop: stopSimulatorRecorder,
+          collect: async (collectedPath) => {
+            try {
+              await collectSimulatorRecording(host, nativePath, collectedPath);
+            } catch (collectError) {
+              throw recorderExitEndedTheRecording(collectError, recorderExit, recorderResult);
+            }
+          },
+          finalize: async ({ collectedPath, exportPath }) => {
+            try {
+              return await finalizeAppleRecordingFromCollected({
+                host,
+                snapshot: current,
+                targetLabel: SIMULATOR_TARGET_LABEL,
+                collectedPath,
+                exportPath,
+                nativePath,
+              });
+            } catch (exportError) {
+              throw recorderExitEndedTheRecording(exportError, recorderExit, recorderResult);
+            }
+          },
+          discard: async (collectedPath) => {
+            await host.screenRecording.outputs.remove(collectedPath);
+          },
+        },
+      }),
+    cleanup: async () => {
+      const result = await cleanupAppleSimulatorProcess(nativeProcess);
+      if (result.status === 'cleaned' || result.status === 'already-missing') {
+        host.screenRecording.ownedProcesses.clear({
+          kind: 'session',
+          sessionId: input.sessionId,
+        });
+      }
+      return result;
+    },
+  });
+}
+
+/**
+ * The stop a `simctl` recording gets when its recorder died with its daemon. There is no recorder left
+ * to signal and no gesture event left to burn in, and every other step is the one the first stop would
+ * have run — including which of them are still owed, which the shared sequence decides from the
+ * checkpoints the first attempt journaled.
+ */
+function simulatorExportHandle(
+  params: Readonly<{
+    host: AppleScreenRecordingOperationHost;
+    restored: AppleSimulatorExportRestore;
+  }>,
+): ScreenRecordingLiveHandle {
+  const {
+    host,
+    restored: { recording, nativePath, cleanup },
+  } = params;
+  const snapshot: ScreenRecordingLiveSnapshot = Object.freeze({
+    ...recording,
+    backend: SIMULATOR_BACKEND_LABEL,
+    gestureEvents: [],
+  });
+  return createScreenRecordingLiveHandle(snapshot, {
+    finish: (current, progress) =>
+      stopAndExportScreenRecording({
+        snapshot: current,
+        progress,
+        steps: {
+          stop: async () => ({
+            observation: { recorder: 'confirmed' as const },
+            warning:
+              'simctl recordVideo had already ended when record stop reattached to it; ' +
+              'the video covers only what the recorder wrote before it stopped.',
+          }),
+          collect: async (collectedPath) => {
+            await collectSimulatorRecording(host, nativePath, collectedPath);
+          },
+          finalize: async ({ collectedPath, exportPath }) =>
+            await finalizeAppleRecordingFromCollected({
+              host,
+              snapshot: current,
+              targetLabel: SIMULATOR_TARGET_LABEL,
+              collectedPath,
+              exportPath,
+              nativePath,
+              ...(recording.showTouches
+                ? {
+                    overlayUnavailable:
+                      'the daemon that held the touch events ended before record stop',
+                  }
+                : {}),
+            }),
+          discard: async (collectedPath) => {
+            await host.screenRecording.outputs.remove(collectedPath);
+          },
+        },
+      }),
+    forceCleanup: async () => await cleanup(),
+  });
+}
+
+async function collectSimulatorRecording(
+  host: AppleScreenRecordingOperationHost,
+  nativePath: string,
+  collectedPath: string,
+): Promise<void> {
+  // The copy gets the container sniff before it is checkpointed; the full playability verdict
+  // runs once, on the export `finalize` writes from it.
+  await host.screenRecording.outputs.copy({ from: nativePath, to: collectedPath });
+  await host.screenRecording.finalize.sniff({ outputPath: collectedPath });
+}
+
+async function startAppleRunnerRecording(params: AppleRecordingStartParams) {
+  const { host, device, owner, input, signal } = params;
+  const appBundleId = input.activeSessionApp?.bundleId;
+  if (!appBundleId) {
+    throw new TypeError('Apple runner recording requires an active app session identity');
+  }
+  await host.screenRecording.outputs.prepare(input.outputPath);
+  const result = await host.screenRecording.apple.runRunner(
+    device,
+    {
+      kind: 'start',
+      appBundleId,
+      outputPath: input.outputPath,
+      ...(input.fps === undefined ? {} : { fps: input.fps }),
+    },
+    signal,
+  );
+  if (!result.runnerSessionId || !result.runnerAuthority) {
+    throw new Error('Apple runner recording did not expose durable session ownership');
+  }
+  const runnerOwnership = {
+    runnerSessionId: result.runnerSessionId,
+    runnerAuthority: result.runnerAuthority,
+  } as const;
+  let runnerStop: Promise<void> | undefined;
+  // A stop the runner refused has to be asked again by the next `record stop`, exactly as the live
+  // handle re-drives a refused finish; only an in-flight or completed stop stays shared.
+  const stopRunner = () => {
+    runnerStop ??= runAppleRecordingOperation(() =>
+      host.screenRecording.apple
+        .runRunner(device, { kind: 'stop', appBundleId, ...runnerOwnership })
+        .then(() => undefined),
+    ).catch((error: unknown) => {
+      runnerStop = undefined;
+      throw error;
+    });
+    return runnerStop;
+  };
+  if (!runnerDescriptorMatchesDevice(device, result.remotePath)) {
+    await stopRunner().catch(() => {});
+    throw new Error('Apple runner recording did not expose coherent durable media ownership');
+  }
+  try {
+    signal.throwIfAborted();
+  } catch (error) {
+    await stopRunner().catch(() => {});
+    throw error;
+  }
+  return startResult({
+    device,
+    owner,
+    input,
+    descriptor: {
+      backend: 'runner',
+      outputPath: input.outputPath,
+      appBundleId,
+      ...runnerOwnership,
+      ...(result.remotePath === undefined ? {} : { remotePath: result.remotePath }),
+    },
+    snapshot: snapshot(input, 'runner AVAssetWriter', result),
+    finish: async (current) => {
+      await stopRunner();
+      if (result.remotePath !== undefined) {
+        await host.screenRecording.apple.retrieveRunnerRecording(
+          device,
+          result.remotePath,
+          current.outPath,
+        );
+      }
+      return await completion({
+        host,
+        snapshot: current,
+        targetLabel: device.appleOs === 'macos' ? 'macOS recording' : 'iOS recording',
+        stopObservation: { recorder: 'confirmed' },
+        // The runner wrote its recording to the device and the stop RPC was acknowledged, so the
+        // retrieved file on the device is safe to retire; nothing removes it here (ADR 0024 2.3).
+        ...(result.remotePath === undefined ? {} : { nativePathDisposition: 'retirable' as const }),
+      });
+    },
+    cleanup: async () => {
+      await stopRunner();
+      return { status: 'cleaned' } as const;
+    },
+  });
+}
+
+async function runAppleRecordingOperation<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw asAppError(error, 'COMMAND_FAILED');
+  }
+}
+
+function describeSimctlRecorderExit(result: HostCommandResult): string | undefined {
+  // A termination record stop asked for comes back with the signal still attached and the exit code
+  // normalized to 0 by the host, so checking the signal first would blame the recorder for our own
+  // SIGTERM escalation.
+  if (result.exitCode === 0) return undefined;
+  return result.signal
+    ? `simctl recordVideo was killed by ${result.signal}`
+    : `simctl recordVideo exited with code ${result.exitCode}`;
+}
+
+// An unreadable file is the one export failure the recorder's exit explains: the next `record stop`
+// re-reads the same settled exit and the same bytes, so it names the exit and the way out. Anything
+// else the export path raised keeps its own verdict — a telemetry or transport failure a retry can fix
+// must not be told to close the session.
+function recorderExitEndedTheRecording(
+  exportError: unknown,
+  exit: string | undefined,
+  result: HostCommandResult | undefined,
+): unknown {
+  const original = asAppError(exportError, 'COMMAND_FAILED');
+  if (exit === undefined || result === undefined) return exportError;
+  if (original.details?.reason !== RECORDING_OUTPUT_UNPLAYABLE_REASON) return exportError;
+  return new AppError(
+    original.code,
+    `${original.message}; ${exit}`,
+    execFailureDetails(result, {
+      ...(original.details ?? {}),
+      ...(result.signal === undefined ? {} : { signal: result.signal }),
+      retriable: false,
+      hint:
+        'The recorder exited before record stop, so the next record stop reads the same file. ' +
+        'Close this session to release the device, then record again.',
+    }),
+  );
+}
+
+function runnerDescriptorMatchesDevice(
+  device: DeviceInfo,
+  remotePath: string | undefined,
+): boolean {
+  if (device.appleOs === 'macos') return remotePath === undefined;
+  if (!isIosFamily(device)) return remotePath === undefined;
+  return remotePath !== undefined && /^tmp\/agent-device-recording-\d+\.mp4$/.test(remotePath);
+}
+
+async function settleAppleSimulatorProcess(
+  nativeProcess: Awaited<ReturnType<ScreenRecordingRuntimeHost['apple']['startSimulator']>>,
+) {
+  await nativeProcess.terminate();
+  return await nativeProcess.wait;
+}
+
+async function cleanupAppleSimulatorProcess(
+  nativeProcess: Awaited<ReturnType<ScreenRecordingRuntimeHost['apple']['startSimulator']>>,
+): Promise<CleanupOutcome> {
+  try {
+    await settleAppleSimulatorProcess(nativeProcess);
+    return { status: 'cleaned' };
+  } catch (error) {
+    return {
+      status: 'cleanup-pending',
+      reason: 'transport-failed',
+      message: error instanceof Error ? error.message : 'Apple simulator cleanup failed',
+    };
+  }
+}
+
+function startResult(params: {
+  device: DeviceInfo;
+  owner: RuntimeOwnerRef;
+  input: ScreenRecordingStartInput;
+  descriptor: AppleRecordingDescriptor;
+  snapshot: ScreenRecordingLiveSnapshot;
+  finish(
+    snapshot: ScreenRecordingLiveSnapshot,
+    progress?: Parameters<ScreenRecordingLiveHandle['finish']>[0],
+  ): Promise<FinishOutcome<ScreenRecordingCompletion>>;
+  cleanup(): Promise<CleanupOutcome>;
+}) {
+  const { device, owner, input, descriptor, snapshot, finish, cleanup } = params;
+  const handle = createScreenRecordingLiveHandle(snapshot, {
+    finish,
+    forceCleanup: cleanup,
+  });
+  return Object.freeze({
+    pendingHandle: new PendingTransferGuard(handle),
+    envelope: createAppleRecordingEnvelope({ device, owner, input, descriptor }),
+  });
+}
+
+function snapshot(
+  input: ScreenRecordingStartInput,
+  backend: string,
+  timing: Readonly<{
+    recorderStartUptimeMs?: number;
+    runnerSessionId?: string;
+  }> = {},
+  clockAnchor?: Readonly<{ wallClockAtMs: number; uptimeMs: number }>,
+): ScreenRecordingLiveSnapshot {
+  const startedAt = Date.now();
+  return Object.freeze({
+    backend,
+    outPath: input.outputPath,
+    ...(input.clientOutputPath === undefined ? {} : { clientOutPath: input.clientOutputPath }),
+    startedAt,
+    scope: input.scope,
+    showTouches: input.showTouches,
+    recordOnlySession: input.recordOnlySession,
+    ...(input.activeSessionApp === undefined ? {} : { activeSessionApp: input.activeSessionApp }),
+    ...(input.exportQuality === undefined ? {} : { exportQuality: input.exportQuality }),
+    gestureEvents: [],
+    ...(clockAnchor === undefined
+      ? {}
+      : {
+          gestureClockOriginAtMs: clockAnchor.wallClockAtMs,
+          gestureClockOriginUptimeMs: clockAnchor.uptimeMs,
+        }),
+    ...(timing.recorderStartUptimeMs === undefined
+      ? {}
+      : {
+          gestureClockOriginAtMs: startedAt,
+          gestureClockOriginUptimeMs: timing.recorderStartUptimeMs,
+          runnerStartedAtUptimeMs: timing.recorderStartUptimeMs,
+        }),
+    ...(timing.runnerSessionId === undefined ? {} : { runnerSessionId: timing.runnerSessionId }),
+  });
+}
+
+function unavailable(
+  reason: 'unsupported-platform-leaf' | 'unsupported-device-backend',
+  hint: string,
+) {
+  return Object.freeze({ available: false, reason, hint } as const);
+}

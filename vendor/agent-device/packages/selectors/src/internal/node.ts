@@ -1,0 +1,13 @@
+import type { Platform, PublicPlatform } from '@agent-device/kernel/device';
+import type { SnapshotNode } from '@agent-device/kernel/snapshot';
+import { isFillableType } from '@agent-device/contracts/snapshot';
+
+export function isNodeVisible(node: SnapshotNode): boolean {
+  if (node.hittable === true) return true;
+  if (!node.rect) return false;
+  return node.rect.width > 0 && node.rect.height > 0;
+}
+
+export function isNodeEditable(node: SnapshotNode, platform: Platform | PublicPlatform): boolean {
+  return isFillableType(node.type ?? '', platform) && node.enabled !== false;
+}

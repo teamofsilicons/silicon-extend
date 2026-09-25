@@ -1,0 +1,346 @@
+# Agent Device Tester
+
+`Agent Device Tester` is a minimal Expo Router fixture app for `agent-device` experiments.
+
+It is intentionally small, but each surface is dense with durable accessibility targets so a few screens cover a large share of the workflows we care about.
+
+## Why this app exists
+
+- It gives `agent-device` a stable React Native target that we control.
+- It keeps the number of screens low while still covering roughly 50 practical interaction and verification cases.
+
+## Screens
+
+- `Home`: visible-text checks, dismissible banner, modal open/close, async loading, status badge, switch state
+- `Catalog`: search debounce, filter chips, direction-aware scroll canary, favorite toggles, cart updates, drill-in navigation
+- `Product detail`: back navigation, quantity stepper, multiline notes, save action
+- `Checkout form`: required-field validation, fill vs type, checkbox state, choice groups, keyboard dismiss, success summary
+- `Settings`: switch rows, accordion content, loading and error states, retry flow, destructive-confirm modal
+- `Automation lab`: long-press, alert-result, app-event, app-state, appearance, orientation, permission-recovery, log canaries, a flattened (`accessible={true}`) text input, and an Apple Pay sheet hosted in `com.apple.PassbookUIService`
+- `WebView accessibility`: a deterministic semantic fixture plus live websites with varied HTML for native accessibility snapshot verification
+
+Navigation uses Expo Router native bottom tabs, so the tab bar itself is also part of the test surface.
+
+The deterministic WebView fixture is the stable accessibility oracle. On iOS, an interactive
+snapshot should expose its root as `webview`, both titles as `heading`, paragraph and label content
+as `text`, and the form controls as `text-field`, `switch`, and `button`. The live-site buttons are
+exploratory smoke coverage for real-world WebKit trees, not stable assertion targets.
+Use an unscoped snapshot for this oracle: XCTest can detach a scoped WebKit document subtree from
+its `WebView` ancestor, leaving insufficient evidence for safe semantic projection.
+
+## Coverage map
+
+These are the main case families this app can support without adding more screens:
+
+- app open and close
+- visible text verification with plain `snapshot`
+- interactive discovery with `snapshot -i`
+- `press` on stable buttons, pills, and rows
+- `fill` on single-line and multiline fields
+- `type` after focus for append flows
+- `type` into a focused field the accessibility tree cannot resolve (flattened input, Apple Pay billing address form)
+- `get text` on headings, badges, summaries, and accordion content
+- `is visible`, `is exists`, and `is absent` assertions
+- `wait` for async loading and success states
+- `diff snapshot` after dismissals and submits
+- long-list scrolling and `scrollintoview`
+- selector-based navigation across repeated cards
+- modal open, cancel, and confirm flows
+- switch and checkbox state changes
+- validation-error and recovery loops
+- retryable error banners
+- cart counters and quantity changes
+- screenshot and recording proof capture
+
+## Run locally
+
+This fixture uses an Expo development build, not Expo Go. Expo's development-build
+workflow installs `expo-dev-client`, builds the native app with `expo run:ios` or
+`expo run:android`, and then serves JavaScript from Metro with `expo start`.
+The app declares `@expo/dom-webview` directly to keep Expo's development runtime
+on the SDK 56 native module; Android verification failed when the dev client
+resolved an older transitive copy.
+
+### Build cache
+
+Local `pnpm test-app:ios` / `test-app:android` cache the native build on disk via
+the [`expo-build-disk-cache`](https://github.com/WookieFPV/expo-build-disk-cache)
+provider (configured in `app.config.js`), keyed by the
+[Expo fingerprint](https://docs.expo.dev/versions/latest/sdk/fingerprint/). A
+second run with no native change reuses the first build instead of recompiling;
+editing screens never needs a rebuild, because Metro serves JavaScript at
+runtime. A fresh checkout still pays for the first native build — the disk cache
+only spares you the repeats.
+
+That fingerprint is why `/ios` and `/android` are gitignored: ignoring the
+prebuild output is what makes @expo/fingerprint treat this app as CNG and skip
+hashing it. Un-ignore them and the fingerprint starts describing your machine
+rather than the project.
+
+CI does not use the disk cache. `.github/workflows/test-app-build-cache.yml`
+builds a **Release** binary (JS embedded, no Metro) per platform when the
+fingerprint has no artifact yet, and publishes it as a GitHub Actions artifact
+named `fingerprint.<hash>.<platform>`. Jobs that drive the app install it through
+`.github/actions/setup-fixture-app`, which downloads that artifact and refreshes
+its JS with `@expo/repack-app` (~seconds) — so a JS-only change reuses the same
+native binary. A consuming job needs `permissions: actions: read`.
+
+The `/automation` route is intentionally JavaScript-only and can be opened from
+**Settings → Open automation lab** or with the
+`agent-device-test-app:///automation` scheme. Its stable `automation-*` ids expose durable
+outcomes for long press, native alert actions, app-event name/payload, app state, appearance,
+window orientation, and microphone permission recovery; the
+`maestro-clickable-first-target` duplicate pair exercises Android Maestro clickable-first
+ordering. `automation-flattened-group` wraps a `TextInput` in an `accessible={true}` view, so the
+field itself never appears in the accessibility tree and only the keyboard proves it has focus;
+`automation-flattened-value` mirrors what was typed. `automation-open-apple-pay` (iOS only, native
+module `modules/apple-pay-lab`) presents the system Apple Pay sheet requiring a billing address plus
+contact email and phone; those forms are hosted out of process in `com.apple.PassbookUIService`, and
+`automation-apple-pay-result` reports `authorized` or `dismissed` once the sheet closes. CI repacks
+JavaScript-only changes into the cached Release app without starting Metro; native configuration
+changes intentionally produce one new fingerprinted build that all simulator consumers share.
+
+### iOS simulator
+
+From the repo root, install dependencies and run the development build on the
+target simulator:
+
+```bash
+pnpm test-app:install
+pnpm test-app:ios -- --device "iPhone 17 Pro"
+```
+
+`expo run:*` keeps Metro in the foreground after launching the app. Leave that
+terminal running, then use a separate terminal for `agent-device` or Maestro
+commands.
+
+### iOS physical device
+
+Use the physical device name from `agent-device devices --platform ios` or
+`xcrun devicectl list devices`. Keep the `expo run:ios` terminal running so
+Metro stays visible to the development build:
+
+```bash
+pnpm test-app:install
+pnpm test-app:ios -- --device "<physical device name>"
+```
+
+Then verify the installed development build from another terminal with the same
+physical device identifier:
+
+```bash
+agent-device open com.callstack.agentdevicelab --platform ios --udid "<physical udid>" --session test-app-physical
+agent-device snapshot -i --platform ios --udid "<physical udid>" --session test-app-physical
+```
+
+The snapshot should show the `Agent Device Tester` home screen, for example the
+`Agent Device Tester` heading and tab bar. An already installed
+`com.callstack.agentdevicelab` is not enough evidence by itself: confirm Metro
+is running for the development build and verify the visible app surface before
+using the session for manual logs, network, replay, or interaction checks. Close
+the same session when verification is complete:
+
+```bash
+agent-device close --platform ios --udid "<physical udid>" --session test-app-physical
+```
+
+#### AccessorySetupKit picker fixture
+
+The Settings tab links to a dedicated **Accessory setup lab** backed by a local Expo module. The
+development client uses this fixed test service UUID, so no build-time environment variables are
+required:
+
+```text
+FFF0
+```
+
+Advertise that service from the test accessory, build with the normal physical-device command above,
+then open **Settings → Open accessory setup lab**. The picker requires physical iOS 18+ hardware; use
+the normal session hygiene above when validating its snapshot, wait, and selector paths.
+
+### Android emulator or device
+
+Install dependencies and run the development build on the target Android
+emulator or device:
+
+```bash
+pnpm test-app:install
+pnpm test-app:android -- --device "$ANDROID_DEVICE"
+```
+
+For Android app/package launches connected to local Metro, run `adb reverse`
+for the Metro port when needed before opening the app with `agent-device`.
+
+### Running from the app folder
+
+If you prefer to work from inside the app folder:
+
+```bash
+cd examples/test-app
+pnpm install --ignore-workspace
+pnpm ios
+```
+
+Or on Android:
+
+```bash
+cd examples/test-app
+pnpm install --ignore-workspace
+pnpm android
+```
+
+After the first native build is installed, use `pnpm test-app:start` when you only
+need to restart Metro for JavaScript or TypeScript changes. `test-app:start`
+starts Metro only; it does not build, install, or prove a physical device is
+running the development build. Once the app is running and verified with
+`snapshot -i`, use `agent-device` against `Agent Device Tester` like any other
+target app.
+
+### Non-default Metro ports
+
+If the default Metro port is already in use, start Metro on another port. Do not
+reinstall the native development build just to change the JavaScript server port:
+
+```bash
+pnpm test-app:start -- --port 8082
+```
+
+If you are building and installing for the first time in that terminal, Expo's
+`run:ios` and `run:android` commands also accept `--port`:
+
+```bash
+pnpm test-app:ios -- --device "<device name>" --port 8082
+pnpm test-app:android -- --device "$ANDROID_DEVICE" --port 8082
+```
+
+After the development build is installed, keep using the same native app. The
+current `agent-device open` CLI does not accept `--metro-host` or `--metro-port`;
+open the app normally, then use the Metro command surface for Metro-specific
+actions:
+
+```bash
+agent-device metro prepare --project-root examples/test-app --kind expo --port 8082 --public-base-url http://127.0.0.1:8082
+agent-device metro reload --metro-host 127.0.0.1 --metro-port 8082
+```
+
+Use `metro prepare` when you want `agent-device` to start or reuse Metro and
+print the runtime URLs. Use `metro reload` when Metro is already running and the
+installed development build is connected to that server. For Android local
+device/emulator runs, also run `adb reverse tcp:8082 tcp:8082` when the device
+needs host port forwarding.
+
+## Local Agent Device suites
+
+The repo includes two local suites for iterating on the fixture app:
+
+```bash
+pnpm test-app:replay:ios
+pnpm test-app:replay:android
+```
+
+These run the `.ad` replay suite in `examples/test-app/replays`.
+
+The Android gesture replay pins coordinates to the CI emulator profile —
+**pixel_7, 1080x2400 @ 420 dpi** (`gh workflow` uses exactly this AVD). Run it
+on a matching emulator; on a different size or density the gesture card moves
+and the canary waits fail with a wait timeout naming the missed state, which
+is fixture geometry, not a product regression. The checkout replay is
+selector-driven and runs on any emulator.
+
+The iOS `gesture-lab.ad` and Android `gesture-lab-android.ad` replays verify
+`gesture pan`, `gesture fling`, `gesture pinch`, and `gesture rotate` against the
+gesture metrics rendered by the Home screen. They also prove that the default pan
+does not activate an exactly-two-pointer recognizer, while
+`gesture pan ... --pointer-count 2` does without changing pinch or rotation state.
+
+Each gesture replay relaunches the app before its combined `gesture transform`
+canary, verifies the clean pan/pinch/rotate state, then checks that one atomic
+two-pointer gesture changes all three semantic states. On Android, these checks
+are intentionally qualitative because recognizers can report non-exact centroid,
+scale, and rotation values for one simultaneous two-finger gesture.
+
+`gesture-pan-duration.ad` is a separate, minimal iOS replay that asserts a single-pointer
+`gesture pan`'s requested duration is actually observed by the app (a bucketed
+`pan duration` status on the Home screen), rather than just that the gesture activated.
+It's split out of `gesture-lab.ad` so it can run as an automatic PR-tier check
+(`.github/workflows/ios.yml`) without depending on `gesture-lab.ad`'s multi-touch commands,
+which stay full-tier only.
+
+To target a specific iOS simulator or an installed Expo development build, run the
+underlying command directly so global flags stay before replay inputs:
+
+```bash
+node bin/agent-device.mjs test examples/test-app/replays \
+  --platform ios \
+  --device "iPhone 17 Pro" \
+  --env APP_TARGET=com.callstack.agentdevicelab \
+  --env APP_URL=<project-url> \
+  --artifacts-dir .tmp/test-app-replay/ios
+```
+
+Omit `APP_URL` when the installed development build can discover the local Metro
+server from its launcher.
+
+The Maestro prototype suite lives in `examples/test-app/maestro` and runs through
+`agent-device replay --maestro`:
+
+```bash
+pnpm test-app:maestro:ios
+pnpm test-app:maestro:android
+```
+
+The Maestro flow includes `launchApp`, so the suite launches the app inside each
+test attempt. Start Metro first when the installed development build needs the
+local bundle.
+
+The suite intentionally covers the compat layer syntax used by public Maestro suites:
+`runFlow` file/inline blocks, `when.platform`, config hooks, deterministic `repeat.times`,
+flow `env`, selectors, input, assertions, and swipe.
+
+## Local iPhone Duo pose-transition semantic checks (manual)
+
+`examples/test-app/foldable/duo-pose-semantic.mjs` drives one booted iPhone Duo through
+closed → half-open → open → closed and asserts the app reacts after **every** pose change —
+a Catalog tap is proved to activate by an absent→present `catalog-title` transition measured from
+the same snapshot that resolved the tap's ref (with `home-title` gone after), the Home reset is
+asserted before the next fold, Add to cart moves the cart counter, a scroll reveals a canary,
+a long press moves a dedicated count, and one multipointer pinch changes a recognized scale.
+It reuses the `agent-device` CLI/daemon and this fixture app; it adds no framework.
+
+This is **local/manual coverage only, never automatic regression coverage.** GitHub Actions
+cannot select it yet (no hosted iPhone Duo runtime, no registered Duo runner), so it is not a CI
+gate and does not change the ordinary iPhone lane.
+
+Requirements: `DEVELOPER_DIR` pinned to a Duo-capable Xcode (iOS 27.1 ships only with Xcode 27.1+);
+exactly one booted iPhone Duo not shared with a concurrent run (concurrent runs rebuild the shared
+Apple runner and race capture/pose state); nothing else for pose control, because `fold` drives the
+hinge through simulator HID — a helper compiled and dispatched inside the simulator with `simctl
+spawn`, so no Device Hub window and no host Accessibility permission is involved; the Agent Device
+Tester app installed on that simulator.
+
+```bash
+# List booted Duo simulators, then run the scenario against one:
+DEVELOPER_DIR=/Applications/Xcode-27.1.0-Beta.app/Contents/Developer \
+  node examples/test-app/foldable/duo-pose-semantic.mjs --udid <DUO-UDID>
+
+# Prove the activation check is sensitive to targeting geometry: derive the pinch origin from a
+# different control's bounds. This flips the pinch scale check to FAIL (red is expected here):
+DEVELOPER_DIR=/Applications/Xcode-27.1.0-Beta.app/Contents/Developer \
+  node examples/test-app/foldable/duo-pose-semantic.mjs --udid <DUO-UDID> --demo-geometry-mutation
+
+# Prove the activation check is sensitive to a missed reset: skip the return-to-Home tap so a
+# closed/half-open activation or Home-reset check FAILS (red is expected here):
+DEVELOPER_DIR=/Applications/Xcode-27.1.0-Beta.app/Contents/Developer \
+  node examples/test-app/foldable/duo-pose-semantic.mjs --udid <DUO-UDID> --demo-skip-home-reset
+```
+
+A clean run prints `15/15 semantic checks passed` and exits 0; each pose's Catalog check reports a
+`catalog absent->present, home present->absent` transition. Failure snapshots land under
+`--artifacts-dir` (default `<state-dir>/artifacts`). The scenario never reuses a ref or coordinate
+across a pose change or mutation (a dropped session re-opens but never replays an `@ref`), saves
+failure artifacts, closes the session, and restores the starting pose.
+
+**Deferred GitHub Actions enablement (not a completion condition).** Wiring an automatic Duo job
+later requires, all at once: a Duo runtime/device type on the runner image, an Xcode with foldable
+HID support, and one actual successful lane run — then re-check the runner-image inventories, which
+are dated, not permanent.

@@ -1,0 +1,79 @@
+import { expect, test } from 'vitest';
+import { makeSnapshotState } from '@agent-device/selectors/snapshot-geometry-fixtures';
+import { createInteractionDevice } from '../../commands/interaction/runtime/__tests__/test-utils/index.ts';
+import { buildSnapshotState } from '@agent-device/capture-kit/snapshot-state';
+import { presentIosInteractiveSnapshot } from '@agent-device/capture-kit/ios-snapshot-engine';
+import { navigationTitleWithAppProvidedDetailsAffordanceNodes } from '@agent-device/capture-kit/snapshot-presentation-ios-transitions-fixtures';
+
+test('the daemon publishes engine transitions without reapplying runner-owned scope', () => {
+  const snapshot = buildSnapshotState(
+    {
+      nodes: presentIosInteractiveSnapshot(navigationTitleWithAppProvidedDetailsAffordanceNodes),
+      backend: 'xctest',
+      producer: 'apple-runner',
+    },
+    { snapshotInteractiveOnly: true, snapshotScope: 'DisplayNameTextField' },
+  );
+
+  expect(snapshot.nodes).toHaveLength(8);
+  expect(snapshot.nodes).toContainEqual(
+    expect.objectContaining({
+      type: 'Button',
+      label: 'Team Standup',
+      identifier: 'DisplayNameTextField',
+    }),
+  );
+  expect(snapshot.nodes).toContainEqual(expect.objectContaining({ label: 'Video Call' }));
+});
+
+test('iOS presentation promotes an app-provided navigation title affordance without stealing a content action', () => {
+  const nodes = presentIosInteractiveSnapshot(navigationTitleWithAppProvidedDetailsAffordanceNodes);
+  const titleActions = nodes.filter(
+    (node) => node.type === 'Button' && node.label === 'Team Standup',
+  );
+
+  expect(titleActions).toHaveLength(2);
+  expect(titleActions[0]).toEqual(
+    expect.objectContaining({ identifier: 'DisplayNameTextField', enabled: true }),
+  );
+  expect(titleActions[0]?.rect).toEqual(expect.objectContaining({ x: 81, y: 58.33, height: 40 }));
+  expect(titleActions[0]?.rect?.width).toBeCloseTo(223.67);
+  expect(titleActions[1]?.rect).toEqual({ x: 20, y: 200.33, width: 362, height: 26.67 });
+  expect(nodes.some((node) => node.type === 'StaticText' && node.label === 'Team Standup')).toBe(
+    false,
+  );
+  expect(nodes.some((node) => node.identifier === 'RoomDetailsIconImageView')).toBe(false);
+});
+
+test('promoted navigation title dispatches as its presented button semantics, not its disabled source field', async () => {
+  const snapshot = makeSnapshotState(
+    presentIosInteractiveSnapshot(navigationTitleWithAppProvidedDetailsAffordanceNodes),
+  );
+  const title = snapshot.nodes.find((node) => node.identifier === 'DisplayNameTextField');
+  expect(title).toEqual(expect.objectContaining({ type: 'Button', enabled: true }));
+
+  let tappedPoint: { x: number; y: number } | undefined;
+  const device = createInteractionDevice(snapshot, {
+    tap: async (_context, point) => {
+      tappedPoint = point;
+    },
+  });
+
+  await device.interactions.click({ kind: 'ref', ref: `@${title!.ref}` }, { session: 'default' });
+
+  expect(tappedPoint).toEqual({ x: 193, y: 78 });
+});
+
+test('iOS presentation leaves a disabled navigation title field alone without a named app affordance', () => {
+  const withoutNamedAffordance = navigationTitleWithAppProvidedDetailsAffordanceNodes.map((node) =>
+    node.identifier === 'RoomDetailsIconImageView' ? { ...node, identifier: undefined } : node,
+  );
+
+  const nodes = presentIosInteractiveSnapshot(withoutNamedAffordance);
+  expect(
+    nodes.some((node) => node.type === 'TextField' && node.identifier === 'DisplayNameTextField'),
+  ).toBe(true);
+  expect(
+    nodes.some((node) => node.type === 'Button' && node.identifier === 'DisplayNameTextField'),
+  ).toBe(false);
+});

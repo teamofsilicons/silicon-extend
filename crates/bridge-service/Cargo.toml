@@ -1,0 +1,12 @@
+[package]
+name = "bridge-service"
+description = "The Silicon Bridge service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bridge-protocol.workspace = true

@@ -1,0 +1,569 @@
+import { isMap, isScalar, isSeq, type Node } from 'yaml';
+import { stripUndefined } from './shared.ts';
+import type {
+  MaestroAssertTrueCommand,
+  MaestroBackCommand,
+  MaestroClearStateCommand,
+  MaestroCommand,
+  MaestroEraseTextCommand,
+  MaestroEvalScriptCommand,
+  MaestroExtendedWaitUntilCommand,
+  MaestroHideKeyboardCommand,
+  MaestroInputTextCommand,
+  MaestroLaunchAppCommand,
+  MaestroLaunchArguments,
+  MaestroOpenLinkCommand,
+  MaestroPressKeyCommand,
+  MaestroScrollCommand,
+  MaestroScrollUntilVisibleCommand,
+  MaestroSetPermissionsCommand,
+  MaestroStopAppCommand,
+  MaestroTakeScreenshotCommand,
+  MaestroWaitForAnimationToEndCommand,
+} from './program-ir.ts';
+import {
+  parseMaestroDirection,
+  parseMaestroDoubleTapOnCommand,
+  parseMaestroLongPressOnCommand,
+  parseMaestroSwipeCommand,
+  parseMaestroTapOnCommand,
+} from './program-ir-gesture-parser.ts';
+import { parseMaestroSelector } from './program-ir-selector-parser.ts';
+import {
+  parseMaestroAssertion,
+  parseMaestroExtendedWaitUntilCondition,
+  parseMaestroOptionalSelector,
+} from './program-ir-selector-options.ts';
+import { readMaestroCommandLabel } from './program-ir-command-options.ts';
+import {
+  parseMaestroRepeatCommand,
+  parseMaestroRetryCommand,
+  parseMaestroRunFlowCommand,
+  parseMaestroRunScriptCommand,
+} from './program-ir-flow-parser.ts';
+import {
+  assertOnlyKeys,
+  entryValue,
+  hasEntry,
+  invalidAt,
+  isNullNode,
+  readAssertTrueCondition,
+  readMapEntries,
+  readOptionalBoolean,
+  readOptionalCommandOption,
+  readOptionalEntry,
+  readOptionalNumeric,
+  readOptionalString,
+  readRequiredNumeric,
+  readRequiredString,
+  readScalarMap,
+  readScalarValue,
+  readSequenceItems,
+  sourceAt,
+  type MaestroProgramParseContext,
+  MAESTRO_PERMISSION_VALUES,
+  VARIABLE_PATTERN,
+} from './program-ir-values.ts';
+
+export function parseMaestroCommandList(
+  node: Node | null | undefined,
+  name: string,
+  context: MaestroProgramParseContext,
+): MaestroCommand[] {
+  return readSequenceItems(node, name, context).map((item) => parseMaestroCommand(item, context));
+}
+
+function parseMaestroCommand(
+  node: Node | null | undefined,
+  context: MaestroProgramParseContext,
+): MaestroCommand {
+  if (isScalar(node)) {
+    if (typeof node.value !== 'string')
+      invalidAt('Maestro command names must be strings.', node, context);
+    return parseScalarCommand(node.value, node, context);
+  }
+  if (!isMap(node)) invalidAt('Maestro commands must be a scalar or one-key map.', node, context);
+  const entries = readMapEntries(node, 'command', context);
+  if (entries.length !== 1)
+    invalidAt('Maestro command maps must contain exactly one command.', node, context);
+  const entry = entries[0]!;
+  return parseCommandValue(entry.key, entry.value, node, context);
+}
+
+function parseScalarCommand(
+  name: string,
+  node: Node,
+  context: MaestroProgramParseContext,
+): MaestroCommand {
+  return parseCommandValue(name, null, node, context);
+}
+
+type CommandValueParser = (
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+) => MaestroCommand;
+
+const COMMAND_VALUE_PARSERS: Readonly<Record<string, CommandValueParser>> = {
+  launchApp: parseLaunchApp,
+  tapOn: parseMaestroTapOnCommand,
+  doubleTapOn: parseMaestroDoubleTapOnCommand,
+  longPressOn: parseMaestroLongPressOnCommand,
+  inputText: parseInputText,
+  eraseText: parseEraseText,
+  openLink: parseOpenLink,
+  assertVisible: (value, node, context) =>
+    parseMaestroAssertion('assertVisible', value, node, context),
+  assertNotVisible: (value, node, context) =>
+    parseMaestroAssertion('assertNotVisible', value, node, context),
+  assertTrue: parseAssertTrue,
+  extendedWaitUntil: parseExtendedWaitUntil,
+  takeScreenshot: parseTakeScreenshot,
+  scroll: parseScroll,
+  scrollUntilVisible: parseScrollUntilVisible,
+  swipe: parseMaestroSwipeCommand,
+  hideKeyboard: parseHideKeyboard,
+  pressKey: parsePressKey,
+  back: parseBack,
+  waitForAnimationToEnd: parseWaitForAnimationToEnd,
+  stopApp: parseStopApp,
+  setPermissions: parseSetPermissions,
+  clearState: parseClearState,
+  runScript: parseMaestroRunScriptCommand,
+  evalScript: parseEvalScript,
+  runFlow: (value, node, context) =>
+    parseMaestroRunFlowCommand(value, node, context, parseMaestroCommandList),
+  repeat: (value, node, context) =>
+    parseMaestroRepeatCommand(value, node, context, parseMaestroCommandList),
+  retry: (value, node, context) =>
+    parseMaestroRetryCommand(value, node, context, parseMaestroCommandList),
+};
+
+/**
+ * The exact set of Maestro command names our engine accepts. This is the
+ * authoritative supported surface — any name outside it is rejected by
+ * `parseCommandValue`. The conformance oracle
+ * (`packages/maestro/test/conformance/verify.ts`) asserts every entry is either
+ * corpus-covered or explicitly listed as unverified.
+ */
+export const SUPPORTED_MAESTRO_COMMAND_NAMES: readonly string[] =
+  Object.keys(COMMAND_VALUE_PARSERS);
+
+function parseCommandValue(
+  name: string,
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroCommand {
+  const parser = COMMAND_VALUE_PARSERS[name];
+  if (!parser) invalidAt(`Maestro command "${name}" is not supported.`, commandNode, context);
+  return parser(value, commandNode, context);
+}
+
+function parseLaunchApp(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroLaunchAppCommand {
+  const source = sourceAt(commandNode, context);
+  if (isNullNode(value)) return { kind: 'launchApp', source };
+  if (isScalar(value))
+    return { kind: 'launchApp', source, appId: readRequiredString(value, 'launchApp', context) };
+  const entries = readMapEntries(value, 'launchApp', context);
+  assertOnlyKeys(
+    entries,
+    'launchApp',
+    ['appId', 'stopApp', 'clearState', 'permissions', 'arguments', 'launchArguments'],
+    context,
+  );
+  const appId = readOptionalEntry(entries, 'appId', (entry) =>
+    readOptionalString(entry, 'launchApp.appId', context),
+  );
+  const stopApp = readOptionalEntry(entries, 'stopApp', (entry) =>
+    readOptionalBoolean(entry, 'launchApp.stopApp', context),
+  );
+  const clearState = readOptionalEntry(entries, 'clearState', (entry) =>
+    readOptionalBoolean(entry, 'launchApp.clearState', context),
+  );
+  const permissions = readOptionalEntry(entries, 'permissions', (entry) =>
+    readSetPermissionsMap(entry, context, 'launchApp'),
+  );
+  const args = readOptionalEntry(entries, 'arguments', (entry) =>
+    parseLaunchArguments(entry, 'launchApp.arguments', context),
+  );
+  const launchArguments = readOptionalEntry(entries, 'launchArguments', (entry) =>
+    parseLaunchArguments(entry, 'launchApp.launchArguments', context),
+  );
+  return stripUndefined({
+    kind: 'launchApp' as const,
+    source,
+    appId,
+    stopApp,
+    clearState,
+    permissions,
+    arguments: args,
+    launchArguments,
+  });
+}
+
+function parseInputText(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroInputTextCommand {
+  const source = sourceAt(commandNode, context);
+  if (isScalar(value))
+    return { kind: 'inputText', source, text: readRequiredString(value, 'inputText', context) };
+  const entries = readMapEntries(value, 'inputText', context);
+  assertOnlyKeys(entries, 'inputText', ['text', 'label'], context);
+  if (!hasEntry(entries, 'text'))
+    invalidAt('Maestro inputText requires text.', commandNode, context);
+  const text = readRequiredString(entryValue(entries, 'text'), 'inputText.text', context);
+  const label = readMaestroCommandLabel(entries, 'inputText', context);
+  return stripUndefined({ kind: 'inputText' as const, source, text, label });
+}
+
+function parseEraseText(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroEraseTextCommand {
+  const source = sourceAt(commandNode, context);
+  if (isNullNode(value)) return { kind: 'eraseText', source };
+  if (isScalar(value))
+    return {
+      kind: 'eraseText',
+      source,
+      charactersToErase: readRequiredNumeric(value, 'eraseText', context),
+    };
+  const entries = readMapEntries(value, 'eraseText', context);
+  assertOnlyKeys(entries, 'eraseText', ['charactersToErase'], context);
+  const charactersToErase = hasEntry(entries, 'charactersToErase')
+    ? readOptionalNumeric(
+        entryValue(entries, 'charactersToErase'),
+        'eraseText.charactersToErase',
+        context,
+      )
+    : undefined;
+  return stripUndefined({
+    kind: 'eraseText' as const,
+    source,
+    charactersToErase,
+  });
+}
+
+function parseOpenLink(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroOpenLinkCommand {
+  const source = sourceAt(commandNode, context);
+  if (isScalar(value))
+    return { kind: 'openLink', source, link: readRequiredString(value, 'openLink', context) };
+  const entries = readMapEntries(value, 'openLink', context);
+  assertOnlyKeys(entries, 'openLink', ['link'], context);
+  return {
+    kind: 'openLink',
+    source,
+    link: readRequiredString(entryValue(entries, 'link'), 'openLink.link', context),
+  };
+}
+
+function parseAssertTrue(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroAssertTrueCommand {
+  const source = sourceAt(commandNode, context);
+  if (isNullNode(value)) invalidAt('Maestro assertTrue requires condition.', commandNode, context);
+  if (isScalar(value)) {
+    return {
+      kind: 'assertTrue',
+      source,
+      condition: readAssertTrueCondition(value, 'assertTrue', context),
+    };
+  }
+  const entries = readMapEntries(value, 'assertTrue', context);
+  assertOnlyKeys(entries, 'assertTrue', ['condition', 'optional', 'label'], context);
+  if (!hasEntry(entries, 'condition'))
+    invalidAt('Maestro assertTrue requires condition.', commandNode, context);
+  const condition = readAssertTrueCondition(
+    entryValue(entries, 'condition'),
+    'assertTrue.condition',
+    context,
+  );
+  const options = readOptionalCommandOption(entries, 'assertTrue', context);
+  const label = readMaestroCommandLabel(entries, 'assertTrue', context);
+  return stripUndefined({ kind: 'assertTrue' as const, source, condition, ...options, label });
+}
+
+function parseExtendedWaitUntil(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroExtendedWaitUntilCommand {
+  const entries = readMapEntries(value, 'extendedWaitUntil', context);
+  assertOnlyKeys(
+    entries,
+    'extendedWaitUntil',
+    ['visible', 'notVisible', 'timeout', 'optional', 'label'],
+    context,
+  );
+  const options = readOptionalCommandOption(entries, 'extendedWaitUntil', context);
+  const label = readMaestroCommandLabel(entries, 'extendedWaitUntil', context);
+  const condition = parseMaestroExtendedWaitUntilCondition(entries, commandNode, context);
+  const timeout = hasEntry(entries, 'timeout')
+    ? readOptionalNumeric(entryValue(entries, 'timeout'), 'extendedWaitUntil.timeout', context)
+    : undefined;
+  const optional = options.optional === true || condition.optional === true ? true : undefined;
+  const command: MaestroExtendedWaitUntilCommand = {
+    kind: 'extendedWaitUntil' as const,
+    source: sourceAt(commandNode, context),
+    timeout,
+    optional,
+    label,
+  };
+  command[condition.key] = condition.selector;
+  return stripUndefined(command);
+}
+
+function parseTakeScreenshot(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroTakeScreenshotCommand {
+  return {
+    kind: 'takeScreenshot',
+    source: sourceAt(commandNode, context),
+    path: readRequiredString(value, 'takeScreenshot', context),
+  };
+}
+
+function parseScroll(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroScrollCommand {
+  if (!isNullNode(value))
+    invalidAt('Maestro scroll does not accept options yet.', commandNode, context);
+  return { kind: 'scroll', source: sourceAt(commandNode, context) };
+}
+
+function parseScrollUntilVisible(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroScrollUntilVisibleCommand {
+  const source = sourceAt(commandNode, context);
+  if (isScalar(value))
+    return {
+      kind: 'scrollUntilVisible',
+      source,
+      element: parseMaestroSelector(value, 'scrollUntilVisible.element', context),
+    };
+  const entries = readMapEntries(value, 'scrollUntilVisible', context);
+  assertOnlyKeys(
+    entries,
+    'scrollUntilVisible',
+    ['element', 'direction', 'timeout', 'optional', 'label'],
+    context,
+  );
+  const options = readOptionalCommandOption(entries, 'scrollUntilVisible', context);
+  const label = readMaestroCommandLabel(entries, 'scrollUntilVisible', context);
+  const parsedElement = parseMaestroOptionalSelector(
+    entries,
+    'element',
+    'scrollUntilVisible.element',
+    context,
+  );
+  if (!parsedElement)
+    invalidAt('Maestro scrollUntilVisible requires element.', commandNode, context);
+  const direction = hasEntry(entries, 'direction')
+    ? parseMaestroDirection(
+        entryValue(entries, 'direction'),
+        'scrollUntilVisible.direction',
+        context,
+      )
+    : undefined;
+  const timeout = hasEntry(entries, 'timeout')
+    ? readOptionalNumeric(entryValue(entries, 'timeout'), 'scrollUntilVisible.timeout', context)
+    : undefined;
+  const optional = options.optional === true || parsedElement!.optional === true ? true : undefined;
+  return stripUndefined({
+    kind: 'scrollUntilVisible' as const,
+    source,
+    element: parsedElement!.selector,
+    direction,
+    timeout,
+    optional,
+    label,
+  });
+}
+
+function parseHideKeyboard(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroHideKeyboardCommand {
+  if (!isNullNode(value))
+    invalidAt('Maestro hideKeyboard does not accept options.', commandNode, context);
+  return { kind: 'hideKeyboard', source: sourceAt(commandNode, context) };
+}
+
+function parsePressKey(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroPressKeyCommand {
+  const key = readRequiredString(value, 'pressKey', context).toLowerCase();
+  if (key !== 'back' && key !== 'enter' && key !== 'return' && key !== 'home')
+    invalidAt(`Maestro pressKey "${key}" is not supported.`, value, context);
+  return { kind: 'pressKey', source: sourceAt(commandNode, context), key };
+}
+
+function parseBack(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroBackCommand {
+  if (!isNullNode(value)) invalidAt('Maestro back does not accept options.', commandNode, context);
+  return { kind: 'back', source: sourceAt(commandNode, context) };
+}
+
+function parseWaitForAnimationToEnd(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroWaitForAnimationToEndCommand {
+  const source = sourceAt(commandNode, context);
+  if (isNullNode(value)) return { kind: 'waitForAnimationToEnd', source };
+  if (isScalar(value)) {
+    const timeout = readOptionalNumeric(value, 'waitForAnimationToEnd', context);
+    return stripUndefined({ kind: 'waitForAnimationToEnd' as const, source, timeout });
+  }
+  const entries = readMapEntries(value, 'waitForAnimationToEnd', context);
+  assertOnlyKeys(entries, 'waitForAnimationToEnd', ['timeout'], context);
+  const timeout = hasEntry(entries, 'timeout')
+    ? readOptionalNumeric(entryValue(entries, 'timeout'), 'waitForAnimationToEnd.timeout', context)
+    : undefined;
+  return stripUndefined({ kind: 'waitForAnimationToEnd' as const, source, timeout });
+}
+
+function parseStopApp(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroStopAppCommand {
+  const source = sourceAt(commandNode, context);
+  if (isNullNode(value)) return { kind: 'stopApp', source };
+  return { kind: 'stopApp', source, appId: readRequiredString(value, 'stopApp', context) };
+}
+
+function parseSetPermissions(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroSetPermissionsCommand {
+  const source = sourceAt(commandNode, context);
+  const entries = readMapEntries(value, 'setPermissions', context);
+  assertOnlyKeys(entries, 'setPermissions', ['appId', 'permissions', 'optional', 'label'], context);
+  if (!hasEntry(entries, 'permissions'))
+    invalidAt('Maestro setPermissions requires permissions.', commandNode, context);
+  const appId = readOptionalEntry(entries, 'appId', (entry) =>
+    readOptionalString(entry, 'setPermissions.appId', context),
+  );
+  const permissions = readSetPermissionsMap(entryValue(entries, 'permissions'), context);
+  const options = readOptionalCommandOption(entries, 'setPermissions', context);
+  const label = readMaestroCommandLabel(entries, 'setPermissions', context);
+  return stripUndefined({
+    kind: 'setPermissions' as const,
+    source,
+    appId,
+    permissions,
+    ...options,
+    label,
+  });
+}
+
+function readSetPermissionsMap(
+  node: Node | null | undefined,
+  context: MaestroProgramParseContext,
+  owner = 'setPermissions',
+): Record<string, string> {
+  const entries = readMapEntries(node, `${owner}.permissions`, context);
+  if (entries.length === 0)
+    invalidAt(`Maestro ${owner}.permissions requires at least one permission.`, node, context);
+  const permissions: Record<string, string> = {};
+  for (const entry of entries) {
+    // No duplicate-key check: the YAML layer already rejects duplicate mapping
+    // keys, and `in`-style checks misfire on prototype names like `constructor`.
+    permissions[entry.key] = readPermissionValue(entry, context, owner);
+  }
+  return permissions;
+}
+
+function readPermissionValue(
+  entry: { key: string; value: Node | null },
+  context: MaestroProgramParseContext,
+  owner = 'setPermissions',
+): string {
+  const name = `${owner}.permissions.${entry.key}`;
+  const value = readScalarValue(entry.value, name, context);
+  if (typeof value !== 'string')
+    invalidAt(`Maestro ${name} expects a string.`, entry.value, context);
+  const normalized = value.toLowerCase();
+  if (MAESTRO_PERMISSION_VALUES.has(normalized)) return normalized;
+  if (VARIABLE_PATTERN.test(value)) return value;
+  if (value.includes('${'))
+    invalidAt(
+      `Maestro ${name} only supports allow|deny|unset (plus always|inuse|never|limited for location/photos) or a bare \${VAR} lookup; JavaScript expressions are not supported.`,
+      entry.value,
+      context,
+    );
+  invalidAt(
+    `Maestro ${name} expects allow|deny|unset (plus always|inuse|never|limited for location/photos) or a bare \${VAR} lookup.`,
+    entry.value,
+    context,
+  );
+}
+
+function parseClearState(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroClearStateCommand {
+  const source = sourceAt(commandNode, context);
+  if (isNullNode(value)) return { kind: 'clearState', source };
+  return { kind: 'clearState', source, appId: readRequiredString(value, 'clearState', context) };
+}
+
+function parseEvalScript(
+  value: Node | null,
+  commandNode: Node,
+  context: MaestroProgramParseContext,
+): MaestroEvalScriptCommand {
+  return {
+    kind: 'evalScript',
+    source: sourceAt(commandNode, context),
+    script: readRequiredString(value, 'evalScript', context),
+  };
+}
+
+function parseLaunchArguments(
+  node: Node | null | undefined,
+  name: string,
+  context: MaestroProgramParseContext,
+): MaestroLaunchArguments {
+  if (isSeq(node)) {
+    const values = readSequenceItems(node, name, context).map((item, index) => {
+      const value = readScalarValue(item, `${name}[${index}]`, context);
+      if (value === null) invalidAt(`${name}[${index}] expects a scalar value.`, item, context);
+      return value;
+    });
+    return { kind: 'list', values };
+  }
+  if (isMap(node)) return { kind: 'map', values: readScalarMap(node, name, context) };
+  const value = readScalarValue(node, name, context);
+  if (value === null) invalidAt(`${name} expects a scalar, list, or map.`, node, context);
+  return { kind: 'scalar', value };
+}

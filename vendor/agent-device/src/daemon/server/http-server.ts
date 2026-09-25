@@ -1,0 +1,978 @@
+import type { RequestProgressEvent } from '@agent-device/contracts/progress';
+import http, { type IncomingHttpHeaders } from 'node:http';
+import {
+  AppError,
+  normalizeError,
+  toAppErrorCode,
+  type DiagnosticsRecordRef,
+} from '@agent-device/kernel/errors';
+import { emitDiagnostic } from '@agent-device/host-kit/diagnostics';
+import { timingSafeStringEqual } from '@agent-device/host-kit/transport';
+import type {
+  CommandRpcParams,
+  DaemonInstallSource,
+  JsonRpcId,
+  JsonRpcRequestEnvelope,
+  LeaseBackend,
+} from '@agent-device/kernel/contracts';
+import { commandRpcParamsSchema } from '@agent-device/kernel/contracts';
+import type { DaemonInvokeFn, DaemonRequest } from '../daemon-request.ts';
+import { normalizeTenantId } from '../config.ts';
+import {
+  clearRequestAbortRegistration,
+  markRequestCanceled,
+  registerRequestAbort,
+  resolveRequestTrackingId,
+  withRequestProgressSink,
+} from '@agent-device/host-kit/request';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+import {
+  serializeDaemonProgressEnvelope,
+  serializeDaemonRpcResponseEnvelope,
+  shouldStreamRequestProgress,
+} from '../../request-progress-protocol.ts';
+import {
+  buildDaemonHealthPayload,
+  DAEMON_HTTP_NETWORK_ACCESS_HEADER,
+  DAEMON_HTTP_PUBLIC_NETWORK_ACCESS,
+  DAEMON_HTTP_TENANT_HEADER,
+} from '@agent-device/contracts/daemon-http';
+import { readVersion } from '@agent-device/host-kit/version';
+import { readLeaseAllocateProviderFlags } from '@agent-device/contracts/lease-scope';
+import { sendRestJsonError, statusCodeForNormalizedError } from '../http-errors.ts';
+import { tryHandleUploadHttpRoute } from '../upload-http.ts';
+import { tryHandleDownloadableArtifactHttpRoute } from '../downloadable-artifact-http.ts';
+import { tryHandleRequestDiagnosticsHttpRoute } from '../request-diagnostics-http.ts';
+import { resolveTrustedTenant, tenantTrustRejectionError } from './tenant-trust.ts';
+import type { TenantSessionNamespace } from '../session-tenant-scope.ts';
+import { tryHandleHumanControlHttpRoute } from '../human-control-http.ts';
+import type { LeaseRegistry } from '../lease-registry.ts';
+
+type JsonRpcRequest = JsonRpcRequestEnvelope;
+
+type JsonRpcResponse = {
+  jsonrpc: '2.0';
+  id: JsonRpcId;
+  result?: unknown;
+  error?: {
+    code: number;
+    message: string;
+    data?: Record<string, unknown>;
+  };
+};
+
+export type HttpAuthHookContext = {
+  headers: IncomingHttpHeaders;
+  rpcRequest: JsonRpcRequest;
+  daemonRequest: DaemonRequest;
+};
+
+export type HttpAuthHookResult =
+  | boolean
+  | void
+  | {
+      ok?: boolean;
+      tenantId?: string;
+      code?: string;
+      message?: string;
+      details?: Record<string, unknown>;
+    };
+
+export type HttpAuthHook = (
+  context: HttpAuthHookContext,
+) => Promise<HttpAuthHookResult> | HttpAuthHookResult;
+
+type HttpAuthDecision =
+  | { ok: true; tenantId?: string }
+  | { ok: false; statusCode: number; response: JsonRpcResponse };
+
+type HttpInstallSource = Exclude<DaemonInstallSource, { kind: 'path' }>;
+
+const MAX_HTTP_RPC_BODY_BYTES = 1024 * 1024;
+const COMMAND_RPC_METHODS = new Set(['agent_device.command', 'agent-device.command']);
+const INSTALL_FROM_SOURCE_RPC_METHODS = new Set([
+  'agent_device.install_from_source',
+  'agent-device.install_from_source',
+]);
+const RELEASE_MATERIALIZED_PATHS_RPC_METHODS = new Set([
+  'agent_device.release_materialized_paths',
+  'agent-device.release_materialized_paths',
+]);
+const LEASE_RPC_METHOD_TO_COMMAND: Record<
+  string,
+  'lease_allocate' | 'lease_heartbeat' | 'lease_release'
+> = {
+  'agent_device.lease.allocate': 'lease_allocate',
+  'agent-device.lease.allocate': 'lease_allocate',
+  'agent_device.lease.heartbeat': 'lease_heartbeat',
+  'agent-device.lease.heartbeat': 'lease_heartbeat',
+  'agent_device.lease.release': 'lease_release',
+  'agent-device.lease.release': 'lease_release',
+};
+
+function restrictRemoteHttpRequest(
+  request: DaemonRequest,
+  authHookConfigured: boolean,
+  networkAccessMarker: string | string[] | undefined,
+): DaemonRequest {
+  if (
+    networkAccessMarker !== undefined &&
+    networkAccessMarker !== DAEMON_HTTP_PUBLIC_NETWORK_ACCESS
+  ) {
+    throw new AppError('INVALID_ARGS', 'Invalid daemon HTTP network access marker');
+  }
+  if (!authHookConfigured && networkAccessMarker === undefined) return request;
+  const source = request.meta?.installSource;
+  const uploadedArtifactId = request.meta?.uploadedArtifactId;
+  if (
+    source?.kind === 'path' &&
+    !(typeof uploadedArtifactId === 'string' && uploadedArtifactId.length > 0)
+  ) {
+    throw new AppError(
+      'INVALID_ARGS',
+      'Invalid params: path install sources are disabled on the remote HTTP surface',
+    );
+  }
+  return {
+    ...request,
+    internal: { ...request.internal, publicNetworkOnly: true },
+  };
+}
+const SUPPORTED_RPC_METHODS = new Set([
+  ...COMMAND_RPC_METHODS,
+  ...INSTALL_FROM_SOURCE_RPC_METHODS,
+  ...RELEASE_MATERIALIZED_PATHS_RPC_METHODS,
+  ...Object.keys(LEASE_RPC_METHOD_TO_COMMAND),
+]);
+
+function createRpcError(
+  id: JsonRpcId,
+  code: number,
+  message: string,
+  data?: Record<string, unknown>,
+): JsonRpcResponse {
+  return {
+    jsonrpc: '2.0',
+    id,
+    error: { code, message, data },
+  };
+}
+
+function sendJson(
+  res: http.ServerResponse<http.IncomingMessage>,
+  response: JsonRpcResponse,
+  httpCode: number = 200,
+): void {
+  res.statusCode = httpCode;
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify(response));
+}
+
+function writeProgressEnvelope(
+  res: http.ServerResponse<http.IncomingMessage>,
+  event: RequestProgressEvent,
+): void {
+  if (res.destroyed) return;
+  res.write(serializeDaemonProgressEnvelope(event));
+}
+
+function writeRpcResponseEnvelope(
+  res: http.ServerResponse<http.IncomingMessage>,
+  response: JsonRpcResponse,
+): void {
+  if (res.destroyed) return;
+  res.write(serializeDaemonRpcResponseEnvelope(response));
+  res.end();
+}
+
+// Map a thrown boundary error to its JSON-RPC error code. Invalid params (malformed
+// wire input rejected before the request reaches the handler) is JSON-RPC -32602, to
+// match the explicit `Invalid params` sibling checks below; everything else is the
+// generic application error -32000.
+function jsonRpcCodeForNormalizedError(code: string): number {
+  return code === 'INVALID_ARGS' ? -32602 : -32000;
+}
+
+function resolveToken(params: Record<string, unknown>, headers: IncomingHttpHeaders): string {
+  const authHeader = typeof headers.authorization === 'string' ? headers.authorization : '';
+  const bearerToken = authHeader.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice('bearer '.length)
+    : undefined;
+  const headerToken =
+    typeof headers['x-agent-device-token'] === 'string'
+      ? headers['x-agent-device-token']
+      : undefined;
+  const paramToken = typeof params.token === 'string' ? params.token : undefined;
+  return paramToken ?? headerToken ?? bearerToken ?? '';
+}
+
+function toDaemonRequest(params: CommandRpcParams, headers: IncomingHttpHeaders): DaemonRequest {
+  return {
+    token: resolveToken(params as Record<string, unknown>, headers),
+    session: params.session ?? 'default',
+    command: params.command ?? '',
+    positionals: params.positionals ?? [],
+    input: params.input,
+    // flags/runtime/meta are validated as objects at the boundary; their full shape is
+    // validated in the session open handler downstream.
+    flags: params.flags as DaemonRequest['flags'],
+    runtime: params.runtime,
+    meta: params.meta as DaemonRequest['meta'],
+  };
+}
+
+function readStringParam(params: Record<string, unknown>, key: string): string | undefined {
+  const value = params[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readIntParam(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  return Number.isInteger(value) ? Number(value) : undefined;
+}
+
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function readRequiredGitHubArtifactText(
+  record: Record<string, unknown>,
+  key: 'owner' | 'repo' | 'artifactName',
+): string {
+  const value = typeof record[key] === 'string' ? record[key].trim() : '';
+  if (!value) {
+    throw new AppError(
+      'INVALID_ARGS',
+      `Invalid params: source.${key} is required for github-actions-artifact sources`,
+    );
+  }
+  return value;
+}
+
+function readGitHubArtifactInteger(record: Record<string, unknown>, key: 'artifactId' | 'runId') {
+  const value = record[key];
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isInteger(parsed)) {
+    throw new AppError('INVALID_ARGS', `Invalid params: source.${key} must be an integer`);
+  }
+  return parsed;
+}
+
+function parseGitHubActionsArtifactSource(record: Record<string, unknown>): HttpInstallSource {
+  const owner = readRequiredGitHubArtifactText(record, 'owner');
+  const repo = readRequiredGitHubArtifactText(record, 'repo');
+  const hasArtifactId = record.artifactId !== undefined;
+  const hasRunId = record.runId !== undefined;
+  const hasArtifactName = record.artifactName !== undefined;
+  if (hasArtifactId && (hasRunId || hasArtifactName)) {
+    throw new AppError(
+      'INVALID_ARGS',
+      'Invalid params: source must specify either artifactId or artifactName, not both',
+    );
+  }
+  if (!hasArtifactId && hasRunId && !hasArtifactName) {
+    throw new AppError(
+      'INVALID_ARGS',
+      'Invalid params: source.artifactName is required when source.runId is specified',
+    );
+  }
+  if (!hasArtifactId && !hasArtifactName) {
+    throw new AppError(
+      'INVALID_ARGS',
+      'Invalid params: source must specify artifactId or artifactName',
+    );
+  }
+  if (hasArtifactId) {
+    return {
+      kind: 'github-actions-artifact',
+      owner,
+      repo,
+      artifactId: readGitHubArtifactInteger(record, 'artifactId'),
+    };
+  }
+  let runId: number | undefined;
+  if (hasRunId) {
+    runId = readGitHubArtifactInteger(record, 'runId');
+  }
+  return {
+    kind: 'github-actions-artifact',
+    owner,
+    repo,
+    ...(hasRunId ? { runId } : {}),
+    artifactName: readRequiredGitHubArtifactText(record, 'artifactName'),
+  };
+}
+
+function toLeaseDaemonRequest(
+  command: 'lease_allocate' | 'lease_heartbeat' | 'lease_release',
+  params: Record<string, unknown>,
+  headers: IncomingHttpHeaders,
+): DaemonRequest {
+  return {
+    token: resolveToken(params, headers),
+    session: readStringParam(params, 'session') ?? 'default',
+    command,
+    positionals: [],
+    flags: command === 'lease_allocate' ? readLeaseAllocateProviderFlags(params) : undefined,
+    meta: {
+      tenantId: readStringParam(params, 'tenantId') ?? readStringParam(params, 'tenant'),
+      runId: readStringParam(params, 'runId'),
+      leaseId: readStringParam(params, 'leaseId'),
+      leaseTtlMs: readIntParam(params, 'ttlMs'),
+      leaseBackend: readStringParam(params, 'backend') as LeaseBackend | undefined,
+      leaseProvider:
+        readStringParam(params, 'leaseProvider') ?? readStringParam(params, 'provider'),
+      deviceKey: readStringParam(params, 'deviceKey'),
+      clientId: readStringParam(params, 'clientId'),
+    },
+  };
+}
+
+function parseInstallSource(params: Record<string, unknown>): HttpInstallSource {
+  const source = params.source;
+  if (!source || typeof source !== 'object') {
+    throw new AppError('INVALID_ARGS', 'Invalid params: source is required');
+  }
+  const record = source as Record<string, unknown>;
+  if (record.kind === 'url') {
+    const url = typeof record.url === 'string' ? record.url.trim() : '';
+    if (!url) {
+      throw new AppError('INVALID_ARGS', 'Invalid params: source.url is required for url sources');
+    }
+    const rawHeaders = record.headers;
+    const headers: Record<string, string> = {};
+    if (rawHeaders !== undefined) {
+      if (!rawHeaders || typeof rawHeaders !== 'object' || Array.isArray(rawHeaders)) {
+        throw new AppError('INVALID_ARGS', 'Invalid params: source.headers must be a string map');
+      }
+      for (const [key, value] of Object.entries(rawHeaders as Record<string, unknown>)) {
+        if (typeof value !== 'string') {
+          throw new AppError(
+            'INVALID_ARGS',
+            'Invalid params: source.headers values must be strings',
+          );
+        }
+        headers[key] = value;
+      }
+    }
+    return Object.keys(headers).length > 0 ? { kind: 'url', url, headers } : { kind: 'url', url };
+  }
+  if (record.kind === 'path') {
+    throw new AppError(
+      'INVALID_ARGS',
+      'Invalid params: source.kind "path" names a file on the daemon host and is not accepted over HTTP',
+      { hint: 'Use a "url" or "github-actions-artifact" source.' },
+    );
+  }
+  if (record.kind === 'github-actions-artifact') {
+    return parseGitHubActionsArtifactSource(record);
+  }
+  throw new AppError(
+    'INVALID_ARGS',
+    'Invalid params: source.kind must be "url" or "github-actions-artifact"',
+  );
+}
+
+function toInstallFromSourceDaemonRequest(
+  params: Record<string, unknown>,
+  headers: IncomingHttpHeaders,
+): DaemonRequest {
+  const platform = readStringParam(params, 'platform');
+  if (platform !== 'ios' && platform !== 'android') {
+    throw new AppError('INVALID_ARGS', 'Invalid params: platform must be "ios" or "android"');
+  }
+  return {
+    token: resolveToken(params, headers),
+    session: readStringParam(params, 'session') ?? 'default',
+    command: 'install_source',
+    positionals: [],
+    flags: { platform },
+    meta: {
+      requestId: readStringParam(params, 'requestId'),
+      installSource: parseInstallSource(params),
+      retainMaterializedPaths: readBooleanParam(params, 'retainPaths'),
+      materializedPathRetentionMs: readIntParam(params, 'retentionMs'),
+    },
+  };
+}
+
+function toReleaseMaterializedPathsDaemonRequest(
+  params: Record<string, unknown>,
+  headers: IncomingHttpHeaders,
+): DaemonRequest {
+  const materializationId = readStringParam(params, 'materializationId')?.trim();
+  if (!materializationId) {
+    throw new AppError('INVALID_ARGS', 'Invalid params: materializationId is required');
+  }
+  return {
+    token: resolveToken(params, headers),
+    session: readStringParam(params, 'session') ?? 'default',
+    command: 'release_materialized_paths',
+    positionals: [],
+    meta: {
+      requestId: readStringParam(params, 'requestId'),
+      materializationId,
+    },
+  };
+}
+
+// The runtime schema reports failures with an internal JSON-path prefix
+// (e.g. `$.positionals: Expected an array`). Strip the `$` sigil so the wire message
+// stays user-facing without leaking the schema's internal path representation.
+function cleanSchemaParseMessage(message: string): string {
+  const separator = message.indexOf(': ');
+  if (separator === -1 || !message.startsWith('$')) return message;
+  const field = message.slice(0, separator).replace(/^\$\.?/, '');
+  const detail = message.slice(separator + 2);
+  return field ? `${field}: ${detail}` : detail;
+}
+
+// Validate the command params at the boundary so malformed client input is rejected as
+// INVALID_ARGS (-> JSON-RPC -32602 / HTTP 400) instead of leaking as an internal 500.
+function parseCommandRpcParams(params: Record<string, unknown>): CommandRpcParams {
+  try {
+    return commandRpcParamsSchema.parse(params);
+  } catch (error) {
+    const detail =
+      error instanceof Error ? cleanSchemaParseMessage(error.message) : 'invalid command params';
+    throw new AppError('INVALID_ARGS', `Invalid params: ${detail}`);
+  }
+}
+
+function methodToDaemonRequest(
+  method: string,
+  params: Record<string, unknown>,
+  headers: IncomingHttpHeaders,
+): DaemonRequest {
+  if (COMMAND_RPC_METHODS.has(method)) {
+    return toDaemonRequest(parseCommandRpcParams(params), headers);
+  }
+  if (INSTALL_FROM_SOURCE_RPC_METHODS.has(method)) {
+    return toInstallFromSourceDaemonRequest(params, headers);
+  }
+  if (RELEASE_MATERIALIZED_PATHS_RPC_METHODS.has(method)) {
+    return toReleaseMaterializedPathsDaemonRequest(params, headers);
+  }
+  const leaseCommand = LEASE_RPC_METHOD_TO_COMMAND[method];
+  if (leaseCommand) {
+    return toLeaseDaemonRequest(leaseCommand, params, headers);
+  }
+  throw new AppError('INVALID_ARGS', `Method not found: ${method}`);
+}
+
+function isCommandRpcMethod(method: string): boolean {
+  return COMMAND_RPC_METHODS.has(method);
+}
+
+async function runHttpAuthHook(
+  authHook: HttpAuthHook | null,
+  context: HttpAuthHookContext,
+): Promise<HttpAuthDecision> {
+  if (!authHook) return { ok: true };
+  const result = await authHook(context);
+  if (result === undefined || result === true) return { ok: true };
+  if (result === false) {
+    const normalized = normalizeError(
+      new AppError('UNAUTHORIZED', 'Request rejected by auth hook'),
+    );
+    return {
+      ok: false,
+      statusCode: 401,
+      response: createRpcError(
+        context.rpcRequest.id ?? null,
+        -32001,
+        normalized.message,
+        normalized,
+      ),
+    };
+  }
+  if (result.ok === false) {
+    const normalized = normalizeError(
+      new AppError(
+        toAppErrorCode(result.code, 'UNAUTHORIZED'),
+        result.message ?? 'Request rejected by auth hook',
+        result.details,
+      ),
+    );
+    return {
+      ok: false,
+      statusCode: 401,
+      response: createRpcError(
+        context.rpcRequest.id ?? null,
+        -32001,
+        normalized.message,
+        normalized,
+      ),
+    };
+  }
+  if (typeof result.tenantId === 'string' && result.tenantId.length > 0) {
+    const tenantId = normalizeTenantId(result.tenantId);
+    if (!tenantId) {
+      const normalized = normalizeError(
+        new AppError('INVALID_ARGS', 'Auth hook returned invalid tenantId'),
+      );
+      return {
+        ok: false,
+        statusCode: 500,
+        response: createRpcError(
+          context.rpcRequest.id ?? null,
+          -32000,
+          normalized.message,
+          normalized,
+        ),
+      };
+    }
+    return { ok: true, tenantId };
+  }
+  return { ok: true };
+}
+
+async function loadHttpAuthHook(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<HttpAuthHook | null> {
+  const hookPath = env.AGENT_DEVICE_HTTP_AUTH_HOOK;
+  if (!hookPath) return null;
+  const exportName = env.AGENT_DEVICE_HTTP_AUTH_EXPORT || 'default';
+  const resolvedPath = path.isAbsolute(hookPath) ? hookPath : path.resolve(hookPath);
+  let imported: Record<string, unknown>;
+  try {
+    imported = (await import(pathToFileURL(resolvedPath).href)) as Record<string, unknown>;
+  } catch (error) {
+    throw new AppError('COMMAND_FAILED', 'Failed to load AGENT_DEVICE_HTTP_AUTH_HOOK module', {
+      hookPath: resolvedPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const maybeHook = imported[exportName];
+  if (typeof maybeHook !== 'function') {
+    throw new AppError('INVALID_ARGS', `Auth hook export ${exportName} is not a function`, {
+      hookPath: resolvedPath,
+      exportName,
+    });
+  }
+  return maybeHook as HttpAuthHook;
+}
+
+export async function createDaemonHttpServer(options: {
+  handleRequest: DaemonInvokeFn;
+  leaseRegistry?: LeaseRegistry;
+  token?: string;
+  retainArtifacts?: boolean;
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Resolves a request diagnostics record path for the `/sessions/.../requests/...`
+   * route (#1801). Omitted by embedded servers with no session store; the route
+   * then does not exist and a remote caller is told the record is unavailable
+   * rather than handed a daemon-host path.
+   */
+  resolveRequestDiagnosticsPath?: (ref: DiagnosticsRecordRef) => string;
+}): Promise<http.Server> {
+  const environment = options.env ?? process.env;
+  const authHook = await loadHttpAuthHook(environment);
+  const { handleRequest, token, retainArtifacts = false, resolveRequestDiagnosticsPath } = options;
+  return http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(buildDaemonHealthPayload('agent-device-daemon', readVersion())));
+      return;
+    }
+
+    if (
+      token &&
+      options.leaseRegistry &&
+      tryHandleHumanControlHttpRoute({
+        req,
+        res,
+        expectedToken: token,
+        registry: options.leaseRegistry,
+      })
+    ) {
+      return;
+    }
+
+    if (
+      tryHandleUploadHttpRoute({
+        req,
+        res,
+        token: resolveToken({}, req.headers),
+        authorize: async (request) =>
+          await authorizeAuxiliaryHttpRequest({
+            req: request.req,
+            res: request.res,
+            authHook,
+            expectedToken: token,
+            daemonRequest: request.daemonRequest,
+          }),
+      })
+    ) {
+      return;
+    }
+
+    if (
+      tryHandleDownloadableArtifactHttpRoute({
+        req,
+        res,
+        retainArtifacts,
+        authorize: async (request) =>
+          await authorizeAuxiliaryHttpRequest({
+            req: request.req,
+            res: request.res,
+            authHook,
+            expectedToken: token,
+            daemonRequest: request.daemonRequest,
+          }),
+      })
+    ) {
+      return;
+    }
+
+    if (
+      resolveRequestDiagnosticsPath &&
+      tryHandleRequestDiagnosticsHttpRoute({
+        req,
+        res,
+        resolveRecordPath: resolveRequestDiagnosticsPath,
+        authorize: async (request) =>
+          await authorizeAuxiliaryHttpRequest({
+            req: request.req,
+            res: request.res,
+            authHook,
+            expectedToken: token,
+            daemonRequest: request.daemonRequest,
+          }),
+      })
+    ) {
+      return;
+    }
+
+    if (req.method !== 'POST' || req.url !== '/rpc') {
+      res.statusCode = 404;
+      res.end('Not found');
+      return;
+    }
+
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > MAX_HTTP_RPC_BODY_BYTES) {
+        req.destroy(new Error('request too large'));
+      }
+    });
+
+    req.on('error', () => {
+      if (!res.headersSent) {
+        sendJson(res, createRpcError(null, -32700, 'Parse error'), 400);
+      }
+    });
+
+    req.on('end', async () => {
+      let rpcRequest: JsonRpcRequest;
+      try {
+        rpcRequest = JSON.parse(body) as JsonRpcRequest;
+      } catch {
+        sendJson(res, createRpcError(null, -32700, 'Parse error'), 400);
+        return;
+      }
+
+      if (rpcRequest.jsonrpc !== '2.0' || typeof rpcRequest.method !== 'string') {
+        sendJson(res, createRpcError(rpcRequest.id ?? null, -32600, 'Invalid Request'), 400);
+        return;
+      }
+      if (!SUPPORTED_RPC_METHODS.has(rpcRequest.method)) {
+        sendJson(
+          res,
+          createRpcError(rpcRequest.id ?? null, -32601, `Method not found: ${rpcRequest.method}`),
+          404,
+        );
+        return;
+      }
+      if (!rpcRequest.params || typeof rpcRequest.params !== 'object') {
+        sendJson(res, createRpcError(rpcRequest.id ?? null, -32602, 'Invalid params'), 400);
+        return;
+      }
+
+      let requestIdForCleanup: string | undefined;
+      let requestAbortRegistration: ReturnType<typeof registerRequestAbort>;
+      let handlerCompleted = false;
+      try {
+        const params = rpcRequest.params as Record<string, unknown>;
+        let daemonRequest = methodToDaemonRequest(rpcRequest.method, params, req.headers);
+        if (
+          isCommandRpcMethod(rpcRequest.method) &&
+          (typeof daemonRequest.command !== 'string' || daemonRequest.command.length === 0)
+        ) {
+          sendJson(
+            res,
+            createRpcError(rpcRequest.id ?? null, -32602, 'Invalid params: command is required'),
+            400,
+          );
+          return;
+        }
+
+        requestIdForCleanup = resolveRequestTrackingId(
+          daemonRequest.meta?.requestId,
+          rpcRequest.id,
+        );
+        daemonRequest.meta = {
+          ...daemonRequest.meta,
+          requestId: requestIdForCleanup,
+        };
+        requestAbortRegistration = registerRequestAbort(requestIdForCleanup);
+        const clientDeclaredTenant = daemonRequest.meta?.tenantId ?? daemonRequest.flags?.tenant;
+
+        const authResult = await runHttpAuthHook(authHook, {
+          headers: req.headers,
+          rpcRequest,
+          daemonRequest,
+        });
+        if (!authResult.ok) {
+          sendJson(res, authResult.response, authResult.statusCode);
+          return;
+        }
+        const tenantTrust = resolveTrustedTenant({
+          hookConfigured: authHook !== null,
+          hookAttestedTenant: authResult.tenantId,
+          clientDeclaredTenant,
+        });
+        if (!tenantTrust.trusted) {
+          const normalized = tenantTrustRejectionError();
+          sendJson(
+            res,
+            createRpcError(rpcRequest.id ?? null, -32001, normalized.message, normalized),
+            401,
+          );
+          return;
+        }
+        daemonRequest.meta = {
+          ...daemonRequest.meta,
+          tenantId: tenantTrust.tenantId,
+          // Attestation is what partitions the session namespace: only an attested
+          // tenant gets tenant isolation, so only then does `scopeRequestSession`
+          // name the session `<tenant>:...`. The diagnostics route reads the same
+          // distinction back out of `authorizeAuxiliaryHttpRequest`.
+          //
+          // When the hook attested the tenant, isolation is the SERVER's answer and
+          // the request does not get a say: honoring a client-supplied `'none'` here
+          // dropped the prefix and dropped the caller into the `cwd:<hash>:` namespace
+          // instead, which the client names and another tenant can name too.
+          sessionIsolation: tenantTrust.attested ? 'tenant' : daemonRequest.meta?.sessionIsolation,
+        };
+        if (daemonRequest.flags?.tenant !== undefined) {
+          daemonRequest.flags = { ...daemonRequest.flags, tenant: tenantTrust.tenantId };
+        }
+        // Consumers that read the flag rather than the meta (`session-doctor-options.ts`)
+        // must not see the isolation the meta just overrode.
+        if (tenantTrust.attested && daemonRequest.flags?.sessionIsolation !== undefined) {
+          daemonRequest.flags = { ...daemonRequest.flags, sessionIsolation: 'tenant' };
+        }
+        daemonRequest = restrictRemoteHttpRequest(
+          daemonRequest,
+          authHook !== null,
+          req.headers[DAEMON_HTTP_NETWORK_ACCESS_HEADER],
+        );
+
+        let canceledInFlight = false;
+        // Request-scoped cancellation: mark this request canceled whenever its client
+        // vanishes before the response finishes, regardless of whether headers were
+        // already sent. `markRequestCanceled` aborts only this request's AbortSignal,
+        // so in-flight runner work owned by the request is canceled without touching
+        // other requests, other devices, or non-Apple work. The guard below keys off
+        // the response's own completion state, so a normal end is never misclassified
+        // as a disconnect.
+        const markCanceledIfResponseIncomplete = () => {
+          if (handlerCompleted || res.writableFinished || canceledInFlight) return;
+          canceledInFlight = true;
+          markRequestCanceled(requestIdForCleanup);
+          emitDiagnostic({
+            level: 'warn',
+            phase: 'request_client_disconnected',
+            data: {
+              requestId: requestIdForCleanup,
+            },
+          });
+        };
+        req.on('aborted', markCanceledIfResponseIncomplete);
+        // `res` close fires for both pre-header and post-header disconnects; the
+        // completion guard distinguishes a real disconnect from a finished response.
+        res.on('close', markCanceledIfResponseIncomplete);
+        if (req.aborted || res.destroyed) {
+          markCanceledIfResponseIncomplete();
+        }
+
+        const streamProgress = shouldStreamRequestProgress(daemonRequest);
+        if (streamProgress) {
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/x-ndjson');
+          const daemonResponse = await withRequestProgressSink(
+            (event) => writeProgressEnvelope(res, event),
+            async () => await handleRequest(daemonRequest),
+          );
+          handlerCompleted = true;
+          const rpcResponse = daemonResponse.ok
+            ? ({
+                jsonrpc: '2.0',
+                id: rpcRequest.id ?? null,
+                result: daemonResponse,
+              } satisfies JsonRpcResponse)
+            : createRpcError(
+                rpcRequest.id ?? null,
+                -32000,
+                daemonResponse.error.message,
+                daemonResponse.error,
+              );
+          writeRpcResponseEnvelope(res, rpcResponse);
+          return;
+        }
+
+        const daemonResponse = await handleRequest(daemonRequest);
+        handlerCompleted = true;
+        if (daemonResponse.ok) {
+          sendJson(res, { jsonrpc: '2.0', id: rpcRequest.id ?? null, result: daemonResponse });
+          return;
+        }
+        sendJson(
+          res,
+          createRpcError(
+            rpcRequest.id ?? null,
+            -32000,
+            daemonResponse.error.message,
+            daemonResponse.error,
+          ),
+          statusCodeForDaemonError(daemonResponse.error),
+        );
+      } catch (error) {
+        handlerCompleted = true;
+        const normalized = normalizeError(error);
+        const rpcErrorCode = jsonRpcCodeForNormalizedError(normalized.code);
+        if (res.headersSent) {
+          writeRpcResponseEnvelope(
+            res,
+            createRpcError(rpcRequest.id ?? null, rpcErrorCode, normalized.message, normalized),
+          );
+          return;
+        }
+        sendJson(
+          res,
+          createRpcError(rpcRequest.id ?? null, rpcErrorCode, normalized.message, normalized),
+          statusCodeForNormalizedError(normalized.code),
+        );
+      } finally {
+        clearRequestAbortRegistration(requestAbortRegistration);
+      }
+    });
+  });
+}
+
+function statusCodeForDaemonError(error: {
+  code: string;
+  details?: Record<string, unknown>;
+}): number {
+  if (error.code === 'DEVICE_IN_USE' && error.details?.reason === 'human_control_active') {
+    return 423;
+  }
+  return statusCodeForNormalizedError(error.code);
+}
+
+/**
+ * The token/auth-hook gate every non-RPC route shares. `sessionNamespace` is the
+ * naming precondition the session-addressed routes need: present only when the
+ * caller carries a tenant at all, and `partitioned` exactly when that tenant is
+ * attested, which is the same condition the `/rpc` handler above turns into
+ * `sessionIsolation: 'tenant'`.
+ */
+async function authorizeAuxiliaryHttpRequest(params: {
+  req: http.IncomingMessage;
+  res: http.ServerResponse;
+  authHook: HttpAuthHook | null;
+  expectedToken?: string;
+  daemonRequest: Pick<DaemonRequest, 'command' | 'positionals'>;
+}): Promise<{ tenantId?: string; sessionNamespace?: TenantSessionNamespace } | null> {
+  const { req, res, authHook, expectedToken, daemonRequest } = params;
+  const token = resolveToken({}, req.headers);
+  const tenantId = normalizeTenantId(readHeaderValue(req.headers, DAEMON_HTTP_TENANT_HEADER));
+  const tokenError = enforceDaemonToken(token, expectedToken);
+  if (tokenError) {
+    sendRestJsonError(res, tokenError);
+    return null;
+  }
+
+  const syntheticRpc: JsonRpcRequest = {
+    jsonrpc: '2.0',
+    id: null,
+    method: 'agent_device.command',
+  };
+  const authResult = await runHttpAuthHook(authHook, {
+    headers: req.headers,
+    rpcRequest: syntheticRpc,
+    daemonRequest: {
+      token,
+      session: 'default',
+      command: daemonRequest.command,
+      positionals: daemonRequest.positionals,
+      ...(tenantId ? { meta: { tenantId } } : {}),
+    },
+  });
+  if (!authResult.ok) {
+    sendAuxiliaryAuthHookRejection(res, authResult);
+    return null;
+  }
+
+  const tenantTrust = resolveTrustedTenant({
+    hookConfigured: authHook !== null,
+    hookAttestedTenant: authResult.tenantId,
+    clientDeclaredTenant: tenantId,
+  });
+  if (!tenantTrust.trusted) {
+    sendRestJsonError(res, tenantTrustRejectionError());
+    return null;
+  }
+
+  const trustedTenant = tenantTrust.tenantId;
+  return {
+    tenantId: trustedTenant,
+    ...(trustedTenant
+      ? { sessionNamespace: { tenant: trustedTenant, partitioned: tenantTrust.attested } }
+      : {}),
+  };
+}
+
+/**
+ * An auth hook's own rejection, rendered as the flat REST error these routes
+ * answer with rather than the JSON-RPC envelope the hook decision carries.
+ */
+function sendAuxiliaryAuthHookRejection(
+  res: http.ServerResponse,
+  decision: Extract<HttpAuthDecision, { ok: false }>,
+): void {
+  res.statusCode = decision.statusCode;
+  res.setHeader('content-type', 'application/json');
+  res.end(
+    JSON.stringify({
+      ok: false,
+      error:
+        decision.response.error?.data?.message ??
+        decision.response.error?.message ??
+        'Unauthorized',
+    }),
+  );
+}
+
+function readHeaderValue(headers: IncomingHttpHeaders, name: string): string | undefined {
+  const value = headers[name];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function enforceDaemonToken(
+  requestToken: string,
+  expectedToken: string | undefined,
+): ReturnType<typeof normalizeError> | null {
+  if (!expectedToken) return null;
+  if (timingSafeStringEqual(requestToken, expectedToken)) return null;
+  return normalizeError(new AppError('UNAUTHORIZED', 'Invalid token'));
+}

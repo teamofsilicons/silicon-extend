@@ -1,0 +1,376 @@
+import assert from 'node:assert/strict';
+import { test, vi } from 'vitest';
+import type { AppsFilter, DeviceLease } from '@agent-device/contracts/device';
+import type { Interactor } from '@agent-device/contracts/interactor-types';
+import type { DeviceInfo } from '@agent-device/kernel/device';
+import {
+  androidAdbHostTarget,
+  androidAdbInvocation,
+  androidAdbSerialTarget,
+  serializeAndroidAdbInvocation,
+  type AndroidAdbInvocation,
+} from '@agent-device/platform-android/mechanics';
+import { AppError } from '@agent-device/kernel/errors';
+import { createLimrunRuntime } from './runtime.ts';
+import type {
+  LimrunAdbProvider,
+  LimrunAdbExecutor,
+  LimrunPortReverseMapping,
+  LimrunRuntimeDependencies,
+} from './runtime-dependencies.ts';
+
+const state = vi.hoisted(() => ({
+  constructorOptions: [] as Array<{ defaultHeaders?: Record<string, string> }>,
+  androidCreateInputs: [] as unknown[],
+  assetList: vi.fn(async () => [
+    {
+      id: 'asset-example',
+      name: 'Example.apk',
+      md5: 'uploaded',
+      os: 'android',
+    },
+  ]),
+  tunnelClose: vi.fn(),
+  disconnect: vi.fn(),
+}));
+
+vi.mock('@limrun/api', () => ({
+  default: class MockLimrun {
+    readonly iosInstances = {
+      create: vi.fn(),
+      list: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    readonly androidInstances = {
+      create: vi.fn(async (input: unknown) => {
+        state.androidCreateInputs.push(input);
+        return {
+          metadata: { id: 'android-instance-1' },
+          status: {
+            token: 'instance-token',
+            apiUrl: 'https://android.example',
+            adbWebSocketUrl: 'wss://adb.example',
+          },
+        };
+      }),
+      list: vi.fn(),
+      delete: vi.fn(async () => undefined),
+    };
+
+    readonly assets = {
+      getOrUpload: vi.fn(),
+      list: state.assetList,
+    };
+
+    constructor(options: { defaultHeaders?: Record<string, string> }) {
+      state.constructorOptions.push(options);
+    }
+  },
+}));
+
+vi.mock('@limrun/api/instance-client', () => ({
+  createInstanceClient: vi.fn(async () => ({
+    disconnect: state.disconnect,
+    setText: vi.fn(async () => undefined),
+    startAdbTunnel: vi.fn(async () => ({
+      address: { address: '127.0.0.1', port: 62_001 },
+      close: state.tunnelClose,
+    })),
+  })),
+}));
+
+test('factory uses the injected Android and host adapters as its construction seam', async () => {
+  const fixture = createContractFixture();
+  const runtime = createLimrunRuntime({ apiKey: 'lim_test_key' }, fixture.dependencies);
+
+  try {
+    const device = await allocateAndroidDevice(runtime);
+
+    assert.equal(runtime.getInteractor(device), fixture.interactor);
+    const deviceSession = runtime.getDeviceSession(device);
+    assert.equal(deviceSession?.platform, 'android');
+    if (deviceSession?.platform !== 'android') throw new Error('Expected Android device session');
+
+    assert.deepEqual(await deviceSession.listApps('all'), [
+      { id: 'com.example.app', name: 'Example' },
+    ]);
+    assert.equal((await deviceSession.getKeyboardState()).visible, false);
+    await runtime.configurePortReverse?.({
+      leaseId: 'lease-android',
+      devicePort: 8081,
+      hostPort: 8081,
+      name: 'metro',
+    });
+
+    assert.deepEqual(state.constructorOptions[0]?.defaultHeaders, {
+      'x-agent-device-client': 'agent-device-cli',
+      'x-agent-device-version': 'test-version',
+    });
+    assert.equal(fixture.createInteractor.mock.calls[0]?.[0], device);
+    assert.equal(fixture.listApps.mock.calls[0]?.[1], 'all');
+    assert.equal(fixture.getKeyboardState.mock.calls.length, 1);
+    assert.deepEqual(fixture.adbCalls[0], [
+      '-s',
+      '127.0.0.1:62001',
+      'reverse',
+      'tcp:8081',
+      'tcp:8081',
+    ]);
+  } finally {
+    await runtime.shutdown();
+  }
+
+  assert.deepEqual(fixture.adbCalls.slice(-2), [
+    ['-s', '127.0.0.1:62001', 'reverse', '--remove', 'tcp:8081'],
+    ['disconnect', '127.0.0.1:62001'],
+  ]);
+  assert.equal(state.tunnelClose.mock.calls.length, 1);
+});
+
+test('allocation installs an exact uploaded asset before binding its application id', async () => {
+  state.androidCreateInputs.length = 0;
+  const fixture = createContractFixture();
+  const runtime = createLimrunRuntime({ apiKey: 'lim_test_key' }, fixture.dependencies);
+
+  try {
+    await runtime.leaseLifecycle.allocate?.(androidLease(), {
+      initialApp: 'Example.apk',
+    });
+
+    assert.deepEqual(state.androidCreateInputs[0], {
+      wait: true,
+      metadata: {
+        displayName: 'agent-device-team-a-run-a',
+        labels: {
+          source: 'agent-device-cli',
+          provider: 'limrun',
+          leaseId: 'lease-android',
+          tenantId: 'team-a',
+          runId: 'run-a',
+        },
+      },
+      spec: {
+        initialAssets: [
+          {
+            kind: 'App',
+            source: 'AssetIDs',
+            assetIds: ['asset-example'],
+          },
+        ],
+      },
+    });
+    assert.equal(fixture.listApps.mock.calls[0]?.[1], 'user-installed');
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test('public daemon requests cannot list or allocate uploaded apps', async () => {
+  state.androidCreateInputs.length = 0;
+  state.assetList.mockClear();
+  const fixture = createContractFixture();
+  const runtime = createLimrunRuntime({ apiKey: 'lim_test_key' }, fixture.dependencies);
+  const appCatalog = runtime.appCatalog;
+  if (!appCatalog) throw new Error('Expected Limrun app catalog capability');
+
+  try {
+    await assert.rejects(
+      async () =>
+        await appCatalog({
+          provider: 'limrun',
+          platform: 'android',
+          publicNetworkOnly: true,
+        }),
+      (error) => error instanceof AppError && error.code === 'UNAUTHORIZED',
+    );
+    await assert.rejects(
+      async () =>
+        await runtime.leaseLifecycle.allocate?.(androidLease(), {
+          initialApp: 'Example.apk',
+          publicNetworkOnly: true,
+        }),
+      (error) => error instanceof AppError && error.code === 'UNAUTHORIZED',
+    );
+    assert.equal(state.assetList.mock.calls.length, 0);
+    assert.equal(state.androidCreateInputs.length, 0);
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test('allocation rejects an unrelated foreground app after preinstall', async () => {
+  const fixture = createContractFixture();
+  fixture.listApps.mockResolvedValueOnce([{ id: 'com.foreground.app', name: 'Foreground' }]);
+  fixture.getForegroundApp.mockResolvedValueOnce({
+    appId: 'com.foreground.app',
+    activity: '.MainActivity',
+  });
+  const runtime = createLimrunRuntime({ apiKey: 'lim_test_key' }, fixture.dependencies);
+
+  await assert.rejects(
+    async () =>
+      await runtime.leaseLifecycle.allocate?.(androidLease(), {
+        initialApp: 'Example.apk',
+      }),
+    (error) => error instanceof AppError && error.code === 'COMMAND_FAILED',
+  );
+  assert.equal(fixture.getForegroundApp.mock.calls.length, 0);
+});
+
+test('a failed device adb command hands the addressed invocation to the root adapter', async () => {
+  const fixture = createContractFixture();
+  const handed: Array<AndroidAdbInvocation | undefined> = [];
+  const invocations: AndroidAdbInvocation[] = [];
+  const dependencies: LimrunRuntimeDependencies = {
+    ...fixture.dependencies,
+    android: {
+      ...fixture.dependencies.android,
+      adbError: async (message, _result, invocation) => {
+        handed.push(invocation);
+        return new AppError('COMMAND_FAILED', message);
+      },
+    },
+    host: {
+      ...fixture.dependencies.host,
+      runAdb: async (invocation) => {
+        invocations.push(invocation);
+        return { stdout: '', stderr: 'offline', exitCode: 1 };
+      },
+    },
+  };
+  const runtime = createLimrunRuntime({ apiKey: 'lim_test_key' }, dependencies);
+
+  try {
+    await allocateAndroidDevice(runtime);
+    await assert.rejects(async () =>
+      runtime.configurePortReverse?.({
+        leaseId: 'lease-android',
+        devicePort: 8081,
+        hostPort: 8081,
+        name: 'metro',
+      }),
+    );
+  } finally {
+    await runtime.shutdown();
+  }
+
+  // The provider restates no argv of its own: the failure carries the typed invocation it addressed.
+  const invocation = invocations[0];
+  assert.ok(invocation);
+  assert.deepEqual(handed[0], invocation);
+  assert.deepEqual(invocation.target.server, { kind: 'ambient' });
+  assert.deepEqual(invocation.target.selector, { kind: 'serial', serial: '127.0.0.1:62001' });
+  assert.equal(serializeAndroidAdbInvocation(invocation)[0], '-s');
+});
+
+function createContractFixture() {
+  const adbCalls: string[][] = [];
+  const activeReverseMappings: LimrunPortReverseMapping[] = [];
+  const interactor = { open: vi.fn() } as unknown as Interactor;
+  const createInteractor = vi.fn((_device: DeviceInfo, _adb: LimrunAdbProvider) => interactor);
+  const listApps = vi.fn(async (_adb: LimrunAdbExecutor, _filter: AppsFilter) => [
+    { id: 'com.example.app', name: 'Example' },
+  ]);
+  const getKeyboardState = vi.fn(async () => ({
+    visible: false,
+    inputOwner: 'unknown' as const,
+  }));
+  const getForegroundApp = vi.fn(async () => ({
+    appId: 'com.example.app',
+    activity: '.MainActivity',
+  }));
+  const dependencies = {
+    clientVersion: 'test-version',
+    android: {
+      createInteractor,
+      createPortReverse: async (adb: LimrunAdbExecutor) =>
+        createInMemoryPortReverse(adb, activeReverseMappings),
+      inferAppName: async () => 'Example',
+      listApps,
+      getForegroundApp,
+      getKeyboardState,
+      dismissKeyboard: async () => ({
+        visible: false,
+        inputOwner: 'unknown' as const,
+        attempts: 0,
+        wasVisible: false,
+        dismissed: false,
+      }),
+      readLogs: async () => 'log line\n',
+      forceStopApp: async () => {},
+      deviceAdbInvocation: (serial: string, command: readonly string[]) =>
+        androidAdbInvocation(androidAdbSerialTarget(serial), command),
+      hostAdbInvocation: (command: readonly string[]) =>
+        androidAdbInvocation(androidAdbHostTarget(), command),
+      adbError: async (message: string) => new AppError('COMMAND_FAILED', message),
+    },
+    host: {
+      runAdb: async (invocation: AndroidAdbInvocation) => {
+        adbCalls.push(serializeAndroidAdbInvocation(invocation));
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+      archiveDirectory: async () => undefined,
+      downloadFile: async () => undefined,
+    },
+    ios: {
+      resolveAppAlias: async (app: string) => app,
+      readBundleAppName: async () => undefined,
+    },
+  } satisfies LimrunRuntimeDependencies;
+  return {
+    adbCalls,
+    createInteractor,
+    dependencies,
+    getForegroundApp,
+    getKeyboardState,
+    interactor,
+    listApps,
+  };
+}
+
+function createInMemoryPortReverse(adb: LimrunAdbExecutor, mappings: LimrunPortReverseMapping[]) {
+  return {
+    ensure: async (mapping: LimrunPortReverseMapping) => {
+      mappings.push(mapping);
+      await adb(['reverse', mapping.local, mapping.remote]);
+    },
+    remove: async (local: LimrunPortReverseMapping['local']) => {
+      const index = mappings.findIndex((mapping) => mapping.local === local);
+      if (index >= 0) mappings.splice(index, 1);
+      await adb(['reverse', '--remove', local]);
+    },
+    removeAllOwned: async (ownerId: string) => {
+      const owned = mappings.filter((mapping) => mapping.ownerId === ownerId);
+      for (const mapping of owned) {
+        mappings.splice(mappings.indexOf(mapping), 1);
+        await adb(['reverse', '--remove', mapping.local]);
+      }
+    },
+    list: async () => [...mappings],
+  };
+}
+
+async function allocateAndroidDevice(
+  runtime: ReturnType<typeof createLimrunRuntime>,
+): Promise<DeviceInfo> {
+  const allocation = await runtime.leaseLifecycle.allocate?.(androidLease());
+  const allocatedDevice = allocation?.device;
+  if (!allocatedDevice || typeof allocatedDevice !== 'object') {
+    throw new Error('Expected allocated device');
+  }
+  return allocatedDevice as DeviceInfo;
+}
+
+function androidLease(): DeviceLease {
+  return {
+    leaseId: 'lease-android',
+    tenantId: 'team-a',
+    runId: 'run-a',
+    backend: 'android-instance',
+    leaseProvider: 'limrun',
+    createdAt: 1,
+    heartbeatAt: 1,
+    expiresAt: 60_001,
+  };
+}

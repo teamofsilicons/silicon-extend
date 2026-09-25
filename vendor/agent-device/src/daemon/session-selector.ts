@@ -1,0 +1,113 @@
+import type { CommandFlags } from '@agent-device/contracts/command';
+import { AppError } from '@agent-device/kernel/errors';
+import type { SessionRef, SessionState } from './session-state.ts';
+import {
+  isIosFamily,
+  isSerialAddressablePlatform,
+  matchesPlatformSelector,
+} from '@agent-device/kernel/device';
+import { parseSerialAllowlist } from '@agent-device/kernel/device-isolation';
+import { buildSessionRecoveryHint, describeSessionDevice } from './session-recovery-hints.ts';
+
+export type SessionSelectorConflictKey =
+  | 'platform'
+  | 'target'
+  | 'udid'
+  | 'serial'
+  | 'device'
+  | 'iosSimulatorDeviceSet'
+  | 'androidDeviceAllowlist';
+
+export type SessionSelectorConflict = {
+  key: SessionSelectorConflictKey;
+  value: string;
+};
+
+export function assertSessionSelectorMatches(ref: SessionRef, flags?: CommandFlags): void {
+  const { address, session } = ref;
+  const mismatches = listSessionSelectorConflicts(session, flags);
+  if (mismatches.length === 0) return;
+
+  throw new AppError(
+    'INVALID_ARGS',
+    `Session "${address}" is already bound to ${describeSessionDevice(session)}, but this request selected ${mismatches.map(formatSessionSelectorConflict).join(', ')}.`,
+    {
+      session: address,
+      conflicts: mismatches.map(formatSessionSelectorConflict),
+      hint: buildSessionRecoveryHint(ref, 'selector-conflict', {
+        // Only a platform disagreement is answered by another platform's implicit session; a device
+        // or target disagreement is not, and suggesting it there sends the caller in circles.
+        offersPlatformSession: mismatches.some((mismatch) => mismatch.key === 'platform'),
+      }),
+    },
+  );
+}
+
+export function listSessionSelectorConflicts(
+  session: SessionState,
+  flags?: CommandFlags,
+): SessionSelectorConflict[] {
+  if (!flags) return [];
+
+  const mismatches: SessionSelectorConflict[] = [];
+  const device = session.device;
+
+  const normalizedPlatform = flags.platform;
+  if (normalizedPlatform && !matchesPlatformSelector(device, normalizedPlatform)) {
+    mismatches.push({ key: 'platform', value: flags.platform! });
+  }
+  if (flags.target && flags.target !== (device.target ?? 'mobile')) {
+    mismatches.push({ key: 'target', value: flags.target });
+  }
+
+  if (flags.udid && (!isIosFamily(device) || flags.udid !== device.id)) {
+    mismatches.push({ key: 'udid', value: flags.udid });
+  }
+
+  if (
+    flags.serial &&
+    (!isSerialAddressablePlatform(device.platform) || flags.serial !== device.id)
+  ) {
+    mismatches.push({ key: 'serial', value: flags.serial });
+  }
+
+  if (flags.device && flags.device.trim().toLowerCase() !== device.name.trim().toLowerCase()) {
+    mismatches.push({ key: 'device', value: flags.device });
+  }
+
+  if (flags.iosSimulatorDeviceSet) {
+    const requestedSetPath = flags.iosSimulatorDeviceSet.trim();
+    const sessionSetPath = device.simulatorSetPath?.trim();
+    if (
+      !isIosFamily(device) ||
+      device.kind !== 'simulator' ||
+      requestedSetPath !== sessionSetPath
+    ) {
+      mismatches.push({ key: 'iosSimulatorDeviceSet', value: flags.iosSimulatorDeviceSet });
+    }
+  }
+
+  if (flags.androidDeviceAllowlist) {
+    const allowlist = parseSerialAllowlist(flags.androidDeviceAllowlist);
+    if (device.platform !== 'android' || !allowlist.has(device.id)) {
+      mismatches.push({ key: 'androidDeviceAllowlist', value: flags.androidDeviceAllowlist });
+    }
+  }
+
+  return mismatches;
+}
+
+export function formatSessionSelectorConflict(conflict: SessionSelectorConflict): string {
+  return `${flagNameForConflictKey(conflict.key)}=${conflict.value}`;
+}
+
+function flagNameForConflictKey(key: SessionSelectorConflictKey): string {
+  switch (key) {
+    case 'iosSimulatorDeviceSet':
+      return '--ios-simulator-device-set';
+    case 'androidDeviceAllowlist':
+      return '--android-device-allowlist';
+    default:
+      return `--${key}`;
+  }
+}

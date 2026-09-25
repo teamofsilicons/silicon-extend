@@ -1,0 +1,35 @@
+/**
+ * Closed result of the `keyboard` command, grounded in the runtime operation
+ * results projected by `src/daemon/keyboard-runtime.ts`.
+ *
+ * `platform` and `action` are always present; the remaining fields appear per
+ * branch (Android `status`/`dismiss` carry the keyboard-state fields; `enter`
+ * and iOS `dismiss` carry a `message`). It is kept as a flat closed shape rather
+ * than a five-way `platform`×`action` union because the per-branch field sets
+ * overlap heavily and the underlying Android keyboard-state types live in the
+ * platform layer (below the public contract). The `Record` index signature of
+ * the previous hand-written mirror is dropped, and the spurious `| null`s are
+ * removed (the handler never returns `null` for these).
+ */
+export type KeyboardCommandResult = {
+  platform: 'android' | 'ios';
+  action: 'status' | 'dismiss' | 'enter';
+  visible?: boolean;
+  wasVisible?: boolean;
+  dismissed?: boolean;
+  attempts?: number;
+  inputType?: string;
+  type?: 'text' | 'number' | 'email' | 'phone' | 'password' | 'datetime' | 'unknown';
+  inputMethodPackage?: string;
+  focusedPackage?: string;
+  focusedResourceId?: string;
+  inputOwner?: 'app' | 'ime' | 'unknown';
+  message?: string;
+  /** iOS `dismiss` only (#1598): which mechanism actually resigned the
+   *  keyboard — 'dismissKey' (tapped the keyboard's own Hide/Dismiss/Done
+   *  key). Generic background-tap dismissal is deliberately unsupported
+   *  (#1606 review): no query can prove a coordinate is side-effect-free,
+   *  so the runner only ever taps the keyboard's own control. Absent when
+   *  the keyboard was not dismissed. */
+  mechanism?: 'dismissKey';
+};

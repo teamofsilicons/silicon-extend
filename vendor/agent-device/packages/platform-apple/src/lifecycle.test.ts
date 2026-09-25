@@ -1,0 +1,667 @@
+import { expect, test, vi } from 'vitest';
+import type { OpenApplicationInput } from '@agent-device/contracts/application-lifecycle-runtime';
+import type { Interactor } from '@agent-device/contracts/interactor-types';
+import type { PlatformRuntimeHost } from '@agent-device/contracts/platform-runtime-operations';
+import type { DeviceInfo } from '@agent-device/kernel/device';
+import { bindAppleApplicationLifecycle } from './lifecycle.ts';
+import { platformRuntimeHostFixture } from './runtime.fixtures.ts';
+
+const device: DeviceInfo = {
+  platform: 'apple',
+  appleOs: 'ios',
+  id: 'ios-device',
+  name: 'iPhone',
+  kind: 'device',
+  target: 'mobile',
+  booted: true,
+  iosPhysicalDeviceBackend: 'coredevice',
+};
+
+test.each(['coredevice', 'xctest'] as const)(
+  'retains a physical iOS runner through relaunch and resets its target with the %s backend',
+  async (iosPhysicalDeviceBackend) => {
+    const selectedDevice = { ...device, iosPhysicalDeviceBackend };
+    const signal = new AbortController().signal;
+    const events: string[] = [];
+    const interactor = {
+      close: vi.fn(async () => {
+        events.push('close');
+      }),
+      open: vi.fn(async () => {
+        events.push('open');
+      }),
+    } as unknown as Interactor;
+    const baseHost = platformRuntimeHostFixture();
+    const stopRunnerSession = vi.fn(async () => {
+      events.push('stop');
+    });
+    const prewarmRunnerSession = vi.fn(async () => {
+      events.push('prewarm');
+    });
+    const notifyRunnerAppRelaunched = vi.fn(async () => {
+      events.push('reset');
+    });
+    const host = {
+      ...baseHost,
+      localInteractors: { resolve: async () => interactor },
+      appleApplications: {
+        ...baseHost.appleApplications,
+        stopRunnerSession,
+        prewarmRunnerSession,
+        notifyRunnerAppRelaunched,
+      },
+    } as unknown as PlatformRuntimeHost;
+    const lifecycle = bindAppleApplicationLifecycle({ host, device: selectedDevice, signal });
+
+    await lifecycle.openApplication(openInput());
+
+    expect(events).toEqual(['close', 'open', 'prewarm', 'reset']);
+    expect(stopRunnerSession).not.toHaveBeenCalled();
+    expect(prewarmRunnerSession).toHaveBeenCalledWith(selectedDevice, {}, signal, false);
+    expect(notifyRunnerAppRelaunched).toHaveBeenCalledWith(selectedDevice, {}, signal);
+  },
+);
+
+test('starts an unawaited physical iOS first-open runner without a redundant health check', async () => {
+  const signal = new AbortController().signal;
+  const events: string[] = [];
+  const interactor = {
+    open: vi.fn(async () => {
+      events.push('open');
+    }),
+  } as unknown as Interactor;
+  const baseHost = platformRuntimeHostFixture();
+  const prewarmRunnerSession = vi.fn(async () => {
+    events.push('prewarm');
+  });
+  const host = {
+    ...baseHost,
+    localInteractors: { resolve: async () => interactor },
+    appleApplications: {
+      ...baseHost.appleApplications,
+      prewarmRunnerSession,
+    },
+  } as unknown as PlatformRuntimeHost;
+  const lifecycle = bindAppleApplicationLifecycle({ host, device, signal });
+
+  await lifecycle.openApplication({
+    ...openInput(),
+    hasExistingSession: false,
+    relaunch: false,
+  });
+
+  expect(events).toEqual(['open', 'prewarm']);
+  expect(prewarmRunnerSession).toHaveBeenCalledWith(device, {}, signal, false, {
+    healthCheck: false,
+  });
+});
+
+test('preserves runner health proof for an unawaited physical iOS open in an existing session', async () => {
+  const signal = new AbortController().signal;
+  const events: string[] = [];
+  const interactor = {
+    open: vi.fn(async () => {
+      events.push('open');
+    }),
+  } as unknown as Interactor;
+  const baseHost = platformRuntimeHostFixture();
+  const prewarmRunnerSession = vi.fn(async () => {
+    events.push('prewarm');
+  });
+  const host = {
+    ...baseHost,
+    localInteractors: { resolve: async () => interactor },
+    appleApplications: {
+      ...baseHost.appleApplications,
+      prewarmRunnerSession,
+    },
+  } as unknown as PlatformRuntimeHost;
+  const lifecycle = bindAppleApplicationLifecycle({ host, device, signal });
+
+  await lifecycle.openApplication({
+    ...openInput(),
+    hasExistingSession: true,
+    relaunch: false,
+  });
+
+  expect(events).toEqual(['open', 'prewarm']);
+  expect(prewarmRunnerSession).toHaveBeenCalledWith(device, {}, signal, false);
+});
+
+test('preserves the health check when physical iOS runner prewarm is awaited', async () => {
+  const signal = new AbortController().signal;
+  const events: string[] = [];
+  const interactor = {
+    open: vi.fn(async () => {
+      events.push('open');
+    }),
+  } as unknown as Interactor;
+  const baseHost = platformRuntimeHostFixture();
+  const prewarmRunnerSession = vi.fn(async () => {
+    events.push('prewarm');
+  });
+  const host = {
+    ...baseHost,
+    localInteractors: { resolve: async () => interactor },
+    appleApplications: {
+      ...baseHost.appleApplications,
+      prewarmRunnerSession,
+    },
+  } as unknown as PlatformRuntimeHost;
+  const lifecycle = bindAppleApplicationLifecycle({ host, device, signal });
+
+  await lifecycle.openApplication({
+    ...openInput(),
+    hasExistingSession: false,
+    relaunch: false,
+    prewarmRunnerBeforeOpen: true,
+  });
+
+  expect(events).toEqual(['prewarm', 'open']);
+  expect(prewarmRunnerSession).toHaveBeenCalledWith(device, {}, signal, true);
+});
+
+test.each(['ipados', 'tvos', 'visionos'] as const)(
+  'preserves runner restart semantics for a physical %s target',
+  async (appleOs) => {
+    const selectedDevice = { ...device, appleOs };
+    const signal = new AbortController().signal;
+    const events: string[] = [];
+    const interactor = {
+      close: vi.fn(async () => {
+        events.push('close');
+      }),
+      open: vi.fn(async () => {
+        events.push('open');
+      }),
+    } as unknown as Interactor;
+    const baseHost = platformRuntimeHostFixture();
+    const stopRunnerSession = vi.fn(async () => {
+      events.push('stop');
+    });
+    const prewarmRunnerSession = vi.fn(async () => {
+      events.push('prewarm');
+    });
+    const notifyRunnerAppRelaunched = vi.fn(async () => {
+      events.push('reset');
+    });
+    const host = {
+      ...baseHost,
+      localInteractors: { resolve: async () => interactor },
+      appleApplications: {
+        ...baseHost.appleApplications,
+        stopRunnerSession,
+        prewarmRunnerSession,
+        notifyRunnerAppRelaunched,
+      },
+    } as unknown as PlatformRuntimeHost;
+    const lifecycle = bindAppleApplicationLifecycle({ host, device: selectedDevice, signal });
+
+    await lifecycle.openApplication(openInput());
+
+    expect(events).toEqual(['stop', 'close', 'open', 'prewarm']);
+    expect(prewarmRunnerSession).toHaveBeenCalledWith(selectedDevice, {}, signal, false);
+    expect(notifyRunnerAppRelaunched).not.toHaveBeenCalled();
+  },
+);
+
+test('discards a retained physical iOS runner when relaunch fails and preserves the failure', async () => {
+  const signal = new AbortController().signal;
+  const events: string[] = [];
+  const relaunchFailure = new Error('app failed to reopen');
+  const interactor = {
+    close: vi.fn(async () => {
+      events.push('close');
+    }),
+    open: vi.fn(async () => {
+      events.push('open');
+      throw relaunchFailure;
+    }),
+  } as unknown as Interactor;
+  const baseHost = platformRuntimeHostFixture();
+  const stopRunnerSession = vi.fn(async () => {
+    events.push('stop');
+    throw new Error('runner cleanup failed');
+  });
+  const notifyRunnerAppRelaunched = vi.fn(async () => {
+    events.push('reset');
+  });
+  const host = {
+    ...baseHost,
+    localInteractors: { resolve: async () => interactor },
+    appleApplications: {
+      ...baseHost.appleApplications,
+      stopRunnerSession,
+      notifyRunnerAppRelaunched,
+    },
+  } as unknown as PlatformRuntimeHost;
+  const lifecycle = bindAppleApplicationLifecycle({ host, device, signal });
+
+  await expect(lifecycle.openApplication(openInput())).rejects.toBe(relaunchFailure);
+
+  expect(events).toEqual(['close', 'open', 'stop']);
+  expect(stopRunnerSession).toHaveBeenCalledWith(device.id);
+  expect(notifyRunnerAppRelaunched).not.toHaveBeenCalled();
+});
+
+test.each([true, false])(
+  'close finalization delegates the runner release to the runner module with retain=%s (#2552)',
+  async (retainRunner) => {
+    const signal = new AbortController().signal;
+    const baseHost = platformRuntimeHostFixture();
+    const releaseRunnerOnClose = vi.fn(async () => {});
+    const dismissCloseAlerts = vi.fn(async () => {});
+    const host = {
+      ...baseHost,
+      appleApplications: {
+        ...baseHost.appleApplications,
+        releaseRunnerOnClose,
+        dismissCloseAlerts,
+      },
+    } as unknown as PlatformRuntimeHost;
+    const lifecycle = bindAppleApplicationLifecycle({ host, device, signal });
+
+    await lifecycle.finalizeApplicationClose({ surface: 'app', retainRunner, stateDir: '/tmp' });
+
+    expect(releaseRunnerOnClose).toHaveBeenCalledWith(device.id, { retain: retainRunner });
+    expect(dismissCloseAlerts).toHaveBeenCalled();
+  },
+);
+
+test('daemon-shutdown finalization dismisses alerts and defers the runner release to the gateway (#2552)', async () => {
+  const signal = new AbortController().signal;
+  const baseHost = platformRuntimeHostFixture();
+  const releaseRunnerOnClose = vi.fn(async () => {});
+  const dismissCloseAlerts = vi.fn(async () => {});
+  const host = {
+    ...baseHost,
+    appleApplications: {
+      ...baseHost.appleApplications,
+      releaseRunnerOnClose,
+      dismissCloseAlerts,
+    },
+  } as unknown as PlatformRuntimeHost;
+  const lifecycle = bindAppleApplicationLifecycle({ host, device, signal });
+
+  await lifecycle.finalizeApplicationClose({
+    surface: 'app',
+    retainRunner: true,
+    stateDir: '/tmp',
+    daemonShutdown: true,
+  });
+
+  expect(releaseRunnerOnClose).not.toHaveBeenCalled();
+  expect(dismissCloseAlerts).toHaveBeenCalled();
+});
+
+test('prepare shares one startup budget across the Simulator boot and the runner preparation', async () => {
+  vi.useFakeTimers();
+  try {
+    const startedAtMs = 1_000_000;
+    vi.setSystemTime(startedAtMs);
+    const { host, calls, prepareRunner } = coldSimulatorLifecycleHost({
+      onBoot: () => vi.setSystemTime(startedAtMs + 10_000),
+      onBootstatus: () => vi.setSystemTime(startedAtMs + 50_000),
+    });
+    const lifecycle = bindAppleApplicationLifecycle({
+      host,
+      device: { ...simulator, booted: false },
+      signal: new AbortController().signal,
+    });
+
+    await lifecycle.prepareAppleRunner({ timeoutMs: 100_000, execution: {} });
+
+    // The boot wait gets what the boot left; the runner gets what the boot wait left.
+    expect(calls.find((call) => call.args.includes('bootstatus'))?.timeoutMs).toBe(90_000);
+    expect(prepareRunner).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id: simulator.id }),
+      { timeoutMs: 50_000, execution: {} },
+      expect.anything(),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('open forwards its startup deadline to the Simulator boot wait', async () => {
+  vi.useFakeTimers();
+  try {
+    const startedAtMs = 1_000_000;
+    vi.setSystemTime(startedAtMs);
+    const { host, calls } = coldSimulatorLifecycleHost({
+      onBoot: () => vi.setSystemTime(startedAtMs + 5_000),
+    });
+    const lifecycle = bindAppleApplicationLifecycle({
+      host,
+      device: { ...simulator, booted: false },
+      signal: new AbortController().signal,
+    });
+
+    await lifecycle.prepareApplicationOpen({
+      target: 'com.example.app',
+      hasExistingSession: false,
+      surface: 'app',
+      prewarmRunnerOnColdBoot: false,
+      execution: { startupDeadlineAtMs: startedAtMs + 45_000 },
+    });
+
+    expect(calls.find((call) => call.args.includes('bootstatus'))?.timeoutMs).toBe(40_000);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+/** A Shutdown Simulator host whose boot and bootstatus calls run the given hooks before succeeding. */
+function coldSimulatorLifecycleHost(hooks: { onBoot?: () => void; onBootstatus?: () => void }) {
+  const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
+  let state = 'Shutdown';
+  const run: PlatformRuntimeHost['appleTools']['run'] = vi.fn(async (request) => {
+    calls.push({ args: [...request.args], timeoutMs: request.timeoutMs });
+    if (request.args.includes('list')) {
+      return {
+        stdout: JSON.stringify({ devices: { ios: [{ udid: simulator.id, state }] } }),
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+    if (request.args.includes('boot')) {
+      hooks.onBoot?.();
+      state = 'Booted';
+    }
+    if (request.args.includes('bootstatus')) hooks.onBootstatus?.();
+    return { stdout: '', stderr: '', exitCode: 0 };
+  });
+  const prepareRunner = vi.fn(async () => ({ runner: {}, connectMs: 0, healthCheckMs: 0 }));
+  const base = platformRuntimeHostFixture();
+  const host = {
+    ...base,
+    appleTools: { isXcrunAvailable: async () => true, run },
+    appleApplications: { ...base.appleApplications, prepareRunner },
+  } as unknown as PlatformRuntimeHost;
+  return { host, calls, prepareRunner };
+}
+
+function openInput(): OpenApplicationInput {
+  return {
+    target: 'com.example.app',
+    positionals: ['com.example.app'],
+    appBundleId: 'com.example.app',
+    surface: 'app',
+    hasExistingSession: true,
+    relaunch: true,
+    prewarmRunnerBeforeOpen: false,
+    enableTestIme: false,
+    stateDir: '/tmp/agent-device-lifecycle-test',
+    runtimeHints: {},
+    execution: {},
+  };
+}
+
+const simulator: DeviceInfo = {
+  platform: 'apple',
+  appleOs: 'ios',
+  id: 'ios-simulator',
+  name: 'iPhone 17 Pro',
+  kind: 'simulator',
+  target: 'mobile',
+  booted: true,
+};
+
+function simulatorHost(overrides: {
+  prewarmRunnerSession?: () => Promise<void>;
+  hasLiveRunnerSession?: () => Promise<boolean>;
+  events: string[];
+}) {
+  const interactor = {
+    close: vi.fn(async () => {
+      overrides.events.push('close');
+    }),
+    open: vi.fn(async () => {
+      overrides.events.push('open');
+    }),
+  } as unknown as Interactor;
+  const baseHost = platformRuntimeHostFixture();
+  const prewarmRunnerSession = vi.fn(
+    overrides.prewarmRunnerSession ??
+      (async () => {
+        overrides.events.push('prewarm');
+      }),
+  );
+  const notifyRunnerAppRelaunched = vi.fn(async () => {
+    overrides.events.push('reset');
+  });
+  const hasLiveRunnerSession = vi.fn(overrides.hasLiveRunnerSession ?? (async () => false));
+  const releaseSpeculativeRunner = vi.fn(async () => {
+    overrides.events.push('release');
+    return true;
+  });
+  const host = {
+    ...baseHost,
+    clock: { ...baseHost.clock, sleep: async () => {} },
+    localInteractors: { resolve: async () => interactor },
+    appleApplications: {
+      ...baseHost.appleApplications,
+      prewarmRunnerSession,
+      notifyRunnerAppRelaunched,
+      hasLiveRunnerSession,
+      releaseSpeculativeRunner,
+    },
+  } as unknown as PlatformRuntimeHost;
+  return {
+    host,
+    prewarmRunnerSession,
+    notifyRunnerAppRelaunched,
+    hasLiveRunnerSession,
+    releaseSpeculativeRunner,
+  };
+}
+
+test('a Simulator open whose plan is observation-only starts no runner, releases a speculative one, and reports demand none', async () => {
+  const events: string[] = [];
+  const { host, prewarmRunnerSession, notifyRunnerAppRelaunched, releaseSpeculativeRunner } =
+    simulatorHost({ events });
+  const lifecycle = bindAppleApplicationLifecycle({
+    host,
+    device: simulator,
+    signal: new AbortController().signal,
+  });
+
+  const outcome = await lifecycle.openApplication({
+    ...openInput(),
+    execution: { plannedOperations: ['captureSnapshot', 'captureScreenshot'] },
+  });
+
+  expect(outcome.timing.runnerDemand).toBe('none');
+  expect(outcome.timing.runnerPrewarmScheduled).toBeUndefined();
+  expect(prewarmRunnerSession).not.toHaveBeenCalled();
+  expect(notifyRunnerAppRelaunched).not.toHaveBeenCalled();
+  // The release goes to the runner owner before the app opens and is never awaited by the open.
+  expect(releaseSpeculativeRunner).toHaveBeenCalledExactlyOnceWith(simulator, {
+    plannedOperations: ['captureSnapshot', 'captureScreenshot'],
+  });
+  expect(events).toEqual(['release', 'open']);
+});
+
+test.each([
+  ['an unknown plan', undefined, 'possible'],
+  ['a plan that needs the runner', ['captureSnapshot', 'tapPoint'], 'required'],
+] as const)(
+  'a Simulator relaunch with %s schedules the runner prewarm without awaiting it',
+  async (_name, plan, expectedDemand) => {
+    const events: string[] = [];
+    let releasePrewarm = () => {};
+    const { host, prewarmRunnerSession, notifyRunnerAppRelaunched, releaseSpeculativeRunner } =
+      simulatorHost({
+        events,
+        // A prewarm that never finishes inside the open: if the open awaited runner readiness
+        // this test would time out instead of passing.
+        prewarmRunnerSession: () =>
+          new Promise<void>((resolve) => {
+            releasePrewarm = resolve;
+          }),
+      });
+    const lifecycle = bindAppleApplicationLifecycle({
+      host,
+      device: simulator,
+      signal: new AbortController().signal,
+    });
+
+    const opened = lifecycle.openApplication({
+      ...openInput(),
+      relaunch: true,
+      execution: { plannedOperations: plan },
+    });
+    const outcome = await Promise.race([
+      opened,
+      new Promise<'awaited-runner-readiness'>((resolve) =>
+        setTimeout(() => resolve('awaited-runner-readiness'), 500),
+      ),
+    ]);
+    releasePrewarm();
+
+    expect(outcome).not.toBe('awaited-runner-readiness');
+    if (outcome === 'awaited-runner-readiness') return;
+    expect(outcome.timing.runnerDemand).toBe(expectedDemand);
+    expect(outcome.timing.runnerPrewarmScheduled).toBe(true);
+    expect(outcome.timing.runnerPrewarmWaited).toBe(false);
+    expect(prewarmRunnerSession).toHaveBeenCalledOnce();
+    // The starting runner has no cached target, so nothing is reset and nothing is awaited.
+    expect(notifyRunnerAppRelaunched).not.toHaveBeenCalled();
+    // Only a proven observation-only plan releases; a plan that may need the runner keeps it.
+    expect(releaseSpeculativeRunner).not.toHaveBeenCalled();
+    expect(events).toEqual(['open']);
+  },
+);
+
+test('a Simulator relaunch resets the target only on a runner that is already alive', async () => {
+  const events: string[] = [];
+  const { host, notifyRunnerAppRelaunched, hasLiveRunnerSession } = simulatorHost({
+    events,
+    hasLiveRunnerSession: async () => true,
+  });
+  const signal = new AbortController().signal;
+  const lifecycle = bindAppleApplicationLifecycle({ host, device: simulator, signal });
+
+  await lifecycle.openApplication({ ...openInput(), relaunch: true });
+
+  expect(hasLiveRunnerSession).toHaveBeenCalledWith(simulator, {});
+  expect(notifyRunnerAppRelaunched).toHaveBeenCalledWith(simulator, {}, signal);
+  expect(events).toEqual(['prewarm', 'open', 'reset']);
+});
+
+test('a physical iOS relaunch still awaits the runner prewarm and ignores the plan', async () => {
+  const events: string[] = [];
+  const interactor = {
+    close: vi.fn(async () => {
+      events.push('close');
+    }),
+    open: vi.fn(async () => {
+      events.push('open');
+    }),
+  } as unknown as Interactor;
+  const baseHost = platformRuntimeHostFixture();
+  const host = {
+    ...baseHost,
+    localInteractors: { resolve: async () => interactor },
+    appleApplications: {
+      ...baseHost.appleApplications,
+      prewarmRunnerSession: vi.fn(async () => {
+        events.push('prewarm');
+      }),
+      notifyRunnerAppRelaunched: vi.fn(async () => {
+        events.push('reset');
+      }),
+      hasLiveRunnerSession: vi.fn(async () => false),
+    },
+  } as unknown as PlatformRuntimeHost;
+  const lifecycle = bindAppleApplicationLifecycle({
+    host,
+    device,
+    signal: new AbortController().signal,
+  });
+
+  const outcome = await lifecycle.openApplication({
+    ...openInput(),
+    execution: { plannedOperations: ['captureSnapshot'] },
+  });
+
+  expect(outcome.timing.runnerDemand).toBeUndefined();
+  expect(outcome.timing.runnerPrewarmWaited).toBe(true);
+  expect(events).toEqual(['close', 'open', 'prewarm', 'reset']);
+});
+
+test('a Simulator open lets the launched app become observable instead of sleeping a fixed settle', async () => {
+  const events: string[] = [];
+  const { host } = simulatorHost({ events });
+  const sleep = vi.fn(async () => {
+    events.push('sleep');
+  });
+  const awaitObservable = vi.fn(async () => {
+    events.push('observe');
+    return 'observable' as const;
+  });
+  const signal = new AbortController().signal;
+  const lifecycle = bindAppleApplicationLifecycle({
+    host: { ...host, clock: { ...host.clock, sleep } } as unknown as PlatformRuntimeHost,
+    device: simulator,
+    signal,
+    observation: { awaitObservable },
+  });
+
+  const outcome = await lifecycle.openApplication({
+    ...openInput(),
+    execution: { plannedOperations: ['captureSnapshot'] },
+  });
+
+  expect(awaitObservable).toHaveBeenCalledWith(simulator, 'com.example.app', signal);
+  expect(outcome.timing.postOpenObservation).toBe('observable');
+  expect(events).toEqual(['release', 'open', 'observe']);
+});
+
+test('a Simulator whose bridge cannot answer keeps the fixed settle', async () => {
+  const events: string[] = [];
+  const { host } = simulatorHost({ events });
+  const sleep = vi.fn(async () => {
+    events.push('sleep');
+  });
+  const lifecycle = bindAppleApplicationLifecycle({
+    host: { ...host, clock: { ...host.clock, sleep } } as unknown as PlatformRuntimeHost,
+    device: simulator,
+    signal: new AbortController().signal,
+    observation: { awaitObservable: async () => 'unobservable' as const },
+  });
+
+  const outcome = await lifecycle.openApplication({
+    ...openInput(),
+    execution: { plannedOperations: ['captureSnapshot'] },
+  });
+
+  expect(outcome.timing.postOpenObservation).toBe('unobservable');
+  expect(events).toEqual(['release', 'open', 'sleep']);
+});
+
+test('a tvOS Simulator relaunch keeps the awaited prewarm and asks for no observation', async () => {
+  const events: string[] = [];
+  const { host, prewarmRunnerSession, notifyRunnerAppRelaunched } = simulatorHost({ events });
+  const awaitObservable = vi.fn(async () => 'observable' as const);
+  const tvos = { ...simulator, appleOs: 'tvos', target: 'tv' } as const satisfies DeviceInfo;
+  const lifecycle = bindAppleApplicationLifecycle({
+    host,
+    device: tvos,
+    signal: new AbortController().signal,
+    observation: { awaitObservable },
+  });
+
+  const outcome = await lifecycle.openApplication({
+    ...openInput(),
+    relaunch: true,
+    execution: { plannedOperations: ['captureSnapshot'] },
+  });
+
+  expect(outcome.timing.runnerDemand).toBeUndefined();
+  expect(outcome.timing.runnerPrewarmWaited).toBe(true);
+  expect(outcome.timing.postOpenObservation).toBeUndefined();
+  expect(awaitObservable).not.toHaveBeenCalled();
+  expect(prewarmRunnerSession).toHaveBeenCalledOnce();
+  expect(notifyRunnerAppRelaunched).not.toHaveBeenCalled();
+});

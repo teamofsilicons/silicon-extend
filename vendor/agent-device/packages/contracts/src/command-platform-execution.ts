@@ -1,0 +1,131 @@
+import type { InventoryUse } from './platform-module.ts';
+import type { RuntimeUseDeclaration } from './platform-runtime.ts';
+import { runtimeUseIdentity } from './platform-runtime-use.ts';
+
+/** A step as the daemon batch runner holds it: the same shape its handler will read. */
+export type RuntimeUseStep = Readonly<{
+  positionals?: readonly string[];
+  flags?: Readonly<Record<string, unknown>>;
+  input?: Readonly<Record<string, unknown>>;
+}>;
+
+/**
+ * Plan-time selection of the runtime uses one step can reach, for a command whose declared
+ * alternatives differ in what they execute. A selector reads the step the way the handler does
+ * and fails closed to every alternative when it cannot tell. Session-dependent splits (active
+ * app) stay open, so a selector returns every alternative the step still admits.
+ */
+export type RuntimeUseStepSelector = (step: RuntimeUseStep) => readonly RuntimeUseDeclaration[];
+
+export type CommandPlatformExecution =
+  | Readonly<{ kind: 'none' }>
+  /**
+   * Host-scoped platform work (ADR 0019): diagnostics, owner cleanup, or managed tooling runs
+   * through a neutral typed host service. The command binds no device runtime as its own
+   * execution shape; any device-runtime leg rides an already migrated command's declared use.
+   */
+  | Readonly<{ kind: 'host' }>
+  | Readonly<{ kind: 'inventory'; use: InventoryUse }>
+  | Readonly<{ kind: 'device-runtime'; use: RuntimeUseDeclaration }>
+  | Readonly<{
+      kind: 'device-runtime';
+      uses: readonly [RuntimeUseDeclaration, ...RuntimeUseDeclaration[]];
+      selectUses?: RuntimeUseStepSelector;
+    }>;
+
+// The discriminated union cannot prove uniqueness or operation-category disjointness inside
+// readonly arrays. Validate those declaration invariants where descriptors enter the registry.
+export function assertCommandPlatformExecution(
+  value: unknown,
+): asserts value is CommandPlatformExecution {
+  if (value === null || typeof value !== 'object') throw invalidPlatformExecution();
+  const declaration = value as Record<string, unknown>;
+  const keys = Object.keys(declaration).sort();
+  if (declaration['kind'] === 'none' && sameKeys(keys, ['kind'])) return;
+  if (declaration['kind'] === 'host' && sameKeys(keys, ['kind'])) return;
+  if (
+    declaration['kind'] === 'inventory' &&
+    sameKeys(keys, ['kind', 'use']) &&
+    hasExactInventoryUse(declaration['use'])
+  ) {
+    return;
+  }
+  if (
+    declaration['kind'] === 'device-runtime' &&
+    sameKeys(keys, ['kind', 'use']) &&
+    hasRuntimeUseDeclaration(declaration['use'])
+  ) {
+    return;
+  }
+  if (
+    declaration['kind'] === 'device-runtime' &&
+    (sameKeys(keys, ['kind', 'uses']) ||
+      (sameKeys(keys, ['kind', 'selectUses', 'uses']) &&
+        typeof declaration['selectUses'] === 'function')) &&
+    hasRuntimeUseDeclarations(declaration['uses'])
+  ) {
+    return;
+  }
+  throw invalidPlatformExecution();
+}
+
+function hasRuntimeUseDeclarations(
+  value: unknown,
+): value is readonly [RuntimeUseDeclaration, ...RuntimeUseDeclaration[]] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (!value.every(hasRuntimeUseDeclaration)) return false;
+  const identities = value.map(runtimeUseIdentity);
+  return new Set(identities).size === identities.length;
+}
+
+function hasExactInventoryUse(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const use = value as Record<string, unknown>;
+  return use['kind'] === 'device-inventory' && sameKeys(Object.keys(use).sort(), ['kind']);
+}
+
+function hasRuntimeUseDeclaration(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const use = value as Record<string, unknown>;
+  const categories = [
+    stringArray(use['required']),
+    stringArray(use['preferred']),
+    stringArray(use['conditional'] ?? []),
+  ];
+  if (!hasValidRuntimeUseCategories(categories)) return false;
+  const operations = categories.flat();
+  if (new Set(operations).size !== operations.length) return false;
+  return sameKeys(
+    Object.keys(use).sort(),
+    use['conditional'] === undefined
+      ? ['preferred', 'required']
+      : ['conditional', 'preferred', 'required'],
+  );
+}
+
+function hasValidRuntimeUseCategories(
+  categories: readonly (string[] | null)[],
+): categories is readonly string[][] {
+  return categories.every(
+    (category): category is string[] => category !== null && hasUniqueValues(category),
+  );
+}
+
+function stringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.every((key): key is string => typeof key === 'string') ? value : null;
+}
+
+function hasUniqueValues(values: readonly string[]): boolean {
+  return new Set(values).size === values.length;
+}
+
+function sameKeys(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function invalidPlatformExecution(): TypeError {
+  return new TypeError(
+    'Command platform execution must declare exactly one of none, host, inventory, or device-runtime',
+  );
+}

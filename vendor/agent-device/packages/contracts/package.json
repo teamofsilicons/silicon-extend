@@ -1,0 +1,507 @@
+{
+  "name": "@agent-device/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared agent-device command, snapshot, provider, and platform vocabulary. Internal workspace package bundled into the published agent-device artifact.",
+  "dependencies": {
+    "@agent-device/kernel": "workspace:*"
+  },
+  "exports": {
+    "./alert-contract": {
+      "types": "./src/alert-contract.ts",
+      "default": "./src/alert-contract.ts"
+    },
+    "./alert-runtime": {
+      "types": "./src/alert-runtime.ts",
+      "default": "./src/alert-runtime.ts"
+    },
+    "./android-clipboard-support": {
+      "types": "./src/android-clipboard-support.ts",
+      "default": "./src/android-clipboard-support.ts"
+    },
+    "./android-input-ownership": {
+      "types": "./src/android-input-ownership.ts",
+      "default": "./src/android-input-ownership.ts"
+    },
+    "./android-observation": {
+      "types": "./src/android-observation.ts",
+      "default": "./src/android-observation.ts"
+    },
+    "./android-snapshot-quality": {
+      "types": "./src/android-snapshot-quality.ts",
+      "default": "./src/android-snapshot-quality.ts"
+    },
+    "./android-system-chrome": {
+      "types": "./src/android-system-chrome.ts",
+      "default": "./src/android-system-chrome.ts"
+    },
+    "./android-system-surface-disclosure": {
+      "types": "./src/android-system-surface-disclosure.ts",
+      "default": "./src/android-system-surface-disclosure.ts"
+    },
+    "./app-deployment-runtime": {
+      "types": "./src/app-deployment-runtime.ts",
+      "default": "./src/app-deployment-runtime.ts"
+    },
+    "./app-deployment-runtime-plan": {
+      "types": "./src/app-deployment-runtime-plan.ts",
+      "default": "./src/app-deployment-runtime-plan.ts"
+    },
+    "./app-event-runtime": {
+      "types": "./src/app-event-runtime.ts",
+      "default": "./src/app-event-runtime.ts"
+    },
+    "./app-inventory-runtime": {
+      "types": "./src/app-inventory-runtime.ts",
+      "default": "./src/app-inventory-runtime.ts"
+    },
+    "./app-log-runtime": {
+      "types": "./src/app-log-runtime.ts",
+      "default": "./src/app-log-runtime.ts"
+    },
+    "./app-state-runtime": {
+      "types": "./src/app-state-runtime.ts",
+      "default": "./src/app-state-runtime.ts"
+    },
+    "./apple-runner-request": {
+      "types": "./src/apple-runner-request.ts",
+      "default": "./src/apple-runner-request.ts"
+    },
+    "./apple-session-observation": {
+      "types": "./src/apple-session-observation.ts",
+      "default": "./src/apple-session-observation.ts"
+    },
+    "./application-lifecycle-interaction": {
+      "types": "./src/application-lifecycle-interaction.ts",
+      "default": "./src/application-lifecycle-interaction.ts"
+    },
+    "./application-lifecycle-runtime": {
+      "types": "./src/application-lifecycle-runtime.ts",
+      "default": "./src/application-lifecycle-runtime.ts"
+    },
+    "./application-lifecycle-runtime-plan": {
+      "types": "./src/application-lifecycle-runtime-plan.ts",
+      "default": "./src/application-lifecycle-runtime-plan.ts"
+    },
+    "./async-lifecycle": {
+      "types": "./src/async-lifecycle.ts",
+      "default": "./src/async-lifecycle.ts"
+    },
+    "./audio-probe-result": {
+      "types": "./src/audio-probe-result.ts",
+      "default": "./src/audio-probe-result.ts"
+    },
+    "./audio-probe-runtime": {
+      "types": "./src/audio-probe-runtime.ts",
+      "default": "./src/audio-probe-runtime.ts"
+    },
+    "./audio-probe-runtime-host": {
+      "types": "./src/audio-probe-runtime-host.ts",
+      "default": "./src/audio-probe-runtime-host.ts"
+    },
+    "./audio-probe-support": {
+      "types": "./src/audio-probe-support.ts",
+      "default": "./src/audio-probe-support.ts"
+    },
+    "./audio-runtime-plan": {
+      "types": "./src/audio-runtime-plan.ts",
+      "default": "./src/audio-runtime-plan.ts"
+    },
+    "./back-mode": {
+      "types": "./src/back-mode.ts",
+      "default": "./src/back-mode.ts"
+    },
+    "./back-runtime": {
+      "types": "./src/back-runtime.ts",
+      "default": "./src/back-runtime.ts"
+    },
+    "./backend-diagnostics": {
+      "types": "./src/backend-diagnostics.ts",
+      "default": "./src/backend-diagnostics.ts"
+    },
+    "./boot-failure": {
+      "types": "./src/boot-failure.ts",
+      "default": "./src/boot-failure.ts"
+    },
+    "./capture": {
+      "types": "./src/facades/capture.ts",
+      "default": "./src/facades/capture.ts"
+    },
+    "./click-button": {
+      "types": "./src/click-button.ts",
+      "default": "./src/click-button.ts"
+    },
+    "./client": {
+      "types": "./src/facades/client.ts",
+      "default": "./src/facades/client.ts"
+    },
+    "./clipboard": {
+      "types": "./src/clipboard.ts",
+      "default": "./src/clipboard.ts"
+    },
+    "./clipboard-runtime": {
+      "types": "./src/clipboard-runtime.ts",
+      "default": "./src/clipboard-runtime.ts"
+    },
+    "./command": {
+      "types": "./src/facades/command.ts",
+      "default": "./src/facades/command.ts"
+    },
+    "./command-platform-execution": {
+      "types": "./src/command-platform-execution.ts",
+      "default": "./src/command-platform-execution.ts"
+    },
+    "./daemon-http": {
+      "types": "./src/daemon-http.ts",
+      "default": "./src/daemon-http.ts"
+    },
+    "./device": {
+      "types": "./src/facades/device.ts",
+      "default": "./src/facades/device.ts"
+    },
+    "./device-boot": {
+      "types": "./src/device-boot.ts",
+      "default": "./src/device-boot.ts"
+    },
+    "./device-readiness-runtime": {
+      "types": "./src/device-readiness-runtime.ts",
+      "default": "./src/device-readiness-runtime.ts"
+    },
+    "./device-shutdown-runtime": {
+      "types": "./src/device-shutdown-runtime.ts",
+      "default": "./src/device-shutdown-runtime.ts"
+    },
+    "./divergence": {
+      "types": "./src/facades/divergence.ts",
+      "default": "./src/facades/divergence.ts"
+    },
+    "./durable-resource": {
+      "types": "./src/durable-resource.ts",
+      "default": "./src/durable-resource.ts"
+    },
+    "./durable-resource-envelope": {
+      "types": "./src/durable-resource-envelope.ts",
+      "default": "./src/durable-resource-envelope.ts"
+    },
+    "./element-text-runtime": {
+      "types": "./src/element-text-runtime.ts",
+      "default": "./src/element-text-runtime.ts"
+    },
+    "./fill-evidence": {
+      "types": "./src/fill-evidence.ts",
+      "default": "./src/fill-evidence.ts"
+    },
+    "./fold-runtime": {
+      "types": "./src/fold-runtime.ts",
+      "default": "./src/fold-runtime.ts"
+    },
+    "./focus-runtime": {
+      "types": "./src/focus-runtime.ts",
+      "default": "./src/focus-runtime.ts"
+    },
+    "./gesture-admission": {
+      "types": "./src/gesture-admission.ts",
+      "default": "./src/gesture-admission.ts"
+    },
+    "./gesture-input": {
+      "types": "./src/gesture-input.ts",
+      "default": "./src/gesture-input.ts"
+    },
+    "./gesture-normalization": {
+      "types": "./src/gesture-normalization.ts",
+      "default": "./src/gesture-normalization.ts"
+    },
+    "./gesture-plan": {
+      "types": "./src/gesture-plan.ts",
+      "default": "./src/gesture-plan.ts"
+    },
+    "./gesture-plan-types": {
+      "types": "./src/gesture-plan-types.ts",
+      "default": "./src/gesture-plan-types.ts"
+    },
+    "./gesture-runtime": {
+      "types": "./src/gesture-runtime.ts",
+      "default": "./src/gesture-runtime.ts"
+    },
+    "./host-diagnostics": {
+      "types": "./src/host-diagnostics.ts",
+      "default": "./src/host-diagnostics.ts"
+    },
+    "./interaction": {
+      "types": "./src/interaction.ts",
+      "default": "./src/interaction.ts"
+    },
+    "./is-predicate": {
+      "types": "./src/is-predicate.ts",
+      "default": "./src/is-predicate.ts"
+    },
+    "./interaction-guarantees": {
+      "types": "./src/interaction-guarantees.ts",
+      "default": "./src/interaction-guarantees.ts"
+    },
+    "./ios-snapshot": {
+      "types": "./src/ios-snapshot.ts",
+      "default": "./src/ios-snapshot.ts"
+    },
+    "./ios-system-surface": {
+      "types": "./src/ios-system-surface.ts",
+      "default": "./src/ios-system-surface.ts"
+    },
+    "./ios-target-activation": {
+      "types": "./src/ios-target-activation.ts",
+      "default": "./src/ios-target-activation.ts"
+    },
+    "./interactor-operation-catalog": {
+      "types": "./src/interactor-operation-catalog.ts",
+      "default": "./src/interactor-operation-catalog.ts"
+    },
+    "./interactor-types": {
+      "types": "./src/interactor-types.ts",
+      "default": "./src/interactor-types.ts"
+    },
+    "./keyboard": {
+      "types": "./src/keyboard.ts",
+      "default": "./src/keyboard.ts"
+    },
+    "./keyboard-runtime": {
+      "types": "./src/keyboard-runtime.ts",
+      "default": "./src/keyboard-runtime.ts"
+    },
+    "./lease-scope": {
+      "types": "./src/lease-scope.ts",
+      "default": "./src/lease-scope.ts"
+    },
+    "./local-interactor-operation-set": {
+      "types": "./src/local-interactor-operation-set.ts",
+      "default": "./src/local-interactor-operation-set.ts"
+    },
+    "./logs-runtime-plan": {
+      "types": "./src/logs-runtime-plan.ts",
+      "default": "./src/logs-runtime-plan.ts"
+    },
+    "./managed-device-allocation": {
+      "types": "./src/managed-device-allocation.ts",
+      "default": "./src/managed-device-allocation.ts"
+    },
+    "./managed-web-backend": {
+      "types": "./src/managed-web-backend.ts",
+      "default": "./src/managed-web-backend.ts"
+    },
+    "./navigation": {
+      "types": "./src/navigation.ts",
+      "default": "./src/navigation.ts"
+    },
+    "./network-runtime": {
+      "types": "./src/network-runtime.ts",
+      "default": "./src/network-runtime.ts"
+    },
+    "./network-runtime-plan": {
+      "types": "./src/network-runtime-plan.ts",
+      "default": "./src/network-runtime-plan.ts"
+    },
+    "./network-traffic": {
+      "types": "./src/network-traffic.ts",
+      "default": "./src/network-traffic.ts"
+    },
+    "./observability": {
+      "types": "./src/facades/observability.ts",
+      "default": "./src/facades/observability.ts"
+    },
+    "./orientation-runtime": {
+      "types": "./src/orientation-runtime.ts",
+      "default": "./src/orientation-runtime.ts"
+    },
+    "./perf-runtime": {
+      "types": "./src/perf-runtime.ts",
+      "default": "./src/perf-runtime.ts"
+    },
+    "./perf-runtime-host": {
+      "types": "./src/perf-runtime-host.ts",
+      "default": "./src/perf-runtime-host.ts"
+    },
+    "./perf-runtime-operation-builder": {
+      "types": "./src/perf-runtime-operation-builder.ts",
+      "default": "./src/perf-runtime-operation-builder.ts"
+    },
+    "./platform-module": {
+      "types": "./src/platform-module.ts",
+      "default": "./src/platform-module.ts"
+    },
+    "./platform-plugin": {
+      "types": "./src/platform-plugin.ts",
+      "default": "./src/platform-plugin.ts"
+    },
+    "./platform-providers": {
+      "types": "./src/platform-providers.ts",
+      "default": "./src/platform-providers.ts"
+    },
+    "./platform-runtime": {
+      "types": "./src/platform-runtime.ts",
+      "default": "./src/platform-runtime.ts"
+    },
+    "./platform-runtime-host": {
+      "types": "./src/platform-runtime-host.ts",
+      "default": "./src/platform-runtime-host.ts"
+    },
+    "./platform-runtime-operations": {
+      "types": "./src/platform-runtime-operations.ts",
+      "default": "./src/platform-runtime-operations.ts"
+    },
+    "./platform-runtime-unavailable": {
+      "types": "./src/platform-runtime-unavailable.ts",
+      "default": "./src/platform-runtime-unavailable.ts"
+    },
+    "./runtime-contract-error": {
+      "types": "./src/runtime-contract-error.ts",
+      "default": "./src/runtime-contract-error.ts"
+    },
+    "./runtime-operation-names": {
+      "types": "./src/runtime-operation-names.ts",
+      "default": "./src/runtime-operation-names.ts"
+    },
+    "./progress": {
+      "types": "./src/facades/progress.ts",
+      "default": "./src/facades/progress.ts"
+    },
+    "./react-native-overlay": {
+      "types": "./src/react-native-overlay.ts",
+      "default": "./src/react-native-overlay.ts"
+    },
+    "./record-runtime-execution": {
+      "types": "./src/record-runtime-execution.ts",
+      "default": "./src/record-runtime-execution.ts"
+    },
+    "./recording": {
+      "types": "./src/facades/recording.ts",
+      "default": "./src/facades/recording.ts"
+    },
+    "./recording-native-path": {
+      "types": "./src/recording-native-path.ts",
+      "default": "./src/recording-native-path.ts"
+    },
+    "./recording-stop-progress": {
+      "types": "./src/recording-stop-progress.ts",
+      "default": "./src/recording-stop-progress.ts"
+    },
+    "./recording-stop-observation": {
+      "types": "./src/recording-stop-observation.ts",
+      "default": "./src/recording-stop-observation.ts"
+    },
+    "./remote": {
+      "types": "./src/facades/remote.ts",
+      "default": "./src/facades/remote.ts"
+    },
+    "./replay": {
+      "types": "./src/facades/replay.ts",
+      "default": "./src/facades/replay.ts"
+    },
+    "./runner-lease-context": {
+      "types": "./src/runner-lease-context.ts",
+      "default": "./src/runner-lease-context.ts"
+    },
+    "./screen-capture-contract": {
+      "types": "./src/screen-capture-contract.ts",
+      "default": "./src/screen-capture-contract.ts"
+    },
+    "./screen-recording-runtime": {
+      "types": "./src/screen-recording-runtime.ts",
+      "default": "./src/screen-recording-runtime.ts"
+    },
+    "./screen-recording-runtime-host": {
+      "types": "./src/screen-recording-runtime-host.ts",
+      "default": "./src/screen-recording-runtime-host.ts"
+    },
+    "./screen-recording-runtime-plan": {
+      "types": "./src/screen-recording-runtime-plan.ts",
+      "default": "./src/screen-recording-runtime-plan.ts"
+    },
+    "./screenshot-runtime": {
+      "types": "./src/screenshot-runtime.ts",
+      "default": "./src/screenshot-runtime.ts"
+    },
+    "./scroll-command": {
+      "types": "./src/scroll-command.ts",
+      "default": "./src/scroll-command.ts"
+    },
+    "./scroll-gesture": {
+      "types": "./src/scroll-gesture.ts",
+      "default": "./src/scroll-gesture.ts"
+    },
+    "./scroll-runtime": {
+      "types": "./src/scroll-runtime.ts",
+      "default": "./src/scroll-runtime.ts"
+    },
+    "./selector-observation-runtime": {
+      "types": "./src/selector-observation-runtime.ts",
+      "default": "./src/selector-observation-runtime.ts"
+    },
+    "./session": {
+      "types": "./src/facades/session.ts",
+      "default": "./src/facades/session.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "default": "./src/settings.ts"
+    },
+    "./settings-runtime": {
+      "types": "./src/settings-runtime.ts",
+      "default": "./src/settings-runtime.ts"
+    },
+    "./snapshot": {
+      "types": "./src/facades/snapshot.ts",
+      "default": "./src/facades/snapshot.ts"
+    },
+    "./snapshot-runtime": {
+      "types": "./src/snapshot-runtime.ts",
+      "default": "./src/snapshot-runtime.ts"
+    },
+    "./snapshot-scope": {
+      "types": "./src/snapshot-scope.ts",
+      "default": "./src/snapshot-scope.ts"
+    },
+    "./startup-recovery-fence": {
+      "types": "./src/startup-recovery-fence.ts",
+      "default": "./src/startup-recovery-fence.ts"
+    },
+    "./system-button-runtime": {
+      "types": "./src/system-button-runtime.ts",
+      "default": "./src/system-button-runtime.ts"
+    },
+    "./tap-keyboard-occlusion": {
+      "types": "./src/tap-keyboard-occlusion.ts",
+      "default": "./src/tap-keyboard-occlusion.ts"
+    },
+    "./touch-runtime": {
+      "types": "./src/touch-runtime.ts",
+      "default": "./src/touch-runtime.ts"
+    },
+    "./tv-remote": {
+      "types": "./src/tv-remote.ts",
+      "default": "./src/tv-remote.ts"
+    },
+    "./tv-remote-runtime": {
+      "types": "./src/tv-remote-runtime.ts",
+      "default": "./src/tv-remote-runtime.ts"
+    },
+    "./type-text-runtime": {
+      "types": "./src/type-text-runtime.ts",
+      "default": "./src/type-text-runtime.ts"
+    },
+    "./viewport-runtime": {
+      "types": "./src/viewport-runtime.ts",
+      "default": "./src/viewport-runtime.ts"
+    },
+    "./wait": {
+      "types": "./src/wait.ts",
+      "default": "./src/wait.ts"
+    },
+    "./wait-runtime-plan": {
+      "types": "./src/wait-runtime-plan.ts",
+      "default": "./src/wait-runtime-plan.ts"
+    }
+  },
+  "devDependencies": {
+    "fast-check": "^4.9.0"
+  }
+}

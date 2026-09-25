@@ -1,0 +1,728 @@
+import assert from 'node:assert/strict';
+import { describe, test } from 'vitest';
+import { parseMaestroProgram } from '../program-ir-parser.ts';
+import type { MaestroCommand } from '../program-ir.ts';
+
+describe('parseMaestroProgram', () => {
+  test('preserves config, hooks, conditions, nested blocks, and source lines', () => {
+    const program = parseMaestroProgram(
+      [
+        'name: Checkout',
+        'appId: example.app',
+        'env:',
+        '  COUNT: ${COUNT}',
+        'onFlowStart:',
+        '  - launchApp:',
+        '      clearState: true',
+        'onFlowComplete:',
+        '  - takeScreenshot: final.png',
+        '---',
+        '- runFlow:',
+        '    when:',
+        '      platform: iOS',
+        '      true: "${maestro.platform == \'ios\'}"',
+        '    env:',
+        '      CHILD: nested',
+        '    commands:',
+        '      - tapOn:',
+        '          id: checkout-form',
+        '      - repeat:',
+        '          times: ${COUNT}',
+        '          commands:',
+        '            - assertVisible: Ready',
+        '- retry:',
+        '    maxRetries: 2',
+        '    commands:',
+        '      - pressKey: Enter',
+      ].join('\n'),
+      { sourcePath: '/flows/checkout.yaml' },
+    );
+
+    assert.deepEqual(program.source, { path: '/flows/checkout.yaml', line: 1 });
+    assert.deepEqual(program.config.env, { COUNT: '${COUNT}' });
+    assert.equal(program.config.onFlowStart?.[0]?.kind, 'launchApp');
+    assert.deepEqual(program.config.onFlowStart?.[0]?.source, {
+      path: '/flows/checkout.yaml',
+      line: 6,
+    });
+    assert.equal(program.config.onFlowComplete?.[0]?.kind, 'takeScreenshot');
+    assert.deepEqual(
+      program.commands.map((command) => command.kind),
+      ['runFlow', 'retry'],
+    );
+
+    const runFlow = commandOfKind(program.commands[0], 'runFlow');
+    assert.deepEqual(runFlow.source, { path: '/flows/checkout.yaml', line: 11 });
+    assert.deepEqual(runFlow.when, {
+      platform: 'ios',
+      true: "${maestro.platform == 'ios'}",
+    });
+    assert.deepEqual(runFlow.env, { CHILD: 'nested' });
+    assert.equal(runFlow.include.kind, 'commands');
+    const inline = runFlow.include as Extract<typeof runFlow.include, { kind: 'commands' }>;
+    assert.deepEqual(
+      inline.commands.map((command) => command.source.line),
+      [18, 20],
+    );
+    const repeat = commandOfKind(inline.commands[1], 'repeat');
+    assert.equal(repeat.times, '${COUNT}');
+    assert.equal(repeat.commands[0]?.kind, 'assertVisible');
+    assert.equal(repeat.commands[0]?.source.line, 23);
+
+    const retry = commandOfKind(program.commands[1], 'retry');
+    assert.equal(retry.maxRetries, 2);
+    assert.equal(retry.commands[0]?.kind, 'pressKey');
+    assert.equal(retry.commands[0]?.source.line, 27);
+  });
+
+  test('parses flow tags as typed metadata and validates each tag', () => {
+    const program = parseMaestroProgram(
+      ['name: Pager', 'tags: [smoke, pager]', '---', '- launchApp'].join('\n'),
+    );
+
+    assert.deepEqual(program.config.tags, ['smoke', 'pager']);
+    assert.throws(
+      () => parseMaestroProgram(['tags: [smoke, 7]', '---', '- launchApp'].join('\n')),
+      /tags\[1\].*expects a string.*line 1/i,
+    );
+  });
+
+  test('keeps authored absolute, percentage, and target gesture spaces', () => {
+    const program = parseMaestroProgram(`---
+- tapOn:
+    point: 20%, 30%
+- tapOn:
+    id: submit
+    retryTapIfNoChange: true
+- doubleTapOn:
+    point: 100,200
+- longPressOn:
+    id: hold
+- swipe:
+    start: 100, 200
+    end: 300, 400
+- swipe:
+    start: 90%, 50%
+    end: 10%, 50%
+- swipe:
+    from:
+      id: handle
+    direction: LEFT
+`);
+
+    const [
+      percentTap,
+      targetTap,
+      absoluteDoubleTap,
+      targetLongPress,
+      absoluteSwipe,
+      percentSwipe,
+      targetSwipe,
+    ] = program.commands;
+    const percentTapCommand = commandOfKind(percentTap, 'tapOn');
+    const targetTapCommand = commandOfKind(targetTap, 'tapOn');
+    const absoluteDoubleTapCommand = commandOfKind(absoluteDoubleTap, 'doubleTapOn');
+    const targetLongPressCommand = commandOfKind(targetLongPress, 'longPressOn');
+    const absoluteSwipeCommand = commandOfKind(absoluteSwipe, 'swipe');
+    const percentSwipeCommand = commandOfKind(percentSwipe, 'swipe');
+    const targetSwipeCommand = commandOfKind(targetSwipe, 'swipe');
+
+    assert.deepEqual(percentTapCommand.target, { space: 'percent', x: 20, y: 30 });
+    assert.deepEqual(targetTapCommand.target, { space: 'target', selector: { id: 'submit' } });
+    assert.equal(targetTapCommand.retryTapIfNoChange, true);
+    assert.deepEqual(absoluteDoubleTapCommand.target, { space: 'absolute', x: 100, y: 200 });
+    assert.deepEqual(targetLongPressCommand.target, {
+      space: 'target',
+      selector: { id: 'hold' },
+    });
+    assert.deepEqual(absoluteSwipeCommand.gesture, {
+      kind: 'coordinates',
+      start: { space: 'absolute', x: 100, y: 200 },
+      end: { space: 'absolute', x: 300, y: 400 },
+    });
+    assert.deepEqual(percentSwipeCommand.gesture, {
+      kind: 'coordinates',
+      start: { space: 'percent', x: 90, y: 50 },
+      end: { space: 'percent', x: 10, y: 50 },
+    });
+    assert.deepEqual(targetSwipeCommand.gesture, {
+      kind: 'target',
+      from: { id: 'handle' },
+      direction: 'left',
+    });
+  });
+
+  test('parses optional on assertion and target command maps', () => {
+    const program = parseMaestroProgram(
+      [
+        '---',
+        '- assertVisible:',
+        '    text: Maybe present',
+        '    optional: true',
+        '- doubleTapOn:',
+        '    id: maybe-present',
+        '    optional: true',
+        '- scrollUntilVisible:',
+        '    element: Maybe visible',
+        '    optional: true',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'assertVisible',
+      source: { line: 2 },
+      target: { text: 'Maybe present' },
+      optional: true,
+    });
+    assert.deepEqual(program.commands[1], {
+      kind: 'doubleTapOn',
+      source: { line: 5 },
+      target: { space: 'target', selector: { id: 'maybe-present' } },
+      optional: true,
+    });
+    assert.deepEqual(program.commands[2], {
+      kind: 'scrollUntilVisible',
+      source: { line: 8 },
+      element: { text: 'Maybe visible' },
+      optional: true,
+    });
+  });
+
+  test('parses optional on scrollUntilVisible and extendedWaitUntil element selectors', () => {
+    const program = parseMaestroProgram(
+      [
+        '---',
+        '- scrollUntilVisible:',
+        '    element:',
+        '      id: maybe-visible',
+        '      optional: true',
+        '- extendedWaitUntil:',
+        '    visible:',
+        '      text: Ready',
+        '      optional: true',
+        '    timeout: 1000',
+        '- extendedWaitUntil:',
+        '    notVisible:',
+        '      id: gone',
+        '      optional: true',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'scrollUntilVisible',
+      source: { line: 2 },
+      element: { id: 'maybe-visible' },
+      optional: true,
+    });
+    assert.deepEqual(program.commands[1], {
+      kind: 'extendedWaitUntil',
+      source: { line: 6 },
+      visible: { text: 'Ready' },
+      timeout: 1000,
+      optional: true,
+    });
+    assert.deepEqual(program.commands[2], {
+      kind: 'extendedWaitUntil',
+      source: { line: 11 },
+      notVisible: { id: 'gone' },
+      optional: true,
+    });
+  });
+
+  test('parses assertTrue literal, ${VAR} lookup, and map form with optional/label', () => {
+    const program = parseMaestroProgram(
+      [
+        '---',
+        '- assertTrue: true',
+        '- assertTrue: "false"',
+        '- assertTrue: ${FLAG}',
+        '- assertTrue:',
+        '    condition: "false"',
+        '    optional: true',
+        '    label: Flag check',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'assertTrue',
+      source: { line: 2 },
+      condition: true,
+    });
+    assert.deepEqual(program.commands[1], {
+      kind: 'assertTrue',
+      source: { line: 3 },
+      condition: 'false',
+    });
+    assert.deepEqual(program.commands[2], {
+      kind: 'assertTrue',
+      source: { line: 4 },
+      condition: '${FLAG}',
+    });
+    assert.deepEqual(program.commands[3], {
+      kind: 'assertTrue',
+      source: { line: 5 },
+      condition: 'false',
+      optional: true,
+      label: 'Flag check',
+    });
+  });
+
+  test('rejects a JS-expression assertTrue condition (only literals and bare ${VAR} lookups are supported)', () => {
+    assert.throws(
+      () => parseMaestroProgram(['---', '- assertTrue: ${1+1}'].join('\n')),
+      /assertTrue.*bare.*lookup.*runScript/is,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          ['---', '- assertTrue:', '    condition: "prefix ${FLAG} suffix"'].join('\n'),
+        ),
+      /assertTrue\.condition.*bare.*lookup.*runScript/is,
+    );
+  });
+
+  test('rejects assertTrue with no condition', () => {
+    assert.throws(
+      () => parseMaestroProgram(['---', '- assertTrue:', '    optional: true'].join('\n')),
+      /assertTrue requires condition/i,
+    );
+    assert.throws(
+      () => parseMaestroProgram(['---', '- assertTrue'].join('\n')),
+      /assertTrue requires condition/i,
+    );
+  });
+
+  test('rejects selectors that contain only optional and no matching criteria', () => {
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          ['---', '- scrollUntilVisible:', '    element:', '      optional: true'].join('\n'),
+        ),
+      /scrollUntilVisible\.element selector must contain a selector value/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          ['---', '- extendedWaitUntil:', '    visible:', '      optional: true'].join('\n'),
+        ),
+      /extendedWaitUntil\.visible selector must contain a selector value/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          ['---', '- extendedWaitUntil:', '    notVisible:', '      optional: true'].join('\n'),
+        ),
+      /extendedWaitUntil\.notVisible selector must contain a selector value/i,
+    );
+  });
+
+  test('rejects extendedWaitUntil with both visible and notVisible conditions', () => {
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          ['---', '- extendedWaitUntil:', '    visible: A', '    notVisible:', '      id: B'].join(
+            '\n',
+          ),
+        ),
+      /extendedWaitUntil cannot specify both visible and notVisible/i,
+    );
+  });
+
+  test('preserves an include boundary and the authored include path', () => {
+    const program = parseMaestroProgram(
+      `appId: example.app
+---
+- runFlow: helpers/child.yaml
+- tapOn: Continue
+`,
+      { sourcePath: '/flows/main.yaml' },
+    );
+
+    const include = commandOfKind(program.commands[0], 'runFlow');
+    assert.deepEqual(include.include, { kind: 'file', path: 'helpers/child.yaml' });
+    assert.deepEqual(include.source, { path: '/flows/main.yaml', line: 3 });
+    assert.deepEqual(program.commands[1]?.source, { path: '/flows/main.yaml', line: 4 });
+  });
+
+  test('keeps supported command values typed instead of lowering them to arguments', () => {
+    const program = parseMaestroProgram(`appId: example.app
+---
+- launchApp:
+    appId: child.app
+    stopApp: false
+    arguments:
+      - --mode
+      - preview
+    launchArguments:
+      feature: true
+- inputText:
+    text: Ada \${USER}
+    label: Full name
+- eraseText:
+    charactersToErase: 4
+- openLink:
+    link: https://example.test
+- extendedWaitUntil:
+    visible:
+      id: ready
+    timeout: 2500
+- scrollUntilVisible:
+    element: Checkout
+    direction: DOWN
+    timeout: 5000
+- runScript:
+    file: setup.js
+    env:
+      SERVER: local
+`);
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'launchApp',
+      source: { line: 3 },
+      appId: 'child.app',
+      stopApp: false,
+      arguments: { kind: 'list', values: ['--mode', 'preview'] },
+      launchArguments: { kind: 'map', values: { feature: true } },
+    });
+    assert.deepEqual(program.commands[1], {
+      kind: 'inputText',
+      source: { line: 11 },
+      text: 'Ada ${USER}',
+      label: 'Full name',
+    });
+    assert.deepEqual(program.commands[3], {
+      kind: 'openLink',
+      source: { line: 16 },
+      link: 'https://example.test',
+    });
+    const wait = commandOfKind(program.commands[4], 'extendedWaitUntil');
+    assert.deepEqual(wait.visible, { id: 'ready' });
+    assert.equal(wait.timeout, 2500);
+    const scroll = commandOfKind(program.commands[5], 'scrollUntilVisible');
+    assert.equal(scroll.direction, 'down');
+    assert.equal(scroll.timeout, 5000);
+    assert.deepEqual(program.commands[6], {
+      kind: 'runScript',
+      source: { line: 26 },
+      file: 'setup.js',
+      env: { SERVER: 'local' },
+    });
+  });
+
+  test('parses setPermissions maps, variables, and optional/label', () => {
+    const program = parseMaestroProgram(`appId: example.app
+---
+- setPermissions:
+    permissions:
+      all: deny
+      notifications: unset
+- setPermissions:
+    appId: child.app
+    permissions:
+      camera: \${CAMERA_STATE}
+      location: always
+    optional: true
+    label: Prepare scan
+`);
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'setPermissions',
+      source: { line: 3 },
+      permissions: { all: 'deny', notifications: 'unset' },
+    });
+    assert.deepEqual(program.commands[1], {
+      kind: 'setPermissions',
+      source: { line: 7 },
+      appId: 'child.app',
+      permissions: { camera: '${CAMERA_STATE}', location: 'always' },
+      optional: true,
+      label: 'Prepare scan',
+    });
+    // Prototype names are not duplicates: the YAML layer already rejects real
+    // duplicate keys, so parsing accepts them and the backend verdict applies.
+    const prototype = parseMaestroProgram(`---
+- setPermissions:
+    permissions:
+      constructor: allow
+`);
+    assert.deepEqual(prototype.commands[0], {
+      kind: 'setPermissions',
+      source: { line: 2 },
+      permissions: { constructor: 'allow' },
+    });
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- setPermissions:
+    appId: example.app
+`),
+      /requires permissions.*line 2/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- setPermissions:
+    permissions:
+      camera: sometimes
+`),
+      /allow\|deny\|unset.*line 4/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- setPermissions:
+    permissions:
+      camera: \${ALLOW + 1}
+`),
+      /not supported.*line 4/i,
+    );
+  });
+
+  test('parses launchApp permissions maps', () => {
+    const program = parseMaestroProgram(`appId: example.app
+---
+- launchApp:
+    clearState: true
+    permissions:
+      all: deny
+      camera: \${CAMERA_STATE}
+`);
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'launchApp',
+      source: { line: 3 },
+      clearState: true,
+      permissions: { all: 'deny', camera: '${CAMERA_STATE}' },
+    });
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- launchApp:
+    permissions: {}
+`),
+      /launchApp\.permissions requires at least one permission.*line 3/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- launchApp:
+    permissions:
+      camera: sometimes
+`),
+      /allow\|deny\|unset.*line 4/i,
+    );
+  });
+
+  test('parses evalScript as a scalar script string', () => {
+    const program = parseMaestroProgram(['---', '- evalScript: ${output.sum = 1 + 2}'].join('\n'));
+    assert.deepEqual(program.commands[0], {
+      kind: 'evalScript',
+      source: { line: 2 },
+      script: '${output.sum = 1 + 2}',
+    });
+    assert.throws(
+      () => parseMaestroProgram(['---', '- evalScript: [1, 2]'].join('\n')),
+      /evalScript expects a scalar value/i,
+    );
+  });
+
+  test('reports source lines for unsupported and invalid command shapes', () => {
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- unsupportedCommand: true
+`),
+      /unsupported.*line 2/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- swipe:
+    start: 10,20
+    end: 50%,60%
+`),
+      /same coordinate space.*line 2/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- swipe:
+    start: 150%,50%
+    end: 10%,50%
+`),
+      /between 0% and 100%.*line 3/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- runFlow:
+    when: {}
+    commands: []
+`),
+      /when cannot be empty.*line 3/i,
+    );
+  });
+
+  test('rejects fractional percentages, directionless target swipes, and pasteText', () => {
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- tapOn:
+    point: 12.5%, 40%
+`),
+      /percentage coordinates must be whole numbers.*line 3/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(`---
+- swipe:
+    from: Pager
+`),
+      /target swipe requires direction.*line 2/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          `---
+- pasteText: pasted
+`,
+          { sourcePath: '/flows/paste.yaml' },
+        ),
+      /command "pasteText" is not supported.*\/flows\/paste\.yaml:line 2/i,
+    );
+  });
+
+  test('parses standalone clearState with an explicit or config app id', () => {
+    const program = parseMaestroProgram(
+      `appId: example.app
+---
+- clearState: example.app
+- clearState
+`,
+      { sourcePath: '/flows/clear.yaml' },
+    );
+
+    assert.deepEqual(program.commands[0], {
+      kind: 'clearState',
+      source: { path: '/flows/clear.yaml', line: 3 },
+      appId: 'example.app',
+    });
+    assert.deepEqual(program.commands[1], {
+      kind: 'clearState',
+      source: { path: '/flows/clear.yaml', line: 4 },
+    });
+  });
+
+  test('preserves source paths for unsupported and malformed flows', () => {
+    const sourcePath = '/flows/includes/child.yaml';
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          `---
+- unsupportedCommand: true
+`,
+          { sourcePath },
+        ),
+      /unsupported.*\/flows\/includes\/child\.yaml:line 2/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          `---
+- tapOn:
+    label: Save
+    unsupported: true
+`,
+          { sourcePath },
+        ),
+      /not supported.*\/flows\/includes\/child\.yaml:line 4/i,
+    );
+    assert.throws(
+      () =>
+        parseMaestroProgram(
+          `---
+- runFlow:
+    file: [child.yaml
+`,
+          { sourcePath },
+        ),
+      /Invalid Maestro YAML flow[\s\S]*\/flows\/includes\/child\.yaml:line 4/i,
+    );
+  });
+
+  test('parses numeric option fields as literals or variable references', () => {
+    const program = parseMaestroProgram(
+      [
+        '---',
+        '- extendedWaitUntil:',
+        '    visible: Ready',
+        '    timeout: ${TIMEOUT}',
+        '- scrollUntilVisible:',
+        '    element: Item',
+        '    timeout: 1200',
+        '- waitForAnimationToEnd: ${ANIM_TIMEOUT}',
+        '- tapOn:',
+        '    id: button',
+        '    index: ${INDEX}',
+        '    repeat: ${REPEAT}',
+        '    delay: 50',
+        '- doubleTapOn:',
+        '    id: button',
+        '    delay: ${DELAY}',
+        '- swipe:',
+        '    start: 90%, 50%',
+        '    end: 10%, 50%',
+        '    duration: ${DURATION}',
+        '- eraseText: ${CHARS}',
+        '- eraseText:',
+        '    charactersToErase: ${CHARS}',
+      ].join('\n'),
+    );
+
+    const extendedWaitUntil = commandOfKind(program.commands[0], 'extendedWaitUntil');
+    assert.equal(extendedWaitUntil.timeout, '${TIMEOUT}');
+
+    const scrollUntilVisible = commandOfKind(program.commands[1], 'scrollUntilVisible');
+    assert.equal(scrollUntilVisible.timeout, 1200);
+
+    const waitForAnimationToEnd = commandOfKind(program.commands[2], 'waitForAnimationToEnd');
+    assert.equal(waitForAnimationToEnd.timeout, '${ANIM_TIMEOUT}');
+
+    const tapOn = commandOfKind(program.commands[3], 'tapOn');
+    assert.equal(
+      tapOn.target.space === 'target' ? tapOn.target.selector.index : undefined,
+      '${INDEX}',
+    );
+    assert.equal(tapOn.repeat, '${REPEAT}');
+    assert.equal(tapOn.delay, 50);
+
+    const doubleTapOn = commandOfKind(program.commands[4], 'doubleTapOn');
+    assert.equal(doubleTapOn.delay, '${DELAY}');
+
+    const swipe = commandOfKind(program.commands[5], 'swipe');
+    assert.equal(swipe.gesture.kind, 'coordinates');
+    assert.equal(swipe.gesture.duration, '${DURATION}');
+
+    const eraseTextScalar = commandOfKind(program.commands[6], 'eraseText');
+    assert.equal(eraseTextScalar.charactersToErase, '${CHARS}');
+    const eraseTextMap = commandOfKind(program.commands[7], 'eraseText');
+    assert.equal(eraseTextMap.charactersToErase, '${CHARS}');
+
+    assert.throws(
+      () => parseMaestroProgram('---\n- tapOn:\n    id: button\n    index: ${0 + 1}\n'),
+      /tapOn\.index.*non-negative integer.*line 4/i,
+    );
+    assert.throws(
+      () => parseMaestroProgram('---\n- eraseText: 0\n'),
+      /eraseText.*positive integer.*line 2/i,
+    );
+  });
+});
+
+function commandOfKind<K extends MaestroCommand['kind']>(
+  command: MaestroCommand | undefined,
+  kind: K,
+): Extract<MaestroCommand, { kind: K }> {
+  assert.equal(command?.kind, kind);
+  return command as Extract<MaestroCommand, { kind: K }>;
+}

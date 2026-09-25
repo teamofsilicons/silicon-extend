@@ -1,0 +1,14 @@
+[package]
+name = "bridge-hosted"
+description = "Drivers for devices a computer carries: iPhone, iPad, Apple TV, Samsung and LG TVs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bridge-driver.workspace = true
+bridge-protocol.workspace = true
+async-trait.workspace = true
