@@ -49,6 +49,7 @@ async fn start() -> Env {
         data_dir: data,
         iam: IamMode::Local,
         iam_public_url: format!("{base}/dev/iam"),
+        iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
         webhook_previous_secret: None,
         files: FilesMode::Local,

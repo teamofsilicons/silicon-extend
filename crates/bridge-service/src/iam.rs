@@ -97,6 +97,8 @@ pub trait Iam: Send + Sync {
     async fn authorize(&self, token: &str, team: Option<&str>, sel: Option<&TestingSelection>) -> AppResult<Principal>;
     /// Whether a Carbon or Silicon is an active member of a team.
     async fn member_active(&self, team: &str, member_id: &str, sel: Option<&TestingSelection>) -> AppResult<bool>;
+    /// The Silicons in the principal's team (for choosing who gets access).
+    async fn team_silicons(&self, principal: &Principal, sel: Option<&TestingSelection>) -> AppResult<Vec<bridge_protocol::model::TeamSilicon>>;
     /// Validates a test application secret and names its environment.
     async fn select_testing(&self, secret: &str) -> AppResult<(Uuid, String)>;
     #[allow(clippy::too_many_arguments)]
@@ -347,6 +349,26 @@ impl Iam for SdkIam {
             Err(silicon_iam_client::Error::Api(api)) if api.status == 404 || api.status == 403 => Ok(false),
             Err(e) => Err(sdk_error(e)),
         }
+    }
+
+    async fn team_silicons(&self, principal: &Principal, sel: Option<&TestingSelection>) -> AppResult<Vec<bridge_protocol::model::TeamSilicon>> {
+        let team = principal.team()?.to_owned();
+        let client = self.client(sel)?.with_credential(Credential::bearer(&principal.token));
+        let mut out = Vec::new();
+        let mut paging = silicon_iam_client::Paging::new();
+        for _ in 0..20 {
+            let page = client.members().directory(&team, Some("id,name,display_name"), &paging).await.map_err(sdk_error)?;
+            for m in page.items {
+                if let Some(id) = m.id.filter(|i| i.starts_with("si:")) {
+                    out.push(bridge_protocol::model::TeamSilicon { id, display_name: m.display_name.or(m.name) });
+                }
+            }
+            match page.page.next_cursor.filter(|_| page.page.has_more) {
+                Some(c) => paging = silicon_iam_client::Paging::new().after(c),
+                None => break,
+            }
+        }
+        Ok(out)
     }
 
     async fn select_testing(&self, secret: &str) -> AppResult<(Uuid, String)> {
@@ -627,6 +649,18 @@ impl Iam for LocalIam {
 
     async fn member_active(&self, team: &str, member_id: &str, _sel: Option<&TestingSelection>) -> AppResult<bool> {
         Ok(ids::member_kind(member_id).is_some() && self.teams_of(member_id).await.is_some_and(|t| t.iter().any(|x| x == team)))
+    }
+
+    async fn team_silicons(&self, principal: &Principal, _sel: Option<&TestingSelection>) -> AppResult<Vec<bridge_protocol::model::TeamSilicon>> {
+        let team = principal.team()?.to_owned();
+        let members = self.members.read().await;
+        let mut out: Vec<_> = members
+            .iter()
+            .filter(|(id, teams)| id.starts_with("si:") && teams.contains(&team))
+            .map(|(id, _)| bridge_protocol::model::TeamSilicon { id: id.clone(), display_name: None })
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
     }
 
     async fn select_testing(&self, secret: &str) -> AppResult<(Uuid, String)> {

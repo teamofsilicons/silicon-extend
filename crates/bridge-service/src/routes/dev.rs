@@ -107,9 +107,9 @@ pub async fn authorize_submit(State(state): State<Shared>, Form(mut form): Form<
         .ok_or_else(|| AppError::invalid("redirect_uri is required"))?;
     let mut url = url::Url::parse(&redirect).map_err(|_| AppError::invalid("redirect_uri must be an absolute URL"))?;
     {
+        // Like IAM: append `slt` to redirect_uri and keep its existing query.
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("slt", member.trim());
-        pairs.append_pair("code", member.trim());
         if let Some(s) = form.get("state") {
             pairs.append_pair("state", s);
         }

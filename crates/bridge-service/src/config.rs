@@ -47,6 +47,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub iam: IamMode,
     pub iam_public_url: String,
+    pub iam_login_url: String,
     pub webhook_secret: Option<(i64, String)>,
     pub webhook_previous_secret: Option<(i64, String)>,
     pub files: FilesMode,
@@ -142,6 +143,10 @@ impl Config {
             iam_public_url: match &iam {
                 IamMode::Sdk { base_url, .. } => var("BRIDGE_IAM_PUBLIC_URL").unwrap_or_else(|| base_url.clone()),
                 IamMode::Local => var_or("BRIDGE_IAM_PUBLIC_URL", "http://127.0.0.1:8480/dev/iam"),
+            },
+            iam_login_url: match &iam {
+                IamMode::Sdk { .. } => var_or("BRIDGE_IAM_LOGIN_URL", "https://auth.iam.teamofsilicons.com/login"),
+                IamMode::Local => var("BRIDGE_IAM_LOGIN_URL").unwrap_or_else(|| format!("{}/dev/iam/login", var_or("BRIDGE_PUBLIC_URL", "http://127.0.0.1:8480"))),
             },
             iam,
             webhook_secret: secret("BRIDGE_IAM_WEBHOOK_SECRET", "BRIDGE_IAM_WEBHOOK_SECRET_VERSION")?,

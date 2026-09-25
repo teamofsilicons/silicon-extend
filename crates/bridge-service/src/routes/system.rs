@@ -62,6 +62,7 @@ pub async fn iam(State(state): State<Shared>, headers: HeaderMap) -> AppResult<R
         IamInfo {
             app_id: state.iam.app_id().to_owned(),
             iam_base_url: state.cfg.iam_public_url.clone(),
+            iam_login_url: Some(state.cfg.iam_login_url.clone()),
             api_base_url: state.cfg.public_url.clone(),
             website_url: state.cfg.website_url.clone(),
             docs_url: state.cfg.docs_url.clone(),

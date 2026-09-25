@@ -410,6 +410,12 @@ pub async fn attach(State(state): State<Shared>, auth: Auth, Path(host_id): Path
     .await
 }
 
+pub async fn team_silicons(State(state): State<Shared>, auth: Auth) -> AppResult<Response> {
+    auth.team()?;
+    let items = state.iam.team_silicons(&auth.p, auth.sel.as_ref()).await?;
+    Ok(ok("team_silicons", serde_json::json!({"items": items})))
+}
+
 pub async fn setup(State(state): State<Shared>, auth: Auth, Path(device_id): Path<String>) -> AppResult<Response> {
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     Ok(ok("setup", d.setup()))

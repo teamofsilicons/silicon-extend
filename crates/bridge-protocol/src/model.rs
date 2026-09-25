@@ -139,6 +139,9 @@ pub struct SetupStep {
     pub help: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What the Carbon enters on the website for this step, if anything (`"code"` for an Apple TV).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -580,12 +583,23 @@ pub struct Me {
 pub struct IamInfo {
     pub app_id: String,
     pub iam_base_url: String,
+    /// Where to send a Carbon to sign in: `{iam_login_url}?app_id=…&redirect_uri=…`; IAM appends `slt=…`.
+    #[serde(default)]
+    pub iam_login_url: Option<String>,
     pub api_base_url: String,
     pub website_url: String,
     pub docs_url: String,
     pub repository_url: String,
     #[serde(default)]
     pub testing_environment: Option<TestingEnvironment>,
+}
+
+/// A Silicon in the caller's team, for picking who gets access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamSilicon {
+    pub id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

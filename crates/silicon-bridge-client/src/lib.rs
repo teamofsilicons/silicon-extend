@@ -400,6 +400,15 @@ impl Authed<'_> {
         self.post(&format!("/api/v1/devices/{id}/stop"), "stop", serde_json::json!({}), false).await
     }
 
+    /// Silicons in the team, for choosing who gets access.
+    pub async fn team_silicons(&self) -> Result<Vec<TeamSilicon>> {
+        #[derive(serde::Deserialize)]
+        struct Items {
+            items: Vec<TeamSilicon>,
+        }
+        Ok(self.get::<Items>("/api/v1/team/silicons").await?.items)
+    }
+
     pub async fn setup(&self, id: &str) -> Result<Setup> {
         self.get(&format!("/api/v1/devices/{id}/setup")).await
     }
