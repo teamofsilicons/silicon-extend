@@ -44,6 +44,7 @@ import {
   type AppleScrollOptions,
 } from './core/scroll.ts';
 import { runMacosDesktopScroll } from './os/macos/desktop-scroll.ts';
+import { runMacOsTextAction } from './os/macos/helper.ts';
 import { appleRemotePressCommand } from './os/tvos/remote.ts';
 
 export type AppleBackRunnerCommand = 'backInApp' | 'backSystem';
@@ -141,9 +142,28 @@ export function iosRunnerOverrides(
         );
       },
       focus: async (x, y) => {
+        if (isMacOs(device)) {
+          return await runMacOsTextAction('', {
+            replace: false,
+            focusOnly: true,
+            x,
+            y,
+            bundleId: ctx.appBundleId,
+            signal: ctx.signal,
+          });
+        }
         return await runAppleRunnerCommand(device, iosTapCommand(device, ctx, x, y), runnerOpts);
       },
       type: async (text, delayMs) => {
+        if (isMacOs(device)) {
+          await runMacOsTextAction(text, {
+            replace: false,
+            bundleId: ctx.appBundleId,
+            delayMs,
+            signal: ctx.signal,
+          });
+          return {};
+        }
         return readTypeTextBackendResult(
           await runAppleRunnerCommand(
             device,
@@ -159,6 +179,16 @@ export function iosRunnerOverrides(
         );
       },
       fill: async (x, y, text, delayMs, options) => {
+        if (isMacOs(device)) {
+          return await runMacOsTextAction(text, {
+            replace: true,
+            bundleId: ctx.appBundleId,
+            x,
+            y,
+            delayMs,
+            signal: ctx.signal,
+          });
+        }
         return await runAppleRunnerCommand(
           device,
           {

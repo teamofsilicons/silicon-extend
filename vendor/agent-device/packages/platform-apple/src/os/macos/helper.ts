@@ -279,12 +279,13 @@ const MACOS_HELPER_KILL_GRACE_MS = 1_000;
 
 async function runMacOsHelper<T extends Record<string, unknown>>(
   args: string[],
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; stdin?: string } = {},
 ): Promise<T> {
   const helperOptions = {
     allowFailure: true,
     timeoutMs: options.timeoutMs ?? MACOS_HELPER_TIMEOUT_MS,
     signal: options.signal,
+    stdin: options.stdin,
     kill: { signal: 'SIGTERM' as const, graceMs: MACOS_HELPER_KILL_GRACE_MS },
   };
   const helperProvider = resolveAppleToolProvider().macosHelper;
@@ -331,6 +332,30 @@ export async function resolveFrontmostMacOsApp(): Promise<{
   pid?: number;
 }> {
   return await runMacOsHelper(['app', 'frontmost']);
+}
+
+export async function runMacOsTextAction(
+  text: string,
+  options: {
+    replace: boolean;
+    focusOnly?: boolean;
+    bundleId?: string;
+    x?: number;
+    y?: number;
+    delayMs?: number;
+    signal?: AbortSignal;
+  },
+): Promise<Record<string, unknown>> {
+  const { signal, ...input } = options;
+  if (input.bundleId) input.bundleId = assertMacOsBundleId(input.bundleId);
+  return await runMacOsHelper(['text'], {
+    signal,
+    stdin: JSON.stringify({ text, ...input }),
+    timeoutMs: Math.max(
+      MACOS_HELPER_TIMEOUT_MS,
+      text.length * Math.max(options.delayMs ?? 0, 2) + 5000,
+    ),
+  });
 }
 
 export async function quitMacOsApp(bundleId: string): Promise<{

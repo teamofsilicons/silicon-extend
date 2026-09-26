@@ -148,10 +148,12 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
 - It checks Accessibility (`AXIsProcessTrusted`) and Screen Recording
   (`CGPreflightScreenCaptureAccess`) without prompting. Those two are the setup steps, and the
   window's **Open** buttons take the Carbon to the right System Settings page.
-- Typing (`fill`/`type`) and `record` go through agent-device's XCUITest runner, so they also need
-  Xcode and **UI Automation** (`automationmodetool`). When UI Automation isn't pre-approved,
-  `input.text` and `screen.record` are reported as `missing` with the exact fix.
-- They aren't setup steps, because setup gates every session and the Mac is useful without typing.
+- Typing (`fill`/`type`/`focus`) uses the native helper with Accessibility and keyboard events.
+  The helper checks field ownership and focus before sending text; a focus failure stops the
+  command. Text is passed over stdin rather than command-line arguments.
+- `record` still uses XCUITest and needs Xcode and **UI Automation** (`automationmodetool`).
+  Without that setup, `screen.record` is reported missing with the exact fix. These are not
+  setup steps because other commands remain useful without recording.
 - Permissions belong to the app that launched the agent: Silicon Bridge.app when installed, or the
   terminal during development.
 

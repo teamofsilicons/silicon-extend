@@ -65,7 +65,7 @@ sed "s/@VERSION@/$VERSION/g" "$ROOT/apps/desktop/macos/Info.plist.in" > "$APP/Co
 cp "$BIN" "$APP/Contents/MacOS/bridge-agent"
 cp "$HELPER" "$APP/Contents/MacOS/agent-device-macos-helper"
 # agent-device: its self-contained dist, plus the Apple sources it builds on first use
-# (the UI testing runner for typing and recording, and the helpers).
+# (the UI testing runner for recording and other runner commands, and the helpers).
 tar -C "$AD" --exclude='.build' --exclude='.swiftpm' --exclude='DerivedData' --exclude='xcuserdata' \
   -cf - bin dist package.json LICENSE apple/runner apple/snapshot-presentation apple/macos-helper apple/snapshot-bridge apple/fold-helper \
   | tar -C "$APP/Contents/Resources/agent-device" -xf -

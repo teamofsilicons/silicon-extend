@@ -17,9 +17,9 @@ pub const ACCESSIBILITY_REASON: &str =
     "Allow Accessibility for Silicon Bridge in System Settings › Privacy & Security › Accessibility.";
 pub const SCREEN_RECORDING_REASON: &str =
     "Allow Screen Recording for Silicon Bridge in System Settings › Privacy & Security › Screen & System Audio Recording.";
-pub const UI_AUTOMATION_REASON: &str = "Typing and screen recording need UI Automation. Allow it once: run `automationmodetool enable-automationmode-without-authentication` in Terminal and enter your password, or approve the “XCTest is trying to Enable UI Automation” prompt each time it appears.";
+pub const UI_AUTOMATION_REASON: &str = "Screen recording needs UI Automation. Allow it once: run `automationmodetool enable-automationmode-without-authentication` in Terminal and enter your password, or approve the “XCTest is trying to Enable UI Automation” prompt each time it appears.";
 pub const XCODE_REASON: &str =
-    "Typing into apps needs Xcode's UI testing tools. Install Xcode from the App Store and open it once.";
+    "Screen recording needs Xcode's UI testing tools. Install Xcode from the App Store and open it once.";
 
 /// macOS's UI Automation mode, which agent-device's UI testing runner turns on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,14 +88,14 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
 
     steps.push(step("accessibility", "Allow Accessibility for Silicon Bridge", facts.accessibility, ACCESSIBILITY_HELP));
     if facts.accessibility {
-        caps.extend([ScreenRead, InputPointer, Alerts]);
+        caps.extend([ScreenRead, InputPointer, InputText, Alerts]);
     } else {
         for c in [ScreenRead, InputPointer, InputText, Alerts] {
             miss(c, ACCESSIBILITY_REASON, &mut missing);
         }
     }
 
-    // Typing and recording go through agent-device's UI testing runner, which needs Xcode and
+    // Recording goes through agent-device's UI testing runner, which needs Xcode and
     // UI Automation; without them those commands would wait for a password prompt.
     let automation_ready = matches!(facts.automation, AutomationMode::Enabled | AutomationMode::NoAuthentication);
     let runner_problem = if !facts.xcode {
@@ -120,14 +120,6 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         }
     }
 
-    // Typing goes through agent-device's UI testing runner. Xcode and UI Automation aren't setup
-    // steps (setup gates every session, and the Mac is useful without typing); what's missing
-    // and why is reported in `missing`.
-    match runner_problem {
-        Some(why) => miss(InputText, why, &mut missing),
-        None if facts.accessibility => caps.push(InputText),
-        None => {}
-    }
     finish(caps, missing, steps)
 }
 
@@ -264,19 +256,19 @@ mod tests {
     }
 
     #[test]
-    fn ui_automation_needing_a_password_holds_back_typing() {
+    fn typing_needs_accessibility_but_recording_still_needs_ui_automation() {
         let p = build_probe(&MacFacts { automation: AutomationMode::NeedsAuthentication, ..all_good() }, &input());
-        assert!(!p.capabilities.contains(&Capability::InputText));
+        assert!(p.capabilities.contains(&Capability::InputText));
         // Only Accessibility and Screen Recording are setup steps; this doesn't block sessions.
         assert_eq!(p.setup.state, SetupState::Complete);
         assert_eq!(p.setup.steps.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["accessibility", "screen_recording"]);
         assert!(p.capabilities.contains(&Capability::InputPointer));
-        assert!(p.missing.iter().any(|m| m.capability == Capability::InputText && m.reason.contains("automationmodetool")));
-        // Recording goes through the same runner.
+        // Recording still goes through the runner.
         assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRecord && m.reason.contains("automationmodetool")));
         assert!(p.capabilities.contains(&Capability::ScreenCapture));
         let p = build_probe(&MacFacts { xcode: false, ..all_good() }, &input());
-        assert!(p.missing.iter().any(|m| m.capability == Capability::InputText && m.reason == XCODE_REASON));
+        assert!(p.capabilities.contains(&Capability::InputText));
+        assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRecord && m.reason == XCODE_REASON));
     }
 
     #[test]

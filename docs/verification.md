@@ -33,8 +33,9 @@ and what has **not** been verified. Rerun the automated part with `e2e/run-all.s
   Developer Mode steps.
 - **Real Samsung/LG TVs and Apple TV**: only mocks (and pyatv's pairing server for Apple TV crypto).
 - **Physical Android phones, Fire TV, Android 11–12.**
-- **Mac typing and screen recording**: need UI Automation enabled once
+- **Mac screen recording**: still needs UI Automation enabled once
   (`automationmodetool enable-automationmode-without-authentication`); reported as missing until then.
+  Typing no longer uses that runner; see the native text follow-up below.
 - **Briefcase and Ting through IAM OBO**: implemented to their documented contracts; tests used the
   local stand-ins (Briefcase's OBO upload lacks self-destruct and "make permanent" — TECHNICAL.md
   open questions 1–2).
@@ -90,5 +91,36 @@ compatibility. These checks do not establish completion of the entire product co
   reports the new signed identity's missing Accessibility and Screen Recording permissions.
   Those grants must be made through macOS before input/capture validation can proceed.
 - Notarization support is implemented but was not run: an existing notarytool Keychain
-  profile is needed. The artifact is signed, not notarized or published. Mac typing and
-  recording still require the UI Automation setup documented above.
+  profile is needed. The artifact is signed, not notarized or published. Recording still
+  requires the UI Automation setup documented above.
+
+## macOS native text follow-up — 2026-09-26
+
+- `fill`, `type` and `focus` now use the signed Accessibility helper without Xcode or an
+  XCTest authentication prompt. Text travels over stdin; the helper verifies the target app
+  and field focus before sending input. Cancellation releases any held key and exits.
+- Real AppKit tests on this Mac passed Unicode (including joined emoji and Devanagari),
+  long text, exact whitespace/punctuation, replacement, append, empty clearing, field
+  isolation, secure-field replacement and refusal of invalid coordinates. Cancelling a
+  delayed entry stopped further typing; the next entry succeeded.
+- Selection uses the Accessibility text range, so clearing does not depend on an Edit menu
+  implementing Command-A. Default text events are grouped to avoid macOS double-space
+  punctuation substitution. Non-secure `fill` verifies the final exact value and reports a
+  failure if the application transforms or rejects it. Explicit per-character delay still
+  uses individual character events.
+- The packaged `bridge-agent exec` path passed `open`, `snapshot`, selector-based `fill`
+  and `type` against the isolated fixture. Its dedicated daemon was stopped after the test.
+  Run `python3 apps/desktop/macos/text-e2e.py --bridge 'target/desktop/macos/Silicon Bridge.app/Contents/MacOS/bridge-agent'`
+  after building and granting Accessibility. The test opens only its own temporary app.
+- 48 focused TypeScript tests and 7 Rust probe tests pass, as do workspace TypeScript
+  checking and lint. The new dispatch regression was observed failing with the original
+  implementation and passing with the native route. The Swift helper build/tests pass.
+  The vendor's `check:affected` selector cannot run from this nested checkout because it
+  resolves the parent Git root; its required checks were selected and run directly.
+- System Settings shows both requested grants enabled. The running app's status reports
+  Accessibility and Screen Recording setup complete; only the separate XCTest recording
+  requirement remains. A subprocess launched by the development host can report different
+  screen permission status from the actual running app.
+- These checks establish native AppKit input and packaged local-driver behavior. They do
+  not establish arbitrary third-party app compatibility, production relay behavior,
+  recording, notarization or publication.

@@ -8,11 +8,34 @@ import {
   runMacOsReadTextAction,
   runMacOsScreenshotAction,
   runMacOsSnapshotAction,
+  runMacOsTextAction,
 } from './helper.ts';
 
 const desktop = macOsHelperSurface('desktop')!;
 const menubar = macOsHelperSurface('menubar')!;
 const frontmostApp = macOsHelperSurface('frontmost-app')!;
+
+test('text stays out of argv and cancellation reaches the native helper', async () => {
+  const controller = new AbortController();
+  const provider = createLocalAppleToolProvider({
+    macosHelper: {
+      run: async (args, options) => {
+        assert.deepEqual(args, ['text']);
+        assert.equal(options?.signal, controller.signal);
+        assert.deepEqual(JSON.parse(String(options?.stdin)), {
+          text: 'private 👋',
+          replace: true,
+          x: 12,
+          y: 34,
+        });
+        return helperReturn({ backend: 'macos-helper' });
+      },
+    },
+  });
+  await withAppleToolProvider(provider, () =>
+    runMacOsTextAction('private 👋', { replace: true, x: 12, y: 34, signal: controller.signal }),
+  );
+});
 
 test('macOS helper snapshot passes cancellation to the helper process', async () => {
   const controller = new AbortController();

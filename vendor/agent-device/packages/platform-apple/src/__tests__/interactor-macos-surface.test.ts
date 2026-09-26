@@ -21,6 +21,7 @@ vi.mock('../os/macos/helper.ts', async (importOriginal) => {
     })),
     runMacOsReadTextAction: vi.fn(async () => ({ text: 'helper' })),
     runMacOsPressAction: vi.fn(async (x: number, y: number) => ({ x, y })),
+    runMacOsTextAction: vi.fn(async () => ({ backend: 'macos-helper' })),
   };
 });
 
@@ -47,6 +48,7 @@ import {
   runMacOsReadTextAction,
   runMacOsScreenshotAction,
   runMacOsSnapshotAction,
+  runMacOsTextAction,
 } from '../os/macos/helper.ts';
 import { captureScreenshotViaRunner, screenshotIos } from '../core/screenshot.ts';
 import { runAppleRunnerCommand } from '../core/runner-client.ts';
@@ -91,6 +93,7 @@ const helperEntryPoints = [
   runMacOsSnapshotAction,
   runMacOsReadTextAction,
   runMacOsPressAction,
+  runMacOsTextAction,
 ];
 const runnerEntryPoints = [runAppleRunnerCommand, screenshotIos, captureScreenshotViaRunner];
 
@@ -99,6 +102,20 @@ function clearEntryPoints(): void {
 }
 
 beforeEach(clearEntryPoints);
+
+test('macOS text entry and focus use the native helper without starting XCTest', async () => {
+  const interactor = createAppleInteractor(macOsDevice, { appBundleId: 'com.example.Editor' });
+  await interactor.fill(20, 30, 'hello 👋');
+  await interactor.type(' more');
+  await interactor.focus(20, 30);
+  expect(runMacOsTextAction).toHaveBeenCalledTimes(3);
+  expect(runAppleRunnerCommand).not.toHaveBeenCalled();
+  vi.mocked(runMacOsTextAction).mockRejectedValueOnce(new Error('text_entry_focus_not_observed'));
+  await expect(interactor.fill(20, 30, 'wrong field')).rejects.toThrow(
+    'text_entry_focus_not_observed',
+  );
+  expect(runAppleRunnerCommand).not.toHaveBeenCalled();
+});
 
 function reachedBackend(): MacOsSurfaceBackend {
   const helper = helperEntryPoints.some((entry) => vi.mocked(entry).mock.calls.length > 0);

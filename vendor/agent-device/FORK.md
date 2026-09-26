@@ -5,6 +5,11 @@ Forked from https://github.com/callstack/agent-device at commit `bce6f52` (2026-
 Bridge runs this fork on Mac and Linux devices (and on a Mac hosting an iPhone or iPad) to read the screen
 and act on it. Changes made for Bridge are listed below, newest first, so they can be offered upstream.
 
+- **2026-09-26 — macOS native text entry.** `fill`, `type` and `focus` route to the signed
+  Accessibility helper instead of starting XCTest. It validates app/field focus, selects text
+  through AX ranges, sends Unicode keyboard events, verifies non-secure replacement and stops
+  on cancellation. Text is supplied over stdin. Unit dispatch tests and Bridge's live AppKit
+  fixture cover the helper and packaged selector path. Recording still uses XCTest.
 - **2026-09-26 — Linux: xclip clipboard writes no longer time out.** `clipboard write` with xclip ran
   `xclip -selection clipboard` directly; xclip forks a child that keeps serving the selection and
   inherits the stdout/stderr pipes, so the 5 s wait always timed out. It now runs through
