@@ -47,6 +47,32 @@ pub struct SessionFacts {
     pub armed_script: Option<PathBuf>,
     /// `logs start` ran and `logs stop` hasn't.
     pub logs_running: bool,
+    /// macOS without UI Automation: agent-device's app sessions go through its XCTest runner, which
+    /// blocks on the "Enable UI Automation" prompt. The session instead follows the frontmost app
+    /// through agent-device's macOS helper (`--surface frontmost-app`), which needs only
+    /// Accessibility and Screen Recording.
+    pub helper_surface: bool,
+}
+
+/// Whether agent-device's XCTest runner can drive macOS apps without a prompt.
+fn macos_runner_ready() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let f = super::probe_macos::gather();
+        matches!(f.automation, super::probe_macos::AutomationMode::Enabled | super::probe_macos::AutomationMode::NoAuthentication) && f.xcode
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// The app or link an `open` names, when it names one and picks no surface itself.
+fn open_target(args: &[String]) -> Option<String> {
+    if args.iter().any(|a| a.starts_with("--surface")) {
+        return None;
+    }
+    args.iter().find(|a| !a.starts_with('-')).cloned()
 }
 
 /// A file the plan expects the command to produce.
@@ -602,6 +628,25 @@ impl Driver for AgentDeviceDriver {
 
     async fn run(&self, inv: Invocation<'_>) -> Output {
         let facts = self.facts(inv.session_id);
+        if facts.helper_surface && inv.command == "open"
+            && let Some(target) = open_target(inv.args) {
+                // Launch with the system, then follow the frontmost app through the helper.
+                let is_link = target.contains("://");
+                let mut launch = std::process::Command::new("/usr/bin/open");
+                if is_link { launch.arg(&target) } else { launch.args(["-a", &target]) };
+                match launch.output() {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        return Output::fail("app_not_found", format!("Couldn't open {target}: {}", String::from_utf8_lossy(&o.stderr).trim()));
+                    }
+                    Err(e) => return Output::fail("app_not_found", format!("Couldn't open {target}: {e}")),
+                }
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+                let argv = ["open".to_owned(), "--surface".into(), "frontmost-app".into()];
+                let mut out = self.invoke(inv.session_id, &argv, inv.workdir, inv.timeout, &inv.cancel).await;
+                tidy_text(&mut out, inv.workdir);
+                return out;
+            }
         let session_dir = self.session_dir(inv.session_id);
         let ctx = PlanContext { workdir: inv.workdir, session_dir: &session_dir, attachments: inv.attachments, facts: &facts };
         let plan = match plan(inv.command, inv.args, &ctx) {
@@ -646,7 +691,15 @@ impl Driver for AgentDeviceDriver {
     }
 
     async fn session_started(&self, session_id: &str) {
-        self.sessions.lock().unwrap().insert(session_id.to_owned(), SessionFacts::default());
+        let helper_surface = self.platform == "macos" && !tokio::task::spawn_blocking(macos_runner_ready).await.unwrap_or(false);
+        self.sessions.lock().unwrap().insert(session_id.to_owned(), SessionFacts { helper_surface, ..SessionFacts::default() });
+        if helper_surface && self.available() {
+            // Start on whatever app is in front, so `snapshot` works before any `open`.
+            let dir = self.session_dir(session_id);
+            let _ = tokio::fs::create_dir_all(&dir).await;
+            let argv = ["open".to_owned(), "--surface".into(), "frontmost-app".into()];
+            let _ = self.invoke(session_id, &argv, &dir, Duration::from_secs(20), &CancelToken::new()).await;
+        }
     }
 
     async fn session_ended(&self, session_id: &str) {

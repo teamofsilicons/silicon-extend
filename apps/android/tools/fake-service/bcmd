@@ -1,0 +1,14 @@
+#!/bin/sh
+# Send one command to the device through a running fake_bridge.py and print its text (and error).
+#   tools/fake-service/bcmd snapshot -i
+#   UPLOADS=1 tools/fake-service/bcmd screenshot home.png
+#   PORT=8490 JSON=1 tools/fake-service/bcmd appstate
+PORT=${PORT:-8490}
+body=$(python3 -c 'import json,sys,os; print(json.dumps({"command": sys.argv[1], "args": sys.argv[2:], "uploads": int(os.environ.get("UPLOADS","0"))}))' "$@")
+res=$(curl -s -X POST "http://127.0.0.1:$PORT/_test/command" -d "$body")
+if [ -n "$JSON" ]; then echo "$res"; exit 0; fi
+echo "$res" | python3 -c '
+import json,sys
+r=json.load(sys.stdin)
+print(r.get("text") or "")
+if not r.get("ok"): print("ERROR:", json.dumps(r.get("error"))); sys.exit(1)'
