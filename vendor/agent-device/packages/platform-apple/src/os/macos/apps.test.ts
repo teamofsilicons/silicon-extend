@@ -2,10 +2,10 @@ import { afterEach, expect, test, vi } from 'vitest';
 import type { DeviceInfo } from '@agent-device/kernel/device';
 
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => undefined) }));
-vi.mock('./helper.ts', () => ({ quitMacOsApp: vi.fn() }));
+vi.mock('./helper.ts', () => ({ quitMacOsApp: vi.fn(), resolveMacOsAppPath: vi.fn() }));
 
-import { quitMacOsApp } from './helper.ts';
-import { closeMacOsApp } from './apps.ts';
+import { quitMacOsApp, resolveMacOsAppPath } from './helper.ts';
+import { closeMacOsApp, resolveMacOsApp } from './apps.ts';
 
 const MACOS_DEVICE: DeviceInfo = {
   platform: 'apple',
@@ -75,4 +75,17 @@ test('closeMacOsApp bounds termination confirmation', async () => {
     details: { reason: 'MACOS_APP_TERMINATION_TIMEOUT', attempts: 20 },
   });
   expect(mockQuitMacOsApp).toHaveBeenCalledTimes(20);
+});
+
+test('resolves a path outside standard application folders by its bundle metadata', async () => {
+  vi.mocked(resolveMacOsAppPath).mockResolvedValueOnce({
+    bundleId: 'com.example.Editor',
+    path: '/tmp/Editor.app',
+  });
+  await expect(resolveMacOsApp('/tmp/Editor.app')).resolves.toBe('com.example.Editor');
+  expect(resolveMacOsAppPath).toHaveBeenCalledWith('/tmp/Editor.app');
+});
+
+test('preserves mixed-case bundle identities', async () => {
+  await expect(resolveMacOsApp('com.example.Editor')).resolves.toBe('com.example.Editor');
 });

@@ -66,14 +66,29 @@ export function createAppleInteractor(
       }),
     openDevice: () => openIosDevice(device),
     close: (app) => closeIosApp(device, app, runnerOpts),
-    screenshot: (outPath, options) => runAppleScreenshot(device, outPath, options, runnerOpts),
-    snapshot: async (options) => await captureAppleSnapshot(device, options, runnerOpts),
+    screenshot: (outPath, options) =>
+      runAppleScreenshot(
+        device,
+        outPath,
+        { ...options, appBundleId: options?.appBundleId ?? runnerContext.appBundleId },
+        runnerOpts,
+      ),
+    snapshot: async (options) =>
+      await captureAppleSnapshot(
+        device,
+        { ...options, appBundleId: options?.appBundleId ?? runnerContext.appBundleId },
+        runnerOpts,
+      ),
     // The live text at a point: helper for a helper-routed macOS surface, XCTest runner for
-    // every other Apple leaf including a macOS app session.
+    // every other Apple platform.
     readTextAtPoint: async (point, options) => {
       const helper = isMacOs(device) ? macOsHelperSurface(options?.surface) : undefined;
       return helper
-        ? await readMacOsSurfaceTextAtPoint(point, helper, options?.appBundleId)
+        ? await readMacOsSurfaceTextAtPoint(
+            point,
+            helper,
+            options?.appBundleId ?? runnerContext.appBundleId,
+          )
         : await readRunnerTextAtPoint(device, point, options, runnerOpts);
     },
     // The XCTest runner's own text reading: it observes the live accessibility hierarchy
@@ -391,7 +406,7 @@ async function runAppleScreenshot(
 ): Promise<void> {
   const helper = isMacOs(device) ? macOsHelperSurface(options.surface) : undefined;
   if (helper) {
-    if (options.fullscreen) {
+    if (options.fullscreen && helper !== 'app') {
       throw new AppError(
         'INVALID_ARGS',
         `screenshot --fullscreen is not accepted on the macOS ${helper} surface: it always captures the main display`,
@@ -401,7 +416,12 @@ async function runAppleScreenshot(
         },
       );
     }
-    await runMacOsScreenshotAction(outPath, { surface: helper });
+    await runMacOsScreenshotAction(outPath, {
+      surface: helper,
+      ...(helper === 'app'
+        ? { bundleId: options.appBundleId, fullscreen: options.fullscreen }
+        : {}),
+    });
     return;
   }
   if (options.captureBackend === 'runner') {

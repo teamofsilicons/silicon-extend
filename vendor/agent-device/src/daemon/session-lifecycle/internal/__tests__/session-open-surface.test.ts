@@ -7,7 +7,7 @@ import {
   authoringPublication,
   makeIosSession,
 } from '../../../../__tests__/test-utils/session-factories.ts';
-import { IOS_SIMULATOR } from '../../../../__tests__/test-utils/device-fixtures.ts';
+import { IOS_SIMULATOR, MACOS_DEVICE } from '../../../../__tests__/test-utils/device-fixtures.ts';
 import { isSessionRecording } from '../../../session-script-publication-capability.ts';
 
 test('resolveRequestedOpenSurface rejects surface flag on iOS', () => {
@@ -125,4 +125,27 @@ test('a re-open of a session that never armed records nothing', () => {
 
   assert.equal(next.scriptPublication, undefined);
   assert.equal(isSessionRecording(next), false);
+});
+
+test('a named macOS app replaces a prior foreground surface, while an explicit surface remains authoritative', () => {
+  const base = {
+    device: MACOS_DEVICE,
+    surfaceFlag: undefined,
+    existingSurface: 'frontmost-app' as const,
+  };
+  assert.equal(resolveRequestedOpenSurface({ ...base, openTarget: 'com.example.Editor' }), 'app');
+  assert.equal(resolveRequestedOpenSurface({ ...base, openTarget: undefined }), 'frontmost-app');
+  assert.equal(
+    resolveRequestedOpenSurface({ ...base, openTarget: 'https://example.test' }),
+    'frontmost-app',
+  );
+  assert.throws(
+    () =>
+      resolveRequestedOpenSurface({
+        ...base,
+        surfaceFlag: 'frontmost-app',
+        openTarget: 'com.example.Editor',
+      }),
+    (error) => error instanceof AppError && error.code === 'INVALID_ARGS',
+  );
 });

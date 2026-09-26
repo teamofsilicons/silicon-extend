@@ -8,17 +8,23 @@ app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 560, height: 330),
                       styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "Bridge text input verification"
+if #available(macOS 13, *) { window.collectionBehavior = [.canJoinAllApplications] }
 if let screen = NSScreen.main {
   window.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.maxY - 80))
 }
+let peer = CommandLine.arguments.contains("--peer")
 let first = NSTextField(string: "first value")
 let second = NSTextField(string: "untouched")
 let secure = NSSecureTextField(string: "")
 let fields: [NSTextField] = [first, second, secure]
 for (index, field) in fields.enumerated() {
-  field.setAccessibilityIdentifier("bridge-field-\(index)")
+  field.setAccessibilityIdentifier("\(peer ? "peer" : "bridge")-field-\(index)")
   field.frame = NSRect(x: 24, y: 250 - index * 80, width: 490, height: 36)
   window.contentView!.addSubview(field)
+}
+if peer {
+  window.title = "Bridge focus-change verification (other app)"
+  window.backgroundColor = .systemPink
 }
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)

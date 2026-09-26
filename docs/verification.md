@@ -175,3 +175,33 @@ compatibility. These checks do not establish completion of the entire product co
   249 tooling tests pass, six fail because tracked-source enumeration resolves the parent Git
   tree and `origin/main` is absent. Its final production scan therefore did not run; this gate
   remains open rather than being counted as passed.
+
+### 2026-09-26 — named macOS app capture
+
+- Named app opens now bind the native `app` surface. A prior frontmost-app session no longer
+  overrides the named target. Explicit `.app` paths resolve bundle metadata outside standard
+  installation folders; mixed-case bundle identifiers are preserved. URL-only opens still use
+  the foreground route and are not covered by this fix.
+- App snapshots carry the session identity to Accessibility; missing bound applications fail
+  rather than substituting the foreground app. App screenshots select that app's AX windows
+  from ScreenCaptureKit, excluding larger invisible backing windows. AppKit initialization
+  fixes the observed `CGS_REQUIRE_INIT` crash in the independent-window filter. Explicit
+  fullscreen capture remains a whole-display request; app-window crop policy remains unchanged.
+- Session `e3a` passed the real local-service path after a second owned app took focus and
+  overlapped the target: bound AX nodes, a nonblank screenshot, app-scoped H.264 recording,
+  upload/download, changing frame hashes, and full ffmpeg decode. Both the downloaded screenshot
+  and decoded video frame were visually inspected. Artifacts: ignored
+  `target/desktop/macos/app-target-verification/`.
+- The first visual audit caught a black backing-window image despite command success. The
+  harness now rejects blank screenshots. Both fixtures use Apple's `canJoinAllApplications`
+  window behavior so the overlap test remains an overlap when Stage Manager is enabled.
+  Earlier hidden-stage capture showed a thumbnail; full-size recording of hidden Stage Manager
+  windows remains unverified and is not claimed here.
+- Checks: 109 focused TypeScript tests, workspace lint/typechecking, 112 agent unit tests and
+  nine helper tests pass. Native app-identity regressions failed before the fix. Secondary and
+  middle click transport is preserved; those physical clicks were not part of this live run.
+- A persistent test daemon retained old code across one rebuild. Its subsequent terminal
+  shutdown and a fresh daemon exposed the updated behavior. Release/update handling must
+  explicitly refresh idle daemons; repeatedly replacing an app bundle is not proof of refresh.
+  Native recording stress/recovery, hidden-stage/multi-display coverage, URL targeting,
+  notarization, other platforms, physical hardware and production integrations remain open.

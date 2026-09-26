@@ -55,6 +55,8 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
     subprocess.run([register, "-f", "-v", str(app.parent)], check=True)
     state = work / "state.json"
     fixture = subprocess.Popen([str(binary), str(state), *( ["--animate"] if args.record_only else [])], stdout=subprocess.DEVNULL)
+    peer = None
+    peer_app = None
     remote_session = None
     remote_env = {**os.environ, "BRIDGE_API_URL": args.service_url, "SILICON_HOME": str(work / "cli-home"), "BRIDGE_TELEMETRY": "off"}
 
@@ -203,6 +205,39 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
                 observed = remote("snapshot", "-i")
                 print("Service fixture open:", opened.get("output"), "snapshot header:", (observed.get("text") or "").splitlines()[:2], flush=True)
                 assert opened["output"].get("appBundleId") == BUNDLE, opened
+                # Bring another owned app over the target, then capture without reopening it.
+                peer_app = work / "Bridge Focus Peer.app"
+                shutil.copytree(app.parent, peer_app)
+                peer_bundle = BUNDLE + ".peer"
+                peer_plist = peer_app / "Contents/Info.plist"
+                metadata = plistlib.loads(peer_plist.read_bytes())
+                metadata["CFBundleIdentifier"] = peer_bundle
+                metadata["CFBundleName"] = "Bridge Focus Peer"
+                peer_plist.write_bytes(plistlib.dumps(metadata))
+                subprocess.run([register, "-f", str(peer_app)], check=True)
+                peer_state = work / "peer.json"
+                peer = subprocess.Popen([str(peer_app / "Contents/MacOS/fixture"), str(peer_state), "--peer"], stdout=subprocess.DEVNULL)
+                until(peer_state.exists)
+                def frontmost_bundle():
+                    status = remote("terminal", "run", shlex.join([str(args.helper), "app", "frontmost"]))
+                    return peer_bundle in json.dumps(status)
+                until(frontmost_bundle)
+                bound = remote("snapshot", "-i")
+                serialized = json.dumps(bound)
+                assert BUNDLE in serialized and "bridge-field-0" in serialized, bound
+                assert "peer-field-0" not in serialized, bound
+                screenshot = work / "bound-app.png"
+                remote("screenshot", "--out", str(screenshot))
+                assert screenshot.is_file(), "bound app screenshot did not download"
+                # A backing window can yield a valid, entirely black PNG. Verify actual content.
+                pixels = subprocess.run(["ffmpeg", "-v", "error", "-i", str(screenshot), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+                assert pixels and sum(value > 24 for value in pixels) > len(pixels) * .05, "bound screenshot is blank"
+
+                if args.artifacts:
+                    args.artifacts.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(screenshot, args.artifacts / "bound-app.png")
+                print("PASS app binding after focus switches to an overlapping owned app", flush=True)
+
                 started = remote("record", "start", "fixture", "--scope", "app", "--fps", "12", "--hide-touches")
                 print("Service recording start:", started.get("output"), flush=True)
                 if not args.record_only:
@@ -262,6 +297,15 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
     finally:
         if remote_session:
             remote_cli("session", "end", remote_session)
+        if peer is not None:
+            peer.terminate()
+            try:
+                peer.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                peer.kill()
+                peer.wait()
+        if peer_app is not None:
+            subprocess.run([register, "-u", str(peer_app)], check=True)
         fixture.terminate()
         try:
             fixture.wait(timeout=3)

@@ -278,3 +278,55 @@ test('helper entry points accept only an owner-routed surface', () => {
   };
   assert.equal(typeof widenedCalls, 'function');
 });
+
+test('bound capture and alternate clicks transport the explicit application identity', async () => {
+  const calls: string[][] = [];
+  const provider = createLocalAppleToolProvider({
+    macosHelper: {
+      run: async (args) => {
+        calls.push([...args]);
+        return helperReturn({});
+      },
+    },
+  });
+  const surface = macOsHelperSurface('app')!;
+  await withAppleToolProvider(provider, async () => {
+    await runMacOsSnapshotAction(surface, { bundleId: 'com.example.Editor' });
+    await runMacOsScreenshotAction('/tmp/bound.png', {
+      surface,
+      bundleId: 'com.example.Editor',
+      fullscreen: true,
+    });
+    await runMacOsPressAction(3, 4, {
+      surface,
+      bundleId: 'com.example.Editor',
+      button: 'secondary',
+    });
+  });
+  assert.deepEqual(calls, [
+    ['snapshot', '--surface', 'app', '--bundle-id', 'com.example.Editor'],
+    [
+      'screenshot',
+      '--out',
+      '/tmp/bound.png',
+      '--fullscreen',
+      '--bundle-id',
+      'com.example.Editor',
+      '--surface',
+      'app',
+    ],
+    [
+      'press',
+      '--x',
+      '3',
+      '--y',
+      '4',
+      '--button',
+      'secondary',
+      '--bundle-id',
+      'com.example.Editor',
+      '--surface',
+      'app',
+    ],
+  ]);
+});

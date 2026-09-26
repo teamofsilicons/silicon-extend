@@ -8,7 +8,7 @@ import {
   createAppResolutionCache,
   type AppResolutionCacheScope,
 } from '@agent-device/provision-kit/app-resolution-cache';
-import { quitMacOsApp } from './helper.ts';
+import { quitMacOsApp, resolveMacOsAppPath } from './helper.ts';
 import { resolveAppleToolProvider, type AppleMacOsHostProvider } from '../../core/tool-provider.ts';
 import type { IosAppInfo } from '../../core/app-info.ts';
 
@@ -16,7 +16,7 @@ const MACOS_ALIASES: Record<string, string> = {
   settings: 'com.apple.systempreferences',
 };
 
-const MACOS_BUNDLE_ID_PATTERN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+const MACOS_BUNDLE_ID_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$/;
 const MACOS_APP_TERMINATION_POLL_MS = 100;
 const MACOS_APP_TERMINATION_MAX_ATTEMPTS = 20;
 
@@ -34,6 +34,13 @@ function isMacOsBundleId(value: string): boolean {
 
 export async function resolveMacOsApp(app: string): Promise<string> {
   const trimmed = app.trim();
+
+  if (
+    trimmed.toLowerCase().endsWith('.app') &&
+    (trimmed.includes('/') || trimmed.startsWith('~'))
+  ) {
+    return (await resolveMacOsAppPath(trimmed)).bundleId;
+  }
 
   const alias = MACOS_ALIASES[trimmed.toLowerCase()];
   if (alias) return alias;

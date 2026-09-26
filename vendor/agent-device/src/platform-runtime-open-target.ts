@@ -53,7 +53,10 @@ function resolveMacOsOpenSurface(
   openTarget: string | undefined,
   existingSurface: SessionSurface | undefined,
 ): SessionSurface {
-  if (!surfaceFlag) return existingSurface ?? 'app';
+  if (!surfaceFlag) {
+    if (openTarget && !isDeepLinkTarget(openTarget)) return 'app';
+    return existingSurface ?? 'app';
+  }
   const surface = parseSessionSurface(surfaceFlag);
   if (surface !== 'app' && surface !== 'menubar') {
     assertOpenSurfaceHasNoTarget(surface, openTarget);

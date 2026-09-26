@@ -349,6 +349,12 @@ async function runMacOsHelper<T extends Record<string, unknown>>(
   });
 }
 
+export async function resolveMacOsAppPath(
+  appPath: string,
+): Promise<{ bundleId: string; path: string }> {
+  return await runMacOsHelper(['app', 'resolve', '--path', appPath]);
+}
+
 export async function resolveFrontmostMacOsApp(): Promise<{
   bundleId?: string;
   appName?: string;
@@ -480,6 +486,7 @@ export async function runMacOsPressAction(
   options: {
     surface: MacOsHelperSurface;
     bundleId?: string;
+    button?: 'primary' | 'secondary' | 'middle';
     holdMs?: number;
     /** Independent presses, each a single click; `--count` on every platform. */
     clicks?: number;
@@ -498,6 +505,7 @@ export async function runMacOsPressAction(
   surface?: SessionSurface;
 }> {
   const args = ['press', '--x', String(x), '--y', String(y)];
+  if (options.button && options.button !== 'primary') args.push('--button', options.button);
   if (options.holdMs && options.holdMs > 0) {
     args.push('--hold-ms', String(options.holdMs));
   }
@@ -521,12 +529,13 @@ export async function runMacOsPressAction(
 
 export async function runMacOsScreenshotAction(
   outPath: string,
-  options: { surface: MacOsHelperSurface },
+  options: { surface: MacOsHelperSurface; bundleId?: string; fullscreen?: boolean },
 ): Promise<{
   path: string;
   surface?: SessionSurface;
 }> {
   const args = ['screenshot', '--out', outPath];
+  if (options.fullscreen) args.push('--fullscreen');
   appendMacOsHelperContextArgs(args, options);
   return await runMacOsHelper(args);
 }

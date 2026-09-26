@@ -72,7 +72,7 @@ fn open_target(args: &[String]) -> Option<String> {
     if args.iter().any(|a| a.starts_with("--surface")) {
         return None;
     }
-    args.iter().find(|a| !a.starts_with('-')).cloned()
+    positional_indices(args).first().map(|&index| args[index].clone())
 }
 
 /// A file the plan expects the command to produce.
@@ -629,11 +629,10 @@ impl Driver for AgentDeviceDriver {
     async fn run(&self, inv: Invocation<'_>) -> Output {
         let facts = self.facts(inv.session_id);
         if facts.helper_surface && inv.command == "open"
-            && let Some(target) = open_target(inv.args) {
-                // Launch with the system, then follow the frontmost app through the helper.
-                let is_link = target.contains("://");
+            && let Some(target) = open_target(inv.args).filter(|target| target.contains("://")) {
+                // Links have no explicit app identity; named apps use the bound native app surface.
                 let mut launch = std::process::Command::new("/usr/bin/open");
-                if is_link { launch.arg(&target) } else { launch.args(["-a", &target]) };
+                launch.arg(&target);
                 match launch.output() {
                     Ok(o) if o.status.success() => {}
                     Ok(o) => {
@@ -935,6 +934,17 @@ mod tests {
         let mut busy = Env::new();
         busy.facts.recording = Some(PathBuf::from("/x.mp4"));
         assert_eq!(busy.plan("record", &["start"]).unwrap_err().error.unwrap().code, "recording_in_progress");
+    }
+
+    #[test]
+    fn native_named_open_retains_target_and_script_plan() {
+        let mut e = Env::new();
+        e.facts.helper_surface = true;
+        let p = e.plan("open", &["com.example.Editor", "--save-script"]).unwrap();
+        assert_eq!(p.argv, s(&["open", "com.example.Editor", "--save-script=/w/sessions/a3f/scripts/session.ad"]));
+        assert!(matches!(p.after, After::ScriptArmed(_)));
+        assert_eq!(e.plan("open", &["--surface", "frontmost-app"]).unwrap().argv, s(&["open", "--surface", "frontmost-app"]));
+        assert_eq!(open_target(&s(&["--save-script", "/tmp/flow.ad", "Editor"])), Some("Editor".into()));
     }
 
     #[test]

@@ -12,11 +12,11 @@ export function parseSessionSurface(value: string | undefined): SessionSurface {
   return SESSION_SURFACE_ENUM.parse(value);
 }
 
-/** The backend that serves every operation on a macOS surface. */
+/** The backend that serves capture, read and pointer operations on a macOS surface. */
 export type MacOsSurfaceBackend = Extract<SnapshotBackend, 'xctest' | 'macos-helper'>;
 
 const MACOS_SURFACE_BACKENDS = {
-  app: 'xctest',
+  app: 'macos-helper',
   'frontmost-app': 'macos-helper',
   desktop: 'macos-helper',
   menubar: 'macos-helper',
@@ -38,7 +38,7 @@ export type MacOsHelperSurface = HelperRoutedSurface & { readonly [helperSurface
 export function macOsHelperSurface(
   surface: SessionSurface | undefined,
 ): MacOsHelperSurface | undefined {
-  return surface !== undefined && macOsSurfaceBackend(surface) === 'macos-helper'
-    ? (surface as MacOsHelperSurface)
+  return macOsSurfaceBackend(surface) === 'macos-helper'
+    ? ((surface ?? 'app') as MacOsHelperSurface)
     : undefined;
 }

@@ -80,7 +80,9 @@ func captureSnapshotResponse(surface: String, bundleId: String? = nil) throws ->
   let result: SnapshotBuildResult
   switch surface {
   case "frontmost-app":
-    result = try snapshotFrontmostApp()
+    result = try snapshotApplication(bundleId: nil, surface: surface)
+  case "app":
+    result = try snapshotApplication(bundleId: bundleId, surface: surface)
   case "desktop":
     result = snapshotDesktop()
   case "menubar":
@@ -92,14 +94,14 @@ func captureSnapshotResponse(surface: String, bundleId: String? = nil) throws ->
   return SnapshotResponse(surface: surface, nodes: result.nodes, truncated: result.truncated)
 }
 
-private func snapshotFrontmostApp() throws -> SnapshotBuildResult {
-  let app = try resolveTargetApplication(bundleId: nil, surface: "frontmost-app")
+private func snapshotApplication(bundleId: String?, surface: String) throws -> SnapshotBuildResult {
+  let app = try resolveTargetApplication(bundleId: bundleId, surface: surface)
   var state = SnapshotTraversalState()
   _ = appendApplicationSnapshot(
     app,
     depth: 0,
     parentIndex: nil,
-    surface: "frontmost-app",
+    surface: surface,
     state: &state
   )
   return SnapshotBuildResult(nodes: state.nodes, truncated: state.truncated)

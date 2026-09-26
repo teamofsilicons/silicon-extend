@@ -137,7 +137,7 @@ struct AgentDeviceMacOSHelper {
 
   static func handleApp(arguments: [String]) throws -> any Encodable {
     guard let action = arguments.first else {
-      throw HelperError.invalidArgs("app requires frontmost|quit")
+      throw HelperError.invalidArgs("app requires frontmost|resolve|quit")
     }
     switch action {
     case "frontmost":
@@ -149,6 +149,11 @@ struct AgentDeviceMacOSHelper {
           pid: app.map { Int32($0.processIdentifier) }
         )
       )
+    case "resolve":
+      guard let target = optionValue(arguments: arguments, name: "--path") else {
+        throw HelperError.invalidArgs("app resolve requires --path <application.app>")
+      }
+      return SuccessEnvelope(data: try resolveAppBundleAtPath(target))
     case "quit":
       guard let rawBundleId = optionValue(arguments: Array(arguments.dropFirst()), name: "--bundle-id"),
             !rawBundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -188,7 +193,7 @@ struct AgentDeviceMacOSHelper {
         )
       )
     default:
-      throw HelperError.invalidArgs("app requires frontmost|quit")
+      throw HelperError.invalidArgs("app requires frontmost|resolve|quit")
     }
   }
 
@@ -347,18 +352,18 @@ struct AgentDeviceMacOSHelper {
       .lowercased(),
       !surface.isEmpty
     else {
-      throw HelperError.invalidArgs("snapshot requires --surface <frontmost-app|desktop|menubar>")
+      throw HelperError.invalidArgs("snapshot requires --surface <app|frontmost-app|desktop|menubar>")
     }
 
     let bundleId = try optionValue(arguments: arguments, name: "--bundle-id").map(validatedBundleId)
 
     switch surface {
-    case "frontmost-app":
+    case "app", "frontmost-app":
       return SuccessEnvelope(data: try captureSnapshotResponse(surface: surface, bundleId: bundleId))
     case "desktop", "menubar":
       return SuccessEnvelope(data: try captureSnapshotResponse(surface: surface, bundleId: bundleId))
     default:
-      throw HelperError.invalidArgs("snapshot requires --surface <frontmost-app|desktop|menubar>")
+      throw HelperError.invalidArgs("snapshot requires --surface <app|frontmost-app|desktop|menubar>")
     }
   }
 
@@ -408,14 +413,23 @@ struct AgentDeviceMacOSHelper {
     let doubleClick = arguments.contains("--double-click")
     let bundleId = try optionValue(arguments: arguments, name: "--bundle-id").map(validatedBundleId)
     let surface = optionValue(arguments: arguments, name: "--surface")
+    guard let button = MouseClickButton(rawValue: optionValue(arguments: arguments, name: "--button") ?? "primary") else {
+      throw HelperError.invalidArgs("press --button requires primary|secondary|middle")
+    }
     let request = MouseClickRequest(
       x: x,
       y: y,
       holdMs: holdMs,
       clicks: clicks,
       doubleClick: doubleClick,
-      intervalMs: intervalMs
+      intervalMs: intervalMs,
+      button: button
     )
+    if surface == "app" {
+      let app = try resolveTargetApplication(bundleId: bundleId, surface: surface)
+      try activateTargetApplication(app)
+      try requirePointOwnedByApplication(x: x, y: y, app: app)
+    }
     try pressAtPosition(request)
     return SuccessEnvelope(
       data: PressResponse(
@@ -439,7 +453,12 @@ struct AgentDeviceMacOSHelper {
     }
 
     let surface = optionValue(arguments: arguments, name: "--surface")
-    try captureSurfaceScreenshot(surface: surface, outPath: outPath)
+    if surface == "app" {
+      try captureAppScreenshot(bundleId: optionValue(arguments: arguments, name: "--bundle-id"),
+                               fullscreen: arguments.contains("--fullscreen"), outPath: outPath)
+    } else {
+      try captureSurfaceScreenshot(surface: surface, outPath: outPath)
+    }
     return SuccessEnvelope(data: ScreenshotResponse(path: outPath, surface: surface))
   }
 
@@ -496,7 +515,7 @@ private func validatedPressInt(
 
 private func readTextAtPosition(bundleId: String?, surface: String?, x: Double, y: Double) throws -> String {
   let targetApp: NSRunningApplication?
-  if surface == "frontmost-app" || (surface == nil && bundleId != nil) {
+  if surface == "app" || surface == "frontmost-app" || (surface == nil && bundleId != nil) {
     targetApp = try resolveTargetApplication(bundleId: bundleId, surface: surface)
   } else {
     targetApp = nil
@@ -583,6 +602,10 @@ private func captureSurfaceScreenshot(surface: String?, outPath: String) throws 
     throw HelperError.commandFailed("screenshot failed")
   }
 
+  try writeScreenshotPNG(capturedImage, outPath: outPath)
+}
+
+func writeScreenshotPNG(_ capturedImage: CGImage, outPath: String) throws {
   let outputURL = URL(fileURLWithPath: outPath)
   if let parent = outputURL.deletingLastPathComponent().path.removingPercentEncoding, !parent.isEmpty {
     try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
@@ -649,13 +672,16 @@ func resolveTargetApplication(bundleId: String?, surface: String?) throws -> NSR
     }
     throw HelperError.commandFailed("app is not running", details: ["bundleId": validatedBundleId])
   }
+  if normalizedSurface == "app" {
+    throw HelperError.invalidArgs("app surface requires --bundle-id <id>")
+  }
   if let frontmost = NSWorkspace.shared.frontmostApplication {
     return frontmost
   }
   throw HelperError.commandFailed("unable to resolve target app")
 }
 
-private func validatedBundleId(_ rawBundleId: String) throws -> String {
+func validatedBundleId(_ rawBundleId: String) throws -> String {
   let bundleId = rawBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
   let pattern = #"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$"#
   guard bundleId.range(of: pattern, options: .regularExpression) != nil else {

@@ -7,7 +7,7 @@ import type {
 import { AppError } from '@agent-device/kernel/errors';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
-import { IOS_SIMULATOR, MACOS_DEVICE } from './device-fixtures.ts';
+import { IOS_SIMULATOR } from './device-fixtures.ts';
 import type { AppleRunnerProvider } from '../runner/index.ts';
 import { createAppleInteractor } from '../interactor.ts';
 import {
@@ -290,19 +290,6 @@ test('a message-less runner capture leaves its disclosures to the verdict', asyn
   assert.equal('warnings' in result, false);
   assert.deepEqual(result.quality?.customActions, coverage);
   assert.deepEqual(result.quality?.collapsedLeafIndexes, [1]);
-});
-
-test('macOS app snapshots preserve runner nodes outside the iOS presentation engine', async () => {
-  const nodes = [{ index: 0, type: 'Application', label: 'System Settings' }];
-  const interactor = createAppleInteractor(
-    MACOS_DEVICE,
-    {},
-    { hasLiveSession: () => true, runCommand: async () => ({ nodes }) },
-  );
-
-  const result = presentedSnapshot(await interactor.snapshot({ interactiveOnly: true }));
-
-  assert.deepEqual(result.nodes, nodes);
 });
 
 test('snapshot reports typed runner presentation failures', async () => {

@@ -9,11 +9,7 @@ import {
   WEB_DESKTOP_DEVICE,
 } from '../../__tests__/test-utils/device-fixtures.ts';
 import { SCREENSHOT_CROP_REASONS } from '@agent-device/contracts/capture';
-import {
-  SESSION_SURFACES,
-  type MacOsSurfaceBackend,
-  type SessionSurface,
-} from '@agent-device/contracts/session';
+import { SESSION_SURFACES, type SessionSurface } from '@agent-device/contracts/session';
 import type { DeviceInfo } from '@agent-device/kernel/device';
 import { expect, test } from 'vitest';
 import {
@@ -71,23 +67,14 @@ test('the classifier and the acceptance matrix agree one-to-one, and the accepte
   }
 });
 
-const MACOS_SURFACE_BACKENDS: Record<SessionSurface, MacOsSurfaceBackend> = {
-  app: 'xctest',
-  'frontmost-app': 'macos-helper',
-  desktop: 'macos-helper',
-  menubar: 'macos-helper',
-};
-const MACOS_CROP_TARGETS: Record<MacOsSurfaceBackend, CropTargetDevice['target']> = {
-  xctest: 'macos-app-window',
-  'macos-helper': 'macos-helper',
-};
-
-test.each([
-  ...SESSION_SURFACES.map((surface) => [surface, MACOS_SURFACE_BACKENDS[surface]] as const),
-  [undefined, 'xctest'] as const,
-])('a macOS %s session crops in the frame of the backend that captures it', (surface, backend) => {
-  expect(classifyScreenshotCropTarget(MACOS_DEVICE, surface)).toBe(MACOS_CROP_TARGETS[backend]);
-});
+test.each([...SESSION_SURFACES, undefined])(
+  'macOS %s crop policy follows window versus display geometry',
+  (surface) => {
+    expect(classifyScreenshotCropTarget(MACOS_DEVICE, surface)).toBe(
+      surface === 'app' || surface === undefined ? 'macos-app-window' : 'macos-helper',
+    );
+  },
+);
 
 test('an apple device with an unpopulated reserved OS is a typed refusal, not a guess', () => {
   const device: DeviceInfo = {

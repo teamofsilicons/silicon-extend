@@ -261,17 +261,12 @@ async function runMacOsSurfacePress(
   options: PressPointOptions,
   surface: MacOsHelperSurface,
 ): Promise<Record<string, unknown>> {
-  if (options.button !== 'primary') {
-    throw new AppError(
-      'UNSUPPORTED_OPERATION',
-      `${options.button} click is not supported on macOS ${surface} sessions.`,
-    );
-  }
   const { runMacOsPressAction } = await import('./os/macos/helper.ts');
   // `count` is independent presses and `doubleTap` raises the click state inside each one,
   // the same reading every other platform gives the two flags.
   const posted = await runMacOsPressAction(point.x, point.y, {
     bundleId: context.appBundleId,
+    button: options.button,
     surface,
     holdMs: options.holdMs,
     clicks: options.count,

@@ -105,13 +105,7 @@ extension AgentDeviceMacOSHelper {
       throw HelperError.commandFailed("allow Accessibility for Silicon Bridge", details: ["permission": "accessibility"])
     }
     let app = try resolveTargetApplication(bundleId: request.bundleId, surface: nil)
-    guard app.activate(options: [.activateIgnoringOtherApps]) else {
-      throw HelperError.commandFailed("could not activate the target app")
-    }
-    let activationDeadline = Date().addingTimeInterval(1)
-    while NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier && Date() < activationDeadline {
-      RunLoop.current.run(until: Date().addingTimeInterval(0.01))
-    }
+    try activateTargetApplication(app)
     let element: AXUIElement
     if let x = request.x, let y = request.y {
       var hit: AXUIElement?

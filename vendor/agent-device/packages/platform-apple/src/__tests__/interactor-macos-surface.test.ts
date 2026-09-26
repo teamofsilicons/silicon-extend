@@ -64,7 +64,7 @@ const macOsDevice: DeviceInfo = {
 };
 
 const MACOS_SURFACE_BACKENDS: Record<SessionSurface, MacOsSurfaceBackend> = {
-  app: 'xctest',
+  app: 'macos-helper',
   'frontmost-app': 'macos-helper',
   desktop: 'macos-helper',
   menubar: 'macos-helper',
@@ -72,7 +72,7 @@ const MACOS_SURFACE_BACKENDS: Record<SessionSurface, MacOsSurfaceBackend> = {
 
 const SURFACE_ROWS = [
   ...SESSION_SURFACES.map((surface) => [surface, MACOS_SURFACE_BACKENDS[surface]] as const),
-  [undefined, 'xctest'] as const,
+  [undefined, 'macos-helper'] as const,
 ];
 
 const HELPER_ROWS = SESSION_SURFACES.filter(
@@ -150,7 +150,7 @@ test.each(SURFACE_ROWS)(
   },
 );
 
-test.each(HELPER_ROWS)(
+test.each(HELPER_ROWS.filter((surface) => surface !== 'app'))(
   'refuses an explicit --fullscreen on the macOS %s surface before any capture',
   async (surface) => {
     const interactor = createAppleInteractor(macOsDevice, {});
@@ -169,7 +169,7 @@ test.each(HELPER_ROWS)(
   },
 );
 
-test.each(HELPER_ROWS)(
+test.each(HELPER_ROWS.filter((surface) => surface !== 'app'))(
   'captures the %s surface through the helper when --fullscreen is not requested',
   async (surface) => {
     const interactor = createAppleInteractor(macOsDevice, {});
@@ -183,16 +183,43 @@ test.each(HELPER_ROWS)(
   },
 );
 
-test('keeps a macOS app session on the runner path with --fullscreen unchanged', async () => {
-  const interactor = createAppleInteractor(macOsDevice, {});
+test('captures the requested app window and forwards explicit fullscreen separately', async () => {
+  const interactor = createAppleInteractor(macOsDevice, { appBundleId: 'com.example.Editor' });
+  for (const fullscreen of [undefined, true]) {
+    await interactor.screenshot('/tmp/out.png', { surface: 'app', fullscreen });
+    expect(runMacOsScreenshotAction).toHaveBeenLastCalledWith('/tmp/out.png', {
+      surface: 'app',
+      bundleId: 'com.example.Editor',
+      fullscreen,
+    });
+  }
+  expect(screenshotIos).not.toHaveBeenCalled();
+});
 
-  await interactor.screenshot('/tmp/out.png', { surface: 'app', fullscreen: true });
+test.each(['primary', 'secondary', 'middle'] as const)(
+  'app-bound %s clicks retain their button and target',
+  async (button) => {
+    const interactor = createAppleInteractor(macOsDevice, { appBundleId: 'com.example.Editor' });
+    await interactor.pressPoint?.({ x: 1, y: 2 }, { ...PRIMARY_PRESS, surface: 'app', button });
+    expect(runMacOsPressAction).toHaveBeenCalledWith(
+      1,
+      2,
+      expect.objectContaining({
+        surface: 'app',
+        bundleId: 'com.example.Editor',
+        button,
+      }),
+    );
+    expect(runAppleRunnerCommand).not.toHaveBeenCalled();
+  },
+);
 
-  expect(runMacOsScreenshotAction).not.toHaveBeenCalled();
-  expect(screenshotIos).toHaveBeenCalledOnce();
-  expect(screenshotIos).toHaveBeenCalledWith(
-    macOsDevice,
-    '/tmp/out.png',
-    expect.objectContaining({ fullscreen: true }),
-  );
+test('an app-bound snapshot uses its session identity without consulting the frontmost app', async () => {
+  const interactor = createAppleInteractor(macOsDevice, { appBundleId: 'com.example.Editor' });
+  await interactor.snapshot({ surface: 'app' });
+  expect(runMacOsSnapshotAction).toHaveBeenCalledWith('app', {
+    bundleId: 'com.example.Editor',
+    signal: undefined,
+  });
+  expect(runAppleRunnerCommand).not.toHaveBeenCalled();
 });

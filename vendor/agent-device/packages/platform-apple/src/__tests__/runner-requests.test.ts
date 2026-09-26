@@ -53,9 +53,7 @@ const INTERACTOR_SITES: Record<string, InteractorDrive> = {
   'ios-simulator.interactions-tap.synthesized': [IOS_SIMULATOR, (i) => i.tap(10, 20)],
   'macos.interactions-tap.coordinate': [MACOS_DEVICE, (i) => i.tap(10, 20)],
   'ios-simulator.interactions-focus.synthesized': [IOS_SIMULATOR, (i) => i.focus(10, 20)],
-  'macos.interactions-focus.coordinate': [MACOS_DEVICE, (i) => i.focus(10, 20)],
   'ios-simulator.interactions-single-press-tap.synthesized': [IOS_SIMULATOR, press()],
-  'macos.interactions-single-press-tap.coordinate': [MACOS_DEVICE, press()],
   'ios-simulator.interactions-tap-element-selector.expected-point': [
     IOS_SIMULATOR,
     (i) =>
@@ -91,8 +89,6 @@ const INTERACTOR_SITES: Record<string, InteractorDrive> = {
     IOS_SIMULATOR,
     press({ count: 2, intervalMs: 50, holdMs: 600 }),
   ],
-  'macos.interactions-mouse-click.secondary': [MACOS_DEVICE, press({ button: 'secondary' })],
-  'macos.interactions-mouse-click.middle': [MACOS_DEVICE, press({ button: 'middle' })],
   'ios-simulator.interactions-single-press-double-tap.single': [
     IOS_SIMULATOR,
     press({ doubleTap: true }),

@@ -36,3 +36,11 @@ and act on it. Changes made for Bridge are listed below, newest first, so they c
   (the snapshot tree with `@eN` refs, `Tapped @e6 (511, 374)`, …). Without the variable nothing
   changes. Files: `src/cli/commands/shared.ts` (`writeCommandOutput`), `src/commands/output/json.ts`
   (`printJson` type, `jsonTextRequested`). Upstreamable as an opt-in flag.
+
+- **2026-09-26 — Bound macOS app capture.** Native app surfaces retain their explicit bundle
+  identity across focus changes. App screenshots select Accessibility windows from
+  ScreenCaptureKit; fullscreen remains explicit. Paths resolve bundle metadata, mixed-case
+  IDs remain intact, and native pointer delivery retains primary/secondary/middle buttons.
+  Named opens replace a prior foreground surface. The live two-app overlap regression checks
+  actual screenshot pixels and decoded recording frames; hidden Stage Manager recording and
+  update-time daemon refresh remain pending.

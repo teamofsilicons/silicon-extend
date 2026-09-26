@@ -9,7 +9,7 @@ An implementation or passing mock does not close a physical-device or production
 - Android: physical-device coverage, large APK/Briefcase inputs and recording beyond the
   native 180-second limit. Local ADB pairing, command execution, installation, logs and
   recording are implemented; see the verification record for exercised paths.
-- Desktop: Mac recording stress/recovery and explicit app-target hardening; notarized helper distribution;
+- Desktop: Mac recording stress/recovery, hidden-stage/multi-display coverage and daemon refresh on updates; notarized helper distribution;
   Windows runtime and recording; Linux recording and current desktop support.
 - Hardware: physical Android/Fire TV, iPhone/iPad, Apple TV, Samsung/LG TVs. Record actual
   device/OS and exercised operations; simulator/mock results remain separate.
@@ -43,7 +43,7 @@ An implementation or passing mock does not close a physical-device or production
   XCTest. Unicode, exact whitespace, clearing, secure-field replacement and cancellation are
   covered. Both OS grants are enabled and recognized by the running GUI app. Native ScreenCaptureKit
   recording now passes short static/animated recording and service artifact-transfer checks without
-  XCTest. Duration/file-limit stress, owner-loss recovery, explicit app targeting, notarization,
+  XCTest. Duration/file-limit stress, owner-loss recovery, hidden-stage app capture, notarization,
   other desktop platforms and production remain open.
 
 ## Release prerequisites inspected
@@ -62,3 +62,7 @@ An implementation or passing mock does not close a physical-device or production
   were established or submission made in this continuation.
 - Physical iPhone and iPad entries are known to Xcode but currently unavailable. Only the
   Android emulator is attached through adb. Hardware verification remains open.
+
+- Named Mac app binding now passes snapshots, nonblank screenshots and app-scoped recording
+  with a second owned app in front. See the named-app verification entry for scope and
+  Stage Manager limitations. URL-only opens still follow the foreground app.

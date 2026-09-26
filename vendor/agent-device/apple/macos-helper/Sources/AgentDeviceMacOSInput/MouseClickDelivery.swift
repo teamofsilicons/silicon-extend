@@ -1,6 +1,13 @@
 import CoreGraphics
 import Foundation
 
+public enum MouseClickButton: String, Sendable {
+  case primary, secondary, middle
+  public var cgButton: CGMouseButton { switch self { case .primary: return .left; case .secondary: return .right; case .middle: return .center } }
+  public var downType: CGEventType { switch self { case .primary: return .leftMouseDown; case .secondary: return .rightMouseDown; case .middle: return .otherMouseDown } }
+  public var upType: CGEventType { switch self { case .primary: return .leftMouseUp; case .secondary: return .rightMouseUp; case .middle: return .otherMouseUp } }
+}
+
 public struct MouseClickRequest: Equatable, Sendable {
   public let x: Double
   public let y: Double
@@ -11,6 +18,7 @@ public struct MouseClickRequest: Equatable, Sendable {
   /// Post every press as a double-click pair with a rising click state.
   public let doubleClick: Bool
   public let intervalMs: Int
+  public let button: MouseClickButton
 
   public init(
     x: Double,
@@ -18,7 +26,8 @@ public struct MouseClickRequest: Equatable, Sendable {
     holdMs: Int = 0,
     clicks: Int = 1,
     doubleClick: Bool = false,
-    intervalMs: Int = 120
+    intervalMs: Int = 120,
+    button: MouseClickButton = .primary
   ) {
     self.x = x
     self.y = y
@@ -26,6 +35,7 @@ public struct MouseClickRequest: Equatable, Sendable {
     self.clicks = clicks
     self.doubleClick = doubleClick
     self.intervalMs = intervalMs
+    self.button = button
   }
 }
 
@@ -38,16 +48,16 @@ public enum MouseClickDeliveryError: Error, Equatable {
 /// primary button stuck down for whatever the user touches next. The host stops the helper
 /// with SIGTERM before SIGKILL (`runMacOsHelper` in `helper.ts`) so that this handler runs
 /// on a deadline and on a cancelled request, not only on a signal sent by hand.
-nonisolated(unsafe) private var heldMouseButton: (point: CGPoint, clickState: Int)?
+nonisolated(unsafe) private var heldMouseButton: (point: CGPoint, clickState: Int, button: MouseClickButton)?
 
 private func releaseHeldMouseButton() {
   guard let held = heldMouseButton else { return }
   heldMouseButton = nil
   let up = CGEvent(
     mouseEventSource: nil,
-    mouseType: .leftMouseUp,
+    mouseType: held.button.upType,
     mouseCursorPosition: held.point,
-    mouseButton: .left
+    mouseButton: held.button.cgButton
   )
   up?.setIntegerValueField(.mouseEventClickState, value: Int64(held.clickState))
   up?.post(tap: .cghidEventTap)
@@ -79,7 +89,7 @@ public func postMouseClick(_ request: MouseClickRequest) throws {
     mouseEventSource: nil,
     mouseType: .mouseMoved,
     mouseCursorPosition: point,
-    mouseButton: .left
+    mouseButton: request.button.cgButton
   ) else {
     throw MouseClickDeliveryError.eventCreationFailed
   }
@@ -91,20 +101,20 @@ public func postMouseClick(_ request: MouseClickRequest) throws {
     }
     guard let down = CGEvent(
       mouseEventSource: nil,
-      mouseType: .leftMouseDown,
+      mouseType: request.button.downType,
       mouseCursorPosition: point,
-      mouseButton: .left
+      mouseButton: request.button.cgButton
     ), let up = CGEvent(
       mouseEventSource: nil,
-      mouseType: .leftMouseUp,
+      mouseType: request.button.upType,
       mouseCursorPosition: point,
-      mouseButton: .left
+      mouseButton: request.button.cgButton
     ) else {
       throw MouseClickDeliveryError.eventCreationFailed
     }
     down.setIntegerValueField(.mouseEventClickState, value: Int64(press.clickState))
     up.setIntegerValueField(.mouseEventClickState, value: Int64(press.clickState))
-    heldMouseButton = (point, press.clickState)
+    heldMouseButton = (point, press.clickState, request.button)
     down.post(tap: .cghidEventTap)
     usleep(UInt32(hold) * 1000)
     // The record clears only after the up is posted: a signal that lands between the two
