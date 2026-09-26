@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16.9-bookworm
+        image: postgres:17.9-bookworm
         env: {POSTGRES_USER: extend, POSTGRES_PASSWORD: extend, POSTGRES_DB: extend}
         ports: ['5440:5432']
         options: --health-cmd pg_isready --health-interval 5s --health-retries 20
@@ -34,6 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: pnpm/action-setup@v4
+        with: {version: 10}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: pnpm, cache-dependency-path: web/pnpm-lock.yaml}
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
