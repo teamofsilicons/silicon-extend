@@ -1113,7 +1113,13 @@ paths:
         Files the command makes are stored in Briefcase for the Silicon, shared with the device's owner, and returned
         in `files`. `self_destruct_minutes` (1 to 43,200; default 1,440) applies to every file this command makes;
         `permanent: true` keeps them. Small inputs a command reads from the caller's machine (a replay script, an
-        image to show on a TV) travel in `attachments`.
+        image to show on a TV, an APK to install) travel in `attachments`: at most 8 and 8 MiB in total.
+
+        A result with `ok: false` ran on the device and failed there; `error.code` says how. Besides agent-device's own
+        codes, a device answers `command_failed` (a shell exited non-zero; `details.exit_code`), `action_failed`,
+        `upload_failed` (a file it made could not be uploaded), `cancelled` (Extend cancelled it), `session_ended` (the
+        Carbon pressed Stop or the session ended while it ran or waited) and, on Android, `device_not_ready` (Android
+        debugging was disconnected).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1136,13 +1142,14 @@ paths:
                     attachments:
                       type: array
                       maxItems: 8
+                      description: At most 8 attachments and 8 MiB (8,388,608 bytes) decoded in total per command.
                       items:
                         type: object
                         required: [name, content_type, content_base64]
                         properties:
                           name: {type: string}
                           content_type: {type: string}
-                          content_base64: {type: string, description: At most 8 MiB decoded}
+                          content_base64: {type: string, description: Counts toward the 8 MiB total}
                     timeout_ms: {type: integer, minimum: 1000, maximum: 300000, default: 30000}
                     self_destruct_minutes: {type: integer, minimum: 1, maximum: 43200, default: 1440}
                     permanent: {type: boolean, default: false}
@@ -1391,9 +1398,10 @@ paths:
       operationId: keepFile
       summary: Make a file permanent before it self-destructs (`extend file keep`)
       description: |
-        The Silicon that made it. Done in Briefcase on the Silicon's behalf. A file already permanent is 409
-        `not_self_destructing`; one already gone is 404. Needs a Briefcase OBO endpoint that does not exist yet
-        (TECHNICAL.md, open question 2).
+        The Silicon that made it. A file already permanent is 409 `not_self_destructing`; one already gone is 404.
+        As built, self-destruct is Extend's own schedule (TECHNICAL.md §13), so this cancels it in Extend and leaves the
+        Briefcase entry unchanged; Briefcase has no OBO endpoint for making a file permanent (TECHNICAL.md, open
+        question 2).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -2003,7 +2011,7 @@ components:
       required: [file_id, name, kind, content_type, size_bytes, url, self_destruct_at, permanent]
       properties:
         file_id: {type: string, format: uuid, description: Briefcase entry id}
-        name: {type: string}
+        name: {type: string, description: 'The name the device gave the file. In Briefcase the file has its own unique name (for example screenshot-20260926-153307-2228fc1d.png), which `url` uses.'}
         kind: {$ref: '#/components/schemas/FileKind'}
         content_type: {type: string}
         size_bytes: {type: integer}

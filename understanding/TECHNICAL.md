@@ -9,6 +9,11 @@ the build differs from the first draft and why. Every value below that
 `UNDERSTANDING.md` does not state is a proposal, and each one is listed again in
 [Open questions](#open-questions) so it can be confirmed or changed.
 
+On 2026-09-27 the as-built parts were brought up to date with the implementation: the Team handle
+row (§1), file naming and sharing (§6), `cancel` (§7), the per-device table (§7), section 13 and
+open questions 12–15. Those edits describe what was built; they await a Carbon's review like the
+rest of this file.
+
 ---
 
 ## 1. Identifiers and values
@@ -57,7 +62,7 @@ Extend stores and passes these. It never mints or parses beyond the prefix rules
 | Carbon id | `c:alice` | `c:` + IAM handle | Silicon IAM |
 | Silicon id | `si:chef` | `si:` + IAM handle | Silicon IAM |
 | Membership id | `c:alice[acme]` | `{member id}[{team handle}]` | Silicon IAM |
-| Team handle (wire name `org_id`, header `X-Org-ID`) | `acme` | IAM handle. IAM names this an organization; Extend keeps IAM's wire names. | Silicon IAM |
+| Team handle (wire name `org_id`, header `X-Org-ID`) | `acme` | IAM handle. Extend keeps IAM's wire names `org_id` and `X-Org-ID` for it. | Silicon IAM |
 | `app_id` | `extend` | Bare IAM application id. Treat as opaque. | Silicon IAM |
 | `app_secret` | `ask_…` | `^ask_[A-Za-z0-9_-]{43}$` | Silicon IAM. A **test** app secret also selects the test environment (§8). |
 | Short-lived token (SLT) | `oac_…` | Opaque. The field is named `slt`; never infer anything from its prefix. In a test environment an existing test member id (`c:alice`, `si:chef`) is also accepted. | Silicon IAM |
@@ -295,7 +300,10 @@ Capabilities:
 A Linux computer without a screen reports only `terminal`, `apps.launch` and `replay`. The final
 list is whatever the device's app reports in its `hello` message, intersected with this table, so
 a device missing a permission (say, Screen Recording on a Mac) simply lacks that capability until
-the Carbon grants it.
+the Carbon grants it. As built, some ✓ above are still reported missing with a reason: on Windows
+`screen.record`, `logs`, `alerts` and `replay`; on Linux `logs`, and `screen.record` on Wayland;
+on Android, `adb`, `apps.install`, `logs` and `screen.record` until Android debugging is connected
+(§7).
 
 ### agent-device commands Extend does not expose
 
@@ -318,15 +326,25 @@ endpoints:
    `briefcase.files.create`, the SHA-256 of the exact bytes, and metadata
    `{path: "", name, content_type}`. An empty path puts the file in Extend's private folder for that
    Silicon: `apps/extend/private/{silicon id}/`.
+   As built, every file gets its own Briefcase name, for example
+   `screenshot-20260926-153307-2228fc1d.png`: Briefcase stores a repeated name as a new version of
+   the same entry, so two screenshots named `screenshot.png` would share one `entry_id`. Extend's
+   own record and `name` in its API keep the name the device gave.
 2. Extend sends the bytes to Briefcase `POST /api/v1/obo/files`.
-3. Extend shares the file with the device owner Carbon (create, read, update, not delete) through
-   `POST /api/v1/obo/invitations`, which Briefcase classes as critical, so it needs Briefcase's
-   approval of Extend once, in Honeycomb.
+3. Extend shares the file with the device owner Carbon through `POST /api/v1/obo/invitations`,
+   which Briefcase classes as critical, so it needs Briefcase's approval of Extend once, in
+   Honeycomb. The first draft said create, read and update; as built the share is **read and
+   update**, never delete, because Briefcase refuses `write` on a file (`invalid_access`) and allows
+   create only on folders (Open question 12). A Carbon who owns the Team still gets delete from
+   Briefcase's own rules.
 4. Extend records the `entry_id`, and returns the Briefcase permanent URL,
    `https://briefcase.teamofsilicons.com/org/{team}/…`, to the CLI.
 
 Self-destruct defaults to 1 day. `--ttl` on the command that makes the file sets 1 minute to 30
-days. `extend file keep <file_id>` makes a file permanent before it goes.
+days. `extend file keep <file_id>` makes a file permanent before it goes. As built, both are Extend's
+own records (§13): the file is trashed through Briefcase's `entries.trash` with an `operation_id`
+derived from the file id, so a retry is the same deletion, and a 404 counts as already gone;
+`keep` marks the file permanent in Extend and leaves the Briefcase entry alone.
 
 In a test environment every Briefcase call uses Briefcase's test environment with the same
 `environment_id`. **See Open questions 1–3:** Briefcase's OBO endpoints don't currently take a
@@ -358,7 +376,7 @@ boot and reconnects on its own.
 | device → service | `stop` | The Carbon tapped Stop |
 | device → service | `takeover_done` | The Carbon tapped Done on a takeover |
 | service → device | `command` | Run this, with `deadline` and `upload_ids` |
-| service → device | `cancel` | Stop the command with this `id` |
+| service → device | `cancel` | Stop the command with this `id`; the device answers its `result` with `ok:false`, code `cancelled` |
 | service → device | `session_started` / `session_ended` | Show or clear the indicator (Silicon id, since) |
 | service → device | `takeover` | Show the takeover reason and Done button |
 | service → device | `display` | TV: show or clear a link, image, video or text |
@@ -368,13 +386,16 @@ boot and reconnects on its own.
 
 ### Per device
 
+As built on 2026-09-27 (the first draft's rows for Android, Mac, Windows and Linux described plans
+that changed; §13 says why):
+
 | Device | How commands are carried out | Indicator |
 |---|---|---|
-| **Android phone and tablet** | The app's AccessibilityService reads every window as an element tree (same `@eN` refs and snapshot shape as agent-device), taps and gestures with `dispatchGesture`, presses back/home/recents, takes screenshots, and reads notifications through a notification listener. Screen recording (needs consent per recording), `adb`, `install` and `logs` (need an on-device wireless-debugging client, not built in 1.0) are reported missing with why. | Ongoing notification with Stop |
-| **Android TV, Google TV, Fire OS** | Same, plus the remote's arrows and select through the accessibility D-pad actions (Android 13+). The display screen is an activity inside the app. | Corner badge drawn as an accessibility overlay (no extra permission); Stop in the app |
-| **Mac** | agent-device's macOS driver: Accessibility API for the element tree and input, ScreenCaptureKit for screenshots and recording. Without UI Automation enabled, agent-device's XCTest runner would block on a prompt, so the session follows the frontmost app through agent-device's macOS helper instead (typing and recording are then reported missing, with the one-time fix). Terminal commands run as the logged-in user. | Menu bar icon changes; banner; Stop in the menu |
-| **Windows** (built by Extend) | UI Automation for the element tree, `SendInput` for mouse and keyboard, Windows.Graphics.Capture for screenshots, Media Foundation for recordings, ConPTY for the terminal. Mapped onto the same agent-device command set and snapshot shape. | Tray icon changes; banner with Stop |
-| **Linux** | AT-SPI2 for the element tree. On Wayland, the XDG desktop portal's RemoteDesktop and ScreenCast (the one-time "screen sharing and remote control" approval) with PipeWire; on X11, XTest and XShm. PTY for the terminal. | Banner with Stop |
+| **Android phone and tablet** | The app's AccessibilityService reads every window as an element tree (same `@eN` refs and snapshot shape as agent-device), taps and gestures with `dispatchGesture`, presses back/home/recents, takes screenshots, and reads notifications through a notification listener. **Android debugging** (the Carbon pairs Wireless debugging from the app once; a TV can use its TCP port) connects the app's own ADB client on the device, which adds `adb`, `install`/`reinstall`, `logs` and `record`. Recording runs supervised `screenrecord` segments of up to 180 s and joins them into one MP4, bounded to 30 minutes or 1 GiB; there is no per-recording consent prompt. Without debugging connected those capabilities are reported missing with "connect Android debugging". | Ongoing notification with Stop |
+| **Android TV, Google TV, Fire OS** | Same, plus the remote's arrows and select through the accessibility D-pad actions (Android 13+). The display screen is an activity inside the app. With Android debugging: `adb`, `install`/`reinstall` and `logs`; no recording on TVs. | Corner badge drawn as an accessibility overlay (no extra permission); Stop in the app |
+| **Mac** | agent-device's macOS driver through its signed native helper, with no XCTest runner and no UI Automation setup: Accessibility for the element tree, pointer input and text entry (text passed over stdin, focus checked before each key event), ScreenCaptureKit for screenshots and H.264 recording of one app or the display. The only setup steps are Accessibility and Screen Recording for Silicon Extend. A session starts on the frontmost app; `open <app>` binds the named app; links open with the system and the session follows the frontmost app. Terminal commands run as the logged-in user. | Menu bar icon changes; banner; Stop in the menu |
+| **Windows** (built by Extend) | UI Automation for the element tree, `SendInput` for mouse and keyboard, GDI for screenshots, Win32 for the clipboard, the Start menu and shell for apps, `cmd.exe` for the terminal. Mapped onto the same agent-device command set and snapshot shape. `record`, `logs`, `alert` and `replay`/`test`/`batch` are reported missing. Compile-checked and unit-tested only; it has never run on Windows. | Tray icon changes; banner with Stop |
+| **Linux** | agent-device's Linux driver: AT-SPI2 for the element tree, xdotool (X11) or ydotool (Wayland) for input, a screenshot tool (gnome-screenshot, scrot or ImageMagick; grim on Wayland), xclip/xsel or wl-clipboard. On X11, recording with ffmpeg (libx264 from `x11grab`): the whole screen, or one app's window through XComposite so windows over it are not recorded. Wayland recording (the ScreenCast portal) is not built and is reported missing, as are `logs`. PTY for the terminal. | Banner with Stop |
 | **iPhone, iPad** (via Mac) | The Mac's app runs agent-device's physical-iOS driver: its XCTest runner is installed on the iPhone once over USB, then reached over Wi-Fi. | On the Mac's app and the website |
 | **Apple TV** (via Mac) | The Companion protocol for apps and remote buttons, and AirPlay for pictures and videos, from the Mac on the same network. The Apple TV shows a code the Carbon enters once. | On the Mac's app and the website |
 | **Samsung TV** (via computer) | Tizen's local remote-control WebSocket (ports 8001/8002). The TV asks the Carbon to allow the connection once and issues a token. | On the host's app and the website |
@@ -501,7 +522,7 @@ every command, so a lost webhook delays nothing.
 
 ---
 
-## 13. As built (2026-09-26)
+## 13. As built (2026-09-26, updated 2026-09-27)
 
 Differences from the first draft, each deliberate:
 
@@ -516,9 +537,33 @@ Differences from the first draft, each deliberate:
 - **One service instance.** Device sockets and waiting commands live in the process
   (`docs/operations.md`).
 - **Android reads the screen with an AccessibilityService**, not agent-device's helper over
-  on-device ADB: an app can't drive its own device's ADB without pairing tricks, and the
-  accessibility tree gives the same element list. See `apps/android/README.md` for what uses
-  wireless debugging.
+  on-device ADB: the accessibility tree gives the same element list and needs no debugging setup.
+  ADB is used only for what accessibility can't do (`adb`, `install`, `logs`, `record`), through an
+  ADB client inside the app (a patched libadb-android) that the Carbon pairs with Wireless debugging
+  once. Every connection must start TLS once paired and prove it reaches Android's shell before it
+  is used. See `apps/android/README.md` for the limits (256 KiB inline per output stream, 256 MiB per
+  command or pull, results capped at 15 MiB, recordings kept through a dropped socket for 240 s).
+- **`adb` arguments are verbatim.** Everything after the first `adb` argument reaches the device as
+  typed; Extend's own flags go before it (`cli.yaml`).
+- **Local inputs.** A command carries at most 8 attachments and 8 MiB in total. `install`,
+  `reinstall`, `adb install` and `adb push` take a local file only; Briefcase file ids and links are
+  refused by the CLI before sending (Open question 14).
+- **Device answers for commands it stops.** Stop on the device and a session ending answer the
+  session's running and queued commands with `session_ended`; a `cancel` frame is answered with
+  `cancelled`; on Android, disconnecting debugging answers debugging commands with
+  `device_not_ready`. On computers, a command that arrives for a session the app already ended is
+  answered `session_ended` without running. On Android, commands running when the socket drops get
+  no answer (the service reports `device_offline`).
+- **Mac uses agent-device's native helper for everything**: text entry through Accessibility and
+  recording through ScreenCaptureKit, so neither Xcode nor UI Automation is needed (the first draft
+  expected the XCTest runner for typing and recording).
+- **Computer cleanup.** When agent-device can't release a Mac or Linux computer after a session
+  (close fails, then a forced release fails), the app keeps working but reports every capability
+  that needs agent-device as missing, with one reason, and retries in the background; `terminal`
+  and `takeover` stay available.
+- **Packaged runtime identity.** Mac and Linux packages stamp agent-device's version with a
+  content digest and install an entry that replaces a daemon started from another install path,
+  so an update or a moved app never keeps running old code.
 - **Local stand-ins** for Silicon IAM, Briefcase and Ting (`EXTEND_IAM_MODE=local` etc.) exist for
   development and tests and are refused in production.
 - **Extra endpoints:** `GET /api/v1/team/silicons` (access picker), `iam_login_url` in
@@ -563,3 +608,20 @@ service. Each needs a Carbon's decision.
 11. **iPhone signing.** agent-device's physical-iOS runner is an XCTest app that must be signed with
     an Apple development team and installed from a Mac with Xcode tools. The setup guide needs to
     say which Apple account signs it: the Carbon's own, or a team one.
+12. **What the owner Carbon may do with a Silicon's file.** §6 first said create, read and update.
+    Briefcase refuses `write` on a file and grants create only on folders, so the build shares read
+    and update. Confirm read and update, or ask Briefcase for another grant.
+13. **Downloading files through Extend.** `extend file get` and `screenshot --out` fetch the
+    Briefcase permanent URL with the Silicon's Extend token, which Briefcase refuses. Proposed: a
+    service route (for example `GET /api/v1/files/{file_id}/content`) that reads the file from
+    Briefcase on the member's behalf after Extend's own visibility check. This adds to `api.yaml`.
+14. **Briefcase file ids as inputs.** `cli.yaml` offered a Briefcase file id for `install`, and
+    still does for `replay`, `display` and `diff screenshot --baseline`; nothing in the CLI, the
+    service or the devices resolves one. The CLI now refuses ids for `install` and asks for a local
+    file. Decide whether the service (or the device) should fetch Briefcase inputs, which would also
+    lift the 8 MiB attachment limit for APKs, or whether `cli.yaml` drops `file_id` there.
+15. **`record start --quality` on computers.** `cli.yaml` offers `normal` (default) and `high` on
+    every platform. agent-device on a Mac accepts `medium` or `high`, and Linux records at one
+    quality and refuses the option. Proposed: the Mac maps `normal` to `medium`; Linux accepts
+    `normal` as "no option" and refuses `high` as unsupported. Not built yet: today
+    `--quality normal` fails on Mac and Linux.

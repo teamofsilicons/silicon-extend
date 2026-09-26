@@ -19,6 +19,10 @@ A scheduler in the service runs every 2 seconds:
 - Every 30 seconds: pairs that went unused longer than their owner allowed end (`pair_expired`);
   files past their self-destruct time are deleted; requests Ting hasn't accepted are retried (up to
   6 attempts); unclaimed uploads are removed.
+- Known gaps (2026-09-27): a pending Ting request is retried only while its sender still has a
+  running session, which a sender normally no longer has; and a self-destruct due after the
+  Silicon's session ended can't act for it in Briefcase, yet Extend drops its record, so the file
+  stays in Briefcase. Both need the Silicon's latest authorized principal (`completion-work.md`).
 - Stale enrollments are deleted after an hour; a claimed credential that is never collected is
   deleted after 10 minutes.
 
@@ -26,8 +30,18 @@ A scheduler in the service runs every 2 seconds:
 
 `EXTEND_LOG_FORMAT=json`, `EXTEND_LOG=info`. Every response has `X-Request-ID`; errors carry it too,
 so a CLI error message can be traced to its log lines. Telemetry events arrive at
-`/api/v1/telemetry` and are stored per world in `telemetry` and logged under target `telemetry`
-(forwarding to Space Station is the next step: set up the ingest key and exporter — not built yet).
+`/api/v1/telemetry` and are stored per world in `telemetry` and logged under target `telemetry`.
+They are exported to Space Station when `EXTEND_SPACE_STATION_KEY` is set (per test environment:
+`EXTEND_TEST_TELEMETRY_KEYS`); no ingest key has been available, so the export has not been seen
+working against Space Station.
+
+## Rate limits
+
+Pairing-code claims are limited per Carbon (5 failed per 10 minutes) and per address (30 per hour),
+and new enrollments to 60 per hour per address. The counters live in the process's memory, so a
+restart resets them. Several end-to-end runs against one shared development service use up the
+enrollment limit within minutes (HTTP 429 `rate_limited`, with a retry time); run test lanes against
+their own service instance.
 
 ## Revocation
 

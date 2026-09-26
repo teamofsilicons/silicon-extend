@@ -32,8 +32,12 @@ plain-http public URLs):
 | `EXTEND_WEBSITE_URL`, `EXTEND_DOCS_URL` | Public links returned by `/api/v1/iam` |
 
 In Silicon IAM, register the OBO endpoints Extend calls: Briefcase `briefcase.files.create`,
-`briefcase.invitations.create` (critical — needs Briefcase's approval), `briefcase.entries.trash`, and
-Ting `tings.send`; and the scopes `self.identity.read`, `self.membership.read`.
+`briefcase.invitations.create` (critical — needs Briefcase's approval), `briefcase.entries.trash`
+and `briefcase.files.read` (for reading a file back; no route uses it yet), and Ting `tings.send`
+and `subscriptions.register` (registering a Silicon as a recipient; not called by the service
+yet, and a real Ting refuses requests to unregistered recipients); and the scopes
+`self.identity.read`, `self.membership.read`. `e2e/real-iam/realiam.py --briefcase --ting` seeds
+exactly this catalog against local services and is the reference for it.
 
 ## Website (`extend.teamofsilicons.com`)
 
@@ -49,6 +53,20 @@ it with `honeycomb releases upload` from a Carbon session, like the sibling apps
 
 ## Device apps
 
-Android: `apps/android` builds the APK (sign with the release key; host the download on the
-website). Desktop: `apps/desktop` builds the macOS app bundle (sign and notarize with the Team's
-Apple Developer ID before distributing), the Linux tarball and the Windows zip.
+Android: `apps/android` builds the APK, package `com.teamofsilicons.extend` (sign with the release
+key; host the download on the website). APKs are development-signed today.
+
+Desktop: `apps/desktop` builds the macOS app bundle, the Linux tarball and `.deb`, and the Windows
+zip. Distribute only the Mac zip without a suffix (`Silicon-Extend-<version>-macos-<arch>.zip`),
+which `build-app.sh` produces only after Apple accepted the notarization and the ticket is stapled;
+`-unnotarized` and `-adhoc` zips are for testing. Which Developer ID signs releases is still the
+Carbon's decision, and changing it after release resets the Accessibility and Screen Recording
+grants Carbons gave the app. The Windows zip has never been built on Windows.
+
+## Licences in what ships
+
+Every artifact carries Team of Silicons' MIT licence and third-party code
+([`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)). The Android app shows its notices; the Mac
+and Linux packages ship agent-device's and Node.js's licence files. The CLI archive, the service
+image, the desktop packages and the website do not yet ship the licence texts of their Rust crates
+and fonts; add them before publishing.

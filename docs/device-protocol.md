@@ -107,6 +107,34 @@ A failed command still answers `result`, with `ok:false` and
 `"error":{"code":"…","message":"…"}`. Use `"code":"unsupported_on_device"` for a command this device
 can't do, `"code":"invalid_args"` for arguments it can't parse, and a precise message either way.
 
+A command that is stopped still answers, unless the socket itself is gone:
+
+| Why it stopped | `error.code` |
+|---|---|
+| The service sent `cancel` for it | `cancelled` |
+| The Carbon pressed Stop on the device, or `session_ended` arrived, while it ran or waited | `session_ended` |
+| It arrived for a session this device already ended (Mac, Windows and Linux app) | `session_ended`, without running it |
+| Android: the Carbon disconnected Android debugging (only `adb`, `install`, `reinstall`, `record`, `logs`) | `device_not_ready` |
+| A shell command exited non-zero (`terminal`, `adb shell`) | `command_failed`, with `details.exit_code` and the output |
+| A file it made could not be uploaded | `upload_failed` |
+
+The service may already have answered the caller (for example `command_timeout`); a late `result`
+is then dropped. Keep each `result` frame well under the socket's 16 MiB message limit: the Android
+app replaces a result larger than 15 MiB with an `action_failed` result and puts long output in
+files instead.
+
+### Keeping a session through a dropped socket
+
+The service pings every 15 s and marks the device offline after 45 s without a pong. It keeps a
+session for 120 s after that and re-sends `session_started` when the device reconnects in time, so
+the longest it can keep a session after losing contact is about 183 s (45 + 15 + 120 + its 2-second
+scheduler pass). A device app should therefore keep a session's state (recordings, log captures,
+snapshot refs) across a dropped socket, and drop it only on `session_ended`, the Carbon's Stop,
+unpairing, a `GET /api/v1/device` after reconnecting that shows another session or none, or its own
+grace period running out; the Android app waits 240 s (`SessionRetention.GRACE_MS`, checked against
+`crates/extend-protocol/src/lib.rs` by a unit test). Commands that were running when the socket
+dropped get no `result` from the Android app; the service answers the caller `device_offline`.
+
 ### Commands
 
 `command` is the top-level name and `args` the remaining CLI tokens, exactly as agent-device's CLI
@@ -117,7 +145,7 @@ latest `snapshot` in the same session.
 ### Attachments (files the caller sends with a command)
 
 A command may carry `attachments: [{"name","content_type","content_base64"}]` (a replay script, an
-APK to install, an image or video to show on a TV). Write each one into the command's scratch
+APK to install, an image or video to show on a TV): at most 8, and 8 MiB decoded in total. Write each one into the command's scratch
 directory, then replace every argument of the form `attachment:<name>` with that file's local path
 before running the command. Example: `display show --image attachment:cat.png` with an attachment
 named `cat.png`.
@@ -136,7 +164,9 @@ X-File-Name: screenshot.png
 <bytes>
 ```
 
-Then list it in `result.files`. Kinds: `screenshot`, `recording`, `log`, `replay_script`, `diff`, `other`.
+`X-File-Name` must be printable ASCII without slashes (HTTP headers can't carry more); replace
+other characters there and put the real name, in any script, in `result.files[].name`. Then list
+the file in `result.files`. Kinds: `screenshot`, `recording`, `log`, `replay_script`, `diff`, `other`.
 
 ## 3. Other device endpoints
 

@@ -67,7 +67,13 @@ pub struct Output {
 
 impl Output {
     pub fn ok(output: serde_json::Value, text: impl Into<String>) -> Self {
-        Self { ok: true, output, text: Some(text.into()), error: None, files: vec![] }
+        Self {
+            ok: true,
+            output,
+            text: Some(text.into()),
+            error: None,
+            files: vec![],
+        }
     }
     pub fn fail(code: &str, message: impl Into<String>) -> Self {
         let message = message.into();
@@ -75,7 +81,11 @@ impl Output {
             ok: false,
             output: serde_json::Value::Null,
             text: Some(message.clone()),
-            error: Some(CommandError { code: code.to_owned(), message, details: serde_json::Value::Null }),
+            error: Some(CommandError {
+                code: code.to_owned(),
+                message,
+                details: serde_json::Value::Null,
+            }),
             files: vec![],
         }
     }

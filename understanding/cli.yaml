@@ -25,7 +25,13 @@ grammar:
     under it.
   - Every agent-device command Extend exposes is also a top-level `extend` command (`extend snapshot`, `extend click @e2`)
     and runs inside the selected session.
-  - Flags may come before or after positionals. `--` ends flag parsing; everything after it is positional.
+  - Flags may come before or after positionals. `--` ends flag parsing; everything after it is positional. For a device
+    command the `--` is also sent to the device, so the device's own parser reads the rest as positional too
+    (`extend type -- -v`).
+  - 'Exception: `extend adb` takes a command line for the device. Everything from its first argument on is sent exactly as
+    typed, including -h, -v, --json and --out (`extend adb shell grep -v error /sdcard/app.log`). Extend''s own flags go
+    before that argument (`extend --json adb shell df -h`, `extend adb --timeout 60000 shell sleep 40`); a `--` directly
+    after `adb` ends them and is not sent. The one exception is where `adb pull` saves on this computer (see `adb` below).'
   - Global flags work on every command.
   - Destructive commands need `--yes`. Without it they print what would happen and exit 2.
   - Errors say exactly what failed, why, and the command to run next. Never "something went wrong".
@@ -396,7 +402,12 @@ commands:
 # `command` + `args` (the tokens after the name) is what the client sends in POST /api/v1/sessions/{session_id}/commands. Each needs the listed capability
 # (TECHNICAL.md §5). Flags every one of them accepts: --session, --timeout, --json.
 # Commands that make files also accept --ttl <1m–30d> (default 1d), --keep (permanent), and --out <path> (also save locally).
-# Files are returned with their Briefcase link.
+# Files are returned with their Briefcase link. For `adb`, all of these go before its first argument (see grammar).
+# Local files a command names (scripts, media, APKs, adb push sources) are read on the caller's machine and sent inside
+# the request: at most 8 files and 8 MiB in total, checked before any file is read. install, reinstall, adb push and
+# adb install take a local file only; a Briefcase link or file id is not accepted in its place yet. The CLI refuses a
+# missing path, a directory, a link or a file id there (invalid_input, exit 2) before sending anything, and says how
+# to download a Briefcase file first (`extend file get <file_id> --out <path>`).
 
 device_commands:
 
@@ -425,6 +436,7 @@ device_commands:
     gives: {text: 'Changed pixels percentage and a Briefcase link to the diff image'}
   - usage: extend record start [<name>] [--scope app|device] [--fps <n>] [--quality normal|high] | extend record stop
     capability: screen.record
+    takes: {--quality: 'normal (the default) or high, on every platform. Linux records at one quality: normal there is the same as leaving it out, and high is refused.'}
     gives: {text: 'On stop: Briefcase link to the video. Stops on its own at 30 minutes or 1 GiB.'}
 
   # Act
@@ -470,9 +482,12 @@ device_commands:
     capability: apps.list
   - usage: extend appstate
     capability: apps.launch
-  - usage: extend install <app> <path|file_id> | extend reinstall <app> <path|file_id>
+  - usage: extend install <package> <path.apk> | extend reinstall <package> <path.apk>
     capability: apps.install
-    summary: Install an .apk or .aab. A local path is uploaded through Extend.
+    summary: 'Install an Android .apk from a local path; its package must match <package>. The APK is sent with the
+      command, so it can be at most 8 MiB. Briefcase links, file ids and .aab bundles are not accepted yet: the CLI
+      refuses them before sending (for an .aab it gives the bundletool command that builds an APK). For a larger APK
+      the error explains how to push it in parts and install it with `extend adb shell pm install -r`.'
 
   # Waiting for and handling pop-ups
   - usage: extend alert [get|wait <ms>|accept|dismiss]
@@ -502,9 +517,14 @@ device_commands:
     capability: terminal
     summary: Run a shell command on the computer as the signed-in user. Prints stdout and stderr; exits with the command's exit code (non-zero → 1, with details.exit_code).
     gives: {json: '{stdout, stderr, exit_code, duration_ms}'}
-  - usage: extend adb <args>...
+  - usage: extend [<extend flags>] adb [<extend flags>] [--] <args>...
     capability: adb
     summary: 'Android debugging on the device itself, e.g. `extend adb shell dumpsys battery`, `extend adb logcat -d`. Files it produces go to Briefcase.'
+    takes:
+      args: 'Sent to the device exactly as typed from the first one on, including -h, -v, --json and --out (except the local path of `pull`, below). Extend''s flags (--json, --session, --timeout, --ttl, --keep, --out, ...) go before it; a leading `--` ends them and is not sent.'
+      push: 'push <local file> <device path>: one local file, sent with the command (8 MiB at most). adb push options, several files, a directory, a link or a file id are refused before sending.'
+      install: 'install [-r] <local .apk>: the local APK is sent with the command (8 MiB at most). Other adb install options are refused before sending; push the APK and run `extend adb shell pm install <options> <device path>` instead.'
+      pull: 'pull <device path> [<local path>]: the file goes to Briefcase; a local path, or --out <local path> before or after the device path, also saves it on this computer and is never sent to the device (real adb pull has no --out). Two local paths are refused.'
   - usage: extend notifications [--json]
     capability: notifications
     summary: Read the Android device's current notifications.

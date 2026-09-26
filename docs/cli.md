@@ -39,6 +39,27 @@ When another Silicon is using the device, `extend session new` exits 6 and tells
 when. Ask for it with `extend request send <device_id> --reason "..."` (1–300 characters, delivered
 through Ting exactly as written).
 
+## Arguments, `--` and local files
+
+- **Global flags** (`--json`, `--timeout`, `--session`, `--team`, `--test`, `-h`, `-v`) work
+  anywhere on a command line, except as below.
+- **`extend adb` is verbatim.** From the first `adb` argument on, every token reaches the device
+  exactly as typed, including `-h`, `-v`, `--json`, `--timeout` and `--out`. Put Extend's own flags
+  before that argument: `extend --json adb shell df -h`, `extend adb --timeout 60000 shell sleep 40`,
+  `extend adb --out shot.png exec-out screencap -p`. A `--` straight after `adb` ends Extend's flags
+  and is not sent. `extend adb -h` with nothing after it is Extend's help for `adb`.
+- **`adb pull`** sends only `pull <device path>`; the local path is a second path
+  (`extend adb pull /sdcard/x ./x`) or `--out <path>`, anywhere. Two local paths are refused.
+- **`--` elsewhere.** For other device commands `--` stops Extend reading `--ttl`, `--keep` and
+  `--out` and is passed on, so the device reads what follows as text (`extend type -- -v`). For
+  Extend's own commands (`device`, `session`, `config`, …) everything after `--` is positional.
+- **Local files** (replay and test scripts, display media, APKs, `adb push` sources) travel with the
+  command: at most 8 files and 8 MiB in total, checked before anything is read or sent.
+  `install`, `reinstall`, `adb install` and `adb push` take a local regular file only; a Briefcase
+  file id, a link, a directory or an `.aab` is refused with the command to run instead (for example
+  `extend file get <file_id> --out ./app.apk`). For a larger APK, push it in parts and install it
+  on the device; `extend adb --help` shows the recipe.
+
 ## For a Carbon
 
 ```sh

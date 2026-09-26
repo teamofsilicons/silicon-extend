@@ -14,3 +14,4 @@ dist
 web/test-results
 web/playwright-report
 web/blob-report
+apps/android/build-screens/

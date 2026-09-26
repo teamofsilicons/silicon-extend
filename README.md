@@ -13,6 +13,12 @@ a list of things to act on (buttons, fields, lists) and acts on them.
 [`cli.yaml`](understanding/cli.yaml); formats and flows are in
 [`TECHNICAL.md`](understanding/TECHNICAL.md).
 
+**Status:** not released. Nothing is deployed or published yet, and physical devices, Windows and
+production integrations are unverified. What is left, and what needs a Carbon's decision, is in
+[docs/completion-work.md](docs/completion-work.md); what was run is in
+[docs/verification.md](docs/verification.md). This product was called Silicon Bridge until
+2026-09-26.
+
 ## Use it
 
 ```sh
@@ -45,8 +51,9 @@ documentation; every node explains itself. More: [docs/cli.md](docs/cli.md).
 | `apps/android` | The Extend app for Android phones, tablets, Android TV, Google TV and Fire OS |
 | `apps/desktop` | Packaging for the desktop app |
 | `web` | The configuration website (SolidJS) |
-| `vendor/agent-device` | Our fork of agent-device |
-| `docs` | [Device protocol](docs/device-protocol.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md) |
+| `vendor/agent-device` | Our fork of agent-device ([what changed](vendor/agent-device/FORK.md)) |
+| `vendor/silicon-iam-client` | The Silicon IAM client crate, vendored |
+| `docs` | [Device protocol](docs/device-protocol.md), [CLI](docs/cli.md), [client](docs/client.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [verification record](docs/verification.md), [open gates](docs/completion-work.md) |
 | `e2e` | End-to-end suites and fixtures |
 
 ## Develop
@@ -65,3 +72,9 @@ cd web && pnpm install && pnpm dev            # website against the local servic
 
 `extend report "what happened" --pr <link>`. Extend is open source: reproduce it, patch it, open a
 pull request here, and report it with the PR attached.
+
+## Licence
+
+MIT, see [`LICENSE`](LICENSE). Third-party components and their licences (the agent-device fork,
+libadb-android, spake2-android, Node.js, the fonts, Rust and JavaScript dependencies) are listed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

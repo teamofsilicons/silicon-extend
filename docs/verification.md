@@ -1,9 +1,248 @@
-# Verification record — 2026-09-26
+# Verification record
 
 What was run to check that Silicon Extend works as `understanding/UNDERSTANDING.md` intends, on what,
-and what has **not** been verified. Rerun the automated part with `e2e/run-all.sh`.
+and what has **not** been verified. Newest first: the 2026-09-27 section, then the 2026-09-26
+record, corrected in place where later work showed it wrong (marked *Corrected 2026-09-27*).
+Rerun the automated part with `e2e/run-all.sh`.
 
-## Automated suites
+## Where the evidence is
+
+- **Nothing here is committed evidence.** Each result was observed by the agent that ran it; its
+  logs, videos and screenshots stayed on this Mac, outside version control. The record itself is
+  the only durable account.
+- **Gone.** The 2026-09-26 record cites logs under `/tmp/extend-*.log` and ignored folders under
+  `target/`. On 2026-09-27 no `/tmp/extend-*` file exists any more, and neither do
+  `target/desktop/macos/`, `target/desktop/linux/verification.json`,
+  `target/android-recording/service-ghqrk9z3/` or the other folders marked *gone* below. Those
+  claims can be checked only by rerunning their lanes.
+- **Kept on this Mac on 2026-09-27**, all ignored by git, so they survive a reboot but not
+  `cargo clean` or a fresh checkout:
+  - `target/desktop/linux-recording/`: `cover-recording-*`, `isolated-recording-*`,
+    `public-app-recording-*`, `runtime-recording-*`, and `service-recording-6snwvqkw/` and
+    `service-recording-nyiexg15/`, each with `summary.txt` and the package install logs;
+  - `target/android-recording/run-*/`: duration-limit proof videos and logs;
+  - `web/test-results/restyle/`: website screenshots;
+  - `apps/android/build-screens/`: Android phone and TV screenshots;
+  - `e2e/real-iam/last-run/`: Briefcase, Ting and Extend logs of the last real-services run.
+- The agents' own scripts, logs and scratch builds from 2026-09-26/27 were in a temporary session
+  directory and are not kept.
+- Lanes that now write their evidence under `target/`: `apps/desktop/linux-e2e/record-service-e2e.py`
+  (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
+  and `e2e/android-recording-service.py`.
+
+## 2026-09-27 — rename, review fixes, restyle, Briefcase and Ting
+
+The work ran from the evening of 2026-09-26 into the early hours of 2026-09-27, on this Mac
+(macOS 27, arm64) with the headless Android emulator `Medium_Phone_API_36.0` (emulator-5554,
+Android 16), a headless Android TV emulator (API 34) for the restyle, and Docker. Every fix was made
+by one agent and then checked by a separate verifier agent that re-ran the tests and tried to break
+it; where a verifier found a problem, a second round fixed it and a second verifier checked again.
+None of this work is committed yet: it is the working tree on top of `7af7fd5`. Nobody drove the
+Carbon's desktop; the shared development service on `:8480` was never restarted. Its enrollment
+limit (60 per hour per address, in memory) was used up by concurrent runs, so most lanes ran against
+their own service instance on another port with its own database, dropped afterwards.
+
+### Run by the documentation pass
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 1: 1,492 hunks in 78 files. The review found the same failure on the earlier base `fcf9a90`; formatting is left to the integration step. |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 (macOS host) |
+| `EXTEND_TEST_ADMIN_URL=postgres://extend:extend@127.0.0.1:5440/postgres cargo test --workspace --locked` | exit 0. extend-agent 142 unit + 9 fake-service; extend-cli 15 unit + 8 `device_args`; extend-hosted 63 (2 ignored); extend-protocol 9; extend-service 13 unit + 4 `e2e` + 6 `obo_requests` + 1 `real_services` (its body runs only with `EXTEND_REALIAM_STATE` set, so here it returned at once); silicon-iam-client 47 + 22 + 2; 4 doc tests. The `e2e` suites left four throwaway `extend_e2e_*` databases (`e2e/clean-test-dbs.sh` drops them). |
+| `npx @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash` | valid, 15 warnings: the same 15 as the committed file |
+| `cargo metadata --format-version 1 --locked --offline` | 581 third-party crates, listed in `THIRD_PARTY_NOTICES.md` |
+| read-only `gh repo view` / `gh api` on `teamofsilicons/silicon-extend` and `teamofsilicons/silicon-bridge` | both exist and are other products (`completion-work.md`) |
+
+Not run by this pass: `e2e/cli-e2e.sh`, the Android, website, Swift and fork suites, and any device
+lane. Those results below are the other agents'.
+
+### Rename (commit `7af7fd5`)
+
+Silicon Bridge became Silicon Extend: crates `extend-*` and `silicon-extend-client`, the `extend`
+CLI, `EXTEND_*` settings, the `Extend-Device` and `Extend-Enrollment` auth schemes,
+`Silicon-Extend-API-Version`, the `ees_` (enrollment secret) and `edc_` (device credential) prefixes
+(were `bes_`/`bdc_`), `extend.teamofsilicons.com` and `backend.extend.teamofsilicons.com`, the
+Android package `com.teamofsilicons.extend`, and the `extend`, `extend_global` and `extend_test_*`
+database schemas. Upstream names that contain the word (`snapshot-bridge`, `atspi-bridge`, "Android
+Debug Bridge") were kept.
+
+- The same commit rewrote the Carbon-owned `understanding/UNDERSTANDING.md` (128 changed lines,
+  Bridge → Extend and the domains), although the file says agents must not edit it. The Carbon
+  should review that diff.
+- Rename damage found and fixed later: GTK's own `NO_AT_BRIDGE` variable had become
+  `NO_AT_EXTEND` in `apps/desktop/linux-e2e/Dockerfile` and `e2e.sh`; FORK.md still said "Bridge".
+- On the emulator the old `com.teamofsilicons.bridge` app is still installed beside the new
+  package; it is not part of this product any more.
+
+### Mark and restyle
+
+- **Mark:** a sibling of Silicon Interface's mark on the same grid, one square of the ring reaching
+  out to another square (`web/public/brand/mark.svg`). Used for the favicon, the website, the
+  Android launcher icon (adaptive, with a monochrome layer) and TV banner, the Mac app icon
+  (`apps/desktop/macos/icon/`, built by `make-icns.sh`) and the tray icon. Checked by rendering at
+  16–1024 px, `cargo test -p extend-agent --lib ui::` (2 new icon tests), a headless Chromium
+  screenshot of a website build, `./gradlew :app:processDebugResources`, and `iconutil` round-trips
+  of the `.icns`. Not seen in Finder or a real menu bar.
+- **Website:** restyled as a sibling of Silicon Interface (tokens copied from Interface, IBM Plex
+  Sans and Mono, Source Serif 4 titles ending in a period, a dithered print on sign-in, empty states
+  and the pairing ticket, a ⌘K menu, a phone layout with a bottom bar). `pnpm check`, `pnpm test`
+  (79 tests), `pnpm build` and `pnpm test:e2e` (27/27 against the mock) pass; `pnpm test:e2e:real`
+  passed 4/4 against the agent's own service on `:8483` and 2–3 of 4 against `:8480`, where the
+  others stopped at the enrollment limit (HTTP 429). The design critic accepted it with only
+  low-severity notes left.
+- **Desktop window and banner** (`crates/extend-agent/src/ui/page.html`): the same system, fonts
+  inlined. Rendered offscreen in headless Chromium and WebKit (37 states each, no page errors, no
+  overflow) with a 32-case banner fit check in both engines; `cargo test -p extend-agent` and clippy
+  pass. Not seen in a real window (WKWebView, WebKitGTK or WebView2). Accepted by the critic with
+  low-severity notes.
+- **Android app:** Interface's system in Compose (fonts bundled), a redrawn TV corner badge
+  (`ui/InUseBadge.kt`), and a styled Open-source licences screen. `./gradlew :app:testDebugUnitTest
+  :app:assembleDebug` (104 JVM tests) passes; phone (API 36) and TV (API 34) emulators were
+  captured in every state against `tools/fake-service/fake_extend.py`, because `:8480` answered
+  429. TalkBack itself was not run. Accepted by the critic with low-severity notes.
+
+### Android debugging
+
+Checked by the second verifier with the current code:
+
+- `./gradlew :app:testDebugUnitTest :libadb:test --rerun-tasks`: all JVM suites pass, including
+  `SessionRetentionTest` (8, its constants check against `crates/extend-protocol` not skipped),
+  `CommandJobsTest` (5), `RecordingTimelineTest` (7), `AdbWireTest` (7), `FramesTest` (12),
+  `ArtifactNameTest`, `LicencesTest`, `AdbReconnectPolicyTest`, and libadb's `ExtendTransportTest`
+  (7/7) and `AndroidPubkeyTest` (3/3).
+- On emulator-5554, `am instrument -e local_daemon true` for `LocalAdbTest` and `RecordingTest`:
+  19 tests, 15 ran and passed, 4 skipped by assumption (`connectLocalForService`,
+  `wirelessPairing`, `wirelessReconnect`, `beyondNativeLimit`), 114.7 s.
+- Mutation checks: restoring upstream libadb's acknowledge-on-arrival makes both flow-control tests
+  fail; changing the pinned spake2-android checksum makes the build fail.
+- Against the verifier's own service (`:8494`): a service restart during `record start` and
+  `logs start` still gave an 82.8 s MP4 and a log with both markers; a 158 s network outage kept the
+  session and gave a 167.97 s MP4 (the old 150 s device grace would have deleted it); a 181 s outage
+  ended the session at +171 s, the device then removed its capture and the CLI reported
+  `session_ended`.
+- Through the CLI: `adb shell "head -c 270000000 /dev/zero"` returned `action_failed` with the
+  256 MiB hint in 2.25 s; 40 MB on stdout plus 3 MB on stderr returned 256 KiB inline per stream and
+  both full files; the app process stayed the same throughout. `adb shell sleep 60` ended 4 s after
+  the Carbon's `extend device stop` with `session_ended` (exit 1; exit 6 is CLI work still open).
+  A non-zero exit gives `command_failed` with `details.exit_code`; `adb pull` of
+  `Café résumé 写真.txt` kept its name.
+- `e2e/android-adb.sh` against `:8494`: all 6 PASS lines (shell, install/reinstall, push/pull, logs,
+  recording, Carbon Stop with exit 6 and cleanup).
+- `tools/wireless-debugging-lane.py` (TLS): pairing passed; `wirelessReconnect` failed three times,
+  because discovery picked a dead mDNS advertisement the emulator kept publishing (open).
+- Emulator UI: "Open-source licences" opens the licences screen.
+- Emulator state afterwards, as the agents reported it: the Extend debug app and its test APK are
+  installed beside the old `com.teamofsilicons.bridge` app, pointed at `http://10.0.2.2:8480` and
+  unpaired; the emulator's adbd trusts the app's key (legacy port 5555 and a Wireless debugging
+  pairing); proof videos are in the app's external files directory.
+
+### Desktop agent
+
+- `cargo test -p extend-agent` (142 unit + 9 integration, three runs of the dispatch and driver
+  tests), clippy with `-D warnings`, and `cargo check --target x86_64-pc-windows-msvc` pass.
+- The real `extend-agent exec` against a logging fake agent-device: 28 `open`/`close` cases with
+  named Mac apps, `--save-script` in every position, and the Spotlight fallback for apps outside
+  `/Applications`.
+- Live against the verifier's own service (`:8498`) with a headless agent and a fake agent-device
+  whose cleanup fails: the held-computer report (setup complete, agent-device capabilities under
+  `missing` with one reason), a new session and `terminal` while held, `snapshot` refused with exit
+  10, background retries forcing only with no session in use, `kill -9` mid-session and restart
+  without disturbing the session, the forced release at session end, the hold shown 0.6 s after
+  `session end`, and a session that ended while the agent was down closed at the next start.
+- Not run: anything on a real desktop (named apps opened by the real helper, the banner in a real
+  window, a real stuck recording).
+
+### CLI
+
+- `cargo test -p extend-cli` (15 unit + 8 integration) and clippy pass. Every integration test also
+  failed against the pre-fix binary.
+- `bash e2e/cli-e2e.sh` against the verifier's own service (`:8493`): 48/48. Against `:8480` it
+  stopped at check 9 on the enrollment limit.
+- About 60 adversarial commands through that service with a fake Android device: `adb` arguments
+  arrive verbatim, Extend flags before the first `adb` argument, the three `adb pull` forms and their
+  refusals, file ids, links, missing paths, directories and `.aab` refused before sending (exit 2),
+  an exactly 8 MiB push sent and 8 MiB + 1 byte refused, a 40 GiB sparse file refused with about
+  9.9 MB peak memory.
+- The parts recipe for a 9 MiB APK (`split -b 8m`, push, `cat`, `pm install -r`) worked on the
+  emulator with host adb; not through Extend's own ADB connection.
+- Still open after the CLI rounds: `record start --quality normal`, which `cli.yaml` now documents
+  for every platform, fails with `invalid_args` on Mac and Linux (a desktop-agent change, not made).
+
+### Fork (agent-device) — macOS
+
+- Targeted vitest suites 43/43; the wider run 4,842 passed and 5 failed, all 5 attributed to code
+  older than this work. An in-memory mutation harness showed the new tests fail against the old
+  logic for each fix. `swift test` for the helper: 21/21 and 6/6 (no test posts events or activates
+  apps); a clean release build at the macOS 13 deployment target; `pnpm typecheck`, lint and build.
+- Not run, because they drive the real desktop: `apps/desktop/macos/text-e2e.py` (frontmost-app
+  typing including `find … type`, colour checks of screenshots and recordings, key-release on
+  cancel), hiding or quitting an app mid-recording, revoked Screen Recording, a context menu in an
+  app screenshot, macOS 13–15.1, two displays.
+
+### Fork (agent-device) — Linux
+
+- In the `silicon-extend-linux-e2e` container: `record-hung-e2e.py` 18/18 with no window manager and
+  18/18 with openbox (the previous worker fails 6 of them), `record-e2e.py` all pass, the isolation
+  lane with no edge, unmap, resize and remap 4/4, `record-app-e2e.py` and `record-runtime-e2e.py`
+  pass; 42/42 vitest; a 3000x2000, 60 fps capture kept real time (5.23 s of video for 5 s).
+- `package-install-check.sh` in a clean `debian:trixie`: the Depends-only and the Recommends
+  installs pass.
+- The installed package through the local service (`record-service-e2e.py`, app and device
+  recording, upload, full decode, identical repeat download) passed with the first-round worker:
+  `service-recording-6snwvqkw/summary.txt` and `service-recording-nyiexg15/summary.txt` (package
+  SHA-256 `eac81e1a…`). The second-round worker was not run through this lane.
+- An adversarial probe found two remaining leaks (a plain Xlib window with background `None` and no
+  `_NET_WM_PING`, left by a cover while hung; a second recorder on an already-redirected window);
+  they are open (`vendor/agent-device/FORK.md`). A frozen Java Swing window did not leak.
+- Not run: any real Linux desktop.
+
+### Packaging
+
+- `node --test apps/desktop/stamp-runtime.test.mjs apps/desktop/runtime-entry.test.mjs`: 37/37.
+- `apps/desktop/macos/build-app.sh` in a scratch copy of the repository reached through symlinks,
+  with pnpm and cargo stubbed, a real Node download and ad-hoc signing: exit 0,
+  `codesign --verify --deep --strict` passes, only the `-adhoc.zip` is produced. The same build with
+  the old stamp script fails as intended. A corrupted cached Node tarball is downloaded again; a wrong
+  pinned hash caches nothing.
+- The notarization paths ran with `codesign`, `xcrun` and `spctl` stubbed (submit error, `Invalid`,
+  staple failure, `spctl` rejection each stop with no zip; success gives the plain zip). Real
+  notarization was not run.
+- `runtime-update-e2e.mjs` against the packaged Mac runtime and the Linux tarball runtime, each under
+  its bundled Node 22.23.3: 5 PASS and 2 REPRODUCED lines. With the real fork, a moved install
+  replaced the stale daemon and four concurrent commands shared one new daemon.
+- The verifier found a regression that is still open: the new entry reads `--state-dir` past `--`,
+  so typed text can choose where it writes its record (`completion-work.md`).
+
+### Briefcase and Ting through real services
+
+- Services: Briefcase 2.1.0 (image `briefcase-backend:candidate`, rev `2e6ffef`) with its migrate,
+  API and worker; MinIO `RELEASE.2025-07-23T15-54-02Z` built from source by `realiam.py build-minio`
+  (the images are no longer published); Silicon IAM `silicon-iam:release-433665db`; the public Ting
+  0.1.9 server binary, checked against its SHA-256 (`069e71b1…`), on SQLite.
+- `python3 e2e/real-iam/realiam.py all --briefcase --ting` from scratch: 66 passed, 2 failed,
+  1 known Briefcase gap (exit 1). `realiam.py all` without the new lanes: 51/51. The
+  `real_services` test against the live fixture passed on both runs.
+- Confirmed through Briefcase's own API: a Silicon's screenshot is stored in
+  `apps/extend/private/si:chef/` with the right owner, size and bytes; the returned URL is
+  Briefcase's permanent URL; the owner's share is exactly read + update (a plain member cannot
+  delete); `extend file keep` leaves the entry alone; a self-destruct trashes it through
+  `entries.trash`. Three defects were found and fixed: the share asked for `write` (Briefcase
+  refused it), a repeated file name crashed the second screenshot, and the trash request lacked its
+  `operation_id`.
+- Ting accepted Extend's `tings.send` with its OBO proof and delivered the request with the exact
+  reason.
+- Still failing: Extend never registers a Silicon as a Ting recipient, so a real Ting refuses the
+  request (`recipient_not_registered`) and it stays pending; `extend file get` and
+  `screenshot --out` fail in Briefcase mode. Known Briefcase gap: a delegated invitation to a Carbon
+  Briefcase has never seen fails with `invalid_principal`.
+- Not exercised: Briefcase's and Ting's test planes, large files through the one-shot upload, a live
+  IAM refusal of an OBO exchange.
+
+---
+
+The rest of this file is the 2026-09-26 record.
+
+## Automated suites — 2026-09-26
 
 | Suite | Where | Result |
 |---|---|---|
@@ -16,7 +255,7 @@ and what has **not** been verified. Rerun the automated part with `e2e/run-all.s
 | Hosted drivers (`crates/extend-hosted`) | mocks, iOS Simulator | 63 tests; Apple TV pairing crypto against pyatv's server (opt-in) |
 | Android (`apps/android`) | JVM, phone emulator (API 36), Android TV emulator (API 34) | 58 unit; 83/83 phone and 36/36 TV checks vs fake service |
 
-## Real devices, through the real service and the `extend` CLI
+## Real devices, through the real service and the `extend` CLI — 2026-09-26
 
 | Device | What ran |
 |---|---|
@@ -26,22 +265,26 @@ and what has **not** been verified. Rerun the automated part with `e2e/run-all.s
 | Android TV emulator | `display show` text and image, remote buttons, `screenshot`, corner badge |
 | iOS Simulator (through the Mac's hosted driver) | `open Settings`, `snapshot -i`, `click`, `screenshot`, `record start/stop` |
 
-## Not verified
+## Not verified — as of 2026-09-26 (current list: `completion-work.md`)
 
 - **Windows**: compiles for `x86_64-pc-windows-msvc`, pure logic unit-tested; never run on Windows.
 - **Physical iPhone/iPad**: helper install (needs signing with an Apple development team), Trust and
   Developer Mode steps.
 - **Real Samsung/LG TVs and Apple TV**: only mocks (and pyatv's pairing server for Apple TV crypto).
 - **Physical Android phones, Fire TV, Android 11–12.**
-- **Mac screen recording**: still needs UI Automation enabled once
-  (`automationmodetool enable-automationmode-without-authentication`); reported as missing until then.
-  Typing no longer uses that runner; see the native text follow-up below.
+- ~~**Mac screen recording**: still needs UI Automation enabled once
+  (`automationmodetool enable-automationmode-without-authentication`); reported as missing until then.~~
+  *Corrected 2026-09-27:* superseded the same day. Recording uses a native ScreenCaptureKit helper and typing the
+  Accessibility helper; neither needs Xcode or UI Automation. The probe reports `screen.record` once
+  Screen Recording is granted (see "Native Mac recording" below).
 - **Briefcase and Ting through IAM OBO**: implemented to their documented contracts; tests used the
   local stand-ins (Briefcase's OBO upload lacks self-destruct and "make permanent" — TECHNICAL.md
-  open questions 1–2).
+  open questions 1–2). *Corrected 2026-09-27:* exercised against real local Briefcase, Ting and IAM services on
+  2026-09-26/27; see the 2026-09-27 section for what passed and what still fails.
 - **Space Station export**: implemented; no ingest key was available to send real events.
 - **Production**: nothing deployed; no DNS, no Vercel, no Honeycomb release upload.
-- **Android `adb`, `install`, `logs`, screen recording**: not built in 1.0 (reported as missing, with why).
+- ~~**Android `adb`, `install`, `logs`, screen recording**: not built in 1.0 (reported as missing, with why).~~
+  *Corrected 2026-09-27:* built the same day; see the Android debugging follow-up below.
 
 ## Android debugging follow-up — 2026-09-26
 
@@ -66,9 +309,11 @@ by this follow-up. Release and physical-device gates above remain open.
   Android emulator: CLI shell, install/reinstall, binary push/pull with artifact retrieval,
   logs/marker, downloaded MP4, Carbon Stop, refusal after Stop and cleanup before a new session.
   IAM, Briefcase and Ting in this run were the development stand-ins.
-- Force-stopping the app during recording and reopening it exercised recovery of its saved
-  recording directory. Instrumentation separately proves that transport closure stops the
-  recorder; the recorder now uses a live PTY instead of a detached process.
+- Force-stopping the app during recording and reopening it exercised the cleanup of its
+  recording directory. *Corrected 2026-09-27:* this is cleanup, not recovery: after an app restart the app stops the
+  interrupted recorder and deletes its directory; nothing is uploaded or offered. Instrumentation
+  separately proves that transport closure stops the recorder; the recorder now uses a live PTY
+  instead of a detached process.
 - Existing phone/emulator regression suite: 84/84 checks pass, including local Stop, refusal
   of further commands from the ended session, reconnect, revoke confirmation and re-enrollment.
   The longer setup screen exposed stale Compose accessibility descendants; snapshots now clear
@@ -77,12 +322,13 @@ by this follow-up. Release and physical-device gates above remain open.
   render correctly. Desktop, physical hardware and production were not tested in this batch.
 
 Limits still requiring follow-up: 8 MiB inline APK/attachment limit, Briefcase file-id input,
-180-second native recording cap, custom recording frame rate/app-only scope, and physical TV
-compatibility. These checks do not establish completion of the entire product contract.
+180-second native recording cap (lifted later that day by segmenting, below), custom recording
+frame rate/app-only scope, and physical TV compatibility. These checks do not establish completion of the entire product contract.
 
 ## macOS release packaging follow-up — 2026-09-26
 
-- Built the optimized arm64 app with Developer ID Application: Shubham Gupta (LTBSK59BJ2).
+- Built the optimized arm64 app signed with a Developer ID Application identity from this Mac's
+  keychain (which identity signs releases is a Carbon decision; see `completion-work.md`).
   The app, helper and bundled Node are signed; hardened runtime and a secure timestamp are
   present. Deep/strict signature verification and a bundled Node JavaScript execution pass.
 - The bundle is 127 MB and its zip is 43 MB. Node 22.23.3 is checksum verified against pinned
@@ -91,8 +337,9 @@ compatibility. These checks do not establish completion of the entire product co
   reports the new signed identity's missing Accessibility and Screen Recording permissions.
   Those grants must be made through macOS before input/capture validation can proceed.
 - Notarization support is implemented but was not run: an existing notarytool Keychain
-  profile is needed. The artifact is signed, not notarized or published. Recording still
-  requires the UI Automation setup documented above.
+  profile is needed. The artifact is signed, not notarized or published. ~~Recording still
+  requires the UI Automation setup documented above.~~ *Corrected 2026-09-27:* it does not; see "Native Mac
+  recording" below.
 
 ## macOS native text follow-up — 2026-09-26
 
@@ -119,7 +366,7 @@ compatibility. These checks do not establish completion of the entire product co
   resolves the parent Git root; its required checks were selected and run directly.
 - System Settings shows both requested grants enabled. The running app's status reports
   Accessibility and Screen Recording setup complete; only the separate XCTest recording
-  requirement remains. A subprocess launched by the development host can report different
+  requirement remains (*Corrected 2026-09-27:* removed later that day by native recording). A subprocess launched by the development host can report different
   screen permission status from the actual running app.
 - These checks establish native AppKit input and packaged local-driver behavior. They do
   not establish arbitrary third-party app compatibility, production relay behavior,
@@ -144,7 +391,9 @@ compatibility. These checks do not establish completion of the entire product co
 - The stuck live test session `extend-c67` subsequently closed successfully through the same
   daemon, confirming cleanup retry releases a real retained claim. Extend now retries the typed
   `session_cleanup_incomplete` result once on session end and preserves state/artifacts if cleanup
-  still fails. The regression failed before this driver change and passes for recovery, persistent
+  still fails (*Corrected 2026-09-27:* since 2026-09-27 a failed cleanup is followed by a forced release, and if that
+  fails the computer reports its agent-device capabilities as missing until a retry succeeds; see
+  the 2026-09-27 section). The regression failed before this driver change and passes for recovery, persistent
   cleanup failure and a same-message error with a different reason. All 111 agent unit tests and
   seven fake-service tests pass after this change.
 
@@ -164,7 +413,7 @@ compatibility. These checks do not establish completion of the entire product co
   and `4b3` passed app capture, real local service relay, upload, CLI download and full ffmpeg
   decode. The final run also verified changing frames and a decoded image showing only the
   fixture app against a black background. Artifacts are under
-  `target/desktop/macos/recording-verification/` (ignored build output).
+  `target/desktop/macos/recording-verification/` (ignored build output; gone by 2026-09-27).
 - The local service uses development IAM/Briefcase/Ting stand-ins. These results do not prove
   production integrations, every Mac app, multi-monitor live behavior, 30-minute/1-GiB stress,
   owner-loss recovery, default touch-overlay rendering, notarization or publication. Explicit
@@ -191,7 +440,7 @@ compatibility. These checks do not establish completion of the entire product co
   overlapped the target: bound AX nodes, a nonblank screenshot, app-scoped H.264 recording,
   upload/download, changing frame hashes, and full ffmpeg decode. Both the downloaded screenshot
   and decoded video frame were visually inspected. Artifacts: ignored
-  `target/desktop/macos/app-target-verification/`.
+  `target/desktop/macos/app-target-verification/` (gone by 2026-09-27).
 - The first visual audit caught a black backing-window image despite command success. The
   harness now rejects blank screenshots. Both fixtures use Apple's `canJoinAllApplications`
   window behavior so the overlap test remains an overlap when Stage Manager is enabled.
@@ -219,16 +468,21 @@ compatibility. These checks do not establish completion of the entire product co
 - Four focused tests pass: identical relocated content, same-size/same-mtime code changes, native
   helper changes and rejection of incomplete staging. The real-daemon harness first reproduced
   stale reuse by unstamped A/B artifacts, then verified a changed PID and execution of build B
-  after stamping. An identical relocated B reused that daemon. Cleanup used the runtime's own
+  after stamping. An identical relocated B reused that daemon (*Corrected 2026-09-27:* since 2026-09-27 the packaged
+  entry replaces a daemon started from another install path; a relocated copy now gets its own). Cleanup used the runtime's own
   stop command against its isolated state directory; no devices or active sessions were opened.
-- This proves refresh of an idle packaged daemon. Active-session update behavior, Windows release
+- This proves refresh of an idle daemon for a stamped copy of the packaged runtime. *Corrected 2026-09-27:* the
+  harness at the time ran under the host's Node against the source runtime; since 2026-09-27 it
+  runs the packaged runtime under its bundled Node with extend-agent's environment, and it still
+  does not start the real `extend-agent` or install the `.deb`. Active-session update behavior, Windows release
   handling, notarization and production publication remain separate gates. Windows uses Extend's
   native driver and does not bundle this Node daemon. Linux's packaging hook is added, but its
   full package build was not rerun in this check.
 - Two successive Developer ID Mac builds retained identical runtime build identities. Deep/strict
   signature verification, bundled Node execution and archive-manifest equality passed. The final
   app contains no local-test environment overrides. Output is the signed, not-notarized
-  `target/desktop/macos/Silicon Extend.app` and its 43-MB zip.
+  `target/desktop/macos/Silicon Extend.app` and its 43-MB zip (*Corrected 2026-09-27:* under today's naming that zip is
+  `Silicon-Extend-<version>-macos-<arch>-unnotarized.zip`).
 
 
 ### 2026-09-26 — Mac recording limits and owner loss
@@ -239,7 +493,7 @@ compatibility. These checks do not establish completion of the entire product co
   bytes and 52.58 seconds; owner loss stopped with `owner-exited` at 1.11 seconds.
 - The same run passed named-app capture with an overlapping foreground peer and a public
   recording start/stop through the local service, upload and CLI download. Saved artifacts
-  are in ignored `target/desktop/macos/record-stress-verification/`.
+  were in ignored `target/desktop/macos/record-stress-verification/` (gone by 2026-09-27).
 - `text-e2e.py --record-stress --device <id>` reproduces these checks. The animated fixture
   supplies changing image content; its owner-loss case exits without signaling the recorder.
   Fixture cleanup runs even when session cleanup fails.
@@ -266,8 +520,8 @@ compatibility. These checks do not establish completion of the entire product co
   exit passed full decoding and nonblank frame checks. The reduced file cap stopped at
   793,075 bytes. Killing the supervisor with SIGKILL stopped its encoder and left a decodable MP4.
 - Invalid fps/size, existing outputs, missing DISPLAY and Wayland were rejected without changing
-  artifacts. Results: `/tmp/extend-linux-recording.log`; saved videos under ignored
-  `target/desktop/linux-recording/recording-s1_mt3aa/`. Python syntax and shell syntax checks pass.
+  artifacts. Results: `/tmp/extend-linux-recording.log` (gone; see "Where the evidence is"); saved
+  videos under ignored `target/desktop/linux-recording/recording-s1_mt3aa/` (also gone). Python syntax and shell syntax checks pass.
 - This is a manual native-worker lane. Public start/stop, app identity binding, durable daemon
   recovery, overlay/export/transfer, obscured/hidden windows, full 30-minute/1-GiB limits, current
   Wayland portal support and release packaging remain open. No Linux capability was enabled
@@ -281,6 +535,8 @@ compatibility. These checks do not establish completion of the entire product co
   and hide-touches. App scope is explicitly refused until isolated app capture is implemented;
   Wayland/XWayland and headless hosts do not advertise this X11 recorder. Recovery remains
   callable when start dependencies are unavailable. Worker and encoder identities are persisted.
+  *Corrected 2026-09-27:* since the 2026-09-26 fork fix, Linux refuses `--quality` (Linux exports the recorder's own
+  H.264 unchanged); `--fps` and `--hide-touches` remain.
 - The first public stop exposed a double-signal bug: generic cleanup signaled both supervisor
   and encoder, then the supervisor signaled ffmpeg again, leaving MP4 without a moov atom.
   Linux now stops its supervisor first and only then cleans a surviving identity-matched encoder.
@@ -293,8 +549,8 @@ compatibility. These checks do not establish completion of the entire product co
   invalidated the runtime's durable path. Both regressions failed before correction. Extend now
   recognizes `outPath`, copies for upload, retains the committed source and reports missing/copy
   errors instead of success with no file. Unit checks cover repeated exports and copy refusal.
-- Final live run: `/tmp/extend-linux-driver-record-final.log`, artifacts in ignored
-  `target/desktop/linux-recording/runtime-recording-l2sf3ujf/`. The driver returned one recording
+- Final live run: `/tmp/extend-linux-driver-record-final.log` (gone), artifacts in ignored
+  `target/desktop/linux-recording/runtime-recording-l2sf3ujf/` (gone). The driver returned one recording
   artifact, full ffmpeg decoding passed, and the manifest's source remained present. Test daemons
   and fixtures were stopped; all screen activity was inside the owned Xvfb container.
 - Checks: 70 Linux/shared-recording TypeScript tests, full workspace typechecking/lint, runtime
@@ -313,7 +569,10 @@ compatibility. These checks do not establish completion of the entire product co
 ### 2026-09-26 — isolated X11 app recording
 
 - Reproduced black app video with ffmpeg x11grab when an opaque peer covered the target.
-  The new XComposite source captures the named window's off-screen pixels. Pixmap XImages
+  The new XComposite source captures the named window's off-screen pixels. *Corrected 2026-09-27:* a review found
+  that a covered or hung app's first frames (or all frames) could show the covering window; since
+  2026-09-27 the recorder waits for the app to redraw what was hidden and refuses apps that do not
+  respond (2026-09-27 section). Pixmap XImages
   report zero RGB masks, so pixel interpretation uses the window's TrueColor visual.
 - Public `open <app>` now retains a named app identity; URLs do not acquire one. App recording
   resolves exactly one mapped WM_CLASS matching the executable or desktop-file basename.
@@ -321,13 +580,13 @@ compatibility. These checks do not establish completion of the entire product co
   durable-resource recovery. Additional app/window-manager coverage remains necessary.
 - The unprivileged Xvfb public lane passed with the target covered before recording began:
   bound identity, unchanged foreground, target-colored output, full MP4 decode, native-file
-  retirement, and missing/ambiguous app refusal. Evidence: `/tmp/extend-linux-public-app-final.log`,
-  artifacts `target/desktop/linux-recording/public-app-recording-sfz4714y/`.
+  retirement, and missing/ambiguous app refusal. Evidence: `/tmp/extend-linux-public-app-final.log`
+  and `target/desktop/linux-recording/public-app-recording-sfz4714y/` (both gone).
 - Native isolation lanes passed target resize and unmap: both ended with `source-ended` and
   playable target-only video (`/tmp/extend-linux-isolation-resize.log` and
-  `/tmp/extend-linux-isolation-unmap.log`). The native lifecycle suite also passed manual stop,
+  `/tmp/extend-linux-isolation-unmap.log`, gone). The native lifecycle suite also passed manual stop,
   reduced duration/file limits, owner exit, supervisor SIGKILL and root-screen capture with the
-  new source (`/tmp/extend-linux-composite-lifecycle.log`). These are manual container lanes.
+  new source (`/tmp/extend-linux-composite-lifecycle.log`, gone). These are manual container lanes.
 - All 64 focused Linux/host TypeScript tests, full workspace typechecking, lint and runtime build
   pass. Python syntax, package-script syntax and diff whitespace checks pass. CLI help, desktop
   instructions and Linux package dependency guidance describe the supported single-window path.
@@ -347,10 +606,12 @@ compatibility. These checks do not establish completion of the entire product co
   recording the actual library packages and minimum versions. This does not establish older
   distro compatibility; build on the oldest intended distribution before widening that claim.
 - Built the optimized tray-enabled agent on Debian trixie arm64, installed the `.deb`, and ran
-  version, headless capability probe and terminal execution using the installed runtime. Final
-  build log: `/tmp/extend-linux-package-release-final.log`. Tarball: 51,414,281 bytes; `.deb`:
+  version, headless capability probe and terminal execution using the installed runtime. The
+  final build log was kept only in `/tmp` and is gone; the 2026-09-27 reruns of this lane write
+  `summary.txt` under `target/desktop/linux-recording/service-recording-*/`. Tarball: 51,414,281 bytes; `.deb`:
   33,279,808 bytes. All 595 packaged regular files match between tarball, staging and `.deb`
-  staging. Artifact hashes and runtime identity are in ignored `target/desktop/linux/verification.json`.
+  staging. Artifact hashes and runtime identity were in ignored `target/desktop/linux/verification.json`
+  (gone).
 - New manual lane `apps/desktop/linux-e2e/record-service-e2e.py` installs the package in a fresh
   test container, runs the agent as Carbon (unprivileged), and mounts only harness/output/package,
   never the source runtime. It pairs a new owned device to the existing local development service
@@ -358,8 +619,9 @@ compatibility. These checks do not establish completion of the entire product co
 - Both debug and optimized packages passed app-only and whole-screen recording via the real
   Extend CLI/service/agent. Each video was uploaded, downloaded, fully decoded, checked for
   expected geometry and changing frames, then downloaded again with identical SHA-256. The
-  optimized evidence is `/tmp/extend-linux-service-record-release.log` and ignored artifacts
-  `target/desktop/linux-recording/service-recording-rh6ph038/`. Test sessions ended, test devices
+  optimized run's log (`/tmp`) and artifacts (`service-recording-rh6ph038/`) are gone; the
+  2026-09-27 reruns are `target/desktop/linux-recording/service-recording-6snwvqkw/summary.txt` and
+  `service-recording-nyiexg15/summary.txt`. Test sessions ended, test devices
   were removed and their containers stopped successfully. The existing service remained running.
 - Shell/Python syntax and diff checks pass. These checks exercise Xvfb, headless agent operation,
   local IAM and local file storage. Production IAM/OBO/Briefcase, graphical Linux tray interaction,
@@ -371,19 +633,20 @@ compatibility. These checks do not establish completion of the entire product co
 - The on-device Android app previously ran one `screenrecord --time-limit 180` process. New
   `RecordingTest#beyondNativeLimit` exercised an animated test fixture for 187 seconds and failed
   against the installed old implementation: its MP4 stopped at 180,436 ms
-  (`/tmp/extend-android-long-before.log`).
+  (`/tmp/extend-android-long-before.log`, gone).
 - Added a session-owned native supervisor that sequences up to 180-second segments, stops at a
   monotonic 30-minute deadline or a reserved file-size threshold, and fences rollover before Stop.
   Child/supervisor signals require a command line containing the capture's unique directory.
-  The PTY HUP trap ends capture on transport loss; source directories remain tracked for recovery.
+  The PTY HUP trap ends capture on transport loss; source directories remain tracked for cleanup
+  (an interrupted capture is stopped and deleted, not recovered).
 - `RecordingMuxer` streams finalized H.264 samples through Android MediaExtractor/MediaMuxer
   into one MP4 with increasing timestamps. It checks dimensions/codec configuration, bounds sample
   buffers and final output size, observes cancellation and retains remote source segments after
   finalization failure. The stop text discloses brief gaps between native recorder restarts.
 - The real long test passed with two segments, 187,824.544 ms, 2,278,619 bytes and 418 encoded
   packets, including 14 packets after 181 seconds. Full host ffmpeg decoding passed using the
-  source time base; timestamps strictly increase. Evidence: `/tmp/extend-android-long-after.log`,
-  ignored `target/android-recording/long.mp4`. This long run preceded the final interruptible-wait
+  source time base; timestamps strictly increase. Evidence: `/tmp/extend-android-long-after.log`
+  and `target/android-recording/long.mp4` (both gone). This long run preceded the final interruptible-wait
   cleanup fix; final-code rollover/finalization was rerun in the short lane below.
 - The broader lifecycle test exposed an existing logs-start readiness race: the following marker
   could be sent before logcat was reading. Start now waits for stream data; the test uses a unique
@@ -391,10 +654,10 @@ compatibility. These checks do not establish completion of the entire product co
   handling while the supervisor slept. Its timer now waits interruptibly, allowing prompt cleanup.
 - Final installed-code `LocalAdbTest#realLocalDaemon` passed shell, APK install/uninstall, binary
   transfer, cancellation, log marker capture, recording, session Stop, disconnect and owned-file
-  cleanup (`/tmp/extend-android-segments-lifecycle-final.log`). The new manual
+  cleanup (`/tmp/extend-android-segments-lifecycle-final.log`, gone). The new manual
   `e2e/android-recording.sh` short lane passed reduced-duration stop, multiple segments, full decode
-  and timestamp checks (`/tmp/extend-android-final-recording-lane.log`, ignored
-  `target/android-recording/run-yPc6h1oR/`). No capture processes or remote directories remained.
+  and timestamp checks (`/tmp/extend-android-final-recording-lane.log` and
+  `target/android-recording/run-yPc6h1oR/`, both gone). No capture processes or remote directories remained.
 - All 64 Android JVM tests and debug/app-test APK builds pass. Only emulator-5554 (Android 16)
   was modified. A connected Pixel 8 was inventoried, not exercised. Full 30-minute/1-GiB limits,
   large APKs, long-video service/Briefcase transfer, physical recording and release signing remain
@@ -427,10 +690,10 @@ compatibility. These checks do not establish completion of the entire product co
 - Final result: 186.9295 seconds, 43,286,430 bytes, 2,104 packets, final frame at 186.830433 seconds;
   full decoding and strictly increasing timestamps pass. Creator and Carbon downloads have SHA-256
   `0e98634cfbc0fd74b897c42fd775772c215ddfb6c693170c328acb3f40b552a5`.
-  Evidence: `/tmp/extend-android-service-long-final.log`, ignored
-  `target/android-recording/service-ghqrk9z3/verification.json` and `recording.mp4`.
+  Evidence: `/tmp/extend-android-service-long-final.log` and
+  `target/android-recording/service-ghqrk9z3/` (both gone; the SHA-256 above is the record).
 - All 64 JVM tests, app/test APK builds and the strengthened reduced-duration native timing test
-  pass (`/tmp/extend-android-service-final-build.log`, `/tmp/extend-android-sparse-bounded.log`).
+  pass (`/tmp/extend-android-service-final-build.log`, `/tmp/extend-android-sparse-bounded.log`, gone).
   After cleanup there were no capture processes or capture directories. Instrumentation/reinstall
   had left previously granted accessibility/notification listeners unbound; only the emulator's
   existing Extend grants were rebound. The physical Pixel 8 was not modified.
