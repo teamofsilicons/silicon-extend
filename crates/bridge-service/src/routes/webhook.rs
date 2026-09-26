@@ -31,7 +31,7 @@ pub async fn receive(State(state): State<Shared>, headers: HeaderMap, body: Byte
         .rows_affected()
         == 1;
     if fresh {
-        tracing::info!(event_id = %event.event_id, event_type = %event.event_type, members = ?event.members, "IAM event");
+        tracing::info!(event_id = %event.event_id, event_type = %event.event_type, members = ?event.members, environment = ?event.testing_environment_id, "IAM event");
         revocation::apply(&state, &world, &event).await?;
     }
     Ok(no_content())

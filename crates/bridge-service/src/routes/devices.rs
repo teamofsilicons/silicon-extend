@@ -48,7 +48,7 @@ async fn check_silicons(state: &Shared, auth: &Auth, ids_: &[String]) -> AppResu
         if ids::member_kind(s) != Some(MemberKind::Silicon) {
             return Err(AppError::invalid(format!("{s:?} is not a Silicon id; Silicon ids look like si:chef.")));
         }
-        if !state.iam.member_active(team, s, auth.sel.as_ref()).await? {
+        if !state.iam.member_active(team, s, Some(&auth.p), auth.sel.as_ref()).await? {
             return Err(AppError::new(ErrorCode::InvalidInput, format!("{s} is not an active Silicon in team {team}."))
                 .hint("Check the id in Silicon IAM; only Silicons in the device's team can get access."));
         }

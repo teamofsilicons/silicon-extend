@@ -4,7 +4,8 @@
 > Product intent lives in `UNDERSTANDING.md`; wire contracts live in `api.yaml` and `cli.yaml`.
 > Where this file and `UNDERSTANDING.md` disagree, `UNDERSTANDING.md` wins and this file is corrected.
 
-Status: **draft for Carbon review, 2026-09-26.** Nothing is built yet. Every value below that
+Status: **draft for Carbon review, 2026-09-26; implemented the same night.** Section 13 lists where
+the build differs from the first draft and why. Every value below that
 `UNDERSTANDING.md` does not state is a proposal, and each one is listed again in
 [Open questions](#open-questions) so it can be confirmed or changed.
 
@@ -204,8 +205,8 @@ activity log (marked removed) so the log stays readable.
 ```
 bridge session new 7c1e09ab   → POST /sessions            → lock taken, session "active", device shows the Silicon
 bridge session connect a3f    → GET  /sessions/a3f        → CLI remembers a3f and caches the device's capabilities
-bridge snapshot -i            → POST /sessions/a3f/commands {"command":"snapshot","input":{"interactive":true}}
-bridge click @e2              → POST /sessions/a3f/commands {"command":"click","input":{"target":"@e2"}}
+bridge snapshot -i            → POST /sessions/a3f/commands {"command":"snapshot","args":["-i"]}
+bridge click @e2              → POST /sessions/a3f/commands {"command":"click","args":["@e2"]}
 bridge session end a3f        → POST /sessions/a3f/end    → lock released, device indicator cleared
 ```
 
@@ -222,7 +223,8 @@ holder's Silicon id, session start time and the `bridge request send` command to
 
 ### Relaying a command
 
-1. The CLI posts `{command, input, timeout_ms}` with the Silicon's access token.
+1. The CLI posts `{command, args, timeout_ms}` with the Silicon's access token. `args` are the
+   command-line tokens after the name, exactly as agent-device's CLI takes them.
 2. The service introspects the token with IAM (cached no longer than 30 s, and dropped immediately
    on a relevant IAM webhook), then checks: the session is the caller's, it is `active`, the caller
    still has access, the device is online, and the command is in the device's capabilities.
@@ -492,10 +494,39 @@ every command, so a lost webhook delays nothing.
   three addresses in `UNDERSTANDING.md`. In a test environment the email is simulated.
 - **Redaction in the activity log:** text typed with `fill` and `type`, and text written with
   `clipboard write`, is replaced with `[redacted N chars]`. Everything else is logged as sent.
-- Secrets never appear in URLs, logs, audit rows, telemetry or stored webhook bodies. Pairing codes
-  are stored as an HMAC keyed with a service secret, not in plain text.
+- Secrets never appear in URLs, logs, audit rows, telemetry or stored webhook bodies. Credentials and
+  enrollment secrets are stored as SHA-256 digests. Pairing codes are stored in plain text: the
+  unpaired app has to be able to fetch its current code by polling, a code lives 5 minutes, works
+  once, and guessing is rate limited.
 
 ---
+
+## 13. As built (2026-09-26)
+
+Differences from the first draft, each deliberate:
+
+- **Commands are CLI tokens, not structured input.** A command is `{command, args}` where `args` are
+  agent-device's command-line tokens. agent-device's structured inputs differ per command and change
+  between versions; forwarding tokens keeps its own parser the authority. Flags that pick a device or
+  session inside agent-device are refused. Files a caller sends (a replay script, an image for a TV)
+  travel as `attachments` and are referenced in args as `attachment:<name>`.
+- **Self-destruct is enforced by Bridge.** Briefcase's delegated upload takes no self-destruct time,
+  so Bridge records the time, deletes the file through Briefcase's delegated trash when it passes,
+  and `bridge file keep` cancels that. Open questions 1–2 still stand for Briefcase itself.
+- **One service instance.** Device sockets and waiting commands live in the process
+  (`docs/operations.md`).
+- **Android reads the screen with an AccessibilityService**, not agent-device's helper over
+  on-device ADB: an app can't drive its own device's ADB without pairing tricks, and the
+  accessibility tree gives the same element list. See `apps/android/README.md` for what uses
+  wireless debugging.
+- **Local stand-ins** for Silicon IAM, Briefcase and Ting (`BRIDGE_IAM_MODE=local` etc.) exist for
+  development and tests and are refused in production.
+- **Extra endpoints:** `GET /api/v1/team/silicons` (access picker), `iam_login_url` in
+  `GET /api/v1/iam`, and `input` on setup steps (`"code"` for an Apple TV).
+- **ISI:** when the CLI runs with `ISI` set, it's sent as `X-Silicon-ISI` and recorded with session
+  starts and commands in the activity log. Nothing depends on it.
+- **Telemetry** goes to each world's outbox table and is exported to Space Station when
+  `BRIDGE_SPACE_STATION_KEY` (and, per test environment, `BRIDGE_TEST_TELEMETRY_KEYS`) is set.
 
 ## Open questions
 

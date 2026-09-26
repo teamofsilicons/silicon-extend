@@ -74,6 +74,9 @@ pub struct IamEvent {
     pub members: Vec<String>,
     /// Team handles named in the event.
     pub teams: Vec<String>,
+    /// Memberships (`member`, `team`) the signed event itself reports as removed. IAM is the
+    /// authority for these, so Bridge ends access without asking again.
+    pub removed: Vec<(String, String)>,
     pub testing_environment_id: Option<Uuid>,
 }
 
@@ -95,8 +98,10 @@ pub trait Iam: Send + Sync {
     async fn logout(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<()>;
     /// Live authorization for a bearer token, optionally in one team.
     async fn authorize(&self, token: &str, team: Option<&str>, sel: Option<&TestingSelection>) -> AppResult<Principal>;
-    /// Whether a Carbon or Silicon is an active member of a team.
-    async fn member_active(&self, team: &str, member_id: &str, sel: Option<&TestingSelection>) -> AppResult<bool>;
+    /// Whether a Carbon or Silicon is an active member of a team. IAM answers directory questions
+    /// only for a member's own login, so `reader` is a signed-in member of that team whose access
+    /// token asks (the Carbon granting access, or the member itself during a webhook re-check).
+    async fn member_active(&self, team: &str, member_id: &str, reader: Option<&Principal>, sel: Option<&TestingSelection>) -> AppResult<bool>;
     /// The Silicons in the principal's team (for choosing who gets access).
     async fn team_silicons(&self, principal: &Principal, sel: Option<&TestingSelection>) -> AppResult<Vec<bridge_protocol::model::TeamSilicon>>;
     /// Validates a test application secret and names its environment.
@@ -146,6 +151,12 @@ impl AuthCache {
             entries.retain(|_, (_, p)| !members.iter().any(|m| m == &p.member.id));
         }
     }
+    /// The most recently authorized principal in `env` that `pick` accepts. Its token may since
+    /// have expired; callers treat an IAM refusal as "cannot tell".
+    pub async fn latest(&self, env: Option<Uuid>, pick: impl Fn(&Principal) -> bool) -> Option<Principal> {
+        let entries = self.entries.read().await;
+        entries.iter().filter(|((_, _, e), (_, p))| *e == env && pick(p)).max_by_key(|(_, (at, _))| *at).map(|(_, (_, p))| p.clone())
+    }
     pub async fn forget_token(&self, token: &str) {
         let digest = ids::secret_digest(token);
         self.entries.write().await.retain(|(d, _, _), _| d != &digest);
@@ -164,6 +175,9 @@ pub struct SdkIam {
     app_id: String,
     app_secret: String,
     verifier: Option<silicon_iam_client::WebhookVerifier>,
+    /// SHA-256 (hex) of each test environment's webhook key, from IAM's testing context, so a
+    /// signed test delivery can be routed to its environment and never to production.
+    test_webhook_keys: RwLock<HashMap<String, Uuid>>,
 }
 
 impl SdkIam {
@@ -192,7 +206,7 @@ impl SdkIam {
             }
             None => None,
         };
-        Ok(Self { sdk, app_id: app_id.to_owned(), app_secret: app_secret.to_owned(), verifier })
+        Ok(Self { sdk, app_id: app_id.to_owned(), app_secret: app_secret.to_owned(), verifier, test_webhook_keys: RwLock::default() })
     }
 
     fn client(&self, sel: Option<&TestingSelection>) -> AppResult<SdkClient> {
@@ -233,11 +247,24 @@ fn mutation(key: &str) -> AppResult<Mutation> {
     IdempotencyKey::parse(digest).map(Mutation::with_key).map_err(AppError::internal)
 }
 
-fn sdk_error(err: silicon_iam_client::Error) -> AppError {
+/// Maps an error from a login (SLT exchange): IAM's 400/401 means the SLT itself was refused.
+fn login_error(err: silicon_iam_client::Error) -> AppError {
     match &err {
         silicon_iam_client::Error::Api(api) if api.status == 401 || api.status == 400 => {
             AppError::new(ErrorCode::SltInvalid, format!("Silicon IAM refused the token: {} ({})", api.message, api.code))
                 .hint("Generate a new short-lived token with the IAM CLI and run `bridge login <slt>` again.")
+        }
+        _ => sdk_error(err),
+    }
+}
+
+/// Maps an error from any other IAM call. A 401 here is about the credential Bridge presented on
+/// the member's behalf (their access token), never about an SLT.
+fn sdk_error(err: silicon_iam_client::Error) -> AppError {
+    match &err {
+        silicon_iam_client::Error::Api(api) if api.status == 401 => {
+            AppError::new(ErrorCode::TokenExpired, format!("Silicon IAM no longer accepts this login: {} ({})", api.message, api.code))
+                .hint("Run `bridge login status`; if it fails, get a new short-lived token and run `bridge login <slt>`.")
         }
         silicon_iam_client::Error::Api(api) if api.status == 403 => {
             AppError::new(ErrorCode::NotATeamMember, format!("Silicon IAM refused access: {} ({})", api.message, api.code))
@@ -263,7 +290,7 @@ impl Iam for SdkIam {
             return Err(AppError::new(ErrorCode::SltInvalid, "A member id works as a login only in a test environment.")
                 .hint("Generate a short-lived token with the IAM CLI and pass that instead."));
         }
-        let tokens = self.client(sel)?.oauth().login(&self.app_id, slt, &mutation(key)?).await.map_err(sdk_error)?;
+        let tokens = self.client(sel)?.oauth().login(&self.app_id, slt, &mutation(key)?).await.map_err(login_error)?;
         let mut session = self.session(tokens, sel)?;
         if let Ok(Some(list)) = self.client(sel)?.oauth().authorizations(&session.access_token).await {
             session.teams = list.into_iter().map(|a| a.org_id).collect();
@@ -275,7 +302,7 @@ impl Iam for SdkIam {
 
     async fn refresh(&self, token: &str, key: &str, sel: Option<&TestingSelection>) -> AppResult<AuthSession> {
         let tokens = self.client(sel)?.oauth().refresh(&self.app_id, token, &mutation(key)?).await.map_err(|e| {
-            let mut err = sdk_error(e);
+            let mut err = login_error(e);
             if err.code() == ErrorCode::SltInvalid {
                 err = AppError::new(ErrorCode::TokenExpired, "The refresh token is no longer accepted; the IAM session ended.")
                     .hint("Get a new short-lived token and run `bridge login <slt>`.");
@@ -333,19 +360,17 @@ impl Iam for SdkIam {
         Ok(Principal { member, team, teams, role, token: token.to_owned() })
     }
 
-    async fn member_active(&self, team: &str, member_id: &str, sel: Option<&TestingSelection>) -> AppResult<bool> {
-        let client = self.client(sel)?;
-        let result = if member_id.starts_with("si:") {
-            client.silicons().get(team, member_id).await.map(|s| matches!(s.status, models::SiliconStatus::Active))
-        } else {
-            client
-                .members()
-                .get(team, &format!("{member_id}[{team}]"))
-                .await
-                .map(|m| serde_json::to_value(&m.status).ok().and_then(|v| v.as_str().map(|s| s == "active")).unwrap_or(false))
-        };
-        match result {
-            Ok(active) => Ok(active),
+    async fn member_active(&self, team: &str, member_id: &str, reader: Option<&Principal>, sel: Option<&TestingSelection>) -> AppResult<bool> {
+        if ids::member_kind(member_id).is_none() {
+            return Ok(false);
+        }
+        // The application credential alone cannot read a team's directory; IAM answers only for a
+        // member's application access token, limited to the teams that member selected.
+        let reader = reader.ok_or_else(|| AppError::unavailable("Silicon IAM", "no signed-in member of the team to ask"))?;
+        let client = self.client(sel)?.with_credential(Credential::bearer(&reader.token));
+        // Directory entries exist only for active, visible memberships; membership ids are `id[team]`.
+        match client.members().directory_member(team, &format!("{member_id}[{team}]"), Some("id,org")).await {
+            Ok(entry) => Ok(entry.id.as_deref() == Some(member_id) && entry.org.is_some_and(|o| o.id.as_str() == team)),
             Err(silicon_iam_client::Error::Api(api)) if api.status == 404 || api.status == 403 => Ok(false),
             Err(e) => Err(sdk_error(e)),
         }
@@ -357,8 +382,12 @@ impl Iam for SdkIam {
         let mut out = Vec::new();
         let mut paging = silicon_iam_client::Paging::new();
         for _ in 0..20 {
-            let page = client.members().directory(&team, Some("id,name,display_name"), &paging).await.map_err(sdk_error)?;
+            // IAM's field selector accepts name,id,role,org,tags,trust; display_name comes with name.
+            let page = client.members().directory(&team, Some("id,name,org"), &paging).await.map_err(sdk_error)?;
             for m in page.items {
+                if m.org.as_ref().is_some_and(|o| o.id.as_str() != team) {
+                    continue;
+                }
                 if let Some(id) = m.id.filter(|i| i.starts_with("si:")) {
                     out.push(bridge_protocol::model::TeamSilicon { id, display_name: m.display_name.or(m.name) });
                 }
@@ -368,6 +397,7 @@ impl Iam for SdkIam {
                 None => break,
             }
         }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
     }
 
@@ -390,6 +420,9 @@ impl Iam for SdkIam {
         })?;
         if ctx.application.app_id != self.app_id {
             return Err(invalid(format!("it belongs to application {:?}, not Bridge", ctx.application.app_id)));
+        }
+        if let Some(digest) = ctx.webhook_key_digest.as_deref() {
+            self.test_webhook_keys.write().await.insert(digest.to_ascii_lowercase(), ctx.environment_id);
         }
         let name = ctx.environment.map(|e| e.name).unwrap_or_else(|| ctx.environment_id.to_string());
         let _ = &self.app_secret;
@@ -431,22 +464,102 @@ impl Iam for SdkIam {
         let verifier = self.verifier.as_ref().ok_or_else(|| {
             AppError::new(ErrorCode::Unauthorized, "Bridge has no IAM webhook secret configured.")
         })?;
-        let verified = verifier
-            .verify(headers, body)
-            .map_err(|e| AppError::new(ErrorCode::Unauthorized, format!("IAM webhook signature rejected: {e}")))?;
-        let event = verified.event();
-        let raw = serde_json::to_value(event).unwrap_or_default();
+        let (event_id, event_type, raw) = match verifier.verify(headers, body) {
+            Ok(verified) => {
+                let event = verified.event();
+                (verified.event_id().to_string(), event.event_type.clone(), serde_json::to_value(event).unwrap_or_default())
+            }
+            // The verifier checks the headers, timestamp and HMAC over the exact bytes before it
+            // parses, so InvalidPayload means an authenticated delivery whose shape this SDK does
+            // not accept. IAM 4 sends public ids as aggregate ids (`"aggregate":{"id":"si:sous"}`),
+            // which SDK 4.0.0 rejects because it expects a UUID; read those events ourselves.
+            Err(silicon_iam_client::WebhookError::InvalidPayload) => {
+                tracing::debug!("IAM webhook signature verified; event read by Bridge (the SDK refused its shape)");
+                authenticated_event(headers, body)?
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "IAM webhook rejected");
+                return Err(AppError::new(ErrorCode::Unauthorized, format!("IAM webhook signature rejected: {e}")));
+            }
+        };
+        tracing::debug!(event = %raw, "verified IAM webhook");
+        // A test delivery belongs to exactly one test environment; it must never touch production.
+        let testing_environment_id = match testing_key(body) {
+            None => None,
+            Some(key) => {
+                use subtle::ConstantTimeEq as _;
+                let digest = ids::hex_lower(&Sha256::digest(key.as_bytes()));
+                let known = self.test_webhook_keys.read().await;
+                let found = known.iter().find(|(d, _)| bool::from(d.as_bytes().ct_eq(digest.as_bytes()))).map(|(_, env)| *env);
+                Some(found.ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::ServiceUnavailable,
+                        "This IAM test delivery names a test environment Bridge has not selected yet; retry later.",
+                    )
+                })?)
+            }
+        };
         let mut members = Vec::new();
         let mut teams = Vec::new();
         collect_ids(&raw, &mut members, &mut teams);
-        Ok(IamEvent {
-            event_id: verified.event_id().to_string(),
-            event_type: event.event_type.clone(),
-            members,
-            teams,
-            testing_environment_id: None,
-        })
+        Ok(IamEvent { event_id, event_type, members, teams, removed: removed_memberships(&raw), testing_environment_id })
     }
+}
+
+/// Reads an IAM event whose signature the official verifier already authenticated but whose shape
+/// it refused. The body's event id must still match the signed routing header.
+fn authenticated_event(headers: &http::HeaderMap, body: &[u8]) -> AppResult<(String, String, serde_json::Value)> {
+    let bad = || AppError::new(ErrorCode::Unauthorized, "The IAM webhook body is not an IAM event.");
+    let value: serde_json::Value = serde_json::from_slice(body).map_err(|_| bad())?;
+    // A test delivery wraps the event as {"test": {"testing_key", "metadata", "data"}}; the key is
+    // never kept in the event Bridge logs or stores.
+    let (meta, data) = match value.get("test") {
+        Some(t) => (t.get("metadata").cloned().ok_or_else(bad)?, t.get("data").cloned().ok_or_else(bad)?),
+        None => (value.clone(), value.get("data").cloned().ok_or_else(bad)?),
+    };
+    let event_id = meta.get("event_id").and_then(|v| v.as_str()).ok_or_else(bad)?.to_owned();
+    let event_type = meta.get("event_type").and_then(|v| v.as_str()).filter(|t| !t.is_empty()).ok_or_else(bad)?.to_owned();
+    let header = headers.get("x-silicon-iam-event-id").and_then(|v| v.to_str().ok()).ok_or_else(bad)?;
+    if !header.eq_ignore_ascii_case(&event_id) || !data.is_object() {
+        return Err(bad());
+    }
+    let raw = serde_json::json!({
+        "event_id": event_id,
+        "event_type": event_type,
+        "occurred_at": meta.get("occurred_at"),
+        "organization_id": meta.get("organization_id"),
+        "aggregate": meta.get("aggregate"),
+        "data": data,
+    });
+    Ok((event_id, event_type, raw))
+}
+
+/// The test environment key a signed test delivery carries, if it is one.
+fn testing_key(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    value.get("test")?.get("testing_key")?.as_str().map(str::to_owned)
+}
+
+/// Memberships a member event reports as removed: `data.current.members[].resource` with
+/// `status: removed` (or `authorization: removed`) and a `member[team]` membership id.
+fn removed_memberships(event: &serde_json::Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let members = event.pointer("/data/current/members").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+    for m in members {
+        let resource = m.get("resource").cloned().unwrap_or_default();
+        let removed = resource.get("status").and_then(|v| v.as_str()) == Some("removed")
+            || m.get("authorization").and_then(|v| v.as_str()) == Some("removed");
+        let Some(membership) = resource.get("membership_id").and_then(|v| v.as_str()) else { continue };
+        if let (true, Some(open)) = (removed, membership.find('['))
+            && membership.ends_with(']')
+        {
+            let (id, team) = (&membership[..open], &membership[open + 1..membership.len() - 1]);
+            if ids::member_kind(id).is_some() && !team.is_empty() {
+                out.push((id.to_owned(), team.to_owned()));
+            }
+        }
+    }
+    out
 }
 
 /// Walks an event and collects every member public id and team handle it names.
@@ -647,7 +760,7 @@ impl Iam for LocalIam {
         })
     }
 
-    async fn member_active(&self, team: &str, member_id: &str, _sel: Option<&TestingSelection>) -> AppResult<bool> {
+    async fn member_active(&self, team: &str, member_id: &str, _reader: Option<&Principal>, _sel: Option<&TestingSelection>) -> AppResult<bool> {
         Ok(ids::member_kind(member_id).is_some() && self.teams_of(member_id).await.is_some_and(|t| t.iter().any(|x| x == team)))
     }
 
@@ -707,6 +820,7 @@ impl Iam for LocalIam {
             event_type: s("event_type"),
             members: list("members"),
             teams: list("teams"),
+            removed: vec![],
             testing_environment_id: v.get("environment_id").and_then(|x| x.as_str()).and_then(|x| x.parse().ok()),
         })
     }
@@ -728,9 +842,68 @@ mod tests {
         assert_eq!(t, vec!["acme".to_owned()]);
     }
 
+    /// The shape IAM 4 actually delivered for `DELETE /organizations/acme/silicons/si:sous`
+    /// (captured from a real IAM in e2e/real-iam), minus volatile ids.
+    fn silicon_removed() -> serde_json::Value {
+        serde_json::json!({
+            "spec_version": "1.0",
+            "event_id": "01a0db14-39a6-7f20-bb3d-7c3da59e1a4e",
+            "event_type": "organization.silicon.removed.v1",
+            "occurred_at": "2026-09-26T00:18:51.000000Z",
+            "organization_id": "3f1b1a52-7a55-4c55-8f4e-0b1d9d7a5c01",
+            "aggregate": {"type": "silicon", "id": "si:sous", "version": 2},
+            "data": {"changed_fields": ["membership.status"], "current": {"members": [{"authorization": "removed",
+                "resource": {"id": "b01e3da0-cd83-459a-b65d-4729051f92fb", "membership_id": "si:sous[acme]",
+                    "principal_type": "silicon", "status": "removed", "type": "organization_membership", "version": 2}}]}}
+        })
+    }
+
+    fn event_headers(id: &str) -> http::HeaderMap {
+        let mut h = http::HeaderMap::new();
+        h.insert("x-silicon-iam-event-id", id.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn reads_signed_events_the_sdk_refuses() {
+        let body = serde_json::to_vec(&silicon_removed()).unwrap();
+        let (id, kind, raw) = authenticated_event(&event_headers("01a0db14-39a6-7f20-bb3d-7c3da59e1a4e"), &body).unwrap();
+        assert_eq!(id, "01a0db14-39a6-7f20-bb3d-7c3da59e1a4e");
+        assert_eq!(kind, "organization.silicon.removed.v1");
+        assert_eq!(removed_memberships(&raw), vec![("si:sous".to_owned(), "acme".to_owned())]);
+        let (mut m, mut t) = (vec![], vec![]);
+        collect_ids(&raw, &mut m, &mut t);
+        assert_eq!((m, t), (vec!["si:sous".to_owned()], vec!["acme".to_owned()]));
+        // The body's event id must match the signed routing header.
+        assert!(authenticated_event(&event_headers("01a0db14-0000-7000-8000-000000000000"), &body).is_err());
+        assert!(testing_key(&body).is_none());
+    }
+
+    #[test]
+    fn reads_test_envelopes_without_keeping_the_key() {
+        let e = silicon_removed();
+        let wrapped = serde_json::json!({"test": {"testing_key": "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6", "metadata": {
+            "spec_version": "1.0", "event_id": e["event_id"], "event_type": e["event_type"], "occurred_at": e["occurred_at"],
+            "organization_id": e["organization_id"], "aggregate": e["aggregate"], "environment_id": null, "generation": 1},
+            "data": e["data"]}});
+        let body = serde_json::to_vec(&wrapped).unwrap();
+        assert_eq!(testing_key(&body).as_deref(), Some("A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"));
+        let (_, _, raw) = authenticated_event(&event_headers("01a0db14-39a6-7f20-bb3d-7c3da59e1a4e"), &body).unwrap();
+        assert!(!raw.to_string().contains("A1b2C3d4"));
+        assert_eq!(removed_memberships(&raw).len(), 1);
+    }
+
+    #[test]
+    fn active_members_are_not_removed() {
+        let mut e = silicon_removed();
+        e["data"]["current"]["members"][0]["authorization"] = "active".into();
+        e["data"]["current"]["members"][0]["resource"]["status"] = "active".into();
+        assert!(removed_memberships(&e).is_empty());
+    }
+
     #[test]
     fn access_ending_events() {
-        let e = |t: &str| IamEvent { event_id: "1".into(), event_type: t.into(), members: vec![], teams: vec![], testing_environment_id: None };
+        let e = |t: &str| IamEvent { event_id: "1".into(), event_type: t.into(), members: vec![], teams: vec![], removed: vec![], testing_environment_id: None };
         assert!(e("organization.member.removed.v1").ends_access());
         assert!(e("session.revoked.v1").ends_access());
         assert!(!e("organization.updated.v1").ends_access());

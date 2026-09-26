@@ -49,6 +49,7 @@ pub async fn member(State(state): State<Shared>, Body(input): Body<MemberChange>
         event_type: event_type.into(),
         members: vec![input.id.clone()],
         teams: input.teams.clone().unwrap_or_default(),
+        removed: vec![],
         testing_environment_id: input.environment_id,
     };
     revocation::apply(&state, &world, &event).await?;
