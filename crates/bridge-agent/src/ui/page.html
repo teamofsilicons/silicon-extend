@@ -60,6 +60,15 @@
     border: 2px solid var(--use); padding: 8px 10px 8px 14px; }
   body.banner-view .bar .grow { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.banner-view .env { font-size: 11px; color: var(--env); }
+  .banner-drag { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: grab; }
+  .banner-drag:active { cursor: grabbing; }
+  #banner-minimize { padding: 4px 9px; flex: none; }
+  #banner-restore { display: none; min-width: 0; flex: 1; padding: 4px 8px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  body.banner-minimized .banner-drag { flex: none; padding: 8px 4px; }
+  body.banner-minimized #banner-text, body.banner-minimized #banner-env,
+  body.banner-minimized #banner-button, body.banner-minimized #banner-minimize { display: none; }
+  body.banner-minimized #banner-restore { display: block; }
 </style>
 </head>
 <body>
@@ -140,10 +149,14 @@
 
 <div id="banner" class="hidden">
   <div class="bar">
-    <span class="dot"></span>
-    <div class="grow" id="banner-text"></div>
+    <div class="banner-drag" title="Drag to move">
+      <span class="dot"></span>
+      <div class="grow" id="banner-text"></div>
+    </div>
     <span class="env" id="banner-env"></span>
     <button class="stop" id="banner-button" data-action="stop">Stop</button>
+    <button id="banner-minimize" data-action="banner_minimize" aria-label="Minimize activity banner" title="Minimize">−</button>
+    <button id="banner-restore" data-action="banner_restore" aria-label="Restore activity banner" title="Restore activity banner"></button>
   </div>
 </div>
 
@@ -159,6 +172,11 @@
     document.body.classList.add('banner-view');
     show('main', false);
     show('banner', true);
+    document.querySelector('.banner-drag').addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      send({ action: 'banner_drag' });
+    });
   }
 
   document.addEventListener('click', function (e) {
@@ -196,7 +214,7 @@
     return '<span class="mark todo">●</span>';
   }
 
-  window.__bridge = function (s) {
+  window.__bridge = function (s, minimized) {
     state = s;
     var word = s.computer_word || 'computer';
     document.querySelectorAll('.word').forEach(function (el) { el.textContent = word; });
@@ -204,6 +222,8 @@
     var inUse = s.in_use;
 
     if (view === 'banner') {
+      document.body.classList.toggle('banner-minimized', !!minimized);
+      $('banner-restore').textContent = takeover ? 'Needs you ↗' : (inUse ? inUse.silicon_id : 'In use') + ' ↗';
       if (takeover) {
         $('banner-text').textContent = (inUse ? inUse.silicon_id : 'A Silicon') + ' needs you: ' + takeover.reason;
         $('banner-button').textContent = 'Done';
@@ -216,6 +236,7 @@
         $('banner-button').className = 'stop';
       }
       $('banner-env').textContent = s.environment ? 'Test: ' + s.environment.name : '';
+      $('banner-restore').title = $('banner-text').textContent + ' — click to restore';
       return;
     }
 

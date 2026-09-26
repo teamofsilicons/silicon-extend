@@ -86,7 +86,7 @@ pub fn run(handle: AgentHandle, runtime: tokio::runtime::Handle, agent_thread: s
         }));
     }
 
-    let mut ui = Ui { handle, proxy, tray: None, main: None, banner: None, status: AgentStatus::default(), shown_code: false, agent_thread: Some(agent_thread) };
+    let mut ui = Ui { handle, proxy, tray: None, main: None, banner: None, banner_minimized: false, status: AgentStatus::default(), shown_code: false, agent_thread: Some(agent_thread) };
 
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -116,6 +116,7 @@ struct Ui {
     tray: Option<TrayIcon>,
     main: Option<(Window, WebView)>,
     banner: Option<(Window, WebView)>,
+    banner_minimized: bool,
     status: AgentStatus,
     shown_code: bool,
     agent_thread: Option<std::thread::JoinHandle<()>>,
@@ -205,6 +206,9 @@ impl Ui {
         }
         add(&PredefinedMenuItem::separator());
         add(&MenuItem::with_id("show", "Show Silicon Bridge…", true, None));
+        if s.in_use.is_some() || s.takeover.is_some() {
+            add(&MenuItem::with_id("banner_restore", "Show activity banner", true, None));
+        }
         add(&CheckMenuItem::with_id("autostart", "Start at login", true, crate::autostart::is_installed(), None));
         if s.phase == Phase::Superseded {
             add(&MenuItem::with_id("reconnect", "Connect this copy instead", true, None));
@@ -218,7 +222,7 @@ impl Ui {
     }
 
     fn on_status(&mut self, s: AgentStatus, target: &EventLoopWindowTarget<UserEvent>) {
-        let first_code = s.phase == Phase::Enrolling && s.pairing.is_some() && !self.shown_code;
+        let first_code = s.phase == Phase::Enrolling && !self.shown_code;
         let banner_needed = s.in_use.is_some() || s.takeover.is_some();
         self.status = s;
         if let Some(t) = &self.tray {
@@ -227,7 +231,7 @@ impl Ui {
             let _ = t.set_tooltip(Some(format!("Silicon Bridge: {}", self.status.headline())));
             t.set_menu(Some(Box::new(self.build_menu())));
         }
-        // Show the code the first time there is one, so the Carbon can pair without hunting.
+        // Setup and connection errors must be visible even before the service returns a code.
         if first_code {
             self.shown_code = true;
             self.show_main(target);
@@ -241,7 +245,7 @@ impl Ui {
     }
 
     fn push_state(&self) {
-        let js = format!("window.__bridge && window.__bridge({})", page_state(&self.status));
+        let js = format!("window.__bridge && window.__bridge({}, {})", page_state(&self.status), self.banner_minimized);
         for (_, view) in self.main.iter().chain(self.banner.iter()) {
             let _ = view.evaluate_script(&js);
         }
@@ -304,7 +308,7 @@ impl Ui {
 
     fn show_banner(&mut self, target: &EventLoopWindowTarget<UserEvent>) {
         if self.banner.is_none() {
-            let size = LogicalSize::new(420.0, 52.0);
+            let size = self.banner_size();
             let mut builder = WindowBuilder::new()
                 .with_title("Silicon Bridge: in use")
                 .with_inner_size(size)
@@ -339,6 +343,30 @@ impl Ui {
         }
     }
 
+    fn banner_size(&self) -> LogicalSize<f64> {
+        if self.banner_minimized { LogicalSize::new(190.0, 44.0) } else { LogicalSize::new(420.0, 52.0) }
+    }
+
+    fn set_banner_minimized(&mut self, minimized: bool) {
+        self.banner_minimized = minimized;
+        if let Some((window, _)) = &self.banner {
+            // Keep the position chosen by the user. Expanding near an edge must stay reachable.
+            window.set_inner_size(self.banner_size());
+            if let (Ok(position), Some(monitor)) = (window.outer_position(), window.current_monitor()) {
+                let scale = window.scale_factor();
+                let position = position.to_logical::<f64>(scale);
+                let origin = monitor.position().to_logical::<f64>(scale);
+                let screen = monitor.size().to_logical::<f64>(scale);
+                let size = self.banner_size();
+                window.set_outer_position(LogicalPosition::new(
+                    position.x.clamp(origin.x, origin.x + (screen.width - size.width).max(0.0)),
+                    position.y.clamp(origin.y, origin.y + (screen.height - size.height).max(0.0)),
+                ));
+            }
+        }
+        self.push_state();
+    }
+
     fn send(&self, a: UiAction) {
         let _ = self.handle.actions.send(a);
     }
@@ -349,6 +377,10 @@ impl Ui {
             "stop" => self.send(UiAction::Stop { target: None }),
             "takeover_done" => self.send(UiAction::TakeoverDone { target: None }),
             "show" => self.show_main(target),
+            "banner_restore" => {
+                self.set_banner_minimized(false);
+                self.show_banner(target);
+            }
             "revoke" => {
                 // The confirmation lives in the window.
                 self.show_main(target);
@@ -382,6 +414,15 @@ impl Ui {
         let device = || msg.get("target").and_then(|t| t.as_str()).and_then(|t| t.parse::<DeviceId>().ok());
         match action {
             "ready" => self.push_state(),
+            "banner_drag" if banner => {
+                if let Some((window, _)) = &self.banner {
+                    if let Err(error) = window.drag_window() {
+                        tracing::warn!("couldn't move the activity banner: {error}");
+                    }
+                }
+            }
+            "banner_minimize" if banner => self.set_banner_minimized(true),
+            "banner_restore" if banner => self.set_banner_minimized(false),
             "stop" => self.send(UiAction::Stop { target: device() }),
             "takeover_done" => self.send(UiAction::TakeoverDone { target: device() }),
             "revoke" if !banner => self.send(UiAction::RevokePair),

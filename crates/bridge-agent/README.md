@@ -196,10 +196,13 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
   - the device name, the Carbon it's paired to and the team
   - the test-environment banner and devices carried
   - **Revoke pair…** with an in-window confirmation
-  - It opens by itself the first time a pairing code appears.
+- It opens by itself when enrollment starts, including when a connection error prevents a pairing code.
 - **Banner.** A small always-on-top strip at the bottom centre of the screen reads "si:chef is using
   this Mac" with **Stop**, or "si:chef needs you: <reason>" with **Done**.
   - It is shown for as long as a session lasts.
+  - Drag its text or orange dot to move it. **−** collapses it to a small indicator;
+    click the indicator to restore it. The chosen position and collapsed state survive status updates.
+  - The menu bar keeps **Stop** / **Done** available and includes **Show activity banner**.
   - It never takes focus, so it doesn't steal the Silicon's typing.
   - Its button works on the first click.
 
