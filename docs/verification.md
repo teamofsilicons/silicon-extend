@@ -78,3 +78,17 @@ by this follow-up. Release and physical-device gates above remain open.
 Limits still requiring follow-up: 8 MiB inline APK/attachment limit, Briefcase file-id input,
 180-second native recording cap, custom recording frame rate/app-only scope, and physical TV
 compatibility. These checks do not establish completion of the entire product contract.
+
+## macOS release packaging follow-up — 2026-09-26
+
+- Built the optimized arm64 app with Developer ID Application: Shubham Gupta (LTBSK59BJ2).
+  The app, helper and bundled Node are signed; hardened runtime and a secure timestamp are
+  present. Deep/strict signature verification and a bundled Node JavaScript execution pass.
+- The bundle is 127 MB and its zip is 43 MB. Node 22.23.3 is checksum verified against pinned
+  official release hashes. The fork is rebuilt rather than reusing potentially stale output.
+- A packaged `probe` with PATH limited to `/usr/bin:/bin` finds agent-device 0.21.15 and
+  reports the new signed identity's missing Accessibility and Screen Recording permissions.
+  Those grants must be made through macOS before input/capture validation can proceed.
+- Notarization support is implemented but was not run: an existing notarytool Keychain
+  profile is needed. The artifact is signed, not notarized or published. Mac typing and
+  recording still require the UI Automation setup documented above.

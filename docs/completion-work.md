@@ -47,3 +47,12 @@ An implementation or passing mock does not close a physical-device or production
   need checking. No signing/release gate is marked complete by this inventory.
 - `gh`, `aws` and `vercel` CLIs are installed; authentication and production permissions have not
   yet been verified in this continuation.
+- Built an optimized macOS arm64 bundle with the existing Developer ID identity, hardened
+  runtime and secure timestamps. Signature verification and bundled Node execution pass.
+  The signed app correctly reports that its own Accessibility and Screen Recording grants
+  are still needed. This does not prove typing/recording or notarization.
+- The Mac build pins and verifies Node 22.23.3, always rebuilds the agent-device fork, and
+  supports notarization through an existing Keychain profile. No notarization credentials
+  were established or submission made in this continuation.
+- Physical iPhone and iPad entries are known to Xcode but currently unavailable. Only the
+  Android emulator is attached through adb. Hardware verification remains open.

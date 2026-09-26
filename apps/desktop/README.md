@@ -1,8 +1,8 @@
 # Silicon Bridge for Mac, Windows and Linux: packaging and end-to-end runs
 
 The app is one Rust binary, [`crates/bridge-agent`](../../crates/bridge-agent/README.md). This
-directory packages it and holds the Linux end-to-end environment. Nothing here is notarized,
-signed with a real identity, or published.
+directory packages it and holds the Linux end-to-end environment. macOS packaging supports
+Developer ID signing and notarization; a successful local build alone does not imply publication.
 
 | Path | What it does |
 |---|---|
@@ -17,6 +17,9 @@ signed with a real identity, or published.
 ```
 apps/desktop/macos/build-app.sh                 # release
 PROFILE=debug apps/desktop/macos/build-app.sh   # faster, for checking the layout
+SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' apps/desktop/macos/build-app.sh
+# With an existing notarytool Keychain profile, submit, staple and assess before making the final zip:
+SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' NOTARY_PROFILE=bridge-release apps/desktop/macos/build-app.sh
 ```
 
 ```
@@ -29,8 +32,14 @@ Silicon Bridge.app/Contents/
   Resources/node/bin/node       Node 22 (official build, downloaded and cached in target/desktop/.cache)
 ```
 
-- The app is signed ad hoc (`codesign --sign -`). A release needs a Developer ID signature and
-  notarization, so that the Accessibility and Screen Recording grants stick to a stable identity.
+- Without `SIGN_IDENTITY`, development builds use an ad-hoc signature. With a Developer ID,
+  the app and helper use hardened runtime and secure timestamps; Node receives only the JIT
+  entitlements used by the bundled runtime. `NOTARY_PROFILE` requires Developer ID signing
+  and completes only after Apple accepts the submission, the ticket is stapled and Gatekeeper
+  assessment succeeds. Credentials stay in Keychain.
+- Node is pinned to 22.23.3. Both architecture checksums in `macos/node-sha256.txt` come from
+  `https://nodejs.org/dist/v22.23.3/SHASUMS256.txt`; cached and offline tarballs are checked too.
+  The agent-device fork is rebuilt on every packaging run to include current source changes.
 - `bridge-agent` finds the bundled agent-device and Node through `../Resources`. Setting
   `BRIDGE_AGENT_DEVICE` or `BRIDGE_NODE` overrides them.
 - Checked here: the bundle built (176 MB, 52 MB zipped), `plutil -lint` passed, and
