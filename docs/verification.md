@@ -134,3 +134,10 @@ compatibility. These checks do not establish completion of the entire product co
   tests pass, including failed recording finish, successful retry, device claim release and
   retaining a provider lease until cleanup succeeds. These are daemon boundary tests, not
   evidence that the intermittent native MP4 finalization failure has been resolved.
+
+- Bridge's driver setup and teardown now share a per-device queue with commands. Previously these
+  hooks ran outside the command queue; the regression failed until the dispatcher performed cleanup
+  before accepting the next session's commands. The fixed test verifies cleanup, new setup, then command execution. Separate
+  devices still run concurrently and session end cancels pending commands. All 110 agent unit
+  tests and seven fake-service tests pass. The rebuilt signed Mac app selected the expected app
+  in a real recording run, but that single run does not establish that all foreground races are fixed.

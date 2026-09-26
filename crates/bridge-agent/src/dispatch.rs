@@ -1,5 +1,5 @@
-//! Runs commands from the service: one at a time per session and in order, within their
-//! deadline, stoppable by `cancel`, with produced files uploaded before the `result` goes back.
+//! Runs commands and session lifecycle hooks in order per device. Commands honor their deadlines
+//! and cancellation, with produced files uploaded before the `result` goes back.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,7 +52,18 @@ pub trait Uploader: Send + Sync {
     async fn upload(&self, upload_id: Uuid, path: &Path, name: &str, content_type: &str) -> Result<u64, String>;
 }
 
-type QueueKey = (Option<DeviceId>, String);
+type QueueKey = Option<DeviceId>;
+
+enum Work {
+    Command(Job),
+    Session { driver: Arc<dyn Driver>, session_id: String, starting: bool },
+}
+
+struct Pending {
+    target: Option<DeviceId>,
+    session_id: String,
+    cancel: CancelToken,
+}
 
 struct Job {
     frame: CommandFrame,
@@ -65,8 +76,8 @@ struct Inner {
     uploader: Arc<dyn Uploader>,
     outbox: Outbox,
     work_root: PathBuf,
-    queues: Mutex<HashMap<QueueKey, mpsc::UnboundedSender<Job>>>,
-    pending: Mutex<HashMap<Uuid, CancelToken>>,
+    queues: Mutex<HashMap<QueueKey, mpsc::UnboundedSender<Work>>>,
+    pending: Mutex<HashMap<Uuid, Pending>>,
 }
 
 #[derive(Clone)]
@@ -91,12 +102,18 @@ impl Dispatcher {
         }
     }
 
-    /// Queues a command behind any others in its session.
+    /// Queues a command after setup, earlier commands and previous-session cleanup on its device.
     pub fn submit(&self, frame: CommandFrame) {
         let cancel = CancelToken::new();
-        self.inner.pending.lock().unwrap().insert(frame.id, cancel.clone());
-        let key: QueueKey = (frame.target.clone(), frame.session_id.to_string());
+        self.inner.pending.lock().unwrap().insert(frame.id, Pending {
+            target: frame.target.clone(), session_id: frame.session_id.to_string(), cancel: cancel.clone(),
+        });
+        let key = frame.target.clone();
         let job = Job { frame, cancel, received: Instant::now() };
+        self.enqueue(key, Work::Command(job));
+    }
+
+    fn enqueue(&self, key: QueueKey, job: Work) {
         let mut queues = self.inner.queues.lock().unwrap();
         let job = match queues.get(&key) {
             Some(tx) => match tx.send(job) {
@@ -106,20 +123,37 @@ impl Dispatcher {
             },
             None => job,
         };
-        queues.insert(key, self.spawn_worker(job));
+        queues.insert(key.clone(), self.spawn_worker(key, job));
     }
 
-    fn spawn_worker(&self, first: Job) -> mpsc::UnboundedSender<Job> {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Job>();
+    fn spawn_worker(&self, key: QueueKey, first: Work) -> mpsc::UnboundedSender<Work> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Work>();
         tx.send(first).ok();
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            while let Some(job) = rx.recv().await {
-                let id = job.frame.id;
-                let outcome = execute(&inner, job).await;
-                inner.pending.lock().unwrap().remove(&id);
-                if !inner.outbox.send(DeviceFrame::Result(outcome)) {
-                    tracing::warn!("command {id} finished while Bridge was unreachable; its result was dropped");
+            while let Some(work) = rx.recv().await {
+                match work {
+                    Work::Command(job) => {
+                        let id = job.frame.id;
+                        let outcome = execute(&inner, job).await;
+                        inner.pending.lock().unwrap().remove(&id);
+                        if !inner.outbox.send(DeviceFrame::Result(outcome)) {
+                            tracing::warn!("command {id} finished while Bridge was unreachable; its result was dropped");
+                        }
+                    }
+                    Work::Session { driver, session_id, starting } => {
+                        if starting {
+                            driver.session_started(&session_id).await;
+                        } else {
+                            driver.session_ended(&session_id).await;
+                            // An idle device can drop its worker only while enqueue is excluded.
+                            let mut queues = inner.queues.lock().unwrap();
+                            if rx.is_empty() {
+                                queues.remove(&key);
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -129,13 +163,32 @@ impl Dispatcher {
     /// Stops a queued or running command.
     pub fn cancel(&self, id: Uuid) {
         if let Some(token) = self.inner.pending.lock().unwrap().get(&id) {
-            token.cancel();
+            token.cancel.cancel();
         }
     }
 
-    /// Forgets a session's queue once it ended. Commands already queued still answer.
+    /// Prepares the driver before this device's first session command can run.
+    pub fn session_started(&self, target: Option<&DeviceId>, session_id: &str) {
+        self.queue_lifecycle(target, session_id, true);
+    }
+
+    /// Cancels remaining commands, then cleans up before the next session uses this device.
     pub fn session_closed(&self, target: Option<&DeviceId>, session_id: &str) {
-        self.inner.queues.lock().unwrap().remove(&(target.cloned(), session_id.to_owned()));
+        for pending in self.inner.pending.lock().unwrap().values() {
+            if pending.target.as_ref() == target && pending.session_id == session_id {
+                pending.cancel.cancel();
+            }
+        }
+        self.queue_lifecycle(target, session_id, false);
+    }
+
+    fn queue_lifecycle(&self, target: Option<&DeviceId>, session_id: &str, starting: bool) {
+        match self.inner.lookup.driver_for(target) {
+            Ok(driver) => self.enqueue(target.cloned(), Work::Session {
+                driver, session_id: session_id.to_owned(), starting,
+            }),
+            Err(error) => tracing::warn!("couldn't handle lifecycle for session {session_id}: {error}"),
+        }
     }
 
     /// Commands queued or running.
@@ -436,6 +489,16 @@ mod tests {
             self.running.fetch_sub(1, Ordering::SeqCst);
             out
         }
+        async fn session_ended(&self, session_id: &str) {
+            self.log.lock().unwrap().push(format!("cleanup {session_id}"));
+            tokio::task::yield_now().await;
+            self.log.lock().unwrap().push(format!("cleaned {session_id}"));
+        }
+        async fn session_started(&self, session_id: &str) {
+            self.log.lock().unwrap().push(format!("setup {session_id}"));
+            tokio::task::yield_now().await;
+            self.log.lock().unwrap().push(format!("ready {session_id}"));
+        }
     }
 
     struct Lookup(Arc<FakeDriver>);
@@ -443,6 +506,7 @@ mod tests {
         fn driver_for(&self, target: Option<&DeviceId>) -> Result<Arc<dyn Driver>, String> {
             match target {
                 None => Ok(self.0.clone()),
+                Some(id) if id.as_str() == "00000001" => Ok(self.0.clone()),
                 Some(id) => Err(format!("device {id} isn't attached to this computer")),
             }
         }
@@ -528,13 +592,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn different_sessions_run_side_by_side() {
+    async fn sessions_on_the_same_device_run_in_order() {
         let mut h = harness(false);
         h.dispatcher.submit(cmd("a3f", "click", &["sleep", "300"], 30_000, 0));
         h.dispatcher.submit(cmd("b40", "click", &["sleep", "300"], 30_000, 0));
         next_result(&mut h.rx).await;
         next_result(&mut h.rx).await;
+        assert_eq!(h.driver.max_running.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn new_session_waits_for_previous_session_cleanup() {
+        let mut h = harness(false);
+        h.dispatcher.submit(cmd("a3f", "snapshot", &[], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        h.dispatcher.session_closed(None, "a3f");
+        h.dispatcher.session_started(None, "b40");
+        h.dispatcher.submit(cmd("b40", "snapshot", &[], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        assert_eq!(*h.driver.log.lock().unwrap(), [
+            "start a3f ", "end a3f ", "cleanup a3f", "cleaned a3f", "setup b40", "ready b40", "start b40 ", "end b40 "
+        ]);
+    }
+
+    #[tokio::test]
+    async fn separate_devices_still_run_side_by_side() {
+        let mut h = harness(false);
+        let mut attached = cmd("b40", "click", &["sleep", "100"], 30_000, 0);
+        attached.target = Some("00000001".parse().unwrap());
+        h.dispatcher.submit(cmd("a3f", "click", &["sleep", "100"], 30_000, 0));
+        h.dispatcher.submit(attached);
+        assert!(next_result(&mut h.rx).await.ok);
+        assert!(next_result(&mut h.rx).await.ok);
         assert_eq!(h.driver.max_running.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn session_end_cancels_queued_work_before_cleanup() {
+        let mut h = harness(false);
+        h.dispatcher.submit(cmd("a3f", "click", &["stubborn"], 30_000, 0));
+        h.dispatcher.session_closed(None, "a3f");
+        h.dispatcher.submit(cmd("b40", "snapshot", &[], 30_000, 0));
+        assert_eq!(next_result(&mut h.rx).await.error.unwrap().code, "cancelled");
+        assert!(next_result(&mut h.rx).await.ok);
+        assert_eq!(*h.driver.log.lock().unwrap(), ["cleanup a3f", "cleaned a3f", "start b40 ", "end b40 "]);
     }
 
     #[tokio::test]

@@ -103,7 +103,9 @@ The state lives in `{home}/.bridge-agent/`. The directory is 0700 and every file
     that fails makes the result `ok:false` with `upload_failed`. Files beyond the upload ids are
     named in the text.
 - **Sessions.** `session_started`/`session_ended` update the indicator and call the driver's
-  hooks. On macOS and Linux, ending a session stops a recording and a log capture that are still
+  hooks in the device's command queue. Setup finishes before its first command; ending a session
+  cancels queued/running commands and finishes cleanup before the next session starts. Different
+  devices keep independent queues. On macOS and Linux, ending a session stops a recording and a log capture that are still
   running, then closes the agent-device session. `takeover` shows the reason and **Done**, which
   sends `takeover_done`. `environment` shows or clears the test-environment banner. `unpaired`
   forgets the credential.

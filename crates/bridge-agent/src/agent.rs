@@ -571,23 +571,17 @@ impl Agent {
             ServiceFrame::SessionStarted { target, session_id, silicon_id, since } => {
                 let info = InUseInfo { silicon_id: silicon_id.clone(), session_id: session_id.to_string(), since: fmt_time(since) };
                 tracing::info!("{silicon_id} started session {session_id}");
+                self.dispatcher.session_started(target.as_ref(), session_id.as_str());
                 match target {
                     None => {
                         self.status.update(|s| {
                             s.in_use = Some(info);
                             s.takeover = None;
                         });
-                        let local = self.local.clone();
-                        let sid = session_id.to_string();
-                        tokio::spawn(async move { local.session_started(&sid).await });
                     }
                     Some(id) => {
                         self.hosted.set_in_use(&id, Some(info));
                         self.sync_attached_status();
-                        if let Ok(d) = self.hosted.driver(&id) {
-                            let sid = session_id.to_string();
-                            tokio::spawn(async move { d.session_started(&sid).await });
-                        }
                     }
                 }
             }
@@ -598,20 +592,15 @@ impl Agent {
                 match target {
                     None => {
                         self.status.update(|s| {
-                            if s.in_use.as_ref().is_some_and(|u| u.session_id == sid) || s.in_use.is_some() {
+                            if s.in_use.as_ref().is_some_and(|u| u.session_id == sid) {
                                 s.in_use = None;
                                 s.takeover = None;
                             }
                         });
-                        let local = self.local.clone();
-                        tokio::spawn(async move { local.session_ended(&sid).await });
                     }
                     Some(id) => {
                         self.hosted.set_in_use(&id, None);
                         self.sync_attached_status();
-                        if let Ok(d) = self.hosted.driver(&id) {
-                            tokio::spawn(async move { d.session_ended(&sid).await });
-                        }
                     }
                 }
             }
