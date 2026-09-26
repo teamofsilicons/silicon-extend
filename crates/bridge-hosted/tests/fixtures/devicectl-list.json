@@ -1,0 +1,200 @@
+{
+ "info": {
+  "arguments": [
+   "devicectl",
+   "list",
+   "devices",
+   "--json-output",
+   "out.json"
+  ],
+  "commandType": "devicectl.list.devices",
+  "jsonVersion": 5,
+  "outcome": "success",
+  "version": "642.16"
+ },
+ "result": {
+  "devices": [
+   {
+    "connectionProperties": {
+     "authenticationType": "manualPairing",
+     "isMobileDeviceOnly": false,
+     "pairingState": "paired",
+     "potentialHostnames": [
+      "Test-iPhone.coredevice.local",
+      "11111111-2222-3333-4444-555555555555.coredevice.local",
+      "00008110-000A1B2C3D4E5F60.coredevice.local"
+     ],
+     "transportType": "localNetwork",
+     "tunnelState": "disconnected",
+     "tunnelTransportProtocol": "tcp"
+    },
+    "deviceProperties": {
+     "bootState": "booted",
+     "ddiServicesAvailable": false,
+     "name": "Test iPhone",
+     "osBuildUpdate": "24A437",
+     "osVersionNumber": "27.0"
+    },
+    "hardwareProperties": {
+     "cpuType": {
+      "name": "arm64e",
+      "subType": -2147483646,
+      "type": 16777228
+     },
+     "deviceType": "iPhone",
+     "ecid": 1234567890123456,
+     "hardwareModel": "D16AP",
+     "platform": "iOS",
+     "productType": "iPhone14,4",
+     "supportedCPUTypes": [
+      {
+       "name": "arm64e",
+       "subType": -2147483646,
+       "type": 16777228
+      },
+      {
+       "name": "arm64",
+       "subType": 0,
+       "type": 16777228
+      }
+     ],
+     "supportedDeviceFamilies": [
+      1
+     ],
+     "udid": "00008110-000A1B2C3D4E5F60"
+    },
+    "identifier": "11111111-2222-3333-4444-555555555555",
+    "properties": {
+     "connection": {
+      "authenticationType": "manualPairing",
+      "pairingState": "paired",
+      "state": "disconnected",
+      "transportType": "localNetwork",
+      "tunnelTransportProtocol": "tcp"
+     },
+     "hardware": {
+      "cpuType": {
+       "subtype": 18446744071562067970,
+       "type": 16777228
+      },
+      "deviceType": "iPhone",
+      "ecid": 1234567890123456,
+      "platform": "iOS",
+      "productType": "iPhone14,4",
+      "supportedCPUTypes": [
+       {
+        "subtype": 18446744071562067970,
+        "type": 16777228
+       },
+       {
+        "subtype": 0,
+        "type": 16777228
+       }
+      ],
+      "supportedDeviceFamilies": [
+       1
+      ],
+      "udid": "00008110-000A1B2C3D4E5F60"
+     },
+     "state": {
+      "bootState": "booted",
+      "name": "Test iPhone"
+     }
+    },
+    "propertyDisplayNames": null,
+    "visibilityClass": "default"
+   },
+   {
+    "connectionProperties": {
+     "authenticationType": "implicit",
+     "isMobileDeviceOnly": false,
+     "lastConnectionDate": "2026-07-31T15:41:50.000Z",
+     "pairingState": "paired",
+     "potentialHostnames": [],
+     "transportType": "sameMachine",
+     "tunnelState": "disconnected"
+    },
+    "deviceProperties": {
+     "bootState": "shutdown",
+     "ddiServicesAvailable": false,
+     "hasInternalOSBuild": false,
+     "name": "iPhone 16",
+     "osBuildUpdate": "22E238",
+     "osVersionNumber": "18.4",
+     "provider": "com.apple.CoreSimulator.SimulatorCoreDevicePlugin"
+    },
+    "hardwareProperties": {
+     "cpuType": {
+      "name": "arm64",
+      "subType": 0,
+      "type": 16777228
+     },
+     "deviceType": "iPhone",
+     "hardwareModel": "D47",
+     "marketingName": "iPhone 16",
+     "platform": "iOS",
+     "productType": "iPhone17,3",
+     "reality": "simulated",
+     "supportedCPUTypes": [
+      {
+       "name": "arm64",
+       "subType": 0,
+       "type": 16777228
+      },
+      {
+       "name": "x86_64",
+       "subType": 3,
+       "type": 16777223
+      }
+     ],
+     "udid": "80A3BF52-880D-4561-AA53-DAE0CF22D301"
+    },
+    "identifier": "80A3BF52-880D-4561-AA53-DAE0CF22D301",
+    "properties": {
+     "connection": {
+      "authenticationType": "implicit",
+      "lastConnectionDate": 807205310,
+      "pairingState": "paired",
+      "state": "disconnected",
+      "transportType": "sameMachine"
+     },
+     "hardware": {
+      "cpuType": {
+       "subtype": 0,
+       "type": 16777228
+      },
+      "deviceType": "iPhone",
+      "hasActionButton": true,
+      "marketingName": "iPhone 16",
+      "platform": "iOS",
+      "productType": "iPhone17,3",
+      "reality": "simulated",
+      "supportedBiometrics": [
+       "faceID"
+      ],
+      "supportedCPUTypes": [
+       {
+        "subtype": 0,
+        "type": 16777228
+       },
+       {
+        "subtype": 3,
+        "type": 16777223
+       }
+      ],
+      "supportsSiri": true,
+      "udid": "80A3BF52-880D-4561-AA53-DAE0CF22D301"
+     },
+     "state": {
+      "bootState": "shutdown",
+      "name": "iPhone 16",
+      "preparednessState": 0,
+      "visibilityClass": "simulators"
+     }
+    },
+    "propertyDisplayNames": null,
+    "visibilityClass": "simulators"
+   }
+  ]
+ }
+}

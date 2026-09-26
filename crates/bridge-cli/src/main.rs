@@ -190,7 +190,7 @@ impl Ctx {
         if let Some(c) = &self.client {
             return Ok(c.clone());
         }
-        let mut b = Client::builder(self.api_url()).user_agent(concat!("bridge-cli/", env!("CARGO_PKG_VERSION"))).telemetry(self.telemetry_on());
+        let mut b = Client::builder(self.api_url()).user_agent(concat!("bridge-cli/", env!("CARGO_PKG_VERSION"))).telemetry(self.telemetry_on()).isi(std::env::var("ISI").ok());
         if let Plane::Test { secret, .. } = &self.plane {
             b = b.testing_secret(secret.clone());
         }

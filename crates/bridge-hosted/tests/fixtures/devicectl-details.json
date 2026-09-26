@@ -1,0 +1,77 @@
+{
+ "info": {
+  "arguments": [],
+  "commandType": "devicectl.device.info.details",
+  "jsonVersion": 5,
+  "outcome": "success",
+  "version": "642.16"
+ },
+ "result": {
+  "connectionProperties": {
+   "authenticationType": "manualPairing",
+   "isMobileDeviceOnly": false,
+   "lastConnectionDate": "2026-09-25T23:40:00.000Z",
+   "localHostnames": [
+    "Test-iPhone.coredevice.local",
+    "11111111-2222-3333-4444-555555555555.coredevice.local",
+    "00008110-000A1B2C3D4E5F60.coredevice.local"
+   ],
+   "pairingState": "paired",
+   "potentialHostnames": [
+    "Test-iPhone.coredevice.local",
+    "11111111-2222-3333-4444-555555555555.coredevice.local",
+    "00008110-000A1B2C3D4E5F60.coredevice.local"
+   ],
+   "transportType": "localNetwork",
+   "tunnelIPAddress": "fda7:4192:277c::1",
+   "tunnelState": "connected",
+   "tunnelTransportProtocol": "tcp"
+  },
+  "deviceProperties": {
+   "bootState": "booted",
+   "ddiServicesAvailable": false,
+   "developerModeStatus": "enabled",
+   "hasInternalOSBuild": false,
+   "name": "Test iPhone",
+   "osBuildUpdate": "24A437",
+   "osVersionNumber": "27.0",
+   "screenViewingURL": "devices://device/open?id=11111111-2222-3333-4444-555555555555"
+  },
+  "hardwareProperties": {
+   "cpuType": {
+    "name": "arm64e",
+    "subType": -2147483646,
+    "type": 16777228
+   },
+   "deviceType": "iPhone",
+   "ecid": 1234567890123456,
+   "hardwareModel": "D16AP",
+   "isProductionFused": true,
+   "marketingName": "iPhone 13 mini",
+   "platform": "iOS",
+   "productType": "iPhone14,4",
+   "reality": "physical",
+   "serialNumber": "LWL76WJXGX",
+   "supportedCPUTypes": [
+    {
+     "name": "arm64e",
+     "subType": -2147483646,
+     "type": 16777228
+    },
+    {
+     "name": "arm64",
+     "subType": 0,
+     "type": 16777228
+    }
+   ],
+   "supportedDeviceFamilies": [
+    1
+   ],
+   "thinningProductType": "iPhone14,4",
+   "udid": "00008110-000A1B2C3D4E5F60"
+  },
+  "identifier": "11111111-2222-3333-4444-555555555555",
+  "propertyDisplayNames": null,
+  "visibilityClass": "default"
+ }
+}

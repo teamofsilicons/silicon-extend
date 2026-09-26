@@ -72,9 +72,15 @@ pub struct ClientBuilder {
     timeout: Duration,
     user_agent: String,
     telemetry: bool,
+    isi: Option<String>,
 }
 
 impl ClientBuilder {
+    /// The internal Silicon (ISI) acting, recorded with the Silicon's actions. Optional.
+    pub fn isi(mut self, isi: Option<String>) -> Self {
+        self.isi = isi.filter(|s| !s.trim().is_empty() && s.len() <= 128);
+        self
+    }
     /// Selects a test environment by its test application secret (`ask_…`).
     pub fn testing_secret(mut self, secret: impl Into<String>) -> Self {
         self.testing_secret = Some(secret.into());
@@ -105,7 +111,7 @@ impl ClientBuilder {
             .user_agent(self.user_agent.clone())
             .build()
             .map_err(|e| Error::Transport { url: base.clone(), source: e })?;
-        let mut client = Client { http, base, testing_secret: self.testing_secret, api_version: API_VERSION, telemetry: self.telemetry };
+        let mut client = Client { http, base, testing_secret: self.testing_secret, api_version: API_VERSION, telemetry: self.telemetry, isi: self.isi };
         let supported: Vec<String> = SUPPORTED_API_VERSIONS.iter().map(u32::to_string).collect();
         let resp = client
             .http
@@ -128,6 +134,7 @@ pub struct Client {
     testing_secret: Option<String>,
     api_version: u32,
     telemetry: bool,
+    isi: Option<String>,
 }
 
 async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
@@ -165,6 +172,7 @@ impl Client {
             timeout: Duration::from_secs(330),
             user_agent: concat!("silicon-bridge-client/", env!("CARGO_PKG_VERSION")).into(),
             telemetry: true,
+            isi: None,
         }
     }
 
@@ -190,6 +198,9 @@ impl Client {
         }
         if !self.telemetry {
             r = r.header("X-Bridge-Telemetry", "off");
+        }
+        if let Some(isi) = &self.isi {
+            r = r.header("X-Silicon-ISI", isi);
         }
         r
     }

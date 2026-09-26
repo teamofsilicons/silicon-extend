@@ -3,12 +3,33 @@
 //!
 //! The desktop agent (`bridge-agent`) calls [`driver_for`] when the service sends an `attach` frame
 //! and keeps the returned driver for that device id. Everything else goes through the
-//! [`bridge_driver::Driver`] trait.
+//! [`bridge_driver::Driver`] trait. [`discover`] finds candidate devices on the local network (or,
+//! for iPhone and iPad, on this Mac) so the Carbon can pick one while adding it.
+//!
+//! | Device | How | Host |
+//! |---|---|---|
+//! | iPhone, iPad | agent-device's physical-iOS driver (XCTest runner on the device) | Mac |
+//! | Apple TV | Companion protocol (HAP pairing, OPACK) for buttons and apps; AirPlay for pictures and videos | Mac |
+//! | Samsung TV | Tizen remote-control WebSocket (8002 TLS, 8001 plain) and REST (8001) | Mac, Windows, Linux |
+//! | LG TV | webOS SSAP WebSocket (3000 plain, 3001 TLS) and its pointer socket | Mac, Windows, Linux |
 
 use std::path::PathBuf;
 
 use bridge_driver::Driver;
 use bridge_protocol::DeviceOs;
+
+mod appletv;
+mod common;
+pub mod discover;
+mod http;
+mod ios;
+mod lg;
+mod samsung;
+mod script;
+mod tls;
+mod ws;
+
+pub use discover::{Found, discover};
 
 /// What the host knows about a device it should carry.
 #[derive(Debug, Clone)]
@@ -25,6 +46,60 @@ pub struct HostedDevice {
 }
 
 /// Builds the driver for a hosted device. Errors say exactly why (wrong host OS, missing helper).
+///
+/// Construction does no I/O and needs no async runtime; drivers connect lazily on the first
+/// `probe` or `run`.
 pub fn driver_for(device: HostedDevice) -> Result<Box<dyn Driver>, String> {
-    Err(format!("{} devices are not supported by this build of the host agent", device.os.as_str()))
+    match device.os {
+        DeviceOs::Ios | DeviceOs::Ipados => ios::driver(device),
+        DeviceOs::Tvos => appletv::driver(device),
+        DeviceOs::SamsungTv => Ok(Box::new(samsung::SamsungDriver::new(device))),
+        DeviceOs::LgTv => Ok(Box::new(lg::LgDriver::new(device))),
+        other => Err(format!(
+            "{} devices run the Bridge app themselves; they are not carried by a host computer",
+            other.as_str()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(os: DeviceOs) -> HostedDevice {
+        HostedDevice {
+            device_id: "dev_1".into(),
+            os,
+            name: "Living room".into(),
+            address: Some("192.0.2.10".into()),
+            state_dir: std::env::temp_dir().join("bridge-hosted-test"),
+            agent_device: vec!["agent-device".into()],
+        }
+    }
+
+    #[test]
+    fn tvs_build_on_every_host() {
+        assert!(driver_for(device(DeviceOs::SamsungTv)).is_ok());
+        assert!(driver_for(device(DeviceOs::LgTv)).is_ok());
+    }
+
+    #[test]
+    fn self_hosted_devices_are_refused() {
+        let err = driver_for(device(DeviceOs::Android)).err().unwrap();
+        assert!(err.contains("run the Bridge app themselves"), "{err}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apple_devices_build_on_a_mac() {
+        assert!(driver_for(device(DeviceOs::Tvos)).is_ok());
+        assert!(driver_for(device(DeviceOs::Ios)).is_ok());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn apple_devices_need_a_mac() {
+        let err = driver_for(device(DeviceOs::Tvos)).err().unwrap();
+        assert!(err.contains("Mac"), "{err}");
+    }
 }

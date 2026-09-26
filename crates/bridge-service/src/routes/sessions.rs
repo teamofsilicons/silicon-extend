@@ -115,6 +115,7 @@ pub async fn start(State(state): State<Shared>, auth: Auth, headers: HeaderMap, 
     let st = state.clone();
     let p = auth.p.clone();
     let sel = auth.sel.clone();
+    let isi = auth.isi.clone();
     idempotent(&state, &auth.world, auth.p.id(), "sessions", &headers, &hash, || async move {
         let mut tx = st.pool.begin().await?;
         let sid = allocate_session_id(&st, &world, &mut tx).await?;
@@ -159,7 +160,7 @@ pub async fn start(State(state): State<Shared>, auth: Auth, headers: HeaderMap, 
                 ServiceFrame::SessionStarted { target, session_id: sid.parse().map_err(AppError::internal)?, silicon_id: p.id().to_owned(), since: row.started_at },
             )
             .await;
-        domain::log(&st, &world, &device_id, &p.member, "session_started", Some(&sid), serde_json::json!({})).await;
+        domain::log(&st, &world, &device_id, &p.member, "session_started", Some(&sid), serde_json::json!({"isi": isi})).await;
         tracing::info!(world = %world.schema, session_id = %sid, device_id, silicon = p.id(), "session started");
         Ok((StatusCode::CREATED, "session", serde_json::to_value(row.view()).map_err(AppError::internal)?))
     })
@@ -494,6 +495,7 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         let who = auth.p.member.clone();
         let args = redacted.clone();
         let cmd = spec.name.to_owned();
+        let isi = auth.isi.clone();
         async move {
             let _ = sqlx::query(sql!(
                 "INSERT INTO {} (id, device_id, actor_kind, actor_id, action, session_id, command, args, outcome, files, details)
@@ -508,7 +510,7 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
             .bind(serde_json::to_value(&args).unwrap_or_default())
             .bind(outcome_word)
             .bind(serde_json::to_value(&files).unwrap_or_default())
-            .bind(serde_json::json!({"duration_ms": duration_ms, "error": error}))
+            .bind(serde_json::json!({"duration_ms": duration_ms, "error": error, "isi": isi}))
             .execute(&st.pool)
             .await;
             let idle = OffsetDateTime::now_utc() + time::Duration::seconds(SESSION_IDLE_S);

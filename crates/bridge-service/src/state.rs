@@ -168,6 +168,8 @@ pub struct Auth {
     pub world: World,
     pub sel: Option<TestingSelection>,
     pub p: Principal,
+    /// The internal Silicon acting (`X-Silicon-ISI`), when the caller says. Extra context only.
+    pub isi: Option<String>,
 }
 
 impl Auth {
@@ -206,7 +208,8 @@ impl FromRequestParts<Shared> for Auth {
                 return Err(AppError::invalid("X-Org-ID must be one team handle."));
             }
         let p = state.authorize(token, team, sel.as_ref()).await?;
-        Ok(Self { world, sel, p })
+        let isi = header(parts, "x-silicon-isi").map(str::trim).filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control)).map(str::to_owned);
+        Ok(Self { world, sel, p, isi })
     }
 }
 
