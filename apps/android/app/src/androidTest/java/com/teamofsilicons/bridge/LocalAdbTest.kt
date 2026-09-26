@@ -74,10 +74,11 @@ class LocalAdbTest {
             assertEquals("alive", adb.shell("printf alive").text)
             android.util.Log.i("BridgeAdbTest", "logs")
             executor.execute("s1", AdbCommand.Logs("start"), emptyList())
-            executor.execute("s1", AdbCommand.Logs("mark", "bridge-marker-123"), emptyList())
+            val marker = "bridge-marker-${UUID.randomUUID()}"
+            executor.execute("s1", AdbCommand.Logs("mark", marker), emptyList())
             delay(500)
             val logs = executor.execute("s1", AdbCommand.Logs("stop"), emptyList()).artifact!!
-            assertTrue(logs.file.readText().contains("bridge-marker-123"))
+            assertTrue("A marker sent after logs start must be captured", logs.file.readText().contains(marker))
             android.util.Log.i("BridgeAdbTest", "recording")
             executor.execute("s1", AdbCommand.Record("start", "test-video"), emptyList())
             delay(2000)

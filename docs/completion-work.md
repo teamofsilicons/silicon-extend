@@ -6,8 +6,8 @@ An implementation or passing mock does not close a physical-device or production
 
 ## Open gates
 
-- Android: physical-device coverage, large APK/Briefcase inputs and recording beyond the
-  native 180-second limit. Local ADB pairing, command execution, installation, logs and
+- Android: physical-device coverage, large APK/Briefcase inputs, long-recording service transfer
+  and full 30-minute/1-GiB recording stress. Local ADB pairing, command execution, installation, logs and
   recording are implemented; see the verification record for exercised paths.
 - Desktop: Mac recording stress/recovery, hidden-stage/multi-display coverage and active-session update policy; notarized helper distribution;
   Windows runtime and recording; Linux multiwindow/minimized-app coverage, Wayland recording and current desktop support.
@@ -35,8 +35,8 @@ An implementation or passing mock does not close a physical-device or production
 - Android ADB implementation built; protocol unit tests, real-daemon instrumentation and
   real-service CLI tests have passed. Crash/reconnect and the 84-check phone regression pass.
   See `docs/verification.md` and `apps/android/README.md` for exact scope and limits.
-- Remaining Android coverage includes physical phones/TVs, large APK/Briefcase inputs, and
-  recording beyond the native 180-second limit. Do not infer full contract completion from
+- Remaining Android coverage includes physical phones/TVs, large APK/Briefcase inputs,
+  long-recording service transfer and full 30-minute/1-GiB stress. Do not infer full contract completion from
   the small installation fixture or a short MP4 recording.
 - Next implementation area: desktop missing recording/input capabilities and release packaging.
 - Mac native `fill`/`type`/`focus` now pass live AppKit and packaged local-driver tests without
@@ -87,3 +87,11 @@ An implementation or passing mock does not close a physical-device or production
   binaries. An installed unprivileged app with no source runtime mounted passed app/device
   recording through the local service, upload, full decode and repeat CLI download. This closes
   local Linux recording transfer; production IAM/Briefcase, x64 and other distros remain open.
+
+
+- Android now supervises multiple native recording segments and combines them into one MP4.
+  A real emulator test failed at 180.4 seconds before the change and produced a fully decoded
+  187.8-second video after it. Reduced automatic duration/rollover, session Stop and ADB disconnect
+  cleanup pass. Native restarts can leave brief capture gaps. The current device inventory also
+  includes a connected Pixel 8; this continuation used only the emulator and does not establish
+  physical-phone coverage.

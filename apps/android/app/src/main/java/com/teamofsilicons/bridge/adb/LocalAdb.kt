@@ -133,7 +133,7 @@ class LocalAdb(private val context: Context) {
         if (check && result.exitCode != 0) throw IOException("Android command exited ${result.exitCode}: ${result.text.take(2048)}")
         return result
     }
-    suspend fun logStream(file: File) = stream("shell,v2,pty:logcat -v threadtime -T 1") { stream ->
+    suspend fun logStream(file: File, onReady: () -> Unit = {}) = stream("shell,v2,pty:logcat -v threadtime -T 1") { stream ->
         val input = drainingInput(stream)
         file.outputStream().use { output ->
             var total = 0
@@ -146,6 +146,7 @@ class LocalAdb(private val context: Context) {
                 if (channel == 3) break
                 if (channel !in 1..2) throw IOException("Unexpected log stream channel")
                 output.write(bytes); output.flush()
+                onReady()
                 total += size
             }
         }

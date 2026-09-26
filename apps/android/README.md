@@ -191,8 +191,11 @@ is disconnected. The app never opens a debugging connection in response to a rem
 - `bridge logs start`, `mark <label>`, `stop --out <file>`, `clear` stream up to 16 MiB of device
   logs. The app closes the live stream on session end or disconnect.
 - `bridge record start [name] [--scope device] [--quality normal|high]` and
-  `record stop --out <file.mp4>` use Android's screenrecord process, capped at 180 seconds per
-  recording. App-only scope and custom frame rates are explicitly unsupported by this backend.
+  `record stop --out <file.mp4>` use supervised screenrecord segments (up to 180 seconds each),
+  combined into one MP4 on stop. The supervisor bounds the overall capture to 30 minutes or
+  1 GiB; native restarts can leave brief capture gaps, disclosed in the stop result. Encoder or
+  dimension changes between segments fail finalization and retain source segments for retry.
+  App-only scope and custom frame rates are explicitly unsupported by this backend.
   Recordings and pulled files are streamed from disk during upload. Stop, revoke and connection
   loss clean up session-owned capture processes. Recorder PID checks include its unique output
   directory, so cleanup cannot signal a recycled PID. Interrupted recording directories are
@@ -218,3 +221,15 @@ adb shell am instrument -w -e class com.teamofsilicons.bridge.LocalAdbTest#realL
 optionally `adb_connect_port` instrumentation arguments. `#wirelessReconnect -e adb_tls true`
 verifies mDNS discovery and reuse of the saved identity in a new app process. The test-only APK
 fixture has no executable code or runtime permissions and is uninstalled after the test.
+
+
+Long Android recording verification (dedicated emulator only): build/install the app and
+instrumentation APK, then run `RUN_LONG=1 bash e2e/android-recording.sh emulator-5554` from
+the repository root. The underlying instrumentation uses `RecordingTest#nativeDurationLimit` for reduced automatic-stop
+and segment-rollover coverage. `RecordingTest#beyondNativeLimit` with `-e long_recording true`
+runs for about 190 seconds and requires real frames after the native 180-second boundary.
+Both use an animated fixture in the test APK. Proof videos are saved under the target app's
+external files directory. Decode variable-rate Android video with its source time base, e.g.
+`ffmpeg -v error -i proof.mp4 -enc_time_base demux -fps_mode passthrough -f null -`.
+These are manual instrumentation lanes; full 30-minute/1-GiB and physical-device recording
+coverage remain separate gates.

@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,6 +28,7 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
     }
     private class LogCapture(val file: File) {
         lateinit var job: Job
+        val ready = CompletableDeferred<Unit>()
         @Volatile var error: String? = null
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -69,13 +71,13 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
                 "start" -> {
                     if (session.recording != null) throw CommandFailure.invalid("A recording is already running in this session. Use record stop first.")
                     val name = command.name.removeSuffix(".mp4") + ".mp4"
-                    val capture = startCapture(name, "screenrecord --time-limit 180 --bit-rate ${if (command.quality == "high") 10000000 else 8000000}", "video.mp4")
+                    val capture = startCapture(name, command.quality == "high")
                     session.recording = capture
-                    Result("Recording started (Android limits each recording to 180 seconds). Use record stop to save it.")
+                    Result("Recording started (up to 30 minutes or 1 GiB). Use record stop to save it.")
                 }
                 else -> {
                     val capture = session.recording ?: throw CommandFailure.invalid("No recording in this session. Run record start first.")
-                    val result = collect(capture, "video.mp4", "video/mp4", "recording")
+                    val result = collect(capture)
                     session.recording = null
                     result
                 }
@@ -86,9 +88,17 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
                     val dir = File(cache, UUID.randomUUID().toString()).apply { mkdirs() }
                     val capture = LogCapture(File(dir, "device.log"))
                     capture.job = scope.launch {
-                        try { adb.logStream(capture.file) }
+                        try {
+                            adb.logStream(capture.file) { capture.ready.complete(Unit) }
+                            if (!capture.ready.isCompleted) capture.ready.completeExceptionally(IllegalStateException("Android log stream ended before readiness"))
+                        }
                         catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { capture.error = e.message }
+                        catch (e: Exception) { capture.error = e.message; capture.ready.completeExceptionally(e) }
+                    }
+                    try { withTimeout(5000) { capture.ready.await() } }
+                    catch (e: Exception) {
+                        withContext(NonCancellable) { capture.job.cancelAndJoin(); dir.deleteRecursively() }
+                        throw e
                     }
                     session.logs = capture
                     Result("Collecting device logs (up to 16 MB). Use logs stop to save them.")
@@ -108,17 +118,22 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
             }
         }
     }
-    private suspend fun startCapture(name: String, executable: String, output: String): Capture {
+    private suspend fun startCapture(name: String, highQuality: Boolean): Capture {
         val dir = directory()
         val capture = Capture(dir, name)
         pending.add(dir)
         persist()
         adb.shell("mkdir -m 700 ${quote(dir)}")
-        // Keep the ADB shell stream open for the recording's lifetime. Losing the app/transport
-        // then terminates the recorder, rather than leaving a detached screen capture running.
+        val script = File.createTempFile("record-", ".sh", cache)
+        try {
+            script.writeText(RecordingScript.create(dir, highQuality))
+            adb.push(script, "$dir/capture.sh")
+        } finally { script.delete() }
+        // The PTY keeps the supervisor tied to this app's ADB stream. Its HUP trap finalizes
+        // the current child and prevents another segment after transport or owner loss.
         capture.job = scope.launch {
             try {
-                adb.shell("echo \$\$ >${quote("$dir/pid")}; exec $executable ${quote("$dir/$output")}", pty = true)
+                adb.shell("exec sh ${quote("$dir/capture.sh")}", pty = true)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { capture.error = e.message }
         }
@@ -126,7 +141,7 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
             withTimeout(5000) {
                 while (true) {
                     capture.error?.let { throw CommandFailure(CommandFailure.ACTION_FAILED, "Android capture could not start: $it") }
-                    val ready = adb.shell("p=\$(cat ${quote("$dir/pid")} 2>/dev/null); test -n \"\$p\" && tr '\\0' ' ' </proc/\$p/cmdline 2>/dev/null | grep -F -- ${quote("$dir/$output")} >/dev/null", check = false)
+                    val ready = adb.shell("p=\$(cat ${quote("$dir/pid")} 2>/dev/null); test -n \"\$p\" && tr '\\0' ' ' </proc/\$p/cmdline 2>/dev/null | grep -F -- ${quote("$dir/chunk-")} >/dev/null", check = false)
                     if (ready.exitCode == 0) break
                     if (capture.job.isCompleted) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android recorder exited without producing a recording")
                     delay(100)
@@ -134,23 +149,25 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
             }
             return capture
         } catch (e: Exception) {
-            withContext(NonCancellable) { runCatching { withTimeout(5000) { cleanup(capture) } } }
+            withContext(NonCancellable) { runCatching { withTimeout(12000) { cleanup(capture) } } }
             throw e
         }
     }
     private suspend fun stop(capture: Capture) {
-        val pidFile = quote("${capture.directory}/pid")
-        // The platform may already have stopped a recording and reused its PID. Never signal
-        // a process unless its command line still names this capture's unique directory.
-        val owned = "p=\$(cat $pidFile 2>/dev/null); case \"\$p\" in ''|*[!0-9]*) exit 0;; esac; " +
-            "tr '\\0' ' ' </proc/\$p/cmdline 2>/dev/null | grep -F -- ${quote(capture.directory)} >/dev/null || exit 0; "
-        adb.shell(owned + "kill -2 \"\$p\" 2>/dev/null || true")
-        repeat(30) {
-            val running = adb.shell("p=\$(cat $pidFile 2>/dev/null); tr '\\0' ' ' </proc/\$p/cmdline 2>/dev/null | grep -F -- ${quote(capture.directory)} >/dev/null", check = false)
+        val dir = quote(capture.directory)
+        // A persistent stop marker fences segment rollover before any signal is delivered.
+        // The supervisor is preferred: it signals its child once and waits for finalization.
+        val ownership = "owned() { p=\$(cat \"\$1\" 2>/dev/null); case \"\$p\" in ''|*[!0-9]*) return 1;; esac; " +
+            "tr '\\0' ' ' </proc/\$p/cmdline 2>/dev/null | grep -F -- $dir >/dev/null; }; "
+        adb.shell(ownership + "touch $dir/stop; if owned $dir/supervisor.pid; then kill -2 \"\$p\" 2>/dev/null || true; " +
+            "elif owned $dir/pid; then kill -2 \"\$p\" 2>/dev/null || true; fi")
+        repeat(80) {
+            val running = adb.shell(ownership + "owned $dir/supervisor.pid || owned $dir/pid", check = false)
             if (running.exitCode != 0) return
             delay(100)
         }
-        adb.shell(owned + "kill -9 \"\$p\" 2>/dev/null || true")
+        adb.shell(ownership + "for f in $dir/pid $dir/supervisor.pid; do if owned \"\$f\"; then kill -9 \"\$p\" 2>/dev/null || true; fi; done")
+        throw CommandFailure(CommandFailure.ACTION_FAILED, "Android recorder did not finalize within eight seconds")
     }
     private suspend fun cleanup(capture: Capture) {
         try { stop(capture) }
@@ -159,19 +176,34 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
         pending.remove(capture.directory)
         persist()
     }
-    private suspend fun collect(capture: Capture, remote: String, mime: String, kind: String): Result {
+    private suspend fun collect(capture: Capture): Result {
         stop(capture)
         capture.job.cancelAndJoin()
         val dir = File(cache, UUID.randomUUID().toString()).apply { mkdirs() }
         val file = File(dir, capture.name)
         try {
-            adb.pull("${capture.directory}/$remote", file)
-            if (file.length() == 0L) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android produced an empty $kind file")
+            val names = adb.shell("ls ${quote(capture.directory)}/chunk-*.mp4").text.lineSequence()
+                .map { it.trim().substringAfterLast('/') }
+                .filter { it.matches(Regex("chunk-[0-9]+\\.mp4")) }
+                .sortedBy { it.removePrefix("chunk-").removeSuffix(".mp4").toInt() }.toList()
+            val parts = names.map { name ->
+                File(dir, ".source-$name").also { adb.pull("${capture.directory}/$name", it) }
+            }
+            RecordingMuxer.combine(parts, file)
+            val reason = adb.shell("cat ${quote(capture.directory)}/completed", check = false).text.trim()
             adb.shell("rm -rf ${quote(capture.directory)}")
             pending.remove(capture.directory)
             persist()
-            return Result("Saved ${capture.name}", Artifact(file, mime, kind))
-        } catch (e: Exception) { dir.deleteRecursively(); throw e }
+            parts.forEach { it.delete() }
+            val note = if (parts.size > 1) " Combined ${parts.size} segments; native recorder restarts can leave brief capture gaps." else ""
+            return Result("Saved ${capture.name} ($reason).$note", Artifact(file, "video/mp4", "recording"))
+        } catch (e: CancellationException) {
+            dir.deleteRecursively()
+            throw e
+        } catch (e: Exception) {
+            dir.deleteRecursively()
+            throw CommandFailure(CommandFailure.ACTION_FAILED, "Could not finalize Android recording: ${e.message}. Source segments are retained for retry.")
+        }
     }
     private suspend fun install(file: File, app: String?, replace: Boolean): Result {
         val dir = directory()
@@ -231,7 +263,7 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
     suspend fun endSession(id: String) = mutex.withLock {
         val session = sessions.remove(id) ?: return@withLock
         session.logs?.let { it.job.cancelAndJoin(); it.file.parentFile?.deleteRecursively() }
-        session.recording?.let { runCatching { withTimeout(6000) { cleanup(it) } } }
+        session.recording?.let { runCatching { withTimeout(12000) { cleanup(it) } } }
     }
     suspend fun endAll() {
         val ids = mutex.withLock { sessions.keys.toList() }

@@ -364,3 +364,38 @@ compatibility. These checks do not establish completion of the entire product co
 - Shell/Python syntax and diff checks pass. These checks exercise Xvfb, headless agent operation,
   local IAM and local file storage. Production IAM/OBO/Briefcase, graphical Linux tray interaction,
   physical desktops, Wayland, x64 packages, other distributions and public publication remain open.
+
+
+### 2026-09-26 — Android recordings beyond the native segment limit
+
+- The on-device Android app previously ran one `screenrecord --time-limit 180` process. New
+  `RecordingTest#beyondNativeLimit` exercised an animated test fixture for 187 seconds and failed
+  against the installed old implementation: its MP4 stopped at 180,436 ms
+  (`/tmp/bridge-android-long-before.log`).
+- Added a session-owned native supervisor that sequences up to 180-second segments, stops at a
+  monotonic 30-minute deadline or a reserved file-size threshold, and fences rollover before Stop.
+  Child/supervisor signals require a command line containing the capture's unique directory.
+  The PTY HUP trap ends capture on transport loss; source directories remain tracked for recovery.
+- `RecordingMuxer` streams finalized H.264 samples through Android MediaExtractor/MediaMuxer
+  into one MP4 with increasing timestamps. It checks dimensions/codec configuration, bounds sample
+  buffers and final output size, observes cancellation and retains remote source segments after
+  finalization failure. The stop text discloses brief gaps between native recorder restarts.
+- The real long test passed with two segments, 187,824.544 ms, 2,278,619 bytes and 418 encoded
+  packets, including 14 packets after 181 seconds. Full host ffmpeg decoding passed using the
+  source time base; timestamps strictly increase. Evidence: `/tmp/bridge-android-long-after.log`,
+  ignored `target/android-recording/long.mp4`. This long run preceded the final interruptible-wait
+  cleanup fix; final-code rollover/finalization was rerun in the short lane below.
+- The broader lifecycle test exposed an existing logs-start readiness race: the following marker
+  could be sent before logcat was reading. Start now waits for stream data; the test uses a unique
+  marker so historical log lines cannot create a false pass. The test then exposed delayed HUP
+  handling while the supervisor slept. Its timer now waits interruptibly, allowing prompt cleanup.
+- Final installed-code `LocalAdbTest#realLocalDaemon` passed shell, APK install/uninstall, binary
+  transfer, cancellation, log marker capture, recording, session Stop, disconnect and owned-file
+  cleanup (`/tmp/bridge-android-segments-lifecycle-final.log`). The new manual
+  `e2e/android-recording.sh` short lane passed reduced-duration stop, multiple segments, full decode
+  and timestamp checks (`/tmp/bridge-android-final-recording-lane.log`, ignored
+  `target/android-recording/run-yPc6h1oR/`). No capture processes or remote directories remained.
+- All 64 Android JVM tests and debug/app-test APK builds pass. Only emulator-5554 (Android 16)
+  was modified. A connected Pixel 8 was inventoried, not exercised. Full 30-minute/1-GiB limits,
+  large APKs, long-video service/Briefcase transfer, physical recording and release signing remain
+  unverified. No production deployment or release is claimed.
