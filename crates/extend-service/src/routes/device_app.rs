@@ -30,18 +30,27 @@ async fn this_device(state: &AppState, auth: &DeviceAuth) -> AppResult<DeviceRow
 }
 
 fn owner(d: &DeviceRow) -> Member {
-    Member { kind: MemberKind::Carbon, id: d.owner_id.clone(), display_name: None }
+    Member {
+        kind: MemberKind::Carbon,
+        id: d.owner_id.clone(),
+        display_name: None,
+    }
 }
 
 async fn test_selection(state: &AppState, world: &World) -> Option<crate::iam::TestingSelection> {
     let id = world.environment_id?;
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM extend_global.test_environments WHERE environment_id = $1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten();
-    Some(crate::iam::TestingSelection { environment_id: id, name: name.unwrap_or_else(|| id.to_string()), secret: String::new() })
+    let name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM extend_global.test_environments WHERE environment_id = $1")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten();
+    Some(crate::iam::TestingSelection {
+        environment_id: id,
+        name: name.unwrap_or_else(|| id.to_string()),
+        secret: String::new(),
+    })
 }
 
 pub async fn me(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Response> {
@@ -51,7 +60,11 @@ pub async fn me(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Resp
         Some(s) => domain::load_session(&state, &auth.world, s).await?,
         None => None,
     };
-    let takeover: Option<Takeover> = session.as_ref().filter(|s| s.state == "paused").and_then(|s| s.takeover.clone()).and_then(|t| serde_json::from_value(t).ok());
+    let takeover: Option<Takeover> = session
+        .as_ref()
+        .filter(|s| s.state == "paused")
+        .and_then(|s| s.takeover.clone())
+        .and_then(|t| serde_json::from_value(t).ok());
     let sel = test_selection(&state, &auth.world).await;
     Ok(ok(
         "device_self",
@@ -88,19 +101,30 @@ pub async fn stop(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Re
     Ok(no_content())
 }
 
-pub async fn upload(State(state): State<Shared>, auth: DeviceAuth, Path(upload_id): Path<Uuid>, headers: HeaderMap, body: Bytes) -> AppResult<Response> {
+pub async fn upload(
+    State(state): State<Shared>,
+    auth: DeviceAuth,
+    Path(upload_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
     let h = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
-    let digest = h("x-content-sha256").ok_or_else(|| AppError::invalid("X-Content-SHA256 is required: the 64 lowercase hex SHA-256 of the bytes."))?;
-    let name = h("x-file-name").filter(|n| !n.is_empty() && n.len() <= 255 && !n.contains('/') && !n.contains('\\')).ok_or_else(|| {
-        AppError::invalid("X-File-Name is required: a plain file name up to 255 characters, no slashes.")
-    })?;
+    let digest = h("x-content-sha256")
+        .ok_or_else(|| AppError::invalid("X-Content-SHA256 is required: the 64 lowercase hex SHA-256 of the bytes."))?;
+    let name = h("x-file-name")
+        .filter(|n| !n.is_empty() && n.len() <= 255 && !n.contains('/') && !n.contains('\\'))
+        .ok_or_else(|| {
+            AppError::invalid("X-File-Name is required: a plain file name up to 255 characters, no slashes.")
+        })?;
     let content_type = h("content-type").unwrap_or_else(|| "application/octet-stream".into());
     if body.len() as u64 > MAX_ARTIFACT_BYTES {
         return Err(AppError::new(ErrorCode::PayloadTooLarge, "Files are limited to 1 GiB."));
     }
     let actual = ids::hex_lower(&Sha256::digest(&body));
     if actual != digest.to_ascii_lowercase() {
-        return Err(AppError::invalid(format!("X-Content-SHA256 {digest} does not match the bytes received ({actual}).")));
+        return Err(AppError::invalid(format!(
+            "X-Content-SHA256 {digest} does not match the bytes received ({actual})."
+        )));
     }
     let claimed = sqlx::query(sql!(
         "UPDATE {} SET received = true, name = $3, content_type = $4, size_bytes = $5
@@ -115,17 +139,25 @@ pub async fn upload(State(state): State<Shared>, auth: DeviceAuth, Path(upload_i
     .execute(&state.pool)
     .await?;
     if claimed.rows_affected() == 0 {
-        return Err(AppError::new(ErrorCode::FileNotFound, "That upload id is unknown, already used, expired, or belongs to another device."));
+        return Err(AppError::new(
+            ErrorCode::FileNotFound,
+            "That upload id is unknown, already used, expired, or belongs to another device.",
+        ));
     }
     let dir = state.cfg.data_dir.join("uploads");
     tokio::fs::create_dir_all(&dir).await.map_err(AppError::internal)?;
-    tokio::fs::write(dir.join(upload_id.to_string()), &body).await.map_err(AppError::internal)?;
+    tokio::fs::write(dir.join(upload_id.to_string()), &body)
+        .await
+        .map_err(AppError::internal)?;
     Ok(axum::http::StatusCode::CREATED.into_response())
 }
 
 pub async fn socket(State(state): State<Shared>, auth: DeviceAuth, ws: WebSocketUpgrade) -> AppResult<Response> {
     this_device(&state, &auth).await?;
-    Ok(ws.max_message_size(16 << 20).on_upgrade(move |socket| run(state, auth.world, auth.device_id, socket)).into_response())
+    Ok(ws
+        .max_message_size(16 << 20)
+        .on_upgrade(move |socket| run(state, auth.world, auth.device_id, socket))
+        .into_response())
 }
 
 fn text(frame: &ServiceFrame) -> Message {
@@ -135,25 +167,48 @@ fn text(frame: &ServiceFrame) -> Message {
 async fn greet(state: &AppState, world: &World, device_id: &str) -> Vec<ServiceFrame> {
     let mut frames = Vec::new();
     let sel = test_selection(state, world).await;
-    frames.push(ServiceFrame::Environment { environment: env_view(state, sel.as_ref(), world).await });
+    frames.push(ServiceFrame::Environment {
+        environment: env_view(state, sel.as_ref(), world).await,
+    });
     if let Ok(Some(d)) = domain::load_device(state, world, device_id).await
         && let (Some(sid), Some(si), Some(since)) = (&d.in_use_session, &d.in_use_silicon, d.in_use_since)
-            && let Ok(session_id) = sid.parse() {
-                frames.push(ServiceFrame::SessionStarted { target: None, session_id, silicon_id: si.clone(), since });
-            }
+        && let Ok(session_id) = sid.parse()
+    {
+        frames.push(ServiceFrame::SessionStarted {
+            target: None,
+            session_id,
+            silicon_id: si.clone(),
+            since,
+        });
+    }
     // Hosted devices: re-announce each, with its running session.
-    let hosted: Vec<DeviceRow> = sqlx::query_as(sql!("{} WHERE d.host_device_id = $1 AND d.removed_at IS NULL", domain::device_select(world)))
-        .bind(device_id)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+    let hosted: Vec<DeviceRow> = sqlx::query_as(sql!(
+        "{} WHERE d.host_device_id = $1 AND d.removed_at IS NULL",
+        domain::device_select(world)
+    ))
+    .bind(device_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
     for h in hosted {
         let Ok(id) = h.device_id.parse() else { continue };
-        frames.push(ServiceFrame::Attach { device_id: id, os: h.os(), name: h.name.clone(), address: h.address.clone(), removed: false });
+        frames.push(ServiceFrame::Attach {
+            device_id: id,
+            os: h.os(),
+            name: h.name.clone(),
+            address: h.address.clone(),
+            removed: false,
+        });
         if let (Some(sid), Some(si), Some(since)) = (&h.in_use_session, &h.in_use_silicon, h.in_use_since)
-            && let Ok(session_id) = sid.parse() {
-                frames.push(ServiceFrame::SessionStarted { target: h.device_id.parse().ok(), session_id, silicon_id: si.clone(), since });
-            }
+            && let Ok(session_id) = sid.parse()
+        {
+            frames.push(ServiceFrame::SessionStarted {
+                target: h.device_id.parse().ok(),
+                session_id,
+                silicon_id: si.clone(),
+                since,
+            });
+        }
     }
     frames
 }
@@ -162,7 +217,13 @@ async fn run(state: Shared, world: World, device_id: String, socket: WebSocket) 
     let key = (world.schema.clone(), device_id.clone());
     let (conn_id, mut rx) = state.hub.register(key.clone()).await;
     let (mut sink, mut stream) = socket.split();
-    let _ = sqlx::query(sql!("UPDATE {} SET last_seen_at = now() WHERE device_id = $1", world.t("devices"))).bind(&device_id).execute(&state.pool).await;
+    let _ = sqlx::query(sql!(
+        "UPDATE {} SET last_seen_at = now() WHERE device_id = $1",
+        world.t("devices")
+    ))
+    .bind(&device_id)
+    .execute(&state.pool)
+    .await;
     tracing::info!(world = %world.schema, device_id, "device connected");
     for f in greet(&state, &world, &device_id).await {
         if sink.send(text(&f)).await.is_err() {
@@ -173,7 +234,12 @@ async fn run(state: Shared, world: World, device_id: String, socket: WebSocket) 
     let mut last_heard = Instant::now();
     let mut last_seen_write = Instant::now();
     let mut nonce = 0u64;
-    let close_with = |code: u16, reason: &'static str| Message::Close(Some(CloseFrame { code, reason: reason.into() }));
+    let close_with = |code: u16, reason: &'static str| {
+        Message::Close(Some(CloseFrame {
+            code,
+            reason: reason.into(),
+        }))
+    };
     loop {
         tokio::select! {
             out = rx.recv() => {
@@ -226,7 +292,13 @@ async fn run(state: Shared, world: World, device_id: String, socket: WebSocket) 
         }
     }
     if state.hub.unregister(&key, conn_id).await {
-        let _ = sqlx::query(sql!("UPDATE {} SET last_seen_at = now() WHERE device_id = $1", world.t("devices"))).bind(&device_id).execute(&state.pool).await;
+        let _ = sqlx::query(sql!(
+            "UPDATE {} SET last_seen_at = now() WHERE device_id = $1",
+            world.t("devices")
+        ))
+        .bind(&device_id)
+        .execute(&state.pool)
+        .await;
     }
     tracing::info!(world = %world.schema, device_id, "device disconnected");
 }
@@ -240,20 +312,40 @@ fn allowed(os: extend_protocol::DeviceOs, caps: Vec<Capability>) -> Vec<Capabili
 }
 
 fn state_of(setup: &Setup) -> &'static str {
-    if setup.state == SetupState::Complete || setup.steps.is_empty() { "ready" } else { "setup" }
+    if setup.state == SetupState::Complete || setup.steps.is_empty() {
+        "ready"
+    } else {
+        "setup"
+    }
 }
 
 /// Handles one frame from a device. `Err(close_code)` closes the socket.
-async fn handle(state: &AppState, world: &World, device_id: &str, key: &(String, String), frame: DeviceFrame) -> Result<(), u16> {
+async fn handle(
+    state: &AppState,
+    world: &World,
+    device_id: &str,
+    key: &(String, String),
+    frame: DeviceFrame,
+) -> Result<(), u16> {
     match frame {
         DeviceFrame::Hello(h) => {
             if !version_at_least(&h.app_version, &state.cfg.device_app_min_version) {
                 return Err(close::UPGRADE_REQUIRED);
             }
-            let Ok(Some(d)) = domain::load_device(state, world, device_id).await else { return Err(close::UNAUTHORIZED) };
+            let Ok(Some(d)) = domain::load_device(state, world, device_id).await else {
+                return Err(close::UNAUTHORIZED);
+            };
             // The OS was fixed at pairing; a hello can't turn a phone into a TV, except the phone/TV
             // pair, which the same Android app detects at runtime.
-            let os = if matches!((d.os(), h.os), (extend_protocol::DeviceOs::Android, extend_protocol::DeviceOs::AndroidTv) | (extend_protocol::DeviceOs::AndroidTv, extend_protocol::DeviceOs::Android)) { h.os } else { d.os() };
+            let os = if matches!(
+                (d.os(), h.os),
+                (extend_protocol::DeviceOs::Android, extend_protocol::DeviceOs::AndroidTv)
+                    | (extend_protocol::DeviceOs::AndroidTv, extend_protocol::DeviceOs::Android)
+            ) {
+                h.os
+            } else {
+                d.os()
+            };
             let caps = allowed(os, h.capabilities);
             let _ = sqlx::query(sql!(
                 "UPDATE {} SET os = $2, os_version = $3, model = $4, app_version = $5, agent_device_version = $6, capabilities = $7, missing = $8,
@@ -274,36 +366,44 @@ async fn handle(state: &AppState, world: &World, device_id: &str, key: &(String,
             .await;
         }
         DeviceFrame::SetupProgress { setup } => {
-            let _ = sqlx::query(sql!("UPDATE {} SET setup = $2, state = $3 WHERE device_id = $1", world.t("devices")))
-                .bind(device_id)
-                .bind(serde_json::to_value(&setup).unwrap_or_default())
-                .bind(state_of(&setup))
-                .execute(&state.pool)
-                .await;
+            let _ = sqlx::query(sql!(
+                "UPDATE {} SET setup = $2, state = $3 WHERE device_id = $1",
+                world.t("devices")
+            ))
+            .bind(device_id)
+            .bind(serde_json::to_value(&setup).unwrap_or_default())
+            .bind(state_of(&setup))
+            .execute(&state.pool)
+            .await;
         }
         DeviceFrame::Result(outcome) => state.hub.resolve(key, outcome).await,
         DeviceFrame::Stop { target: Some(t) } => {
             if let Ok(Some(h)) = domain::load_device(state, world, t.as_str()).await
-                && h.host_device_id.as_deref() == Some(device_id) {
-                    let _ = stop_running(state, world, &h).await;
-                }
+                && h.host_device_id.as_deref() == Some(device_id)
+            {
+                let _ = stop_running(state, world, &h).await;
+            }
         }
         DeviceFrame::TakeoverDone { target: Some(t) } => {
             if let Ok(Some(h)) = domain::load_device(state, world, t.as_str()).await
                 && h.host_device_id.as_deref() == Some(device_id)
-                    && let Some(sid) = &h.in_use_session {
-                        let _ = super::sessions::release(state, world, sid, &owner(&h)).await;
-                    }
+                && let Some(sid) = &h.in_use_session
+            {
+                let _ = super::sessions::release(state, world, sid, &owner(&h)).await;
+            }
         }
         DeviceFrame::Stop { target: None } => {
             if let Ok(Some(d)) = domain::load_device(state, world, device_id).await {
                 let _ = stop_running(state, world, &d).await;
                 // A host's Stop also stops what runs on the devices it carries.
-                let hosted: Vec<DeviceRow> = sqlx::query_as(sql!("{} WHERE d.host_device_id = $1 AND d.removed_at IS NULL", domain::device_select(world)))
-                    .bind(device_id)
-                    .fetch_all(&state.pool)
-                    .await
-                    .unwrap_or_default();
+                let hosted: Vec<DeviceRow> = sqlx::query_as(sql!(
+                    "{} WHERE d.host_device_id = $1 AND d.removed_at IS NULL",
+                    domain::device_select(world)
+                ))
+                .bind(device_id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
                 for h in hosted {
                     let _ = stop_running(state, world, &h).await;
                 }
@@ -311,19 +411,32 @@ async fn handle(state: &AppState, world: &World, device_id: &str, key: &(String,
         }
         DeviceFrame::TakeoverDone { target: None } => {
             if let Ok(Some(d)) = domain::load_device(state, world, device_id).await
-                && let Some(sid) = &d.in_use_session {
-                    let _ = super::sessions::release(state, world, sid, &owner(&d)).await;
-                }
+                && let Some(sid) = &d.in_use_session
+            {
+                let _ = super::sessions::release(state, world, sid, &owner(&d)).await;
+            }
         }
         DeviceFrame::Attached(a) => {
             let child = a.device_id.to_string();
-            let Ok(Some(d)) = domain::load_device(state, world, &child).await else { return Ok(()) };
+            let Ok(Some(d)) = domain::load_device(state, world, &child).await else {
+                return Ok(());
+            };
             if d.host_device_id.as_deref() != Some(device_id) {
                 tracing::warn!(device_id, child, "host reported a device it doesn't carry");
                 return Ok(());
             }
             let caps = allowed(d.os(), a.capabilities.clone());
-            state.hub.set_attached((world.schema.clone(), child.clone()), AttachedState { online: a.online, capabilities: caps.clone(), missing: a.missing.clone() }).await;
+            state
+                .hub
+                .set_attached(
+                    (world.schema.clone(), child.clone()),
+                    AttachedState {
+                        online: a.online,
+                        capabilities: caps.clone(),
+                        missing: a.missing.clone(),
+                    },
+                )
+                .await;
             let _ = sqlx::query(sql!(
                 "UPDATE {} SET os_version = COALESCE($2, os_version), model = COALESCE($3, model), capabilities = $4, missing = $5, setup = $6, state = $7,
                         last_seen_at = CASE WHEN $8 THEN now() ELSE last_seen_at END WHERE device_id = $1",

@@ -52,9 +52,15 @@ impl AppState {
         hits.retain(|t| t.elapsed() < window);
         if hits.len() >= max {
             let wait = window.saturating_sub(hits[0].elapsed()).as_secs() + 1;
-            return Err(AppError::new(ErrorCode::RateLimited, format!("Too many {what}; the limit is {max} per {} minutes.", window.as_secs() / 60))
-                .hint(format!("Retry in {wait} seconds."))
-                .details(serde_json::json!({"retry_after_s": wait})));
+            return Err(AppError::new(
+                ErrorCode::RateLimited,
+                format!(
+                    "Too many {what}; the limit is {max} per {} minutes.",
+                    window.as_secs() / 60
+                ),
+            )
+            .hint(format!("Retry in {wait} seconds."))
+            .details(serde_json::json!({"retry_after_s": wait})));
         }
         hits.push(std::time::Instant::now());
         Ok(())
@@ -67,9 +73,15 @@ impl AppState {
             let recent: Vec<_> = hits.iter().filter(|t| t.elapsed() < window).collect();
             if recent.len() >= max {
                 let wait = window.saturating_sub(recent[0].elapsed()).as_secs() + 1;
-                return Err(AppError::new(ErrorCode::RateLimited, format!("Too many {what}; the limit is {max} per {} minutes.", window.as_secs() / 60))
-                    .hint(format!("Retry in {wait} seconds."))
-                    .details(serde_json::json!({"retry_after_s": wait})));
+                return Err(AppError::new(
+                    ErrorCode::RateLimited,
+                    format!(
+                        "Too many {what}; the limit is {max} per {} minutes.",
+                        window.as_secs() / 60
+                    ),
+                )
+                .hint(format!("Retry in {wait} seconds."))
+                .details(serde_json::json!({"retry_after_s": wait})));
             }
         }
         Ok(())
@@ -86,13 +98,26 @@ impl AppState {
             return Ok((World::production(), None));
         };
         let digest = ids::secret_digest(secret);
-        let cached = self.selections.read().await.get(&digest).filter(|(at, _)| at.elapsed().as_secs() < 60).map(|(_, s)| s.clone());
+        let cached = self
+            .selections
+            .read()
+            .await
+            .get(&digest)
+            .filter(|(at, _)| at.elapsed().as_secs() < 60)
+            .map(|(_, s)| s.clone());
         let sel = match cached {
             Some(s) => s,
             None => {
                 let (environment_id, name) = self.iam.select_testing(secret).await?;
-                let s = TestingSelection { environment_id, name, secret: secret.to_owned() };
-                self.selections.write().await.insert(digest, (std::time::Instant::now(), s.clone()));
+                let s = TestingSelection {
+                    environment_id,
+                    name,
+                    secret: secret.to_owned(),
+                };
+                self.selections
+                    .write()
+                    .await
+                    .insert(digest, (std::time::Instant::now(), s.clone()));
                 s
             }
         };
@@ -123,14 +148,21 @@ impl AppState {
             self.ready_worlds.write().await.insert(world.schema.clone());
         }
         // Honeycomb decides expiry; Extend only reports activity.
-        let _ = sqlx::query("UPDATE extend_global.test_environments SET last_activity_at = now() WHERE environment_id = $1")
-            .bind(sel.environment_id)
-            .execute(&self.pool)
-            .await;
+        let _ = sqlx::query(
+            "UPDATE extend_global.test_environments SET last_activity_at = now() WHERE environment_id = $1",
+        )
+        .bind(sel.environment_id)
+        .execute(&self.pool)
+        .await;
         Ok((world, Some(sel)))
     }
 
-    pub async fn authorize(&self, token: &str, team: Option<&str>, sel: Option<&TestingSelection>) -> AppResult<Principal> {
+    pub async fn authorize(
+        &self,
+        token: &str,
+        team: Option<&str>,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<Principal> {
         let env = sel.map(|s| s.environment_id);
         if let Some(p) = self.auth_cache.get(token, team, env).await {
             return Ok(p);
@@ -180,16 +212,25 @@ impl Auth {
         if self.p.is_carbon() {
             Ok(())
         } else {
-            Err(AppError::new(ErrorCode::CarbonOnly, format!("Only Carbons can do this; {} is a Silicon.", self.p.id()))
-                .hint("Ask the Carbon who owns the device to do it on extend.teamofsilicons.com or with the extend CLI."))
+            Err(AppError::new(
+                ErrorCode::CarbonOnly,
+                format!("Only Carbons can do this; {} is a Silicon.", self.p.id()),
+            )
+            .hint("Ask the Carbon who owns the device to do it on extend.teamofsilicons.com or with the extend CLI."))
         }
     }
     pub fn require_silicon(&self) -> AppResult<()> {
         if self.p.is_silicon() {
             Ok(())
         } else {
-            Err(AppError::new(ErrorCode::SiliconOnly, format!("Only Silicons use devices through sessions; {} is a Carbon.", self.p.id()))
-                .hint("Give a Silicon access with `extend device access grant <device_id> <silicon_id>`."))
+            Err(AppError::new(
+                ErrorCode::SiliconOnly,
+                format!(
+                    "Only Silicons use devices through sessions; {} is a Carbon.",
+                    self.p.id()
+                ),
+            )
+            .hint("Give a Silicon access with `extend device access grant <device_id> <silicon_id>`."))
         }
     }
 }
@@ -204,11 +245,15 @@ impl FromRequestParts<Shared> for Auth {
         })?;
         let team = header(parts, TEAM_HEADER).map(str::trim).filter(|s| !s.is_empty());
         if let Some(t) = team
-            && (t.len() > 128 || !t.bytes().all(|b| b.is_ascii_graphic())) {
-                return Err(AppError::invalid("X-Org-ID must be one team handle."));
-            }
+            && (t.len() > 128 || !t.bytes().all(|b| b.is_ascii_graphic()))
+        {
+            return Err(AppError::invalid("X-Org-ID must be one team handle."));
+        }
         let p = state.authorize(token, team, sel.as_ref()).await?;
-        let isi = header(parts, "x-silicon-isi").map(str::trim).filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control)).map(str::to_owned);
+        let isi = header(parts, "x-silicon-isi")
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control))
+            .map(str::to_owned);
         Ok(Self { world, sel, p, isi })
     }
 }
@@ -226,10 +271,18 @@ impl FromRequestParts<Shared> for DeviceAuth {
             .and_then(|v| v.strip_prefix("Extend-Device "))
             .map(str::trim)
             .filter(|c| ids::is_secret(ids::DEVICE_CREDENTIAL_PREFIX, c))
-            .ok_or_else(|| AppError::new(ErrorCode::Unauthorized, "Send the device credential as Authorization: Extend-Device <credential>."))?;
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::Unauthorized,
+                    "Send the device credential as Authorization: Extend-Device <credential>.",
+                )
+            })?;
         let (world, device_id) = device_by_credential(state, cred).await?.ok_or_else(|| {
-            AppError::new(ErrorCode::Unauthorized, "This device credential is not paired (the pair was revoked, removed or expired).")
-                .hint("Show the pairing screen and pair the device again.")
+            AppError::new(
+                ErrorCode::Unauthorized,
+                "This device credential is not paired (the pair was revoked, removed or expired).",
+            )
+            .hint("Show the pairing screen and pair the device again.")
         })?;
         Ok(Self { world, device_id })
     }
@@ -239,9 +292,10 @@ impl FromRequestParts<Shared> for DeviceAuth {
 pub async fn device_by_credential(state: &AppState, cred: &str) -> AppResult<Option<(World, String)>> {
     let digest = ids::secret_digest(cred);
     let mut worlds = vec![World::production()];
-    let envs: Vec<(Uuid,)> = sqlx::query_as("SELECT environment_id FROM extend_global.test_environments WHERE state = 'ready'")
-        .fetch_all(&state.pool)
-        .await?;
+    let envs: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT environment_id FROM extend_global.test_environments WHERE state = 'ready'")
+            .fetch_all(&state.pool)
+            .await?;
     worlds.extend(envs.into_iter().map(|(id,)| World::test(id)));
     for world in worlds {
         let found: Option<(String,)> = sqlx::query_as(sql!(

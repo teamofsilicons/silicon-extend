@@ -29,13 +29,20 @@ async fn recheck(state: &AppState, world: &World, member: &str, event: &IamEvent
     };
     if kind == Some(MemberKind::Silicon) {
         // Running sessions: re-authorize with the token the Silicon last used.
-        let running: Vec<(String, String)> =
-            sqlx::query_as(sql!("SELECT session_id, team FROM {} WHERE silicon_id = $1 AND state <> 'ended'", world.t("sessions")))
-                .bind(member)
-                .fetch_all(&state.pool)
-                .await?;
+        let running: Vec<(String, String)> = sqlx::query_as(sql!(
+            "SELECT session_id, team FROM {} WHERE silicon_id = $1 AND state <> 'ended'",
+            world.t("sessions")
+        ))
+        .bind(member)
+        .fetch_all(&state.pool)
+        .await?;
         for (sid, team) in running {
-            let stored = state.session_principals.read().await.get(&(world.schema.clone(), sid.clone())).cloned();
+            let stored = state
+                .session_principals
+                .read()
+                .await
+                .get(&(world.schema.clone(), sid.clone()))
+                .cloned();
             let still_ok = if removed(event, member, &team) {
                 false
             } else {
@@ -67,21 +74,35 @@ async fn recheck(state: &AppState, world: &World, member: &str, event: &IamEvent
         .await?;
         for (device_id, team) in grants {
             if !still_member(state, world, event, &team, member, None).await {
-                sqlx::query(sql!("DELETE FROM {} WHERE device_id = $1 AND silicon_id = $2", world.t("device_access")))
-                    .bind(&device_id)
-                    .bind(member)
-                    .execute(&state.pool)
-                    .await?;
-                domain::log(state, world, &device_id, &domain::system_member(), "access_revoked", None, serde_json::json!({"silicon_id": member, "reason": "left_team"})).await;
+                sqlx::query(sql!(
+                    "DELETE FROM {} WHERE device_id = $1 AND silicon_id = $2",
+                    world.t("device_access")
+                ))
+                .bind(&device_id)
+                .bind(member)
+                .execute(&state.pool)
+                .await?;
+                domain::log(
+                    state,
+                    world,
+                    &device_id,
+                    &domain::system_member(),
+                    "access_revoked",
+                    None,
+                    serde_json::json!({"silicon_id": member, "reason": "left_team"}),
+                )
+                .await;
             }
         }
     } else if kind == Some(MemberKind::Carbon) {
         // An owner who left a team takes their devices in that team with them.
-        let owned: Vec<(String, String)> =
-            sqlx::query_as(sql!("SELECT device_id, team FROM {} WHERE owner_id = $1 AND removed_at IS NULL AND host_device_id IS NULL", world.t("devices")))
-                .bind(member)
-                .fetch_all(&state.pool)
-                .await?;
+        let owned: Vec<(String, String)> = sqlx::query_as(sql!(
+            "SELECT device_id, team FROM {} WHERE owner_id = $1 AND removed_at IS NULL AND host_device_id IS NULL",
+            world.t("devices")
+        ))
+        .bind(member)
+        .fetch_all(&state.pool)
+        .await?;
         for (device_id, team) in owned {
             if !still_member(state, world, event, &team, member, None).await {
                 domain::unpair(state, world, &device_id, EndReason::LeftTeam, &domain::system_member()).await?;
@@ -118,12 +139,21 @@ async fn still_member(
         Some((p, sel)) => (Some(p), sel),
         None => (None, None),
     };
-    state.iam.member_active(team, member, p.as_ref(), sel.as_ref()).await.unwrap_or(true)
+    state
+        .iam
+        .member_active(team, member, p.as_ref(), sel.as_ref())
+        .await
+        .unwrap_or(true)
 }
 
 /// A signed-in member of `team` (other than `member`) whose login can read the team's directory:
 /// a running session's Silicon, else the most recent cached authorization.
-async fn reader(state: &AppState, world: &World, team: &str, member: &str) -> Option<(Principal, Option<TestingSelection>)> {
+async fn reader(
+    state: &AppState,
+    world: &World,
+    team: &str,
+    member: &str,
+) -> Option<(Principal, Option<TestingSelection>)> {
     let usable = |p: &Principal| p.id() != member && p.teams.iter().any(|t| t == team);
     let from_sessions = state
         .session_principals
@@ -138,7 +168,16 @@ async fn reader(state: &AppState, world: &World, team: &str, member: &str) -> Op
     let p = state.auth_cache.latest(world.environment_id, usable).await?;
     let sel = match world.environment_id {
         None => None,
-        Some(env) => Some(state.selections.read().await.values().map(|(_, s)| s).find(|s| s.environment_id == env).cloned()?),
+        Some(env) => Some(
+            state
+                .selections
+                .read()
+                .await
+                .values()
+                .map(|(_, s)| s)
+                .find(|s| s.environment_id == env)
+                .cloned()?,
+        ),
     };
     Some((p, sel))
 }

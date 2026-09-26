@@ -13,7 +13,11 @@ use crate::error::{AppError, AppResult};
 use crate::state::{AppState, Auth, Shared};
 
 async fn postmark(state: &AppState, report: &ReportInput, id: Uuid, member: &str) -> Result<(), String> {
-    let token = state.cfg.postmark_token.as_deref().ok_or("no Postmark token configured")?;
+    let token = state
+        .cfg
+        .postmark_token
+        .as_deref()
+        .ok_or("no Postmark token configured")?;
     let body = serde_json::json!({
         "From": "bugs@teamofsilicons.com",
         "To": state.cfg.report_recipients.join(","),
@@ -48,16 +52,33 @@ async fn postmark(state: &AppState, report: &ReportInput, id: Uuid, member: &str
     }
 }
 
-pub async fn report(State(state): State<Shared>, auth: Auth, headers: HeaderMap, Body(input): Body<ReportInput>) -> AppResult<Response> {
+pub async fn report(
+    State(state): State<Shared>,
+    auth: Auth,
+    headers: HeaderMap,
+    Body(input): Body<ReportInput>,
+) -> AppResult<Response> {
     let n = input.message.chars().count();
     if n == 0 || n > 60_000 {
-        return Err(AppError::invalid(format!("A report message must be 1–60000 characters; it is {n}.")));
+        return Err(AppError::invalid(format!(
+            "A report message must be 1–60000 characters; it is {n}."
+        )));
     }
     if let Some(pr) = &input.pr
-        && !(pr.starts_with("https://") || pr.starts_with("http://")) {
-            return Err(AppError::invalid("--pr must be a link to the pull request, like https://github.com/teamofsilicons/silicon-extend/pull/12."));
-        }
-    state.rate_limit(format!("report:{}", auth.p.id()), 10, Duration::from_secs(3600), "bug reports").await?;
+        && !(pr.starts_with("https://") || pr.starts_with("http://"))
+    {
+        return Err(AppError::invalid(
+            "--pr must be a link to the pull request, like https://github.com/teamofsilicons/silicon-extend/pull/12.",
+        ));
+    }
+    state
+        .rate_limit(
+            format!("report:{}", auth.p.id()),
+            10,
+            Duration::from_secs(3600),
+            "bug reports",
+        )
+        .await?;
     let hash = hash_json(&input);
     let st = state.clone();
     let world = auth.world.clone();
@@ -108,17 +129,38 @@ pub async fn report(State(state): State<Shared>, auth: Auth, headers: HeaderMap,
     .await
 }
 
-const TELEMETRY_FIELDS: &[&str] =
-    &["source", "event", "step", "success", "duration_ms", "error_code", "command", "device_os", "session_id", "request_id", "client_version"];
+const TELEMETRY_FIELDS: &[&str] = &[
+    "source",
+    "event",
+    "step",
+    "success",
+    "duration_ms",
+    "error_code",
+    "command",
+    "device_os",
+    "session_id",
+    "request_id",
+    "client_version",
+];
 
-pub async fn telemetry(State(state): State<Shared>, auth: Auth, headers: HeaderMap, body: axum::body::Bytes) -> AppResult<Response> {
+pub async fn telemetry(
+    State(state): State<Shared>,
+    auth: Auth,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> AppResult<Response> {
     if headers.get("x-extend-telemetry").and_then(|v| v.to_str().ok()) == Some("off") {
         return Ok(no_content());
     }
     let data: serde_json::Value = super::parse_envelope(&body)?;
-    let obj = data.as_object().ok_or_else(|| AppError::invalid("telemetry data must be an object"))?;
+    let obj = data
+        .as_object()
+        .ok_or_else(|| AppError::invalid("telemetry data must be an object"))?;
     if let Some(k) = obj.keys().find(|k| !TELEMETRY_FIELDS.contains(&k.as_str())) {
-        return Err(AppError::invalid(format!("telemetry field {k:?} is not accepted; allowed: {}", TELEMETRY_FIELDS.join(", "))));
+        return Err(AppError::invalid(format!(
+            "telemetry field {k:?} is not accepted; allowed: {}",
+            TELEMETRY_FIELDS.join(", ")
+        )));
     }
     for required in ["source", "event", "step", "success", "duration_ms"] {
         if !obj.contains_key(required) {
@@ -126,11 +168,14 @@ pub async fn telemetry(State(state): State<Shared>, auth: Auth, headers: HeaderM
         }
     }
     tracing::info!(target: "telemetry", member = auth.p.id(), world = %auth.world.schema, event = %data, "telemetry");
-    sqlx::query(sql!("INSERT INTO {} (member_id, event) VALUES ($1, $2)", auth.world.t("telemetry")))
-        .bind(auth.p.id())
-        .bind(&data)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(sql!(
+        "INSERT INTO {} (member_id, event) VALUES ($1, $2)",
+        auth.world.t("telemetry")
+    ))
+    .bind(auth.p.id())
+    .bind(&data)
+    .execute(&state.pool)
+    .await?;
     let _ = envelope::<()>;
     Ok(no_content())
 }

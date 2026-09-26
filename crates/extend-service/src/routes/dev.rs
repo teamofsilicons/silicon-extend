@@ -3,9 +3,9 @@
 
 use std::collections::HashMap;
 
+use axum::Form;
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::Form;
 use extend_protocol::{ErrorCode, ids};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -18,7 +18,12 @@ use crate::revocation;
 use crate::state::{AppState, Shared};
 
 fn local(state: &AppState) -> AppResult<&LocalIam> {
-    state.local_iam.as_deref().ok_or_else(|| AppError::new(ErrorCode::UnknownCommand, "Development routes exist only with EXTEND_IAM_MODE=local."))
+    state.local_iam.as_deref().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::UnknownCommand,
+            "Development routes exist only with EXTEND_IAM_MODE=local.",
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -38,7 +43,11 @@ pub async fn member(State(state): State<Shared>, Body(input): Body<MemberChange>
     if ids::member_kind(&input.id).is_none() {
         return Err(AppError::invalid("id must be a member id like c:alice or si:chef"));
     }
-    let event_type = if input.revoke { "session.revoked.v1" } else { "organization.member.removed.v1" };
+    let event_type = if input.revoke {
+        "session.revoked.v1"
+    } else {
+        "organization.member.removed.v1"
+    };
     iam.set_member(&input.id, input.teams.clone()).await;
     if input.revoke {
         iam.revoke_member(&input.id).await;
@@ -65,7 +74,9 @@ pub struct TestApp {
 pub async fn test_app(State(state): State<Shared>, Body(input): Body<TestApp>) -> AppResult<Response> {
     local(&state)?;
     if !ids::is_secret(ids::APP_SECRET_PREFIX, &input.secret) {
-        return Err(AppError::invalid("secret must be ask_ followed by 43 base64url characters"));
+        return Err(AppError::invalid(
+            "secret must be ask_ followed by 43 base64url characters",
+        ));
     }
     sqlx::query(
         "INSERT INTO extend_global.local_test_apps (secret_digest, environment_id) VALUES ($1, $2)
@@ -80,11 +91,20 @@ pub async fn test_app(State(state): State<Shared>, Body(input): Body<TestApp>) -
 }
 
 /// A stand-in for IAM's consent screen: pick a member, get sent back with a short-lived token.
-pub async fn authorize_page(State(state): State<Shared>, Query(q): Query<HashMap<String, String>>) -> AppResult<Response> {
+pub async fn authorize_page(
+    State(state): State<Shared>,
+    Query(q): Query<HashMap<String, String>>,
+) -> AppResult<Response> {
     local(&state)?;
     let hidden: String = q
         .iter()
-        .map(|(k, v)| format!(r#"<input type="hidden" name="{}" value="{}">"#, html_escape(k), html_escape(v)))
+        .map(|(k, v)| {
+            format!(
+                r#"<input type="hidden" name="{}" value="{}">"#,
+                html_escape(k),
+                html_escape(v)
+            )
+        })
         .collect();
     Ok(Html(format!(
         r#"<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -96,7 +116,10 @@ pub async fn authorize_page(State(state): State<Shared>, Query(q): Query<HashMap
     .into_response())
 }
 
-pub async fn authorize_submit(State(state): State<Shared>, Form(mut form): Form<HashMap<String, String>>) -> AppResult<Response> {
+pub async fn authorize_submit(
+    State(state): State<Shared>,
+    Form(mut form): Form<HashMap<String, String>>,
+) -> AppResult<Response> {
     local(&state)?;
     let member = form.remove("member").unwrap_or_default();
     if ids::member_kind(member.trim()).is_none() {
@@ -128,5 +151,8 @@ pub async fn tings(State(state): State<Shared>) -> AppResult<Response> {
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

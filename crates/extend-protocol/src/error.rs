@@ -60,13 +60,22 @@ impl ErrorCode {
         match self {
             NotSignedIn | TokenExpired | SltInvalid | Unauthorized | TestingSecretInvalid => 401,
             NotATeamMember | CarbonOnly | SiliconOnly | NotOwner | NoAccess | AccessRemoved | NotSessionOwner => 403,
-            DeviceNotFound | SessionNotFound | FileNotFound | RequestNotFound | EnrollmentNotFound | PairingCodeInvalid
-            | UnknownCommand => 404,
-            InvalidInput | ConfirmationRequired | NoSession | UnsupportedOnDevice | ApiVersionUnsupported | ApiVersionMismatch => {
-                if matches!(self, ApiVersionUnsupported | ApiVersionMismatch) { 400 } else { 422 }
+            DeviceNotFound | SessionNotFound | FileNotFound | RequestNotFound | EnrollmentNotFound
+            | PairingCodeInvalid | UnknownCommand => 404,
+            InvalidInput
+            | ConfirmationRequired
+            | NoSession
+            | UnsupportedOnDevice
+            | ApiVersionUnsupported
+            | ApiVersionMismatch => {
+                if matches!(self, ApiVersionUnsupported | ApiVersionMismatch) {
+                    400
+                } else {
+                    422
+                }
             }
-            DeviceInUse | DeviceNotInUse | DeviceNotReady | SessionEnded | Conflict | NotSelfDestructing | TestDeviceLimit
-            | TestEnvironmentLimit => 409,
+            DeviceInUse | DeviceNotInUse | DeviceNotReady | SessionEnded | Conflict | NotSelfDestructing
+            | TestDeviceLimit | TestEnvironmentLimit => 409,
             VersionConflict => 412,
             TestOnly => 400,
             PayloadTooLarge => 413,
@@ -88,8 +97,10 @@ impl ErrorCode {
             UnknownCommand | InvalidInput | ConfirmationRequired | NoSession => 2,
             NotSignedIn | TokenExpired | SltInvalid | Unauthorized => 3,
             NotATeamMember | CarbonOnly | SiliconOnly | NotOwner | NoAccess | AccessRemoved | NotSessionOwner => 4,
-            DeviceNotFound | SessionNotFound | FileNotFound | RequestNotFound | EnrollmentNotFound | PairingCodeInvalid => 5,
-            DeviceInUse | DeviceNotInUse | DeviceNotReady | SessionEnded | VersionConflict | Conflict | NotSelfDestructing => 6,
+            DeviceNotFound | SessionNotFound | FileNotFound | RequestNotFound | EnrollmentNotFound
+            | PairingCodeInvalid => 5,
+            DeviceInUse | DeviceNotInUse | DeviceNotReady | SessionEnded | VersionConflict | Conflict
+            | NotSelfDestructing => 6,
             DeviceOffline => 7,
             SessionPaused => 8,
             CommandTimeout => 9,
@@ -103,7 +114,10 @@ impl ErrorCode {
     }
 
     pub fn as_str(self) -> String {
-        serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
     }
 }
 
@@ -129,7 +143,10 @@ impl ApiError {
             code,
             message: message.into(),
             hint: None,
-            docs_url: Some(format!("https://docs.extend.teamofsilicons.com/errors#{}", code.as_str())),
+            docs_url: Some(format!(
+                "https://docs.extend.teamofsilicons.com/errors#{}",
+                code.as_str()
+            )),
             request_id: String::new(),
             details: serde_json::Value::Null,
         }

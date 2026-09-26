@@ -16,7 +16,9 @@ use crate::model::{Attachment, EndReason, MissingCapability, Setup, TestingEnvir
 pub enum DeviceFrame {
     /// First frame after connecting, and again whenever capabilities change.
     Hello(Hello),
-    SetupProgress { setup: Setup },
+    SetupProgress {
+        setup: Setup,
+    },
     /// The answer to a `command` with the same id.
     Result(CommandOutcome),
     /// The Carbon tapped Stop. `target` names a device this host carries; absent means this device
@@ -32,7 +34,9 @@ pub enum DeviceFrame {
     },
     /// A device paired through this host changed state.
     Attached(AttachedStatus),
-    Pong { nonce: u64 },
+    Pong {
+        nonce: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,7 +100,9 @@ pub struct ProducedFile {
 pub enum ServiceFrame {
     /// Run a command. `target` is set when the command is for a device paired through this host.
     Command(CommandFrame),
-    Cancel { id: Uuid },
+    Cancel {
+        id: Uuid,
+    },
     SessionStarted {
         #[serde(default)]
         target: Option<DeviceId>,
@@ -137,13 +143,22 @@ pub enum ServiceFrame {
         removed: bool,
     },
     /// A setup code the Carbon entered for an attached device (Apple TV).
-    SetupCode { device_id: DeviceId, code: String },
-    Environment { environment: Option<TestingEnvironment> },
+    SetupCode {
+        device_id: DeviceId,
+        code: String,
+    },
+    Environment {
+        environment: Option<TestingEnvironment>,
+    },
     /// The pair ended; forget the credential and show the pairing screen.
-    Unpaired { reason: EndReason },
+    Unpaired {
+        reason: EndReason,
+    },
     /// A newer connection replaced this one; close without reconnecting.
     Superseded,
-    Ping { nonce: u64 },
+    Ping {
+        nonce: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -178,7 +193,9 @@ pub enum EnrollmentFrame {
         #[serde(default)]
         environment: Option<TestingEnvironment>,
     },
-    Ping { nonce: u64 },
+    Ping {
+        nonce: u64,
+    },
 }
 
 /// WebSocket close codes.
@@ -211,6 +228,11 @@ mod tests {
         assert_eq!(stop, DeviceFrame::Stop { target: None });
         assert_eq!(serde_json::to_string(&stop).unwrap(), r#"{"type":"stop"}"#);
         let t: DeviceFrame = serde_json::from_str(r#"{"type":"takeover_done","target":"7c1e09ab"}"#).unwrap();
-        assert_eq!(t, DeviceFrame::TakeoverDone { target: Some("7c1e09ab".parse().unwrap()) });
+        assert_eq!(
+            t,
+            DeviceFrame::TakeoverDone {
+                target: Some("7c1e09ab".parse().unwrap())
+            }
+        );
     }
 }

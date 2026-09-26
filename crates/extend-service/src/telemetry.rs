@@ -10,11 +10,14 @@ use crate::state::AppState;
 
 /// Records a service-side event. Never fails the caller.
 pub async fn record(state: &AppState, world: &World, member: Option<&str>, event: serde_json::Value) {
-    let _ = sqlx::query(sql!("INSERT INTO {} (member_id, event) VALUES ($1, $2)", world.t("telemetry")))
-        .bind(member)
-        .bind(&event)
-        .execute(&state.pool)
-        .await;
+    let _ = sqlx::query(sql!(
+        "INSERT INTO {} (member_id, event) VALUES ($1, $2)",
+        world.t("telemetry")
+    ))
+    .bind(member)
+    .bind(&event)
+    .execute(&state.pool)
+    .await;
 }
 
 fn key_for(world: &World) -> Option<String> {
@@ -73,7 +76,13 @@ pub async fn export(state: &AppState, world: &World) -> crate::error::AppResult<
     .flatten()
     .unwrap_or(false);
     if delivered {
-        sqlx::query(sql!("UPDATE {} SET exported_at = now() WHERE id = ANY($1)", world.t("telemetry"))).bind(&ids).execute(&state.pool).await?;
+        sqlx::query(sql!(
+            "UPDATE {} SET exported_at = now() WHERE id = ANY($1)",
+            world.t("telemetry")
+        ))
+        .bind(&ids)
+        .execute(&state.pool)
+        .await?;
     }
     Ok(())
 }

@@ -77,17 +77,33 @@ pub struct Device {
     pub host_device_id: Option<DeviceId>,
     pub state: DeviceState,
     pub online: bool,
-    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_seen_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_use: Option<InUse>,
-    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_used_at: Option<Timestamp>,
-    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub paired_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pair_ttl_days: Option<i32>,
-    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub pair_expires_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub days_left: Option<i64>,
@@ -154,7 +170,10 @@ impl Setup {
     pub fn from_steps(steps: Vec<SetupStep>) -> Self {
         let state = if steps.iter().all(|s| s.status == StepStatus::Done) {
             SetupState::Complete
-        } else if steps.iter().any(|s| matches!(s.status, StepStatus::NeedsCarbon | StepStatus::Failed)) {
+        } else if steps
+            .iter()
+            .any(|s| matches!(s.status, StepStatus::NeedsCarbon | StepStatus::Failed))
+        {
             SetupState::NeedsCarbon
         } else {
             SetupState::InProgress
@@ -162,7 +181,10 @@ impl Setup {
         Self { state, steps }
     }
     pub fn complete() -> Self {
-        Self { state: SetupState::Complete, steps: vec![] }
+        Self {
+            state: SetupState::Complete,
+            steps: vec![],
+        }
     }
 }
 
@@ -468,7 +490,11 @@ pub struct FileInfo {
     pub created_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_with: Option<String>,
-    #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<Timestamp>,
 }
 

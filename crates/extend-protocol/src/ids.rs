@@ -69,7 +69,11 @@ impl FromStr for DeviceId {
         if s.len() == 8 && is_lower_hex(s) {
             Ok(Self(s.to_owned()))
         } else {
-            Err(IdError { kind: "device id", expected: "8 lowercase hexadecimal characters, like 7c1e09ab", got: s.to_owned() })
+            Err(IdError {
+                kind: "device id",
+                expected: "8 lowercase hexadecimal characters, like 7c1e09ab",
+                got: s.to_owned(),
+            })
         }
     }
 }
@@ -96,7 +100,11 @@ impl FromStr for SessionId {
         if s.len() >= 3 && s.len() <= 16 && is_lower_hex(s) {
             Ok(Self(s.to_owned()))
         } else {
-            Err(IdError { kind: "session id", expected: "3 or more lowercase hexadecimal characters, like a3f", got: s.to_owned() })
+            Err(IdError {
+                kind: "session id",
+                expected: "3 or more lowercase hexadecimal characters, like a3f",
+                got: s.to_owned(),
+            })
         }
     }
 }
@@ -120,7 +128,11 @@ impl FromStr for PairingCode {
         if trimmed.len() == 6 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
             Ok(Self(trimmed.to_ascii_uppercase()))
         } else {
-            Err(IdError { kind: "pairing code", expected: "6 hexadecimal characters, like 4F9C2A", got: s.to_owned() })
+            Err(IdError {
+                kind: "pairing code",
+                expected: "6 hexadecimal characters, like 4F9C2A",
+                got: s.to_owned(),
+            })
         }
     }
 }
@@ -129,13 +141,19 @@ impl FromStr for PairingCode {
 pub fn new_secret(prefix: &str) -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill(&mut bytes);
-    format!("{prefix}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    format!(
+        "{prefix}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    )
 }
 
 /// True when `s` is `prefix` followed by exactly 43 base64url characters.
 pub fn is_secret(prefix: &str, s: &str) -> bool {
     s.strip_prefix(prefix).is_some_and(|rest| {
-        rest.len() == 43 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        rest.len() == 43
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     })
 }
 

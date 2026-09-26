@@ -8,10 +8,12 @@ use axum::response::Response;
 use base64::Engine as _;
 use extend_protocol::capability::{self, Origin, RESERVED_FLAGS};
 use extend_protocol::frames::{CommandFrame, ServiceFrame};
-use extend_protocol::model::{CommandError, CommandRequest, CommandResult, EndReason, FileInfo, FileKind, SessionCreate, Takeover, TakeoverCreate};
+use extend_protocol::model::{
+    CommandError, CommandRequest, CommandResult, EndReason, FileInfo, FileKind, SessionCreate, Takeover, TakeoverCreate,
+};
 use extend_protocol::{
-    COMMAND_TIMEOUT_DEFAULT_MS, COMMAND_TIMEOUT_MAX_MS, COMMAND_TIMEOUT_MIN_MS, ErrorCode, SELF_DESTRUCT_DEFAULT_MIN, SELF_DESTRUCT_MAX_MIN, SESSION_IDLE_S,
-    SessionId, TAKEOVER_MAX_S,
+    COMMAND_TIMEOUT_DEFAULT_MS, COMMAND_TIMEOUT_MAX_MS, COMMAND_TIMEOUT_MIN_MS, ErrorCode, SELF_DESTRUCT_DEFAULT_MIN,
+    SELF_DESTRUCT_MAX_MIN, SESSION_IDLE_S, SessionId, TAKEOVER_MAX_S,
 };
 use rand::Rng as _;
 use serde::Deserialize;
@@ -27,7 +29,13 @@ use crate::hub::SendError;
 use crate::state::{AppState, Auth, Shared};
 
 fn in_use_error(d: &domain::DeviceRow) -> AppError {
-    let since = d.in_use_since.map(|t| t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()).unwrap_or_default();
+    let since = d
+        .in_use_since
+        .map(|t| {
+            t.format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
     AppError::new(
         ErrorCode::DeviceInUse,
         format!(
@@ -43,37 +51,56 @@ fn in_use_error(d: &domain::DeviceRow) -> AppError {
 }
 
 /// Picks an unused session id of the shortest length that still has one (TECHNICAL.md section 1).
-async fn allocate_session_id(state: &AppState, world: &World, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AppResult<String> {
+async fn allocate_session_id(
+    state: &AppState,
+    world: &World,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> AppResult<String> {
     let mut len = 3usize;
     loop {
-        let used: i64 = sqlx::query_scalar(sql!("SELECT count(*) FROM {} WHERE length(session_id) = $1", world.t("session_ids")))
-            .bind(len as i32)
-            .fetch_one(&mut **tx)
-            .await?;
+        let used: i64 = sqlx::query_scalar(sql!(
+            "SELECT count(*) FROM {} WHERE length(session_id) = $1",
+            world.t("session_ids")
+        ))
+        .bind(len as i32)
+        .fetch_one(&mut **tx)
+        .await?;
         let space = SessionId::space(len) as i64;
         if used < space {
             // Random tries first; near the end of a length, scan for the gaps.
             for _ in 0..32 {
                 let candidate = SessionId::from_parts(rand::rng().random_range(0..space as u64), len).to_string();
-                let res = sqlx::query(sql!("INSERT INTO {} (session_id) VALUES ($1) ON CONFLICT DO NOTHING", world.t("session_ids")))
-                    .bind(&candidate)
-                    .execute(&mut **tx)
-                    .await?;
+                let res = sqlx::query(sql!(
+                    "INSERT INTO {} (session_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                    world.t("session_ids")
+                ))
+                .bind(&candidate)
+                .execute(&mut **tx)
+                .await?;
                 if res.rows_affected() == 1 {
                     return Ok(candidate);
                 }
             }
             if len <= 4 {
-                let taken: Vec<(String,)> = sqlx::query_as(sql!("SELECT session_id FROM {} WHERE length(session_id) = $1", world.t("session_ids")))
-                    .bind(len as i32)
-                    .fetch_all(&mut **tx)
-                    .await?;
+                let taken: Vec<(String,)> = sqlx::query_as(sql!(
+                    "SELECT session_id FROM {} WHERE length(session_id) = $1",
+                    world.t("session_ids")
+                ))
+                .bind(len as i32)
+                .fetch_all(&mut **tx)
+                .await?;
                 let taken: std::collections::HashSet<String> = taken.into_iter().map(|(s,)| s).collect();
-                if let Some(free) = (0..space as u64).map(|v| SessionId::from_parts(v, len).to_string()).find(|c| !taken.contains(c)) {
-                    let res = sqlx::query(sql!("INSERT INTO {} (session_id) VALUES ($1) ON CONFLICT DO NOTHING", world.t("session_ids")))
-                        .bind(&free)
-                        .execute(&mut **tx)
-                        .await?;
+                if let Some(free) = (0..space as u64)
+                    .map(|v| SessionId::from_parts(v, len).to_string())
+                    .find(|c| !taken.contains(c))
+                {
+                    let res = sqlx::query(sql!(
+                        "INSERT INTO {} (session_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                        world.t("session_ids")
+                    ))
+                    .bind(&free)
+                    .execute(&mut **tx)
+                    .await?;
                     if res.rows_affected() == 1 {
                         return Ok(free);
                     }
@@ -89,23 +116,57 @@ async fn allocate_session_id(state: &AppState, world: &World, tx: &mut sqlx::Tra
     }
 }
 
-pub async fn start(State(state): State<Shared>, auth: Auth, headers: HeaderMap, Body(input): Body<SessionCreate>) -> AppResult<Response> {
+pub async fn start(
+    State(state): State<Shared>,
+    auth: Auth,
+    headers: HeaderMap,
+    Body(input): Body<SessionCreate>,
+) -> AppResult<Response> {
     auth.require_silicon()?;
     let team = auth.team()?.to_owned();
     let device_id = input.device_id.to_string();
-    let d = domain::load_device(&state, &auth.world, &device_id).await?.filter(|d| d.team == team).ok_or_else(|| domain::device_not_found(&device_id))?;
+    let d = domain::load_device(&state, &auth.world, &device_id)
+        .await?
+        .filter(|d| d.team == team)
+        .ok_or_else(|| domain::device_not_found(&device_id))?;
     if domain::access_of(&state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
-        return Err(AppError::new(ErrorCode::NoAccess, format!("{} has no access to {} ({device_id}).", auth.p.id(), d.name))
-            .hint(format!("Ask {} (the Carbon who owns it) to grant access: extend device access grant {device_id} {}", d.owner_id, auth.p.id())));
+        return Err(AppError::new(
+            ErrorCode::NoAccess,
+            format!("{} has no access to {} ({device_id}).", auth.p.id(), d.name),
+        )
+        .hint(format!(
+            "Ask {} (the Carbon who owns it) to grant access: extend device access grant {device_id} {}",
+            d.owner_id,
+            auth.p.id()
+        )));
     }
     if !domain::is_online(&state, &auth.world, &d).await {
-        let seen = d.last_seen_at.map(|t| format!(" It was last seen {t}.")).unwrap_or_default();
-        return Err(AppError::new(ErrorCode::DeviceOffline, format!("{} is offline, so it can't be used right now.{seen}", d.name)).hint(offline_hint(&d)));
+        let seen = d
+            .last_seen_at
+            .map(|t| format!(" It was last seen {t}."))
+            .unwrap_or_default();
+        return Err(AppError::new(
+            ErrorCode::DeviceOffline,
+            format!("{} is offline, so it can't be used right now.{seen}", d.name),
+        )
+        .hint(offline_hint(&d)));
     }
     if d.state != "ready" {
-        let left: Vec<String> = d.setup().steps.into_iter().filter(|s| s.status != extend_protocol::model::StepStatus::Done).map(|s| s.title).collect();
-        return Err(AppError::new(ErrorCode::DeviceNotReady, format!("{} hasn't finished setup. Steps left: {}.", d.name, left.join("; ")))
-            .hint(format!("{} can finish them on the device; watch with `extend device setup {device_id}`.", d.owner_id)));
+        let left: Vec<String> = d
+            .setup()
+            .steps
+            .into_iter()
+            .filter(|s| s.status != extend_protocol::model::StepStatus::Done)
+            .map(|s| s.title)
+            .collect();
+        return Err(AppError::new(
+            ErrorCode::DeviceNotReady,
+            format!("{} hasn't finished setup. Steps left: {}.", d.name, left.join("; ")),
+        )
+        .hint(format!(
+            "{} can finish them on the device; watch with `extend device setup {device_id}`.",
+            d.owner_id
+        )));
     }
     if d.in_use_session.is_some() {
         return Err(in_use_error(&d));
@@ -193,12 +254,19 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
     let who = if auth.p.is_silicon() {
         "s.silicon_id = $2".to_owned()
     } else {
-        format!("EXISTS (SELECT 1 FROM {} d WHERE d.device_id = s.device_id AND d.owner_id = $2)", auth.world.t("devices"))
+        format!(
+            "EXISTS (SELECT 1 FROM {} d WHERE d.device_id = s.device_id AND d.owner_id = $2)",
+            auth.world.t("devices")
+        )
     };
     let state_filter = match q.state.as_deref() {
         None => None,
         Some(s @ ("active" | "paused" | "ended")) => Some(s.to_owned()),
-        Some(other) => return Err(AppError::invalid(format!("state must be active, paused or ended; got {other:?}."))),
+        Some(other) => {
+            return Err(AppError::invalid(format!(
+                "state must be active, paused or ended; got {other:?}."
+            )));
+        }
     };
     let rows: Vec<SessionRow> = sqlx::query_as(sql!(
         "SELECT {} FROM {} s WHERE s.team = $1 AND {who}
@@ -224,12 +292,26 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
 }
 
 /// Loads a session the caller may see: its Silicon, or the Carbon who owns its device.
-async fn visible_session(state: &AppState, auth: &Auth, session_id: &str) -> AppResult<(SessionRow, domain::DeviceRow)> {
+async fn visible_session(
+    state: &AppState,
+    auth: &Auth,
+    session_id: &str,
+) -> AppResult<(SessionRow, domain::DeviceRow)> {
     if session_id.parse::<SessionId>().is_err() {
-        return Err(AppError::invalid(format!("{session_id:?} is not a session id; session ids are 3 or more lowercase hexadecimal characters, like a3f.")));
+        return Err(AppError::invalid(format!(
+            "{session_id:?} is not a session id; session ids are 3 or more lowercase hexadecimal characters, like a3f."
+        )));
     }
-    let not_found = || AppError::new(ErrorCode::SessionNotFound, format!("No session {session_id} is visible to you.")).hint("List yours with `extend session ls`.");
-    let s = domain::load_session(state, &auth.world, session_id).await?.ok_or_else(not_found)?;
+    let not_found = || {
+        AppError::new(
+            ErrorCode::SessionNotFound,
+            format!("No session {session_id} is visible to you."),
+        )
+        .hint("List yours with `extend session ls`.")
+    };
+    let s = domain::load_session(state, &auth.world, session_id)
+        .await?
+        .ok_or_else(not_found)?;
     let d: domain::DeviceRow = sqlx::query_as(sql!("{} WHERE d.device_id = $1", domain::device_select(&auth.world)))
         .bind(&s.device_id)
         .fetch_optional(&state.pool)
@@ -245,7 +327,11 @@ async fn visible_session(state: &AppState, auth: &Auth, session_id: &str) -> App
 
 pub async fn get(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>) -> AppResult<Response> {
     let (s, d) = visible_session(&state, &auth, &session_id).await?;
-    let access = if d.is_owner(&auth.p) { Access::Owner } else { Access::Silicon };
+    let access = if d.is_owner(&auth.p) {
+        Access::Owner
+    } else {
+        Access::Silicon
+    };
     let device = domain::device_view(&state, &auth.world, &d, access, true).await;
     let mut view = s.view();
     view.capabilities = device.capabilities.clone();
@@ -257,10 +343,21 @@ pub async fn get(State(state): State<Shared>, auth: Auth, Path(session_id): Path
 pub async fn end(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>) -> AppResult<Response> {
     let (s, _) = visible_session(&state, &auth, &session_id).await?;
     if s.silicon_id != auth.p.id() {
-        return Err(AppError::new(ErrorCode::NotSessionOwner, format!("Session {session_id} belongs to {}.", s.silicon_id))
-            .hint("The device's Carbon stops a session with `extend device stop <device_id>`."));
+        return Err(AppError::new(
+            ErrorCode::NotSessionOwner,
+            format!("Session {session_id} belongs to {}.", s.silicon_id),
+        )
+        .hint("The device's Carbon stops a session with `extend device stop <device_id>`."));
     }
-    let row = match domain::end_session(&state, &auth.world, &session_id, EndReason::EndedBySilicon, &auth.p.member).await? {
+    let row = match domain::end_session(
+        &state,
+        &auth.world,
+        &session_id,
+        EndReason::EndedBySilicon,
+        &auth.p.member,
+    )
+    .await?
+    {
         Some(r) => r,
         None => s,
     };
@@ -271,20 +368,36 @@ fn takeover_of(s: &SessionRow) -> Option<Takeover> {
     s.takeover.clone().and_then(|t| serde_json::from_value(t).ok())
 }
 
-pub async fn takeover_start(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>, Body(input): Body<TakeoverCreate>) -> AppResult<Response> {
+pub async fn takeover_start(
+    State(state): State<Shared>,
+    auth: Auth,
+    Path(session_id): Path<String>,
+    Body(input): Body<TakeoverCreate>,
+) -> AppResult<Response> {
     let (s, d) = visible_session(&state, &auth, &session_id).await?;
     if s.silicon_id != auth.p.id() {
-        return Err(AppError::new(ErrorCode::NotSessionOwner, format!("Session {session_id} belongs to {}.", s.silicon_id)));
+        return Err(AppError::new(
+            ErrorCode::NotSessionOwner,
+            format!("Session {session_id} belongs to {}.", s.silicon_id),
+        ));
     }
     match s.state.as_str() {
         "ended" => return Err(session_ended(&s)),
-        "paused" => return Err(AppError::new(ErrorCode::Conflict, "A takeover is already in progress in this session.").hint("See it with `extend takeover status`.")),
+        "paused" => {
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "A takeover is already in progress in this session.",
+            )
+            .hint("See it with `extend takeover status`."));
+        }
         _ => {}
     }
     let reason = input.reason.trim().to_owned();
     let n = reason.chars().count();
     if n == 0 || n > 300 {
-        return Err(AppError::invalid(format!("The takeover reason must be 1–300 characters; it is {n}.")));
+        return Err(AppError::invalid(format!(
+            "The takeover reason must be 1–300 characters; it is {n}."
+        )));
     }
     let now = OffsetDateTime::now_utc();
     let t = Takeover {
@@ -294,28 +407,57 @@ pub async fn takeover_start(State(state): State<Shared>, auth: Auth, Path(sessio
         started_at: now,
         expires_at: now + time::Duration::seconds(TAKEOVER_MAX_S),
     };
-    sqlx::query(sql!("UPDATE {} SET state = 'paused', takeover = $2, idle_ends_at = $3 WHERE session_id = $1 AND state = 'active'", auth.world.t("sessions")))
-        .bind(&session_id)
-        .bind(serde_json::to_value(&t).map_err(AppError::internal)?)
-        .bind(t.expires_at)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(sql!(
+        "UPDATE {} SET state = 'paused', takeover = $2, idle_ends_at = $3 WHERE session_id = $1 AND state = 'active'",
+        auth.world.t("sessions")
+    ))
+    .bind(&session_id)
+    .bind(serde_json::to_value(&t).map_err(AppError::internal)?)
+    .bind(t.expires_at)
+    .execute(&state.pool)
+    .await?;
     let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
     state
         .hub
-        .send(&d.route(&auth.world), ServiceFrame::Takeover { target, session_id: t.session_id.clone(), reason: reason.clone(), expires_at: t.expires_at })
+        .send(
+            &d.route(&auth.world),
+            ServiceFrame::Takeover {
+                target,
+                session_id: t.session_id.clone(),
+                reason: reason.clone(),
+                expires_at: t.expires_at,
+            },
+        )
         .await;
-    domain::log(&state, &auth.world, &d.device_id, &auth.p.member, "takeover_started", Some(&session_id), serde_json::json!({"reason": reason})).await;
+    domain::log(
+        &state,
+        &auth.world,
+        &d.device_id,
+        &auth.p.member,
+        "takeover_started",
+        Some(&session_id),
+        serde_json::json!({"reason": reason}),
+    )
+    .await;
     Ok(super::created("takeover", t))
 }
 
-pub async fn takeover_get(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>) -> AppResult<Response> {
+pub async fn takeover_get(
+    State(state): State<Shared>,
+    auth: Auth,
+    Path(session_id): Path<String>,
+) -> AppResult<Response> {
     let (s, _) = visible_session(&state, &auth, &session_id).await?;
     Ok(ok("takeover", if s.state == "paused" { takeover_of(&s) } else { None }))
 }
 
 /// Resumes a paused session. Used by the Silicon (`DELETE …/takeover`) and the device's Done button.
-pub async fn release(state: &AppState, world: &World, session_id: &str, actor: &extend_protocol::model::Member) -> AppResult<bool> {
+pub async fn release(
+    state: &AppState,
+    world: &World,
+    session_id: &str,
+    actor: &extend_protocol::model::Member,
+) -> AppResult<bool> {
     let idle = OffsetDateTime::now_utc() + time::Duration::seconds(SESSION_IDLE_S);
     let row: Option<(String,)> = sqlx::query_as(sql!(
         "UPDATE {} SET state = 'active', takeover = NULL, idle_ends_at = $2 WHERE session_id = $1 AND state = 'paused' RETURNING device_id",
@@ -330,19 +472,47 @@ pub async fn release(state: &AppState, world: &World, session_id: &str, actor: &
     };
     if let Some(d) = domain::load_device(state, world, &device_id).await? {
         let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
-        let _ = state.hub.send(&d.route(world), ServiceFrame::TakeoverEnded { target, session_id: session_id.parse().map_err(AppError::internal)? }).await;
+        let _ = state
+            .hub
+            .send(
+                &d.route(world),
+                ServiceFrame::TakeoverEnded {
+                    target,
+                    session_id: session_id.parse().map_err(AppError::internal)?,
+                },
+            )
+            .await;
     }
-    domain::log(state, world, &device_id, actor, "takeover_released", Some(session_id), serde_json::json!({})).await;
+    domain::log(
+        state,
+        world,
+        &device_id,
+        actor,
+        "takeover_released",
+        Some(session_id),
+        serde_json::json!({}),
+    )
+    .await;
     Ok(true)
 }
 
-pub async fn takeover_release(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>) -> AppResult<Response> {
+pub async fn takeover_release(
+    State(state): State<Shared>,
+    auth: Auth,
+    Path(session_id): Path<String>,
+) -> AppResult<Response> {
     let (s, d) = visible_session(&state, &auth, &session_id).await?;
     if s.silicon_id != auth.p.id() && !d.is_owner(&auth.p) {
-        return Err(AppError::new(ErrorCode::NotSessionOwner, format!("Session {session_id} belongs to {}.", s.silicon_id)));
+        return Err(AppError::new(
+            ErrorCode::NotSessionOwner,
+            format!("Session {session_id} belongs to {}.", s.silicon_id),
+        ));
     }
     if !release(&state, &auth.world, &session_id, &auth.p.member).await? {
-        return Err(AppError::new(ErrorCode::Conflict, "No takeover is in progress in this session."));
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            "No takeover is in progress in this session.",
+        ));
     }
     Ok(no_content())
 }
@@ -351,7 +521,11 @@ fn session_ended(s: &SessionRow) -> AppError {
     let reason = s.end_reason.as_deref().and_then(EndReason::parse);
     AppError::new(
         ErrorCode::SessionEnded,
-        format!("Session {} has ended: {}.", s.session_id, reason.map_or("unknown reason", EndReason::explain)),
+        format!(
+            "Session {} has ended: {}.",
+            s.session_id,
+            reason.map_or("unknown reason", EndReason::explain)
+        ),
     )
     .hint(format!("Start a new one with `extend session new {}`.", s.device_id))
     .details(serde_json::json!({"end_reason": s.end_reason}))
@@ -365,8 +539,15 @@ pub fn redact(spec: &capability::CommandSpec, args: &[String]) -> Vec<String> {
     args.iter()
         .enumerate()
         .map(|(i, a)| {
-            let keep = a.starts_with('-') || a.starts_with('@') || (spec.name == "clipboard" && i == 0) || (spec.name == "fill" && i == 0);
-            if keep { a.clone() } else { format!("[redacted {} chars]", a.chars().count()) }
+            let keep = a.starts_with('-')
+                || a.starts_with('@')
+                || (spec.name == "clipboard" && i == 0)
+                || (spec.name == "fill" && i == 0);
+            if keep {
+                a.clone()
+            } else {
+                format!("[redacted {} chars]", a.chars().count())
+            }
         })
         .collect()
 }
@@ -374,21 +555,30 @@ pub fn redact(spec: &capability::CommandSpec, args: &[String]) -> Vec<String> {
 fn check_args(req: &CommandRequest) -> AppResult<&'static capability::CommandSpec> {
     let name = req.command.trim();
     if let Some(replacement) = capability::not_exposed(name) {
-        let mut e = AppError::new(ErrorCode::UnknownCommand, format!("`{name}` is an agent-device command Extend doesn't relay."));
+        let mut e = AppError::new(
+            ErrorCode::UnknownCommand,
+            format!("`{name}` is an agent-device command Extend doesn't relay."),
+        );
         if let Some(r) = replacement {
             e = e.hint(format!("Use `{r}` instead."));
         } else {
-            e = e.hint("Extend leaves out agent-device's tools for app developers (simulators, emulators, React Native, web).");
+            e = e.hint(
+                "Extend leaves out agent-device's tools for app developers (simulators, emulators, React Native, web).",
+            );
         }
         return Err(e);
     }
     let spec = capability::command(name).ok_or_else(|| {
-        AppError::new(ErrorCode::UnknownCommand, format!("`{name}` is not an Extend command.")).hint("See the commands for this device with `extend --help` while connected.")
+        AppError::new(ErrorCode::UnknownCommand, format!("`{name}` is not an Extend command."))
+            .hint("See the commands for this device with `extend --help` while connected.")
     })?;
     for a in &req.args {
         let flag = a.split('=').next().unwrap_or_default();
         if RESERVED_FLAGS.contains(&flag) {
-            return Err(AppError::invalid(format!("`{flag}` picks a device or session inside agent-device; Extend picks those.")).hint("Drop the flag; the session already names the device."));
+            return Err(AppError::invalid(format!(
+                "`{flag}` picks a device or session inside agent-device; Extend picks those."
+            ))
+            .hint("Drop the flag; the session already names the device."));
         }
         if a.len() > 64 * 1024 {
             return Err(AppError::invalid("An argument is longer than 64 KiB."));
@@ -400,11 +590,19 @@ fn check_args(req: &CommandRequest) -> AppResult<&'static capability::CommandSpe
     Ok(spec)
 }
 
-pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>, Body(req): Body<CommandRequest>) -> AppResult<Response> {
+pub async fn command(
+    State(state): State<Shared>,
+    auth: Auth,
+    Path(session_id): Path<String>,
+    Body(req): Body<CommandRequest>,
+) -> AppResult<Response> {
     auth.require_silicon()?;
     let (s, d) = visible_session(&state, &auth, &session_id).await?;
     if s.silicon_id != auth.p.id() {
-        return Err(AppError::new(ErrorCode::NotSessionOwner, format!("Session {session_id} belongs to {}.", s.silicon_id)));
+        return Err(AppError::new(
+            ErrorCode::NotSessionOwner,
+            format!("Session {session_id} belongs to {}.", s.silicon_id),
+        ));
     }
     match s.state.as_str() {
         "ended" => return Err(session_ended(&s)),
@@ -417,12 +615,24 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
     }
     // Access is re-checked on every command, not only at session start.
     if domain::access_of(&state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
-        domain::end_session(&state, &auth.world, &session_id, EndReason::AccessRemoved, &domain::system_member()).await?;
-        return Err(AppError::new(ErrorCode::AccessRemoved, format!("Your access to {} was removed; session {session_id} has ended.", d.name)));
+        domain::end_session(
+            &state,
+            &auth.world,
+            &session_id,
+            EndReason::AccessRemoved,
+            &domain::system_member(),
+        )
+        .await?;
+        return Err(AppError::new(
+            ErrorCode::AccessRemoved,
+            format!("Your access to {} was removed; session {session_id} has ended.", d.name),
+        ));
     }
     let spec = check_args(&req)?;
     if !domain::is_online(&state, &auth.world, &d).await {
-        return Err(AppError::new(ErrorCode::DeviceOffline, format!("{} is offline right now.", d.name)).hint(offline_hint(&d)));
+        return Err(
+            AppError::new(ErrorCode::DeviceOffline, format!("{} is offline right now.", d.name)).hint(offline_hint(&d)),
+        );
     }
     let caps = d.capabilities();
     if !spec.any_of.iter().any(|c| caps.contains(c)) {
@@ -430,19 +640,36 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         let why: Vec<String> = spec
             .any_of
             .iter()
-            .map(|c| missing.iter().find(|m| m.capability == *c).map_or_else(|| format!("{} is not something a {} can do", c.as_str(), d.os().as_str()), |m| format!("{}: {}", c.as_str(), m.reason)))
+            .map(|c| {
+                missing.iter().find(|m| m.capability == *c).map_or_else(
+                    || format!("{} is not something a {} can do", c.as_str(), d.os().as_str()),
+                    |m| format!("{}: {}", c.as_str(), m.reason),
+                )
+            })
             .collect();
-        return Err(AppError::new(ErrorCode::UnsupportedOnDevice, format!("`{}` doesn't work on {} right now. {}", spec.name, d.name, why.join("; ")))
-            .hint("See what works with `extend device show <device_id>` or `extend --help` while connected.")
-            .details(serde_json::json!({"needs_any_of": spec.any_of, "missing": missing})));
+        return Err(AppError::new(
+            ErrorCode::UnsupportedOnDevice,
+            format!(
+                "`{}` doesn't work on {} right now. {}",
+                spec.name,
+                d.name,
+                why.join("; ")
+            ),
+        )
+        .hint("See what works with `extend device show <device_id>` or `extend --help` while connected.")
+        .details(serde_json::json!({"needs_any_of": spec.any_of, "missing": missing})));
     }
     let timeout_ms = req.timeout_ms.unwrap_or(COMMAND_TIMEOUT_DEFAULT_MS);
     if !(COMMAND_TIMEOUT_MIN_MS..=COMMAND_TIMEOUT_MAX_MS).contains(&timeout_ms) {
-        return Err(AppError::invalid(format!("timeout_ms must be 1000–300000; got {timeout_ms}.")));
+        return Err(AppError::invalid(format!(
+            "timeout_ms must be 1000–300000; got {timeout_ms}."
+        )));
     }
     let self_destruct = req.self_destruct_minutes.unwrap_or(SELF_DESTRUCT_DEFAULT_MIN);
     if !(1..=SELF_DESTRUCT_MAX_MIN).contains(&self_destruct) {
-        return Err(AppError::invalid(format!("self_destruct_minutes must be 1–43200 (30 days); got {self_destruct}.")));
+        return Err(AppError::invalid(format!(
+            "self_destruct_minutes must be 1–43200 (30 days); got {self_destruct}."
+        )));
     }
     let mut total_attach = 0usize;
     for a in &req.attachments {
@@ -452,25 +679,36 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         total_attach += bytes.len();
     }
     if total_attach > 8 << 20 || req.attachments.len() > 8 {
-        return Err(AppError::invalid("Attachments are limited to 8 files and 8 MiB in total."));
+        return Err(AppError::invalid(
+            "Attachments are limited to 8 files and 8 MiB in total.",
+        ));
     }
     let _ = spec.origin == Origin::Extend;
 
-    let lock = state.hub.session_lock((auth.world.schema.clone(), session_id.clone())).await;
+    let lock = state
+        .hub
+        .session_lock((auth.world.schema.clone(), session_id.clone()))
+        .await;
     let _guard = lock.lock().await;
-    state.session_principals.write().await.insert((auth.world.schema.clone(), session_id.clone()), (auth.p.clone(), auth.sel.clone()));
+    state.session_principals.write().await.insert(
+        (auth.world.schema.clone(), session_id.clone()),
+        (auth.p.clone(), auth.sel.clone()),
+    );
 
     let command_id = Uuid::now_v7();
     let upload_ids: Vec<Uuid> = (0..4).map(|_| Uuid::now_v7()).collect();
     let expires = OffsetDateTime::now_utc() + time::Duration::milliseconds(timeout_ms as i64 + 60_000);
     for u in &upload_ids {
-        sqlx::query(sql!("INSERT INTO {} (upload_id, device_id, command_id, expires_at) VALUES ($1, $2, $3, $4)", auth.world.t("uploads")))
-            .bind(u)
-            .bind(d.host_device_id.as_ref().unwrap_or(&d.device_id))
-            .bind(command_id)
-            .bind(expires)
-            .execute(&state.pool)
-            .await?;
+        sqlx::query(sql!(
+            "INSERT INTO {} (upload_id, device_id, command_id, expires_at) VALUES ($1, $2, $3, $4)",
+            auth.world.t("uploads")
+        ))
+        .bind(u)
+        .bind(d.host_device_id.as_ref().unwrap_or(&d.device_id))
+        .bind(command_id)
+        .bind(expires)
+        .execute(&state.pool)
+        .await?;
     }
     let started = OffsetDateTime::now_utc();
     let frame = ServiceFrame::Command(CommandFrame {
@@ -483,7 +721,15 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         timeout_ms,
         upload_ids: upload_ids.clone(),
     });
-    let outcome = state.hub.command(&d.route(&auth.world), command_id, frame, Duration::from_millis(timeout_ms + 2_000)).await;
+    let outcome = state
+        .hub
+        .command(
+            &d.route(&auth.world),
+            command_id,
+            frame,
+            Duration::from_millis(timeout_ms + 2_000),
+        )
+        .await;
     let duration_ms = (OffsetDateTime::now_utc() - started).whole_milliseconds() as i64;
     let redacted = redact(spec, &req.args);
 
@@ -522,10 +768,13 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
             .bind(idle)
             .execute(&st.pool)
             .await;
-            let _ = sqlx::query(sql!("UPDATE {} SET last_activity_at = now(), last_used_at = now() WHERE device_id = $1", world.t("devices")))
-                .bind(&device_id)
-                .execute(&st.pool)
-                .await;
+            let _ = sqlx::query(sql!(
+                "UPDATE {} SET last_activity_at = now(), last_used_at = now() WHERE device_id = $1",
+                world.t("devices")
+            ))
+            .bind(&device_id)
+            .execute(&st.pool)
+            .await;
             idle
         }
     };
@@ -534,12 +783,25 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         Ok(o) => o,
         Err(SendError::Timeout) => {
             log_command("timeout", vec![], Some("command_timeout".into())).await;
-            return Err(AppError::new(ErrorCode::CommandTimeout, format!("{} did not answer `{}` within {} ms. It may still have run.", d.name, spec.name, timeout_ms))
-                .hint("Check the screen with `extend snapshot` before retrying, or pass a longer --timeout."));
+            return Err(AppError::new(
+                ErrorCode::CommandTimeout,
+                format!(
+                    "{} did not answer `{}` within {} ms. It may still have run.",
+                    d.name, spec.name, timeout_ms
+                ),
+            )
+            .hint("Check the screen with `extend snapshot` before retrying, or pass a longer --timeout."));
         }
         Err(SendError::Offline | SendError::Dropped) => {
             log_command("unknown", vec![], Some("device_offline".into())).await;
-            return Err(AppError::new(ErrorCode::DeviceOffline, format!("{} went offline while running `{}`; it may have run.", d.name, spec.name)).hint(offline_hint(&d)));
+            return Err(AppError::new(
+                ErrorCode::DeviceOffline,
+                format!(
+                    "{} went offline while running `{}`; it may have run.",
+                    d.name, spec.name
+                ),
+            )
+            .hint(offline_hint(&d)));
         }
     };
 
@@ -558,7 +820,16 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         let size = bytes.len() as i64;
         let stored = state
             .files
-            .store(&auth.p, NewFile { name: &f.name, content_type: &f.content_type, bytes, owner_carbon: &d.owner_id }, auth.sel.as_ref())
+            .store(
+                &auth.p,
+                NewFile {
+                    name: &f.name,
+                    content_type: &f.content_type,
+                    bytes,
+                    owner_carbon: &d.owner_id,
+                },
+                auth.sel.as_ref(),
+            )
             .await;
         let stored = match stored {
             Ok(s) => s,
@@ -567,7 +838,8 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
                 continue;
             }
         };
-        let self_destruct_at = (!req.permanent).then(|| OffsetDateTime::now_utc() + time::Duration::minutes(i64::from(self_destruct)));
+        let self_destruct_at =
+            (!req.permanent).then(|| OffsetDateTime::now_utc() + time::Duration::minutes(i64::from(self_destruct)));
         sqlx::query(sql!(
             "INSERT INTO {} (file_id, team, device_id, session_id, command_id, created_by, shared_with, name, kind, content_type, size_bytes, url, self_destruct_at, permanent)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
@@ -634,7 +906,11 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
             output: outcome.output,
             text: outcome.text,
             files,
-            error: outcome.error.map(|e| CommandError { code: e.code, message: e.message, details: e.details }),
+            error: outcome.error.map(|e| CommandError {
+                code: e.code,
+                message: e.message,
+                details: e.details,
+            }),
             started_at: started,
             duration_ms,
             idle_ends_at: Some(idle),
@@ -649,9 +925,15 @@ mod tests {
     #[test]
     fn redacts_typed_text() {
         let fill = capability::command("fill").unwrap();
-        assert_eq!(redact(fill, &["@e3".into(), "hunter2".into()]), vec!["@e3".to_owned(), "[redacted 7 chars]".into()]);
+        assert_eq!(
+            redact(fill, &["@e3".into(), "hunter2".into()]),
+            vec!["@e3".to_owned(), "[redacted 7 chars]".into()]
+        );
         let clip = capability::command("clipboard").unwrap();
-        assert_eq!(redact(clip, &["write".into(), "secret".into()]), vec!["write".to_owned(), "[redacted 6 chars]".into()]);
+        assert_eq!(
+            redact(clip, &["write".into(), "secret".into()]),
+            vec!["write".to_owned(), "[redacted 6 chars]".into()]
+        );
         let click = capability::command("click").unwrap();
         assert_eq!(redact(click, &["@e2".into()]), vec!["@e2".to_owned()]);
     }
@@ -667,8 +949,23 @@ mod tests {
             attachments: vec![],
         };
         assert!(check_args(&req("click", &["@e2"])).is_ok());
-        assert_eq!(check_args(&req("click", &["@e2", "--platform", "ios"])).unwrap_err().code(), ErrorCode::InvalidInput);
-        assert_eq!(check_args(&req("boot", &[])).unwrap_err().code(), ErrorCode::UnknownCommand);
-        assert!(check_args(&req("devices", &[])).unwrap_err().0.hint.unwrap().contains("extend device ls"));
+        assert_eq!(
+            check_args(&req("click", &["@e2", "--platform", "ios"]))
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidInput
+        );
+        assert_eq!(
+            check_args(&req("boot", &[])).unwrap_err().code(),
+            ErrorCode::UnknownCommand
+        );
+        assert!(
+            check_args(&req("devices", &[]))
+                .unwrap_err()
+                .0
+                .hint
+                .unwrap()
+                .contains("extend device ls")
+        );
     }
 }

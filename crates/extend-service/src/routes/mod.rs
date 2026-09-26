@@ -1,9 +1,9 @@
 //! HTTP and WebSocket routes (`understanding/api.yaml`).
 
 mod auth;
+mod dev;
 mod device_app;
 mod devices;
-mod dev;
 pub mod enroll;
 mod files;
 mod ops;
@@ -90,7 +90,9 @@ pub fn router(state: Shared) -> Router {
         .merge(api);
     if let Some(dir) = state.cfg.web_dir.clone() {
         let index = dir.join("index.html");
-        app = app.fallback_service(tower_http::services::ServeDir::new(dir).fallback(tower_http::services::ServeFile::new(index)));
+        app = app.fallback_service(
+            tower_http::services::ServeDir::new(dir).fallback(tower_http::services::ServeFile::new(index)),
+        );
     }
     app.layer(axum::middleware::from_fn(request_id_layer))
         .layer(
@@ -109,7 +111,8 @@ pub fn router(state: Shared) -> Router {
 }
 
 async fn fallback() -> AppError {
-    AppError::new(ErrorCode::UnknownCommand, "No such endpoint in the Extend API.").hint("The API is described at understanding/api.yaml in the repository.")
+    AppError::new(ErrorCode::UnknownCommand, "No such endpoint in the Extend API.")
+        .hint("The API is described at understanding/api.yaml in the repository.")
 }
 
 /// Stamps a request id on every response and every error.
@@ -131,11 +134,16 @@ async fn request_id_layer(req: Request, next: Next) -> Response {
 /// Checks a client's version pin, advertises the version, and counts usage for sunset decisions.
 async fn version_layer(State(state): State<Shared>, req: Request, next: Next) -> Response {
     if let Some(pin) = req.headers().get(API_VERSION_HEADER).and_then(|v| v.to_str().ok())
-        && pin.trim() != API_VERSION.to_string() && req.uri().path().starts_with("/api/v1/") {
-            return AppError::new(ErrorCode::ApiVersionMismatch, format!("The client pinned API version {pin}, but this path is version {API_VERSION}."))
-                .hint("Negotiate with GET /api/version and use the matching path.")
-                .into_response();
-        }
+        && pin.trim() != API_VERSION.to_string()
+        && req.uri().path().starts_with("/api/v1/")
+    {
+        return AppError::new(
+            ErrorCode::ApiVersionMismatch,
+            format!("The client pinned API version {pin}, but this path is version {API_VERSION}."),
+        )
+        .hint("Negotiate with GET /api/version and use the matching path.")
+        .into_response();
+    }
     if req.uri().path().starts_with("/api/v1/") {
         let pool = state.pool.clone();
         tokio::spawn(async move {
@@ -148,7 +156,8 @@ async fn version_layer(State(state): State<Shared>, req: Request, next: Next) ->
         });
     }
     let mut resp = next.run(req).await;
-    resp.headers_mut().insert(API_VERSION_HEADER, HeaderValue::from(API_VERSION));
+    resp.headers_mut()
+        .insert(API_VERSION_HEADER, HeaderValue::from(API_VERSION));
     resp
 }
 
@@ -166,9 +175,13 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Body<T> {
 }
 
 pub fn parse_envelope<T: DeserializeOwned>(bytes: &[u8]) -> AppResult<T> {
-    let v: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| AppError::invalid(format!("The body is not valid JSON: {e}")).hint(r#"Send {"type": "<kind>", "data": {...}}."#))?;
-    let data = v.get("data").cloned().ok_or_else(|| AppError::invalid(r#"The body must be an envelope {"type": "<kind>", "data": {...}}."#))?;
+    let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
+        AppError::invalid(format!("The body is not valid JSON: {e}")).hint(r#"Send {"type": "<kind>", "data": {...}}."#)
+    })?;
+    let data = v
+        .get("data")
+        .cloned()
+        .ok_or_else(|| AppError::invalid(r#"The body must be an envelope {"type": "<kind>", "data": {...}}."#))?;
     serde_json::from_value(data).map_err(|e| AppError::invalid(format!("The body's data is not valid: {e}")))
 }
 
@@ -182,7 +195,8 @@ pub fn created<T: serde::Serialize>(kind: &str, data: T) -> Response {
 
 pub fn envelope<T: serde::Serialize>(status: StatusCode, kind: &str, data: T) -> Response {
     let mut resp = (status, Json(serde_json::json!({"type": kind, "data": data}))).into_response();
-    resp.headers_mut().insert("cache-control", HeaderValue::from_static("no-store"));
+    resp.headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
     resp
 }
 
@@ -204,7 +218,10 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = AppResult<(StatusCode, &'static str, serde_json::Value)>>,
 {
-    let key = headers.get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     if let Some(k) = &key {
         if k.len() < 8 || k.len() > 255 || !k.bytes().all(|b| (b'!'..=b'~').contains(&b)) {
             return Err(AppError::invalid("Idempotency-Key must be 8–255 printable characters."));
@@ -220,11 +237,19 @@ where
         .await?;
         if let Some((hash, status, response)) = found {
             if hash != body_hash {
-                return Err(AppError::new(ErrorCode::Conflict, "This Idempotency-Key was already used with a different body.")
-                    .hint("Use a new key for a new request; reuse a key only to retry the identical request."));
+                return Err(AppError::new(
+                    ErrorCode::Conflict,
+                    "This Idempotency-Key was already used with a different body.",
+                )
+                .hint("Use a new key for a new request; reuse a key only to retry the identical request."));
             }
-            let mut resp = (StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK), Json(response)).into_response();
-            resp.headers_mut().insert("idempotency-replayed", HeaderValue::from_static("true"));
+            let mut resp = (
+                StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK),
+                Json(response),
+            )
+                .into_response();
+            resp.headers_mut()
+                .insert("idempotency-replayed", HeaderValue::from_static("true"));
             return Ok(resp);
         }
     }
@@ -245,7 +270,8 @@ where
         .await;
     }
     let mut resp = (status, Json(body)).into_response();
-    resp.headers_mut().insert("cache-control", HeaderValue::from_static("no-store"));
+    resp.headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
     Ok(resp)
 }
 

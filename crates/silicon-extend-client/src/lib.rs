@@ -21,7 +21,10 @@ use std::time::Duration;
 pub use extend_protocol as protocol;
 use extend_protocol::envelope::Page;
 use extend_protocol::model::*;
-use extend_protocol::{API_VERSION, API_VERSION_HEADER, ApiError, DeviceId, ErrorCode, SUPPORTED_VERSIONS_HEADER, TEAM_HEADER, TESTING_SECRET_HEADER};
+use extend_protocol::{
+    API_VERSION, API_VERSION_HEADER, ApiError, DeviceId, ErrorCode, SUPPORTED_VERSIONS_HEADER, TEAM_HEADER,
+    TESTING_SECRET_HEADER,
+};
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -103,15 +106,32 @@ impl ClientBuilder {
     /// Builds the client and negotiates the API version with the service.
     pub async fn connect(self) -> Result<Client> {
         let base = self.base_url.trim_end_matches('/').to_owned();
-        if !(base.starts_with("https://") || base.starts_with("http://127.0.0.1") || base.starts_with("http://localhost") || base.starts_with("http://10.0.2.2") || base.starts_with("http://[::1]")) {
-            return Err(Error::Invalid(format!("{base} must be https (plain http is allowed only for local addresses)")));
+        if !(base.starts_with("https://")
+            || base.starts_with("http://127.0.0.1")
+            || base.starts_with("http://localhost")
+            || base.starts_with("http://10.0.2.2")
+            || base.starts_with("http://[::1]"))
+        {
+            return Err(Error::Invalid(format!(
+                "{base} must be https (plain http is allowed only for local addresses)"
+            )));
         }
         let http = reqwest::Client::builder()
             .timeout(self.timeout)
             .user_agent(self.user_agent.clone())
             .build()
-            .map_err(|e| Error::Transport { url: base.clone(), source: e })?;
-        let mut client = Client { http, base, testing_secret: self.testing_secret, api_version: API_VERSION, telemetry: self.telemetry, isi: self.isi };
+            .map_err(|e| Error::Transport {
+                url: base.clone(),
+                source: e,
+            })?;
+        let mut client = Client {
+            http,
+            base,
+            testing_secret: self.testing_secret,
+            api_version: API_VERSION,
+            telemetry: self.telemetry,
+            isi: self.isi,
+        };
         let supported: Vec<String> = SUPPORTED_API_VERSIONS.iter().map(u32::to_string).collect();
         let resp = client
             .http
@@ -119,7 +139,10 @@ impl ClientBuilder {
             .header(SUPPORTED_VERSIONS_HEADER, supported.join(", "))
             .send()
             .await
-            .map_err(|e| Error::Transport { url: client.base.clone(), source: e })?;
+            .map_err(|e| Error::Transport {
+                url: client.base.clone(),
+                source: e,
+            })?;
         let info: VersionInfo = decode(resp).await?;
         client.api_version = info.api_version;
         Ok(client)
@@ -139,18 +162,30 @@ pub struct Client {
 
 async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| Error::Decode { status: status.as_u16(), detail: e.to_string() })?;
+    let bytes = resp.bytes().await.map_err(|e| Error::Decode {
+        status: status.as_u16(),
+        detail: e.to_string(),
+    })?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| Error::Decode {
         status: status.as_u16(),
         detail: String::from_utf8_lossy(&bytes).chars().take(300).collect(),
     })?;
     if !status.is_success() || v.get("type").and_then(|t| t.as_str()) == Some("error") {
-        let error: ApiError = serde_json::from_value(v.get("data").cloned().unwrap_or_default())
-            .map_err(|e| Error::Decode { status: status.as_u16(), detail: format!("error body: {e}") })?;
-        return Err(Error::Api { status: status.as_u16(), error: Box::new(error) });
+        let error: ApiError =
+            serde_json::from_value(v.get("data").cloned().unwrap_or_default()).map_err(|e| Error::Decode {
+                status: status.as_u16(),
+                detail: format!("error body: {e}"),
+            })?;
+        return Err(Error::Api {
+            status: status.as_u16(),
+            error: Box::new(error),
+        });
     }
     let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
-    serde_json::from_value(data).map_err(|e| Error::Decode { status: status.as_u16(), detail: e.to_string() })
+    serde_json::from_value(data).map_err(|e| Error::Decode {
+        status: status.as_u16(),
+        detail: e.to_string(),
+    })
 }
 
 async fn expect_empty(resp: reqwest::Response) -> Result<()> {
@@ -192,7 +227,10 @@ impl Client {
     }
 
     fn req(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
-        let mut r = self.http.request(method, format!("{}{path}", self.base)).header(API_VERSION_HEADER, self.api_version.to_string());
+        let mut r = self
+            .http
+            .request(method, format!("{}{path}", self.base))
+            .header(API_VERSION_HEADER, self.api_version.to_string());
         if let Some(s) = &self.testing_secret {
             r = r.header(TESTING_SECRET_HEADER, s);
         }
@@ -206,12 +244,19 @@ impl Client {
     }
 
     async fn send(&self, r: reqwest::RequestBuilder) -> Result<reqwest::Response> {
-        r.send().await.map_err(|e| Error::Transport { url: self.base.clone(), source: e })
+        r.send().await.map_err(|e| Error::Transport {
+            url: self.base.clone(),
+            source: e,
+        })
     }
 
     /// Scopes calls to a signed-in member and (optionally) one team.
     pub fn authed<'a>(&'a self, access_token: &'a str, team: Option<&'a str>) -> Authed<'a> {
-        Authed { c: self, token: access_token, team }
+        Authed {
+            c: self,
+            token: access_token,
+            team,
+        }
     }
 
     pub async fn iam(&self) -> Result<IamInfo> {
@@ -225,7 +270,10 @@ impl Client {
     /// Exchanges a short-lived token from Silicon IAM. In a test environment a test member id
     /// (`c:alice`, `si:chef`) also works.
     pub async fn login(&self, slt: &str) -> Result<AuthSession> {
-        let r = self.req(Method::POST, "/api/v1/auth/login").header("Idempotency-Key", Uuid::new_v4().to_string()).json(&env("login", LoginInput { slt: slt.to_owned() }));
+        let r = self
+            .req(Method::POST, "/api/v1/auth/login")
+            .header("Idempotency-Key", Uuid::new_v4().to_string())
+            .json(&env("login", LoginInput { slt: slt.to_owned() }));
         decode(self.send(r).await?).await
     }
 
@@ -233,12 +281,25 @@ impl Client {
         let r = self
             .req(Method::POST, "/api/v1/auth/refresh")
             .header("Idempotency-Key", idempotency_key)
-            .json(&env("refresh", RefreshInput { refresh_token: refresh_token.to_owned() }));
+            .json(&env(
+                "refresh",
+                RefreshInput {
+                    refresh_token: refresh_token.to_owned(),
+                },
+            ));
         decode(self.send(r).await?).await
     }
 
     pub async fn logout(&self, token: &str, access_token: Option<&str>) -> Result<()> {
-        let mut r = self.req(Method::POST, "/api/v1/auth/logout").header("Idempotency-Key", Uuid::new_v4().to_string()).json(&env("logout", LogoutInput { token: token.to_owned() }));
+        let mut r = self
+            .req(Method::POST, "/api/v1/auth/logout")
+            .header("Idempotency-Key", Uuid::new_v4().to_string())
+            .json(&env(
+                "logout",
+                LogoutInput {
+                    token: token.to_owned(),
+                },
+            ));
         if let Some(a) = access_token {
             r = r.bearer_auth(a);
         }
@@ -253,25 +314,45 @@ impl Client {
     // ── Device side (Extend apps) ──
 
     pub async fn enroll(&self, input: &EnrollmentCreate) -> Result<EnrollmentCreated> {
-        decode(self.send(self.req(Method::POST, "/api/v1/enrollments").json(&env("enrollment", input))).await?).await
+        decode(
+            self.send(
+                self.req(Method::POST, "/api/v1/enrollments")
+                    .json(&env("enrollment", input)),
+            )
+            .await?,
+        )
+        .await
     }
 
     pub async fn enrollment(&self, id: Uuid, secret: &str) -> Result<EnrollmentState> {
-        let r = self.req(Method::GET, &format!("/api/v1/enrollments/{id}")).header("authorization", format!("Extend-Enrollment {secret}"));
+        let r = self
+            .req(Method::GET, &format!("/api/v1/enrollments/{id}"))
+            .header("authorization", format!("Extend-Enrollment {secret}"));
         decode(self.send(r).await?).await
     }
 
     pub async fn device_self(&self, credential: &str) -> Result<DeviceSelf> {
-        let r = self.req(Method::GET, "/api/v1/device").header("authorization", format!("Extend-Device {credential}"));
+        let r = self
+            .req(Method::GET, "/api/v1/device")
+            .header("authorization", format!("Extend-Device {credential}"));
         decode(self.send(r).await?).await
     }
 
     pub async fn revoke_pair(&self, credential: &str) -> Result<()> {
-        let r = self.req(Method::DELETE, "/api/v1/device").header("authorization", format!("Extend-Device {credential}"));
+        let r = self
+            .req(Method::DELETE, "/api/v1/device")
+            .header("authorization", format!("Extend-Device {credential}"));
         expect_empty(self.send(r).await?).await
     }
 
-    pub async fn upload_artifact(&self, credential: &str, upload_id: Uuid, name: &str, content_type: &str, bytes: Vec<u8>) -> Result<()> {
+    pub async fn upload_artifact(
+        &self,
+        credential: &str,
+        upload_id: Uuid,
+        name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<()> {
         use sha2_lite::sha256_hex;
         let r = self
             .req(Method::PUT, &format!("/api/v1/device/artifacts/{upload_id}"))
@@ -285,7 +366,10 @@ impl Client {
 
     /// The WebSocket URL for a path (`/api/v1/device/connect`).
     pub fn ws_url(&self, path: &str) -> String {
-        let base = self.base.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1);
+        let base = self
+            .base
+            .replacen("https://", "wss://", 1)
+            .replacen("http://", "ws://", 1);
         format!("{base}{path}")
     }
 
@@ -294,9 +378,19 @@ impl Client {
         let resp = self.send(self.http.get(url).bearer_auth(access_token)).await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(Error::Decode { status: status.as_u16(), detail: format!("downloading {url} failed") });
+            return Err(Error::Decode {
+                status: status.as_u16(),
+                detail: format!("downloading {url} failed"),
+            });
         }
-        Ok(resp.bytes().await.map_err(|e| Error::Transport { url: url.to_owned(), source: e })?.to_vec())
+        Ok(resp
+            .bytes()
+            .await
+            .map_err(|e| Error::Transport {
+                url: url.to_owned(),
+                source: e,
+            })?
+            .to_vec())
     }
 }
 
@@ -335,9 +429,20 @@ pub struct ListQuery {
 fn qs(pairs: &[(&str, Option<String>)]) -> String {
     let parts: Vec<String> = pairs
         .iter()
-        .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={}", url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>())))
+        .filter_map(|(k, v)| {
+            v.as_ref().map(|v| {
+                format!(
+                    "{k}={}",
+                    url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
+                )
+            })
+        })
         .collect();
-    if parts.is_empty() { String::new() } else { format!("?{}", parts.join("&")) }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", parts.join("&"))
+    }
 }
 
 /// Calls made as a signed-in member.
@@ -374,7 +479,13 @@ impl Authed<'_> {
     pub async fn devices(&self, q: DeviceQuery) -> Result<Page<Device>> {
         self.get(&format!(
             "/api/v1/devices{}",
-            qs(&[("scope", q.scope), ("online", q.online.map(|b| b.to_string())), ("os", q.os), ("limit", q.limit.map(|l| l.to_string())), ("cursor", q.cursor)])
+            qs(&[
+                ("scope", q.scope),
+                ("online", q.online.map(|b| b.to_string())),
+                ("os", q.os),
+                ("limit", q.limit.map(|l| l.to_string())),
+                ("cursor", q.cursor)
+            ])
         ))
         .await
     }
@@ -388,11 +499,19 @@ impl Authed<'_> {
     }
 
     pub async fn attach(&self, host_id: &str, input: &AttachmentCreate) -> Result<Device> {
-        self.post(&format!("/api/v1/devices/{host_id}/attachments"), "attachment", input, true).await
+        self.post(
+            &format!("/api/v1/devices/{host_id}/attachments"),
+            "attachment",
+            input,
+            true,
+        )
+        .await
     }
 
     pub async fn update_device(&self, id: &str, version: Option<i64>, patch: &DevicePatch) -> Result<Device> {
-        let mut r = self.req(Method::PATCH, &format!("/api/v1/devices/{id}")).json(&env("device", patch));
+        let mut r = self
+            .req(Method::PATCH, &format!("/api/v1/devices/{id}"))
+            .json(&env("device", patch));
         if let Some(v) = version {
             r = r.header("If-Match", format!("\"{v}\""));
         }
@@ -408,7 +527,13 @@ impl Authed<'_> {
     }
 
     pub async fn stop_device(&self, id: &str) -> Result<Session> {
-        self.post(&format!("/api/v1/devices/{id}/stop"), "stop", serde_json::json!({}), false).await
+        self.post(
+            &format!("/api/v1/devices/{id}/stop"),
+            "stop",
+            serde_json::json!({}),
+            false,
+        )
+        .await
     }
 
     /// Silicons in the team, for choosing who gets access.
@@ -425,7 +550,13 @@ impl Authed<'_> {
     }
 
     pub async fn setup_code(&self, id: &str, code: &str) -> Result<Setup> {
-        self.post(&format!("/api/v1/devices/{id}/setup/code"), "setup_code", serde_json::json!({"code": code}), false).await
+        self.post(
+            &format!("/api/v1/devices/{id}/setup/code"),
+            "setup_code",
+            serde_json::json!({"code": code}),
+            false,
+        )
+        .await
     }
 
     pub async fn access(&self, id: &str) -> Result<Vec<AccessGrant>> {
@@ -437,11 +568,21 @@ impl Authed<'_> {
     }
 
     pub async fn grant(&self, id: &str, silicon_id: &str) -> Result<AccessGrant> {
-        decode(self.c.send(self.req(Method::PUT, &format!("/api/v1/devices/{id}/access/{silicon_id}"))).await?).await
+        decode(
+            self.c
+                .send(self.req(Method::PUT, &format!("/api/v1/devices/{id}/access/{silicon_id}")))
+                .await?,
+        )
+        .await
     }
 
     pub async fn revoke(&self, id: &str, silicon_id: &str) -> Result<()> {
-        expect_empty(self.c.send(self.req(Method::DELETE, &format!("/api/v1/devices/{id}/access/{silicon_id}"))).await?).await
+        expect_empty(
+            self.c
+                .send(self.req(Method::DELETE, &format!("/api/v1/devices/{id}/access/{silicon_id}")))
+                .await?,
+        )
+        .await
     }
 
     pub async fn activity(&self, id: &str, q: ActivityQuery) -> Result<Page<ActivityEntry>> {
@@ -460,29 +601,59 @@ impl Authed<'_> {
     }
 
     pub async fn device_requests(&self, id: &str, q: ListQuery) -> Result<Page<RequestInfo>> {
-        self.get(&format!("/api/v1/devices/{id}/requests{}", qs(&[("limit", q.limit.map(|l| l.to_string())), ("cursor", q.cursor)]))).await
+        self.get(&format!(
+            "/api/v1/devices/{id}/requests{}",
+            qs(&[("limit", q.limit.map(|l| l.to_string())), ("cursor", q.cursor)])
+        ))
+        .await
     }
 
     pub async fn send_request(&self, device_id: &str, reason: &str) -> Result<RequestInfo> {
-        self.post(&format!("/api/v1/devices/{device_id}/requests"), "request", RequestCreate { reason: reason.to_owned() }, true).await
+        self.post(
+            &format!("/api/v1/devices/{device_id}/requests"),
+            "request",
+            RequestCreate {
+                reason: reason.to_owned(),
+            },
+            true,
+        )
+        .await
     }
 
     pub async fn requests(&self, q: ListQuery) -> Result<Page<RequestInfo>> {
         self.get(&format!(
             "/api/v1/requests{}",
-            qs(&[("direction", q.direction), ("device_id", q.device_id), ("limit", q.limit.map(|l| l.to_string())), ("cursor", q.cursor)])
+            qs(&[
+                ("direction", q.direction),
+                ("device_id", q.device_id),
+                ("limit", q.limit.map(|l| l.to_string())),
+                ("cursor", q.cursor)
+            ])
         ))
         .await
     }
 
     pub async fn start_session(&self, device_id: &DeviceId) -> Result<Session> {
-        self.post("/api/v1/sessions", "session", SessionCreate { device_id: device_id.clone() }, true).await
+        self.post(
+            "/api/v1/sessions",
+            "session",
+            SessionCreate {
+                device_id: device_id.clone(),
+            },
+            true,
+        )
+        .await
     }
 
     pub async fn sessions(&self, q: ListQuery) -> Result<Page<Session>> {
         self.get(&format!(
             "/api/v1/sessions{}",
-            qs(&[("device_id", q.device_id), ("state", q.state), ("limit", q.limit.map(|l| l.to_string())), ("cursor", q.cursor)])
+            qs(&[
+                ("device_id", q.device_id),
+                ("state", q.state),
+                ("limit", q.limit.map(|l| l.to_string())),
+                ("cursor", q.cursor)
+            ])
         ))
         .await
     }
@@ -492,11 +663,25 @@ impl Authed<'_> {
     }
 
     pub async fn end_session(&self, id: &str) -> Result<Session> {
-        self.post(&format!("/api/v1/sessions/{id}/end"), "end", serde_json::json!({}), false).await
+        self.post(
+            &format!("/api/v1/sessions/{id}/end"),
+            "end",
+            serde_json::json!({}),
+            false,
+        )
+        .await
     }
 
     pub async fn takeover(&self, id: &str, reason: &str) -> Result<Takeover> {
-        self.post(&format!("/api/v1/sessions/{id}/takeover"), "takeover", TakeoverCreate { reason: reason.to_owned() }, false).await
+        self.post(
+            &format!("/api/v1/sessions/{id}/takeover"),
+            "takeover",
+            TakeoverCreate {
+                reason: reason.to_owned(),
+            },
+            false,
+        )
+        .await
     }
 
     pub async fn takeover_status(&self, id: &str) -> Result<Option<Takeover>> {
@@ -504,18 +689,35 @@ impl Authed<'_> {
     }
 
     pub async fn release_takeover(&self, id: &str) -> Result<()> {
-        expect_empty(self.c.send(self.req(Method::DELETE, &format!("/api/v1/sessions/{id}/takeover"))).await?).await
+        expect_empty(
+            self.c
+                .send(self.req(Method::DELETE, &format!("/api/v1/sessions/{id}/takeover")))
+                .await?,
+        )
+        .await
     }
 
     /// Runs one command in a session and waits for the device's answer.
     pub async fn run(&self, session_id: &str, cmd: &CommandRequest) -> Result<CommandResult> {
-        self.post(&format!("/api/v1/sessions/{session_id}/commands"), "command", cmd, false).await
+        self.post(
+            &format!("/api/v1/sessions/{session_id}/commands"),
+            "command",
+            cmd,
+            false,
+        )
+        .await
     }
 
     pub async fn files(&self, q: ListQuery) -> Result<Page<FileInfo>> {
         self.get(&format!(
             "/api/v1/files{}",
-            qs(&[("session_id", q.session_id), ("device_id", q.device_id), ("kind", q.kind), ("limit", q.limit.map(|l| l.to_string())), ("cursor", q.cursor)])
+            qs(&[
+                ("session_id", q.session_id),
+                ("device_id", q.device_id),
+                ("kind", q.kind),
+                ("limit", q.limit.map(|l| l.to_string())),
+                ("cursor", q.cursor)
+            ])
         ))
         .await
     }
@@ -525,7 +727,13 @@ impl Authed<'_> {
     }
 
     pub async fn keep_file(&self, id: &str) -> Result<FileInfo> {
-        self.post(&format!("/api/v1/files/{id}/keep"), "keep", serde_json::json!({}), false).await
+        self.post(
+            &format!("/api/v1/files/{id}/keep"),
+            "keep",
+            serde_json::json!({}),
+            false,
+        )
+        .await
     }
 
     pub async fn report(&self, input: &ReportInput) -> Result<ReportReceipt> {
@@ -534,7 +742,9 @@ impl Authed<'_> {
 
     /// Sends one telemetry event (fields listed in api.yaml); errors are the caller's to ignore.
     pub async fn telemetry(&self, event: serde_json::Value) -> Result<()> {
-        let r = self.req(Method::POST, "/api/v1/telemetry").json(&env("telemetry", event));
+        let r = self
+            .req(Method::POST, "/api/v1/telemetry")
+            .json(&env("telemetry", event));
         expect_empty(self.c.send(r).await?).await
     }
 }

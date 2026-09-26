@@ -1,3 +1,4 @@
 .state/
 last-run/
 __pycache__/
+.cache/

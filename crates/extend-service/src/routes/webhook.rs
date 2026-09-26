@@ -24,11 +24,14 @@ pub async fn receive(State(state): State<Shared>, headers: HeaderMap, body: Byte
         crate::db::ensure_world(&state.pool, &world).await?;
     }
     // At-least-once delivery: a duplicate is acknowledged and ignored.
-    let fresh = sqlx::query(sql!("INSERT INTO {} (event_id) VALUES ($1) ON CONFLICT DO NOTHING", world.t("iam_events")))
-        .bind(&event.event_id)
-        .execute(&state.pool)
-        .await?
-        .rows_affected()
+    let fresh = sqlx::query(sql!(
+        "INSERT INTO {} (event_id) VALUES ($1) ON CONFLICT DO NOTHING",
+        world.t("iam_events")
+    ))
+    .bind(&event.event_id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected()
         == 1;
     if fresh {
         tracing::info!(event_id = %event.event_id, event_type = %event.event_type, members = ?event.members, environment = ?event.testing_environment_id, "IAM event");

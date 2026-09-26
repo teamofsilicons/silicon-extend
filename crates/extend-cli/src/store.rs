@@ -21,7 +21,9 @@ pub fn default_root() -> PathBuf {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// The directory state actually lives in.
@@ -114,16 +116,23 @@ impl Plane {
 
 pub fn load_test(id: &str) -> anyhow::Result<TestEnv> {
     let path = root().join("test").join(format!("{id}.json"));
-    let raw = fs::read(&path).with_context(|| format!("test environment {id} is not added (run `extend config test add {id}` and paste its app secret)"))?;
+    let raw = fs::read(&path).with_context(|| {
+        format!("test environment {id} is not added (run `extend config test add {id}` and paste its app secret)")
+    })?;
     Ok(serde_json::from_slice(&raw)?)
 }
 
 pub fn save_test(id: &str, env: &TestEnv) -> anyhow::Result<()> {
-    write_private(&root().join("test").join(format!("{id}.json")), &serde_json::to_vec_pretty(env)?)
+    write_private(
+        &root().join("test").join(format!("{id}.json")),
+        &serde_json::to_vec_pretty(env)?,
+    )
 }
 
 pub fn list_tests() -> Vec<(String, TestEnv)> {
-    let Ok(dir) = fs::read_dir(root().join("test")) else { return vec![] };
+    let Ok(dir) = fs::read_dir(root().join("test")) else {
+        return vec![];
+    };
     let mut v: Vec<_> = dir
         .flatten()
         .filter_map(|e| {
@@ -173,7 +182,11 @@ impl Lock {
                 Ok(_) => return Self(path),
                 Err(_) => {
                     // A lock older than 30 s belongs to a process that died.
-                    let stale = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e.as_secs() > 30);
+                    let stale = fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|e| e.as_secs() > 30);
                     if stale {
                         let _ = fs::remove_file(&path);
                     }
@@ -194,18 +207,26 @@ impl Drop for Lock {
 // ── config.toml: flat `key = "value"` lines ──
 
 pub const CONFIG_KEYS: &[(&str, &str)] = &[
-    ("api_url", "Extend service URL (default https://backend.extend.teamofsilicons.com)"),
+    (
+        "api_url",
+        "Extend service URL (default https://backend.extend.teamofsilicons.com)",
+    ),
     ("telemetry", "on|off (default on)"),
     ("output", "text|json (default text)"),
     ("team", "default team handle"),
     ("screenshot_scale", "0.01–1, used when screenshot has no --scale"),
-    ("self_destruct", "default file self-destruct, like 1d, 90m, 30d (1m–30d, default 1d)"),
+    (
+        "self_destruct",
+        "default file self-destruct, like 1d, 90m, 30d (1m–30d, default 1d)",
+    ),
     ("download_dir", "where --out and `extend file get` save by default"),
     ("color", "auto|always|never"),
 ];
 
 pub fn load_config() -> BTreeMap<String, String> {
-    let Ok(raw) = fs::read_to_string(root().join("config.toml")) else { return BTreeMap::new() };
+    let Ok(raw) = fs::read_to_string(root().join("config.toml")) else {
+        return BTreeMap::new();
+    };
     raw.lines()
         .filter_map(|l| {
             let l = l.trim();
@@ -247,7 +268,10 @@ fn sessions_dir(plane: &Plane) -> PathBuf {
 }
 
 pub fn current_session(plane: &Plane) -> Option<String> {
-    fs::read_to_string(sessions_dir(plane).join("current")).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    fs::read_to_string(sessions_dir(plane).join("current"))
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn set_current_session(plane: &Plane, id: Option<&str>) -> anyhow::Result<()> {
@@ -262,7 +286,10 @@ pub fn set_current_session(plane: &Plane, id: Option<&str>) -> anyhow::Result<()
 }
 
 pub fn save_session_cache(plane: &Plane, c: &SessionCache) -> anyhow::Result<()> {
-    write_private(&sessions_dir(plane).join(format!("{}.json", c.session_id)), &serde_json::to_vec_pretty(c)?)
+    write_private(
+        &sessions_dir(plane).join(format!("{}.json", c.session_id)),
+        &serde_json::to_vec_pretty(c)?,
+    )
 }
 
 pub fn load_session_cache(plane: &Plane, id: &str) -> Option<SessionCache> {

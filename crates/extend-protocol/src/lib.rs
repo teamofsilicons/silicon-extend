@@ -11,7 +11,7 @@ pub mod frames;
 pub mod ids;
 pub mod model;
 
-pub use capability::{Capability, CommandSpec, DeviceOs, COMMANDS, NOT_EXPOSED};
+pub use capability::{COMMANDS, Capability, CommandSpec, DeviceOs, NOT_EXPOSED};
 pub use envelope::Envelope;
 pub use error::{ApiError, ErrorCode};
 pub use ids::{DeviceId, PairingCode, SessionId};
@@ -45,8 +45,7 @@ pub const TEST_DEVICE_LIMIT: i64 = 5;
 /// Most test environments active at once across the deployment.
 pub const TEST_ENVIRONMENT_LIMIT: i64 = 10;
 /// The exact message `UNDERSTANDING.md` requires when a test environment is full.
-pub const TEST_DEVICE_LIMIT_MESSAGE: &str =
-    "In test environment you are limited to 5 paired devices per environment.";
+pub const TEST_DEVICE_LIMIT_MESSAGE: &str = "In test environment you are limited to 5 paired devices per environment.";
 /// Default and bounds for a command deadline.
 pub const COMMAND_TIMEOUT_DEFAULT_MS: u64 = 30_000;
 pub const COMMAND_TIMEOUT_MIN_MS: u64 = 1_000;

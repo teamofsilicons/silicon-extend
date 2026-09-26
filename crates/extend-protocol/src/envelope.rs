@@ -11,7 +11,10 @@ pub struct Envelope<T> {
 
 impl<T> Envelope<T> {
     pub fn new(kind: impl Into<String>, data: T) -> Self {
-        Self { kind: kind.into(), data }
+        Self {
+            kind: kind.into(),
+            data,
+        }
     }
 }
 

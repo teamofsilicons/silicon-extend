@@ -3,9 +3,9 @@
 
 use std::time::Duration;
 
+use extend_protocol::SESSION_OFFLINE_GRACE_S;
 use extend_protocol::frames::EnrollmentFrame;
 use extend_protocol::model::EndReason;
-use extend_protocol::SESSION_OFFLINE_GRACE_S;
 use uuid::Uuid;
 
 use crate::db::World;
@@ -50,10 +50,11 @@ pub fn spawn(state: Shared) {
 
 async fn worlds(state: &AppState) -> Vec<World> {
     let mut v = vec![World::production()];
-    let envs: Vec<(Uuid,)> = sqlx::query_as("SELECT environment_id FROM extend_global.test_environments WHERE state = 'ready'")
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+    let envs: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT environment_id FROM extend_global.test_environments WHERE state = 'ready'")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
     v.extend(envs.into_iter().map(|(id,)| World::test(id)));
     v
 }
@@ -71,7 +72,16 @@ async fn rotate_codes(state: &AppState) -> crate::error::AppResult<()> {
             continue;
         }
         if let Some((code, expires, true)) = crate::routes::enroll::rotate_if_due(state, id).await? {
-            state.hub.send_enrollment(id, EnrollmentFrame::Code { pairing_code: code, code_expires_at: expires }).await;
+            state
+                .hub
+                .send_enrollment(
+                    id,
+                    EnrollmentFrame::Code {
+                        pairing_code: code,
+                        code_expires_at: expires,
+                    },
+                )
+                .await;
         }
     }
     Ok(())
@@ -80,18 +90,26 @@ async fn rotate_codes(state: &AppState) -> crate::error::AppResult<()> {
 async fn sessions(state: &AppState, world: &World) -> crate::error::AppResult<()> {
     let actor = domain::system_member();
     // Idle (and takeovers that ran out).
-    let idle: Vec<(String,)> = sqlx::query_as(sql!("SELECT session_id FROM {} WHERE state <> 'ended' AND idle_ends_at <= now()", world.t("sessions")))
-        .fetch_all(&state.pool)
-        .await?;
+    let idle: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT session_id FROM {} WHERE state <> 'ended' AND idle_ends_at <= now()",
+        world.t("sessions")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
     for (sid,) in idle {
         domain::end_session(state, world, &sid, EndReason::IdleTimeout, &actor).await?;
     }
     // Devices that stayed offline during a session.
-    let running: Vec<(String, String)> = sqlx::query_as(sql!("SELECT session_id, device_id FROM {} WHERE state <> 'ended'", world.t("sessions")))
-        .fetch_all(&state.pool)
-        .await?;
+    let running: Vec<(String, String)> = sqlx::query_as(sql!(
+        "SELECT session_id, device_id FROM {} WHERE state <> 'ended'",
+        world.t("sessions")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
     for (sid, device_id) in running {
-        let Some(d) = domain::load_device(state, world, &device_id).await? else { continue };
+        let Some(d) = domain::load_device(state, world, &device_id).await? else {
+            continue;
+        };
         if domain::is_online(state, world, &d).await {
             continue;
         }
@@ -124,26 +142,47 @@ async fn slow(state: &AppState, world: &World) -> crate::error::AppResult<()> {
     .fetch_all(&state.pool)
     .await?;
     for (file_id, creator) in due {
-        let who = state.session_principals.read().await.values().find(|(p, _)| p.id() == creator).cloned();
+        let who = state
+            .session_principals
+            .read()
+            .await
+            .values()
+            .find(|(p, _)| p.id() == creator)
+            .cloned();
         let result = match &who {
-            Some((p, sel)) => state.files.destroy(p, file_id, sel.as_ref()).await.map_err(|e| e.0.message),
+            Some((p, sel)) => state
+                .files
+                .destroy(p, file_id, sel.as_ref())
+                .await
+                .map_err(|e| e.0.message),
             None => {
                 // No live token for the Silicon: remove Extend's record; Briefcase keeps the file until
                 // the Silicon's next session lets Extend delete it. Local files go now.
                 let dummy = crate::iam::Principal {
-                    member: extend_protocol::model::Member { kind: extend_protocol::model::MemberKind::Silicon, id: creator.clone(), display_name: None },
+                    member: extend_protocol::model::Member {
+                        kind: extend_protocol::model::MemberKind::Silicon,
+                        id: creator.clone(),
+                        display_name: None,
+                    },
                     team: None,
                     teams: vec![],
                     role: None,
                     token: String::new(),
                 };
-                state.files.destroy(&dummy, file_id, None).await.map_err(|e| e.0.message)
+                state
+                    .files
+                    .destroy(&dummy, file_id, None)
+                    .await
+                    .map_err(|e| e.0.message)
             }
         };
         if let Err(e) = &result {
             tracing::warn!(file_id = %file_id, error = %e, "self-destruct delete failed");
         }
-        sqlx::query(sql!("DELETE FROM {} WHERE file_id = $1", world.t("files"))).bind(file_id).execute(&state.pool).await?;
+        sqlx::query(sql!("DELETE FROM {} WHERE file_id = $1", world.t("files")))
+            .bind(file_id)
+            .execute(&state.pool)
+            .await?;
     }
     // Requests Ting hasn't accepted yet.
     let pending: Vec<(Uuid, String, String, String, String, Option<String>, String, i32)> = sqlx::query_as(sql!(
@@ -155,11 +194,25 @@ async fn slow(state: &AppState, world: &World) -> crate::error::AppResult<()> {
     .fetch_all(&state.pool)
     .await?;
     for (id, device_id, name, from, to, session, reason, _attempts) in pending {
-        let who = state.session_principals.read().await.values().find(|(p, _)| p.id() == from).cloned();
+        let who = state
+            .session_principals
+            .read()
+            .await
+            .values()
+            .find(|(p, _)| p.id() == from)
+            .cloned();
         let Some((p, sel)) = who else {
             continue;
         };
-        let ting = crate::ting::DeviceRequestTing { request_id: id, device_id: &device_id, device_name: &name, from: &from, to: &to, session_id: session.as_deref(), reason: &reason };
+        let ting = crate::ting::DeviceRequestTing {
+            request_id: id,
+            device_id: &device_id,
+            device_name: &name,
+            from: &from,
+            to: &to,
+            session_id: session.as_deref(),
+            reason: &reason,
+        };
         let (delivery, err) = match state.notifier.device_request(&p, &ting, sel.as_ref()).await {
             Ok(()) => ("delivered", None),
             Err(e) => ("pending", Some(e.0.message)),
@@ -176,9 +229,12 @@ async fn slow(state: &AppState, world: &World) -> crate::error::AppResult<()> {
         .await?;
     }
     // Uploads nobody claimed.
-    let stale: Vec<(Uuid,)> = sqlx::query_as(sql!("DELETE FROM {} WHERE expires_at < now() - interval '10 minutes' RETURNING upload_id", world.t("uploads")))
-        .fetch_all(&state.pool)
-        .await?;
+    let stale: Vec<(Uuid,)> = sqlx::query_as(sql!(
+        "DELETE FROM {} WHERE expires_at < now() - interval '10 minutes' RETURNING upload_id",
+        world.t("uploads")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
     for (u,) in stale {
         let _ = tokio::fs::remove_file(state.cfg.data_dir.join("uploads").join(u.to_string())).await;
     }

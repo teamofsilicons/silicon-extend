@@ -9,7 +9,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 EXTEND="$ROOT/target/debug/extend"
 FAKE="$ROOT/target/debug/examples/fake_device"
 WORK=$(mktemp -d)
-trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$WORK"' EXIT
+ENV=
+lifecycle() { # action [name]: a Honeycomb lifecycle instruction for the test environment $ENV
+  local op; op=$(python3 -c 'import uuid;print(uuid.uuid4())')
+  curl -sS --fail-with-body -XPUT "$API/internal/honeycomb/organizations/acme/testing-environments/$ENV/operations/$op" \
+    -H 'authorization: Bearer hck_local_dev_token' -H 'content-type: application/json' \
+    -d "{\"operation_id\":\"$op\",\"environment_id\":\"$ENV\",\"org_id\":\"acme\",\"app_id\":\"extend\",\"environment_revision\":1,\"generation\":1,\"key_version\":1,\"action\":\"$1\",\"testing_key\":\"abcdefghijklmnopqrstuvwxyz012345\"${2:+,\"name\":\"$2\"}}"
+}
+# The service allows 10 test environments across all of Extend, so each run purges the one it made.
+trap 'kill $(jobs -p) 2>/dev/null || true; [ -z "$ENV" ] || lifecycle purge >/dev/null || true; rm -rf "$WORK"' EXIT
 export EXTEND_API_URL=$API EXTEND_TELEMETRY=off
 
 pass=0
@@ -106,9 +114,7 @@ sleep 0.5; grep -q "UNPAIRED device_removed" "$FAKE_LOG" && ok "device was told 
 # ── Test environment ──
 ENV=$(python3 -c 'import uuid;print(uuid.uuid4())')
 SECRET=ask_$(python3 -c 'import secrets,base64;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))')
-OP=$(python3 -c 'import uuid;print(uuid.uuid4())')
-curl -sf -XPUT "$API/internal/honeycomb/organizations/acme/testing-environments/$ENV/operations/$OP" -H 'authorization: Bearer hck_local_dev_token' -H 'content-type: application/json' \
-  -d "{\"operation_id\":\"$OP\",\"environment_id\":\"$ENV\",\"org_id\":\"acme\",\"app_id\":\"extend\",\"environment_revision\":1,\"generation\":1,\"key_version\":1,\"action\":\"prepare\",\"testing_key\":\"abcdefghijklmnopqrstuvwxyz012345\",\"name\":\"cli-e2e\"}" >/dev/null
+lifecycle prepare cli-e2e >"$WORK/prepare" || { cat "$WORK/prepare"; echo; die "couldn't prepare a test environment (the service's reason is above)"; }
 curl -sf -XPOST "$API/dev/iam/test-apps" -H 'content-type: application/json' -d "{\"type\":\"t\",\"data\":{\"secret\":\"$SECRET\",\"environment_id\":\"$ENV\"}}"
 printf %s "$SECRET" | as alice config test add "$ENV" | grep -q cli-e2e && ok "test environment added from stdin"
 expect_exit 11 as alice env show

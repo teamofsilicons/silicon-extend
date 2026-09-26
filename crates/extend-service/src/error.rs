@@ -35,12 +35,18 @@ impl AppError {
     }
     pub fn internal(err: impl std::fmt::Display) -> Self {
         tracing::error!(error = %err, "internal error");
-        Self::new(ErrorCode::Internal, "Extend hit an unexpected error. The request id identifies it in the service logs.")
+        Self::new(
+            ErrorCode::Internal,
+            "Extend hit an unexpected error. The request id identifies it in the service logs.",
+        )
     }
     pub fn unavailable(what: &str, err: impl std::fmt::Display) -> Self {
         tracing::warn!(dependency = what, error = %err, "dependency unavailable");
-        Self::new(ErrorCode::ServiceUnavailable, format!("{what} is unavailable right now: {err}"))
-            .hint("Retry in a moment. If it keeps failing, report it with `extend report`.")
+        Self::new(
+            ErrorCode::ServiceUnavailable,
+            format!("{what} is unavailable right now: {err}"),
+        )
+        .hint("Retry in a moment. If it keeps failing, report it with `extend report`.")
     }
 }
 
@@ -70,7 +76,8 @@ impl IntoResponse for AppError {
         let status = StatusCode::from_u16(err.code.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let body = serde_json::json!({"type": "error", "data": err});
         let mut resp = (status, axum::Json(body)).into_response();
-        resp.headers_mut().insert("cache-control", HeaderValue::from_static("no-store"));
+        resp.headers_mut()
+            .insert("cache-control", HeaderValue::from_static("no-store"));
         resp
     }
 }

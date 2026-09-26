@@ -16,21 +16,30 @@ pub enum Environment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IamMode {
     /// The official Silicon IAM client against a real IAM.
-    Sdk { base_url: String, app_id: String, app_secret: String },
+    Sdk {
+        base_url: String,
+        app_id: String,
+        app_secret: String,
+    },
     /// Local development and tests: members are named in `EXTEND_LOCAL_MEMBERS`. Refused in production.
     Local,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilesMode {
-    Briefcase { api_url: String, web_url: String },
+    Briefcase {
+        api_url: String,
+        web_url: String,
+    },
     /// Files kept on local disk and served from `/dev/files/{id}`. Refused in production.
     Local,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TingMode {
-    Ting { base_url: String },
+    Ting {
+        base_url: String,
+    },
     /// Requests are recorded and marked delivered. Refused in production.
     Local,
 }
@@ -101,7 +110,9 @@ impl Config {
             other => bail!("EXTEND_FILES_MODE must be briefcase or local, got {other:?}"),
         };
         let ting = match var_or("EXTEND_TING_MODE", if production { "ting" } else { "local" }).as_str() {
-            "ting" => TingMode::Ting { base_url: var_or("EXTEND_TING_URL", "https://backend.ting.teamofsilicons.com") },
+            "ting" => TingMode::Ting {
+                base_url: var_or("EXTEND_TING_URL", "https://backend.ting.teamofsilicons.com"),
+            },
             "local" if production => bail!("EXTEND_TING_MODE=local is refused in production"),
             "local" => TingMode::Local,
             other => bail!("EXTEND_TING_MODE must be ting or local, got {other:?}"),
@@ -110,7 +121,9 @@ impl Config {
             match var(name) {
                 None => Ok(None),
                 Some(s) => {
-                    let v = var_or(version, "1").parse::<i64>().with_context(|| format!("{version} must be an integer"))?;
+                    let v = var_or(version, "1")
+                        .parse::<i64>()
+                        .with_context(|| format!("{version} must be an integer"))?;
                     Ok(Some((v, s)))
                 }
             }
@@ -126,7 +139,9 @@ impl Config {
                     .collect()
             })
             .unwrap_or_default();
-        let bind = var_or("EXTEND_BIND", "127.0.0.1:8480").parse().context("EXTEND_BIND must be host:port")?;
+        let bind = var_or("EXTEND_BIND", "127.0.0.1:8480")
+            .parse()
+            .context("EXTEND_BIND must be host:port")?;
         let public_url = var_or("EXTEND_PUBLIC_URL", &format!("http://{bind}"));
         if production && !public_url.starts_with("https://") {
             bail!("EXTEND_PUBLIC_URL must be https in production");
@@ -138,7 +153,10 @@ impl Config {
             public_url,
             website_url: var_or("EXTEND_WEBSITE_URL", "https://extend.teamofsilicons.com"),
             docs_url: var_or("EXTEND_DOCS_URL", "https://extend.teamofsilicons.com/docs"),
-            repository_url: var_or("EXTEND_REPOSITORY_URL", "https://github.com/teamofsilicons/silicon-extend"),
+            repository_url: var_or(
+                "EXTEND_REPOSITORY_URL",
+                "https://github.com/teamofsilicons/silicon-extend",
+            ),
             data_dir: PathBuf::from(var_or("EXTEND_DATA_DIR", "./data")),
             iam_public_url: match &iam {
                 IamMode::Sdk { base_url, .. } => var("EXTEND_IAM_PUBLIC_URL").unwrap_or_else(|| base_url.clone()),
@@ -146,11 +164,16 @@ impl Config {
             },
             iam_login_url: match &iam {
                 IamMode::Sdk { .. } => var_or("EXTEND_IAM_LOGIN_URL", "https://auth.iam.teamofsilicons.com/login"),
-                IamMode::Local => var("EXTEND_IAM_LOGIN_URL").unwrap_or_else(|| format!("{}/dev/iam/login", var_or("EXTEND_PUBLIC_URL", "http://127.0.0.1:8480"))),
+                IamMode::Local => var("EXTEND_IAM_LOGIN_URL").unwrap_or_else(|| {
+                    format!("{}/dev/iam/login", var_or("EXTEND_PUBLIC_URL", "http://127.0.0.1:8480"))
+                }),
             },
             iam,
             webhook_secret: secret("EXTEND_IAM_WEBHOOK_SECRET", "EXTEND_IAM_WEBHOOK_SECRET_VERSION")?,
-            webhook_previous_secret: secret("EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET", "EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION")?,
+            webhook_previous_secret: secret(
+                "EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET",
+                "EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
+            )?,
             files,
             ting,
             honeycomb_service_token: var("EXTEND_HONEYCOMB_SERVICE_TOKEN"),

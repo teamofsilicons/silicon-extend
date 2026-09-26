@@ -15,27 +15,47 @@ pub async fn live() -> StatusCode {
 }
 
 pub async fn ready(State(state): State<Shared>) -> Response {
-    match sqlx::query("SELECT 1 FROM extend_global.schema_versions LIMIT 1").execute(&state.pool).await {
+    match sqlx::query("SELECT 1 FROM extend_global.schema_versions LIMIT 1")
+        .execute(&state.pool)
+        .await
+    {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::SERVICE_UNAVAILABLE, format!("database unavailable: {e}")).into_response(),
     }
 }
 
 pub async fn negotiate(headers: HeaderMap) -> AppResult<Response> {
-    let raw = headers.get(SUPPORTED_VERSIONS_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("1");
+    let raw = headers
+        .get(SUPPORTED_VERSIONS_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("1");
     let theirs: Vec<u32> = raw.split(',').filter_map(|s| s.trim().parse().ok()).collect();
     let ours = [API_VERSION];
-    let agreed = theirs.iter().copied().filter(|v| ours.contains(v)).max().ok_or_else(|| {
-        AppError::new(ErrorCode::ApiVersionUnsupported, format!("No API version in common: the client supports {theirs:?}, Extend supports {ours:?}."))
+    let agreed = theirs
+        .iter()
+        .copied()
+        .filter(|v| ours.contains(v))
+        .max()
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::ApiVersionUnsupported,
+                format!("No API version in common: the client supports {theirs:?}, Extend supports {ours:?}."),
+            )
             .hint("Update the CLI with `honeycomb install 'extend'`.")
             .details(serde_json::json!({"client": theirs, "service": ours}))
-    })?;
+        })?;
     let mut resp = ok(
         "version",
-        VersionInfo { api_version: agreed, supported: ours.to_vec(), service_version: env!("CARGO_PKG_VERSION").into(), deprecated: vec![] },
+        VersionInfo {
+            api_version: agreed,
+            supported: ours.to_vec(),
+            service_version: env!("CARGO_PKG_VERSION").into(),
+            deprecated: vec![],
+        },
     );
     resp.headers_mut().insert(API_VERSION_HEADER, HeaderValue::from(agreed));
-    resp.headers_mut().insert("vary", HeaderValue::from_static(SUPPORTED_VERSIONS_HEADER));
+    resp.headers_mut()
+        .insert("vary", HeaderValue::from_static(SUPPORTED_VERSIONS_HEADER));
     Ok(resp)
 }
 

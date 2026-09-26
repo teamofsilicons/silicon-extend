@@ -51,7 +51,8 @@ impl Principal {
     }
     pub fn team(&self) -> AppResult<&str> {
         self.team.as_deref().ok_or_else(|| {
-            AppError::invalid("This request needs a team.").hint("Send the team handle in X-Org-ID, or pass --team <handle> to the CLI.")
+            AppError::invalid("This request needs a team.")
+                .hint("Send the team handle in X-Org-ID, or pass --team <handle> to the CLI.")
         })
     }
 }
@@ -84,9 +85,20 @@ impl IamEvent {
     /// True for events that can end a member's access (logout, removal, revocation, deletion).
     pub fn ends_access(&self) -> bool {
         let t = self.event_type.to_ascii_lowercase();
-        ["remov", "revok", "logout", "logged_out", "delet", "left", "suspend", "deactivat", "expire", "consent"]
-            .iter()
-            .any(|w| t.contains(w))
+        [
+            "remov",
+            "revok",
+            "logout",
+            "logged_out",
+            "delet",
+            "left",
+            "suspend",
+            "deactivat",
+            "expire",
+            "consent",
+        ]
+        .iter()
+        .any(|w| t.contains(w))
     }
 }
 
@@ -94,16 +106,31 @@ impl IamEvent {
 pub trait Iam: Send + Sync {
     fn app_id(&self) -> &str;
     async fn login(&self, slt: &str, idempotency_key: &str, sel: Option<&TestingSelection>) -> AppResult<AuthSession>;
-    async fn refresh(&self, refresh_token: &str, idempotency_key: &str, sel: Option<&TestingSelection>) -> AppResult<AuthSession>;
+    async fn refresh(
+        &self,
+        refresh_token: &str,
+        idempotency_key: &str,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<AuthSession>;
     async fn logout(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<()>;
     /// Live authorization for a bearer token, optionally in one team.
     async fn authorize(&self, token: &str, team: Option<&str>, sel: Option<&TestingSelection>) -> AppResult<Principal>;
     /// Whether a Carbon or Silicon is an active member of a team. IAM answers directory questions
     /// only for a member's own login, so `reader` is a signed-in member of that team whose access
     /// token asks (the Carbon granting access, or the member itself during a webhook re-check).
-    async fn member_active(&self, team: &str, member_id: &str, reader: Option<&Principal>, sel: Option<&TestingSelection>) -> AppResult<bool>;
+    async fn member_active(
+        &self,
+        team: &str,
+        member_id: &str,
+        reader: Option<&Principal>,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<bool>;
     /// The Silicons in the principal's team (for choosing who gets access).
-    async fn team_silicons(&self, principal: &Principal, sel: Option<&TestingSelection>) -> AppResult<Vec<extend_protocol::model::TeamSilicon>>;
+    async fn team_silicons(
+        &self,
+        principal: &Principal,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<Vec<extend_protocol::model::TeamSilicon>>;
     /// Validates a test application secret and names its environment.
     async fn select_testing(&self, secret: &str) -> AppResult<(Uuid, String)>;
     #[allow(clippy::too_many_arguments)]
@@ -132,7 +159,10 @@ impl AuthCache {
     pub async fn get(&self, token: &str, team: Option<&str>, env: Option<Uuid>) -> Option<Principal> {
         let key = (ids::secret_digest(token), team.map(str::to_owned), env);
         let entries = self.entries.read().await;
-        entries.get(&key).filter(|(at, _)| at.elapsed() < Self::TTL).map(|(_, p)| p.clone())
+        entries
+            .get(&key)
+            .filter(|(at, _)| at.elapsed() < Self::TTL)
+            .map(|(_, p)| p.clone())
     }
     pub async fn put(&self, token: &str, team: Option<&str>, env: Option<Uuid>, p: Principal) {
         let key = (ids::secret_digest(token), team.map(str::to_owned), env);
@@ -155,7 +185,11 @@ impl AuthCache {
     /// have expired; callers treat an IAM refusal as "cannot tell".
     pub async fn latest(&self, env: Option<Uuid>, pick: impl Fn(&Principal) -> bool) -> Option<Principal> {
         let entries = self.entries.read().await;
-        entries.iter().filter(|((_, _, e), (_, p))| *e == env && pick(p)).max_by_key(|(_, (at, _))| *at).map(|(_, (_, p))| p.clone())
+        entries
+            .iter()
+            .filter(|((_, _, e), (_, p))| *e == env && pick(p))
+            .max_by_key(|(_, (at, _))| *at)
+            .map(|(_, (_, p))| p.clone())
     }
     pub async fn forget_token(&self, token: &str) {
         let digest = ids::secret_digest(token);
@@ -164,8 +198,17 @@ impl AuthCache {
 }
 
 fn member_from_public_id(id: &str) -> AppResult<Member> {
-    let kind = ids::member_kind(id).ok_or_else(|| AppError::new(ErrorCode::Unauthorized, format!("IAM returned an unusable member id {id:?}")))?;
-    Ok(Member { kind, id: id.to_owned(), display_name: None })
+    let kind = ids::member_kind(id).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::Unauthorized,
+            format!("IAM returned an unusable member id {id:?}"),
+        )
+    })?;
+    Ok(Member {
+        kind,
+        id: id.to_owned(),
+        display_name: None,
+    })
 }
 
 // ───────────────────────────── Official client ─────────────────────────────
@@ -206,7 +249,13 @@ impl SdkIam {
             }
             None => None,
         };
-        Ok(Self { sdk, app_id: app_id.to_owned(), app_secret: app_secret.to_owned(), verifier, test_webhook_keys: RwLock::default() })
+        Ok(Self {
+            sdk,
+            app_id: app_id.to_owned(),
+            app_secret: app_secret.to_owned(),
+            verifier,
+            test_webhook_keys: RwLock::default(),
+        })
     }
 
     fn client(&self, sel: Option<&TestingSelection>) -> AppResult<SdkClient> {
@@ -216,12 +265,19 @@ impl SdkIam {
                 .sdk
                 .with_testing_application(&self.app_id, &s.secret)
                 .map(|c| c.with_credential(Credential::application(&self.app_id, &s.secret)))
-                .map_err(|e| AppError::new(ErrorCode::TestingSecretInvalid, format!("The test application secret was refused: {e}"))),
+                .map_err(|e| {
+                    AppError::new(
+                        ErrorCode::TestingSecretInvalid,
+                        format!("The test application secret was refused: {e}"),
+                    )
+                }),
         }
     }
 
     fn session(&self, tokens: models::OAuthTokenResponse, sel: Option<&TestingSelection>) -> AppResult<AuthSession> {
-        let actor = tokens.actor.ok_or_else(|| AppError::unavailable("Silicon IAM", "login returned no actor"))?;
+        let actor = tokens
+            .actor
+            .ok_or_else(|| AppError::unavailable("Silicon IAM", "login returned no actor"))?;
         let member = member_from_public_id(&actor.public_id)?;
         Ok(AuthSession {
             access_token: tokens.access_token,
@@ -244,16 +300,19 @@ impl SdkIam {
 fn mutation(key: &str) -> AppResult<Mutation> {
     // IAM wants 16+ characters; hash the caller's key so any valid key maps to a stable one.
     let digest = ids::hex_lower(&Sha256::digest(format!("silicon-extend:{key}").as_bytes()));
-    IdempotencyKey::parse(digest).map(Mutation::with_key).map_err(AppError::internal)
+    IdempotencyKey::parse(digest)
+        .map(Mutation::with_key)
+        .map_err(AppError::internal)
 }
 
 /// Maps an error from a login (SLT exchange): IAM's 400/401 means the SLT itself was refused.
 fn login_error(err: silicon_iam_client::Error) -> AppError {
     match &err {
-        silicon_iam_client::Error::Api(api) if api.status == 401 || api.status == 400 => {
-            AppError::new(ErrorCode::SltInvalid, format!("Silicon IAM refused the token: {} ({})", api.message, api.code))
-                .hint("Generate a new short-lived token with the IAM CLI and run `extend login <slt>` again.")
-        }
+        silicon_iam_client::Error::Api(api) if api.status == 401 || api.status == 400 => AppError::new(
+            ErrorCode::SltInvalid,
+            format!("Silicon IAM refused the token: {} ({})", api.message, api.code),
+        )
+        .hint("Generate a new short-lived token with the IAM CLI and run `extend login <slt>` again."),
         _ => sdk_error(err),
     }
 }
@@ -262,17 +321,47 @@ fn login_error(err: silicon_iam_client::Error) -> AppError {
 /// the member's behalf (their access token), never about an SLT.
 fn sdk_error(err: silicon_iam_client::Error) -> AppError {
     match &err {
-        silicon_iam_client::Error::Api(api) if api.status == 401 => {
-            AppError::new(ErrorCode::TokenExpired, format!("Silicon IAM no longer accepts this login: {} ({})", api.message, api.code))
-                .hint("Run `extend login status`; if it fails, get a new short-lived token and run `extend login <slt>`.")
-        }
-        silicon_iam_client::Error::Api(api) if api.status == 403 => {
-            AppError::new(ErrorCode::NotATeamMember, format!("Silicon IAM refused access: {} ({})", api.message, api.code))
-        }
-        silicon_iam_client::Error::RateLimited { .. } => {
-            AppError::new(ErrorCode::RateLimited, "Silicon IAM is rate limiting Extend; retry shortly.")
-        }
+        silicon_iam_client::Error::Api(api) if api.status == 401 => AppError::new(
+            ErrorCode::TokenExpired,
+            format!(
+                "Silicon IAM no longer accepts this login: {} ({})",
+                api.message, api.code
+            ),
+        )
+        .hint("Run `extend login status`; if it fails, get a new short-lived token and run `extend login <slt>`."),
+        silicon_iam_client::Error::Api(api) if api.status == 403 => AppError::new(
+            ErrorCode::NotATeamMember,
+            format!("Silicon IAM refused access: {} ({})", api.message, api.code),
+        ),
+        silicon_iam_client::Error::RateLimited { .. } => AppError::new(
+            ErrorCode::RateLimited,
+            "Silicon IAM is rate limiting Extend; retry shortly.",
+        ),
         _ => AppError::unavailable("Silicon IAM", &err),
+    }
+}
+
+/// Maps a refused OBO catalog read or proof exchange. IAM answers 404 when the endpoint is not in
+/// the audience's catalog or Extend holds no approved, consented authority for it, 403 when the
+/// member's selected team or membership does not allow it, and 400 `invalid_subject_token` when
+/// the member's login is no longer accepted.
+fn obo_error(err: silicon_iam_client::Error, member: &str, audience: &str, endpoint_id: &str) -> AppError {
+    let what = |api: &silicon_iam_client::ApiError| {
+        format!(
+            "Silicon IAM would not let Extend act for {member} on {audience} ({endpoint_id}): {} ({}).",
+            api.message, api.code
+        )
+    };
+    match &err {
+        silicon_iam_client::Error::Api(api) if api.code == "invalid_subject_token" || api.status == 401 && api.code.contains("subject") => {
+            AppError::new(ErrorCode::TokenExpired, format!("{} {member}'s Extend login is no longer accepted.", what(api)))
+                .hint("Get a new short-lived token with the IAM CLI and run `extend login <slt>`.")
+        }
+        silicon_iam_client::Error::Api(api) if api.status == 404 || api.status == 403 => AppError::new(ErrorCode::NoAccess, what(api)).hint(format!(
+            "Extend needs {audience}'s {endpoint_id} approved for it (a Team admin does this in Honeycomb) and {member}'s consent: \
+             get a new short-lived token with the IAM CLI and run `extend login <slt>` to approve Extend's current access."
+        )),
+        _ => sdk_error(err),
     }
 }
 
@@ -287,10 +376,18 @@ impl Iam for SdkIam {
             return Err(AppError::invalid("slt must be 1–4096 printable characters."));
         }
         if sel.is_none() && ids::member_kind(slt).is_some() {
-            return Err(AppError::new(ErrorCode::SltInvalid, "A member id works as a login only in a test environment.")
-                .hint("Generate a short-lived token with the IAM CLI and pass that instead."));
+            return Err(AppError::new(
+                ErrorCode::SltInvalid,
+                "A member id works as a login only in a test environment.",
+            )
+            .hint("Generate a short-lived token with the IAM CLI and pass that instead."));
         }
-        let tokens = self.client(sel)?.oauth().login(&self.app_id, slt, &mutation(key)?).await.map_err(login_error)?;
+        let tokens = self
+            .client(sel)?
+            .oauth()
+            .login(&self.app_id, slt, &mutation(key)?)
+            .await
+            .map_err(login_error)?;
         let mut session = self.session(tokens, sel)?;
         if let Ok(Some(list)) = self.client(sel)?.oauth().authorizations(&session.access_token).await {
             session.teams = list.into_iter().map(|a| a.org_id).collect();
@@ -301,14 +398,22 @@ impl Iam for SdkIam {
     }
 
     async fn refresh(&self, token: &str, key: &str, sel: Option<&TestingSelection>) -> AppResult<AuthSession> {
-        let tokens = self.client(sel)?.oauth().refresh(&self.app_id, token, &mutation(key)?).await.map_err(|e| {
-            let mut err = login_error(e);
-            if err.code() == ErrorCode::SltInvalid {
-                err = AppError::new(ErrorCode::TokenExpired, "The refresh token is no longer accepted; the IAM session ended.")
+        let tokens = self
+            .client(sel)?
+            .oauth()
+            .refresh(&self.app_id, token, &mutation(key)?)
+            .await
+            .map_err(|e| {
+                let mut err = login_error(e);
+                if err.code() == ErrorCode::SltInvalid {
+                    err = AppError::new(
+                        ErrorCode::TokenExpired,
+                        "The refresh token is no longer accepted; the IAM session ended.",
+                    )
                     .hint("Get a new short-lived token and run `extend login <slt>`.");
-            }
-            err
-        })?;
+                }
+                err
+            })?;
         let mut session = self.session(tokens, sel)?;
         if let Ok(Some(list)) = self.client(sel)?.oauth().authorizations(&session.access_token).await {
             session.teams = list.into_iter().map(|a| a.org_id).collect();
@@ -317,11 +422,21 @@ impl Iam for SdkIam {
     }
 
     async fn logout(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<()> {
-        let hint = if token.starts_with("ort_") { Some("refresh_token".to_owned()) } else { Some("access_token".to_owned()) };
+        let hint = if token.starts_with("ort_") {
+            Some("refresh_token".to_owned())
+        } else {
+            Some("access_token".to_owned())
+        };
         let _ = hint;
         self.client(sel)?
             .oauth()
-            .revoke(&models::OAuthRevocationRequest { token: token.to_owned(), token_type_hint: None }, &Mutation::new())
+            .revoke(
+                &models::OAuthRevocationRequest {
+                    token: token.to_owned(),
+                    token_type_hint: None,
+                },
+                &Mutation::new(),
+            )
             .await
             .map_err(sdk_error)
     }
@@ -329,19 +444,36 @@ impl Iam for SdkIam {
     async fn authorize(&self, token: &str, team: Option<&str>, sel: Option<&TestingSelection>) -> AppResult<Principal> {
         let client = self.client(sel)?;
         let not_signed_in = || {
-            AppError::new(ErrorCode::TokenExpired, "The access token is not active: it expired, was revoked, or belongs to another application.")
-                .hint("Run `extend login status`; if it fails, get a new short-lived token and run `extend login <slt>`.")
+            AppError::new(
+                ErrorCode::TokenExpired,
+                "The access token is not active: it expired, was revoked, or belongs to another application.",
+            )
+            .hint("Run `extend login status`; if it fails, get a new short-lived token and run `extend login <slt>`.")
         };
-        let all = client.oauth().authorizations(token).await.map_err(sdk_error)?.ok_or_else(not_signed_in)?;
+        let all = client
+            .oauth()
+            .authorizations(token)
+            .await
+            .map_err(sdk_error)?
+            .ok_or_else(not_signed_in)?;
         let env = sel.map(|s| s.environment_id);
-        let all: Vec<_> = all.into_iter().filter(|a| a.audience == self.app_id && a.testing_environment_id == env).collect();
+        let all: Vec<_> = all
+            .into_iter()
+            .filter(|a| a.audience == self.app_id && a.testing_environment_id == env)
+            .collect();
         let first = all.first().ok_or_else(|| {
-            AppError::new(ErrorCode::NotATeamMember, "The token reaches no active team membership for Extend.")
-                .hint("Select a team when approving the login in Silicon IAM.")
+            AppError::new(
+                ErrorCode::NotATeamMember,
+                "The token reaches no active team membership for Extend.",
+            )
+            .hint("Select a team when approving the login in Silicon IAM.")
         })?;
         let public_id = first.public_id.clone().ok_or_else(|| {
-            AppError::new(ErrorCode::Unauthorized, "IAM did not disclose who this token belongs to.")
-                .hint("Approve the identity scope for Extend in Silicon IAM.")
+            AppError::new(
+                ErrorCode::Unauthorized,
+                "IAM did not disclose who this token belongs to.",
+            )
+            .hint("Approve the identity scope for Extend in Silicon IAM.")
         })?;
         let member = member_from_public_id(&public_id)?;
         let mut teams: Vec<String> = all.iter().map(|a| a.org_id.clone()).collect();
@@ -351,45 +483,76 @@ impl Iam for SdkIam {
             None => (None, None),
             Some(t) => {
                 let a = all.iter().find(|a| a.org_id == t).ok_or_else(|| {
-                    AppError::new(ErrorCode::NotATeamMember, format!("{public_id} is not an active member of team {t:?} for Extend."))
-                        .hint(format!("Teams this login reaches: {}.", teams.join(", ")))
+                    AppError::new(
+                        ErrorCode::NotATeamMember,
+                        format!("{public_id} is not an active member of team {t:?} for Extend."),
+                    )
+                    .hint(format!("Teams this login reaches: {}.", teams.join(", ")))
                 })?;
                 (Some(t.to_owned()), a.org_role.clone())
             }
         };
-        Ok(Principal { member, team, teams, role, token: token.to_owned() })
+        Ok(Principal {
+            member,
+            team,
+            teams,
+            role,
+            token: token.to_owned(),
+        })
     }
 
-    async fn member_active(&self, team: &str, member_id: &str, reader: Option<&Principal>, sel: Option<&TestingSelection>) -> AppResult<bool> {
+    async fn member_active(
+        &self,
+        team: &str,
+        member_id: &str,
+        reader: Option<&Principal>,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<bool> {
         if ids::member_kind(member_id).is_none() {
             return Ok(false);
         }
         // The application credential alone cannot read a team's directory; IAM answers only for a
         // member's application access token, limited to the teams that member selected.
-        let reader = reader.ok_or_else(|| AppError::unavailable("Silicon IAM", "no signed-in member of the team to ask"))?;
+        let reader =
+            reader.ok_or_else(|| AppError::unavailable("Silicon IAM", "no signed-in member of the team to ask"))?;
         let client = self.client(sel)?.with_credential(Credential::bearer(&reader.token));
         // Directory entries exist only for active, visible memberships; membership ids are `id[team]`.
-        match client.members().directory_member(team, &format!("{member_id}[{team}]"), Some("id,org")).await {
+        match client
+            .members()
+            .directory_member(team, &format!("{member_id}[{team}]"), Some("id,org"))
+            .await
+        {
             Ok(entry) => Ok(entry.id.as_deref() == Some(member_id) && entry.org.is_some_and(|o| o.id.as_str() == team)),
             Err(silicon_iam_client::Error::Api(api)) if api.status == 404 || api.status == 403 => Ok(false),
             Err(e) => Err(sdk_error(e)),
         }
     }
 
-    async fn team_silicons(&self, principal: &Principal, sel: Option<&TestingSelection>) -> AppResult<Vec<extend_protocol::model::TeamSilicon>> {
+    async fn team_silicons(
+        &self,
+        principal: &Principal,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<Vec<extend_protocol::model::TeamSilicon>> {
         let team = principal.team()?.to_owned();
         let client = self.client(sel)?.with_credential(Credential::bearer(&principal.token));
         let mut out = Vec::new();
         let mut paging = silicon_iam_client::Paging::new();
         for _ in 0..20 {
             // IAM's field selector accepts name,id,role,org,tags,trust; display_name comes with name.
-            let page = client.members().directory(&team, Some("id,name,org"), &paging).await.map_err(sdk_error)?;
+            let page = client
+                .members()
+                .directory(&team, Some("id,name,org"), &paging)
+                .await
+                .map_err(sdk_error)?;
             for m in page.items {
                 if m.org.as_ref().is_some_and(|o| o.id.as_str() != team) {
                     continue;
                 }
                 if let Some(id) = m.id.filter(|i| i.starts_with("si:")) {
-                    out.push(extend_protocol::model::TeamSilicon { id, display_name: m.display_name.or(m.name) });
+                    out.push(extend_protocol::model::TeamSilicon {
+                        id,
+                        display_name: m.display_name.or(m.name),
+                    });
                 }
             }
             match page.page.next_cursor.filter(|_| page.page.has_more) {
@@ -403,8 +566,11 @@ impl Iam for SdkIam {
 
     async fn select_testing(&self, secret: &str) -> AppResult<(Uuid, String)> {
         let invalid = |why: String| {
-            AppError::new(ErrorCode::TestingSecretInvalid, format!("The test application secret was refused: {why}. Nothing ran in production."))
-                .hint("Check the secret from Honeycomb, or leave testing to use production.")
+            AppError::new(
+                ErrorCode::TestingSecretInvalid,
+                format!("The test application secret was refused: {why}. Nothing ran in production."),
+            )
+            .hint("Check the secret from Honeycomb, or leave testing to use production.")
         };
         if !ids::is_secret(ids::APP_SECRET_PREFIX, secret) {
             return Err(invalid("it must be ask_ followed by 43 characters".into()));
@@ -415,16 +581,27 @@ impl Iam for SdkIam {
             .map_err(|e| invalid(e.to_string()))?
             .with_credential(Credential::application(&self.app_id, secret));
         let ctx = client.applications().testing_context().await.map_err(|e| match e {
-            silicon_iam_client::Error::Api(api) if api.status < 500 => invalid(format!("{} ({})", api.message, api.code)),
+            silicon_iam_client::Error::Api(api) if api.status < 500 => {
+                invalid(format!("{} ({})", api.message, api.code))
+            }
             other => AppError::unavailable("Silicon IAM", other),
         })?;
         if ctx.application.app_id != self.app_id {
-            return Err(invalid(format!("it belongs to application {:?}, not Extend", ctx.application.app_id)));
+            return Err(invalid(format!(
+                "it belongs to application {:?}, not Extend",
+                ctx.application.app_id
+            )));
         }
         if let Some(digest) = ctx.webhook_key_digest.as_deref() {
-            self.test_webhook_keys.write().await.insert(digest.to_ascii_lowercase(), ctx.environment_id);
+            self.test_webhook_keys
+                .write()
+                .await
+                .insert(digest.to_ascii_lowercase(), ctx.environment_id);
         }
-        let name = ctx.environment.map(|e| e.name).unwrap_or_else(|| ctx.environment_id.to_string());
+        let name = ctx
+            .environment
+            .map(|e| e.name)
+            .unwrap_or_else(|| ctx.environment_id.to_string());
         let _ = &self.app_secret;
         Ok((ctx.environment_id, name))
     }
@@ -440,7 +617,11 @@ impl Iam for SdkIam {
         sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof> {
         let client = self.client(sel)?;
-        let catalog = client.obo().endpoints(audience).await.map_err(sdk_error)?;
+        let catalog = client
+            .obo()
+            .endpoints(audience)
+            .await
+            .map_err(|e| obo_error(e, principal.id(), audience, endpoint_id))?;
         let request = models::OboExchangeRequest {
             org_id: principal.team.clone(),
             subject_token: principal.token.clone(),
@@ -452,7 +633,11 @@ impl Iam for SdkIam {
                 body_sha256: silicon_iam_client::api::obo::body_sha256(body),
             },
         };
-        let proof = client.obo().exchange_signed(&request, &catalog, &Mutation::new()).await.map_err(sdk_error)?;
+        let proof = client
+            .obo()
+            .exchange_signed(&request, &catalog, &Mutation::new())
+            .await
+            .map_err(|e| obo_error(e, principal.id(), audience, endpoint_id))?;
         Ok(OboProof {
             access_proof: proof.access_proof,
             testing_app_secret: proof.testing_context.as_ref().map(|t| t.app_secret.clone()),
@@ -461,13 +646,18 @@ impl Iam for SdkIam {
     }
 
     async fn verify_webhook(&self, headers: &http::HeaderMap, body: &[u8]) -> AppResult<IamEvent> {
-        let verifier = self.verifier.as_ref().ok_or_else(|| {
-            AppError::new(ErrorCode::Unauthorized, "Extend has no IAM webhook secret configured.")
-        })?;
+        let verifier = self
+            .verifier
+            .as_ref()
+            .ok_or_else(|| AppError::new(ErrorCode::Unauthorized, "Extend has no IAM webhook secret configured."))?;
         let (event_id, event_type, raw) = match verifier.verify(headers, body) {
             Ok(verified) => {
                 let event = verified.event();
-                (verified.event_id().to_string(), event.event_type.clone(), serde_json::to_value(event).unwrap_or_default())
+                (
+                    verified.event_id().to_string(),
+                    event.event_type.clone(),
+                    serde_json::to_value(event).unwrap_or_default(),
+                )
             }
             // The verifier checks the headers, timestamp and HMAC over the exact bytes before it
             // parses, so InvalidPayload means an authenticated delivery whose shape this SDK does
@@ -479,7 +669,10 @@ impl Iam for SdkIam {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "IAM webhook rejected");
-                return Err(AppError::new(ErrorCode::Unauthorized, format!("IAM webhook signature rejected: {e}")));
+                return Err(AppError::new(
+                    ErrorCode::Unauthorized,
+                    format!("IAM webhook signature rejected: {e}"),
+                ));
             }
         };
         tracing::debug!(event = %raw, "verified IAM webhook");
@@ -490,7 +683,10 @@ impl Iam for SdkIam {
                 use subtle::ConstantTimeEq as _;
                 let digest = ids::hex_lower(&Sha256::digest(key.as_bytes()));
                 let known = self.test_webhook_keys.read().await;
-                let found = known.iter().find(|(d, _)| bool::from(d.as_bytes().ct_eq(digest.as_bytes()))).map(|(_, env)| *env);
+                let found = known
+                    .iter()
+                    .find(|(d, _)| bool::from(d.as_bytes().ct_eq(digest.as_bytes())))
+                    .map(|(_, env)| *env);
                 Some(found.ok_or_else(|| {
                     AppError::new(
                         ErrorCode::ServiceUnavailable,
@@ -502,7 +698,14 @@ impl Iam for SdkIam {
         let mut members = Vec::new();
         let mut teams = Vec::new();
         collect_ids(&raw, &mut members, &mut teams);
-        Ok(IamEvent { event_id, event_type, members, teams, removed: removed_memberships(&raw), testing_environment_id })
+        Ok(IamEvent {
+            event_id,
+            event_type,
+            members,
+            teams,
+            removed: removed_memberships(&raw),
+            testing_environment_id,
+        })
     }
 }
 
@@ -514,12 +717,27 @@ fn authenticated_event(headers: &http::HeaderMap, body: &[u8]) -> AppResult<(Str
     // A test delivery wraps the event as {"test": {"testing_key", "metadata", "data"}}; the key is
     // never kept in the event Extend logs or stores.
     let (meta, data) = match value.get("test") {
-        Some(t) => (t.get("metadata").cloned().ok_or_else(bad)?, t.get("data").cloned().ok_or_else(bad)?),
+        Some(t) => (
+            t.get("metadata").cloned().ok_or_else(bad)?,
+            t.get("data").cloned().ok_or_else(bad)?,
+        ),
         None => (value.clone(), value.get("data").cloned().ok_or_else(bad)?),
     };
-    let event_id = meta.get("event_id").and_then(|v| v.as_str()).ok_or_else(bad)?.to_owned();
-    let event_type = meta.get("event_type").and_then(|v| v.as_str()).filter(|t| !t.is_empty()).ok_or_else(bad)?.to_owned();
-    let header = headers.get("x-silicon-iam-event-id").and_then(|v| v.to_str().ok()).ok_or_else(bad)?;
+    let event_id = meta
+        .get("event_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(bad)?
+        .to_owned();
+    let event_type = meta
+        .get("event_type")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(bad)?
+        .to_owned();
+    let header = headers
+        .get("x-silicon-iam-event-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(bad)?;
     if !header.eq_ignore_ascii_case(&event_id) || !data.is_object() {
         return Err(bad());
     }
@@ -544,12 +762,18 @@ fn testing_key(body: &[u8]) -> Option<String> {
 /// `status: removed` (or `authorization: removed`) and a `member[team]` membership id.
 fn removed_memberships(event: &serde_json::Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let members = event.pointer("/data/current/members").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+    let members = event
+        .pointer("/data/current/members")
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default();
     for m in members {
         let resource = m.get("resource").cloned().unwrap_or_default();
         let removed = resource.get("status").and_then(|v| v.as_str()) == Some("removed")
             || m.get("authorization").and_then(|v| v.as_str()) == Some("removed");
-        let Some(membership) = resource.get("membership_id").and_then(|v| v.as_str()) else { continue };
+        let Some(membership) = resource.get("membership_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
         if let (true, Some(open)) = (removed, membership.find('['))
             && membership.ends_with(']')
         {
@@ -662,18 +886,44 @@ impl LocalIam {
         }
     }
 
-    async fn issue(&self, member: &str, teams: Vec<String>, env: Option<Uuid>, sel: Option<&TestingSelection>) -> AuthSession {
+    async fn issue(
+        &self,
+        member: &str,
+        teams: Vec<String>,
+        env: Option<Uuid>,
+        sel: Option<&TestingSelection>,
+    ) -> AuthSession {
         let access = Self::new_token("oat_");
         let refresh = Self::new_token("ort_");
         let mut t = self.tokens.write().await;
-        t.insert(access.clone(), LocalToken { member: member.to_owned(), teams: teams.clone(), env, refresh: false });
-        t.insert(refresh.clone(), LocalToken { member: member.to_owned(), teams: teams.clone(), env, refresh: true });
+        t.insert(
+            access.clone(),
+            LocalToken {
+                member: member.to_owned(),
+                teams: teams.clone(),
+                env,
+                refresh: false,
+            },
+        );
+        t.insert(
+            refresh.clone(),
+            LocalToken {
+                member: member.to_owned(),
+                teams: teams.clone(),
+                env,
+                refresh: true,
+            },
+        );
         AuthSession {
             access_token: access,
             refresh_token: refresh,
             token_type: "Bearer".into(),
             expires_in: 3600,
-            member: Member { kind: ids::member_kind(member).unwrap_or(MemberKind::Carbon), id: member.to_owned(), display_name: None },
+            member: Member {
+                kind: ids::member_kind(member).unwrap_or(MemberKind::Carbon),
+                id: member.to_owned(),
+                display_name: None,
+            },
             teams,
             testing_environment: sel.map(|s| extend_protocol::model::TestingEnvironment {
                 environment_id: s.environment_id,
@@ -696,42 +946,73 @@ impl Iam for LocalIam {
         let raw = slt.trim().trim_start_matches("local:");
         let (id, teams_hint) = raw.split_once('@').map_or((raw, None), |(a, b)| (a, Some(b)));
         if ids::member_kind(id).is_none() {
-            return Err(AppError::new(ErrorCode::SltInvalid, format!("Local IAM expects a member id like c:alice or si:chef, got {slt:?}.")));
+            return Err(AppError::new(
+                ErrorCode::SltInvalid,
+                format!("Local IAM expects a member id like c:alice or si:chef, got {slt:?}."),
+            ));
         }
         let known = self.teams_of(id).await.ok_or_else(|| {
-            AppError::new(ErrorCode::SltInvalid, format!("{id} is not a member local IAM knows (EXTEND_LOCAL_MEMBERS)."))
+            AppError::new(
+                ErrorCode::SltInvalid,
+                format!("{id} is not a member local IAM knows (EXTEND_LOCAL_MEMBERS)."),
+            )
         })?;
         let teams = match teams_hint {
-            Some(h) => h.split('+').filter(|t| known.iter().any(|k| k == t)).map(str::to_owned).collect(),
+            Some(h) => h
+                .split('+')
+                .filter(|t| known.iter().any(|k| k == t))
+                .map(str::to_owned)
+                .collect(),
             None => known,
         };
         if teams.is_empty() {
-            return Err(AppError::new(ErrorCode::NotATeamMember, format!("{id} is not in any of those teams.")));
+            return Err(AppError::new(
+                ErrorCode::NotATeamMember,
+                format!("{id} is not in any of those teams."),
+            ));
         }
         Ok(self.issue(id, teams, sel.map(|s| s.environment_id), sel).await)
     }
 
     async fn refresh(&self, token: &str, _key: &str, sel: Option<&TestingSelection>) -> AppResult<AuthSession> {
-        let old = self.tokens.write().await.remove(token).filter(|t| t.refresh).ok_or_else(|| {
-            AppError::new(ErrorCode::TokenExpired, "The refresh token is no longer accepted.").hint("Run `extend login <slt>` again.")
-        })?;
+        let old = self
+            .tokens
+            .write()
+            .await
+            .remove(token)
+            .filter(|t| t.refresh)
+            .ok_or_else(|| {
+                AppError::new(ErrorCode::TokenExpired, "The refresh token is no longer accepted.")
+                    .hint("Run `extend login <slt>` again.")
+            })?;
         Ok(self.issue(&old.member, old.teams, old.env, sel).await)
     }
 
     async fn logout(&self, token: &str, _sel: Option<&TestingSelection>) -> AppResult<()> {
         let mut t = self.tokens.write().await;
         if let Some(found) = t.remove(token)
-            && found.refresh {
-                t.retain(|_, x| x.member != found.member);
-            }
+            && found.refresh
+        {
+            t.retain(|_, x| x.member != found.member);
+        }
         Ok(())
     }
 
     async fn authorize(&self, token: &str, team: Option<&str>, sel: Option<&TestingSelection>) -> AppResult<Principal> {
-        let found = self.tokens.read().await.get(token).cloned().filter(|t| !t.refresh).ok_or_else(|| {
-            AppError::new(ErrorCode::TokenExpired, "The access token is not active: it expired, was revoked, or never existed.")
+        let found = self
+            .tokens
+            .read()
+            .await
+            .get(token)
+            .cloned()
+            .filter(|t| !t.refresh)
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::TokenExpired,
+                    "The access token is not active: it expired, was revoked, or never existed.",
+                )
                 .hint("Run `extend login <slt>` again.")
-        })?;
+            })?;
         if found.env != sel.map(|s| s.environment_id) {
             return Err(AppError::new(
                 ErrorCode::TokenExpired,
@@ -741,18 +1022,28 @@ impl Iam for LocalIam {
         let current = self.teams_of(&found.member).await.unwrap_or_default();
         let teams: Vec<String> = found.teams.iter().filter(|t| current.contains(t)).cloned().collect();
         if teams.is_empty() {
-            return Err(AppError::new(ErrorCode::NotATeamMember, format!("{} is no longer an active member of any team.", found.member)));
+            return Err(AppError::new(
+                ErrorCode::NotATeamMember,
+                format!("{} is no longer an active member of any team.", found.member),
+            ));
         }
         let team = match team {
             None => None,
             Some(t) if teams.iter().any(|x| x == t) => Some(t.to_owned()),
             Some(t) => {
-                return Err(AppError::new(ErrorCode::NotATeamMember, format!("{} is not an active member of team {t:?}.", found.member))
-                    .hint(format!("Teams this login reaches: {}.", teams.join(", "))));
+                return Err(AppError::new(
+                    ErrorCode::NotATeamMember,
+                    format!("{} is not an active member of team {t:?}.", found.member),
+                )
+                .hint(format!("Teams this login reaches: {}.", teams.join(", "))));
             }
         };
         Ok(Principal {
-            member: Member { kind: ids::member_kind(&found.member).unwrap_or(MemberKind::Carbon), id: found.member, display_name: None },
+            member: Member {
+                kind: ids::member_kind(&found.member).unwrap_or(MemberKind::Carbon),
+                id: found.member,
+                display_name: None,
+            },
             team,
             teams,
             role: Some("member".into()),
@@ -760,17 +1051,34 @@ impl Iam for LocalIam {
         })
     }
 
-    async fn member_active(&self, team: &str, member_id: &str, _reader: Option<&Principal>, _sel: Option<&TestingSelection>) -> AppResult<bool> {
-        Ok(ids::member_kind(member_id).is_some() && self.teams_of(member_id).await.is_some_and(|t| t.iter().any(|x| x == team)))
+    async fn member_active(
+        &self,
+        team: &str,
+        member_id: &str,
+        _reader: Option<&Principal>,
+        _sel: Option<&TestingSelection>,
+    ) -> AppResult<bool> {
+        Ok(ids::member_kind(member_id).is_some()
+            && self
+                .teams_of(member_id)
+                .await
+                .is_some_and(|t| t.iter().any(|x| x == team)))
     }
 
-    async fn team_silicons(&self, principal: &Principal, _sel: Option<&TestingSelection>) -> AppResult<Vec<extend_protocol::model::TeamSilicon>> {
+    async fn team_silicons(
+        &self,
+        principal: &Principal,
+        _sel: Option<&TestingSelection>,
+    ) -> AppResult<Vec<extend_protocol::model::TeamSilicon>> {
         let team = principal.team()?.to_owned();
         let members = self.members.read().await;
         let mut out: Vec<_> = members
             .iter()
             .filter(|(id, teams)| id.starts_with("si:") && teams.contains(&team))
-            .map(|(id, _)| extend_protocol::model::TeamSilicon { id: id.clone(), display_name: None })
+            .map(|(id, _)| extend_protocol::model::TeamSilicon {
+                id: id.clone(),
+                display_name: None,
+            })
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
@@ -805,15 +1113,23 @@ impl Iam for LocalIam {
         _body: &[u8],
         _sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof> {
-        Ok(OboProof { access_proof: format!("obo_local:{audience}:{endpoint_id}:{}", principal.id()), testing_app_secret: None, testing_iam_key: None })
+        Ok(OboProof {
+            access_proof: format!("obo_local:{audience}:{endpoint_id}:{}", principal.id()),
+            testing_app_secret: None,
+            testing_iam_key: None,
+        })
     }
 
     async fn verify_webhook(&self, _headers: &http::HeaderMap, body: &[u8]) -> AppResult<IamEvent> {
         // Local events are plain JSON: {"event_id","event_type","members":[...],"teams":[...]}.
-        let v: serde_json::Value = serde_json::from_slice(body).map_err(|e| AppError::invalid(format!("local IAM event is not JSON: {e}")))?;
+        let v: serde_json::Value =
+            serde_json::from_slice(body).map_err(|e| AppError::invalid(format!("local IAM event is not JSON: {e}")))?;
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_owned();
         let list = |k: &str| {
-            v.get(k).and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+            v.get(k)
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default()
         };
         Ok(IamEvent {
             event_id: s("event_id"),
@@ -821,7 +1137,10 @@ impl Iam for LocalIam {
             members: list("members"),
             teams: list("teams"),
             removed: vec![],
-            testing_environment_id: v.get("environment_id").and_then(|x| x.as_str()).and_then(|x| x.parse().ok()),
+            testing_environment_id: v
+                .get("environment_id")
+                .and_then(|x| x.as_str())
+                .and_then(|x| x.parse().ok()),
         })
     }
 }
@@ -867,10 +1186,14 @@ mod tests {
     #[test]
     fn reads_signed_events_the_sdk_refuses() {
         let body = serde_json::to_vec(&silicon_removed()).unwrap();
-        let (id, kind, raw) = authenticated_event(&event_headers("01a0db14-39a6-7f20-bb3d-7c3da59e1a4e"), &body).unwrap();
+        let (id, kind, raw) =
+            authenticated_event(&event_headers("01a0db14-39a6-7f20-bb3d-7c3da59e1a4e"), &body).unwrap();
         assert_eq!(id, "01a0db14-39a6-7f20-bb3d-7c3da59e1a4e");
         assert_eq!(kind, "organization.silicon.removed.v1");
-        assert_eq!(removed_memberships(&raw), vec![("si:sous".to_owned(), "acme".to_owned())]);
+        assert_eq!(
+            removed_memberships(&raw),
+            vec![("si:sous".to_owned(), "acme".to_owned())]
+        );
         let (mut m, mut t) = (vec![], vec![]);
         collect_ids(&raw, &mut m, &mut t);
         assert_eq!((m, t), (vec!["si:sous".to_owned()], vec!["acme".to_owned()]));
@@ -902,8 +1225,47 @@ mod tests {
     }
 
     #[test]
+    fn obo_refusals_say_what_why_and_what_to_do() {
+        let api = |status: u16, code: &str| {
+            silicon_iam_client::Error::Api(Box::new(silicon_iam_client::ApiError {
+                status,
+                code: code.into(),
+                message: "refused".into(),
+                details: None,
+                request_id: None,
+            }))
+        };
+        let e = obo_error(
+            api(404, "not_found"),
+            "si:chef",
+            "briefcase",
+            "briefcase.invitations.create",
+        );
+        assert_eq!(e.code(), ErrorCode::NoAccess);
+        assert!(
+            e.0.message.contains("si:chef") && e.0.message.contains("briefcase.invitations.create"),
+            "{}",
+            e.0.message
+        );
+        assert!(e.0.hint.as_deref().unwrap_or_default().contains("extend login"));
+        let e = obo_error(api(400, "invalid_subject_token"), "si:chef", "ting", "tings.send");
+        assert_eq!(e.code(), ErrorCode::TokenExpired);
+        assert_eq!(
+            obo_error(api(503, "unavailable"), "si:chef", "ting", "tings.send").code(),
+            ErrorCode::ServiceUnavailable
+        );
+    }
+
+    #[test]
     fn access_ending_events() {
-        let e = |t: &str| IamEvent { event_id: "1".into(), event_type: t.into(), members: vec![], teams: vec![], removed: vec![], testing_environment_id: None };
+        let e = |t: &str| IamEvent {
+            event_id: "1".into(),
+            event_type: t.into(),
+            members: vec![],
+            teams: vec![],
+            removed: vec![],
+            testing_environment_id: None,
+        };
         assert!(e("organization.member.removed.v1").ends_access());
         assert!(e("session.revoked.v1").ends_access());
         assert!(!e("organization.updated.v1").ends_access());

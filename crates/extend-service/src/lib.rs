@@ -38,8 +38,21 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
     db::migrate_global(&pool).await?;
     std::fs::create_dir_all(cfg.data_dir.join("uploads"))?;
     let (iam, local_iam): (iam::DynIam, Option<Arc<iam::LocalIam>>) = match &cfg.iam {
-        IamMode::Sdk { base_url, app_id, app_secret } => (
-            Arc::new(iam::SdkIam::connect(base_url, app_id, app_secret, cfg.webhook_secret.clone(), cfg.webhook_previous_secret.clone()).await?),
+        IamMode::Sdk {
+            base_url,
+            app_id,
+            app_secret,
+        } => (
+            Arc::new(
+                iam::SdkIam::connect(
+                    base_url,
+                    app_id,
+                    app_secret,
+                    cfg.webhook_secret.clone(),
+                    cfg.webhook_previous_secret.clone(),
+                )
+                .await?,
+            ),
             None,
         ),
         IamMode::Local => {
@@ -48,7 +61,11 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
         }
     };
     let files: files::DynFiles = match &cfg.files {
-        FilesMode::Briefcase { api_url, web_url } => Arc::new(files::BriefcaseFiles::new(api_url.clone(), web_url.clone(), iam.clone())),
+        FilesMode::Briefcase { api_url, web_url } => Arc::new(files::BriefcaseFiles::new(
+            api_url.clone(),
+            web_url.clone(),
+            iam.clone(),
+        )),
         FilesMode::Local => Arc::new(files::LocalFiles::new(&cfg.data_dir.join("files"), &cfg.public_url)?),
     };
     let (notifier, local_ting): (ting::DynNotifier, _) = match &cfg.ting {

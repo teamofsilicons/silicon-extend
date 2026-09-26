@@ -19,7 +19,8 @@ use crate::state::{Sel, Shared};
 
 pub async fn current(State(state): State<Shared>, sel: Sel) -> AppResult<Response> {
     let s = sel.sel.as_ref().ok_or_else(|| {
-        AppError::new(ErrorCode::TestOnly, "No test environment is selected.").hint("Send the test application's secret in X-Testing-Application-Secret.")
+        AppError::new(ErrorCode::TestOnly, "No test environment is selected.")
+            .hint("Send the test application's secret in X-Testing-Application-Secret.")
     })?;
     Ok(ok("testing_environment", env_view(&state, Some(s), &sel.world).await))
 }
@@ -50,7 +51,10 @@ pub struct Operation {
 
 fn service_auth(state: &Shared, headers: &HeaderMap) -> AppResult<()> {
     let expected = state.cfg.honeycomb_service_token.as_deref().ok_or_else(|| {
-        AppError::new(ErrorCode::Unauthorized, "Extend has no Honeycomb service credential configured (EXTEND_HONEYCOMB_SERVICE_TOKEN).")
+        AppError::new(
+            ErrorCode::Unauthorized,
+            "Extend has no Honeycomb service credential configured (EXTEND_HONEYCOMB_SERVICE_TOKEN).",
+        )
     })?;
     let presented = headers
         .get_all("authorization")
@@ -59,11 +63,21 @@ fn service_auth(state: &Shared, headers: &HeaderMap) -> AppResult<()> {
         .filter_map(|v| v.strip_prefix("Bearer "))
         .collect::<Vec<_>>();
     let [token] = presented.as_slice() else {
-        return Err(AppError::new(ErrorCode::Unauthorized, "Send exactly one Authorization: Bearer <Honeycomb service credential>."));
+        return Err(AppError::new(
+            ErrorCode::Unauthorized,
+            "Send exactly one Authorization: Bearer <Honeycomb service credential>.",
+        ));
     };
     let a = Sha256::digest(token.as_bytes());
     let b = Sha256::digest(expected.as_bytes());
-    if bool::from(a.ct_eq(&b)) { Ok(()) } else { Err(AppError::new(ErrorCode::Unauthorized, "The Honeycomb service credential is wrong.")) }
+    if bool::from(a.ct_eq(&b)) {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            ErrorCode::Unauthorized,
+            "The Honeycomb service credential is wrong.",
+        ))
+    }
 }
 
 fn make_receipt(op: &Operation, state_word: &str, target: &str) -> serde_json::Value {
@@ -88,9 +102,15 @@ pub async fn receipt_get(state: &Shared, env: Uuid, op: Uuid) -> AppResult<Optio
         .await?)
 }
 
-pub async fn receipt(State(state): State<Shared>, headers: HeaderMap, Path((_org, env, op)): Path<(String, Uuid, Uuid)>) -> AppResult<Response> {
+pub async fn receipt(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Path((_org, env, op)): Path<(String, Uuid, Uuid)>,
+) -> AppResult<Response> {
     service_auth(&state, &headers)?;
-    let (_, r) = receipt_get(&state, env, op).await?.ok_or_else(|| AppError::new(ErrorCode::RequestNotFound, "Unknown operation."))?;
+    let (_, r) = receipt_get(&state, env, op)
+        .await?
+        .ok_or_else(|| AppError::new(ErrorCode::RequestNotFound, "Unknown operation."))?;
     Ok((StatusCode::OK, axum::Json(r)).into_response())
 }
 
@@ -103,13 +123,21 @@ async fn active_count(state: &Shared, except: Uuid) -> AppResult<i64> {
 
 async fn end_everything(state: &Shared, world: &World, reason: EndReason, unpair: bool) -> AppResult<()> {
     let actor = domain::system_member();
-    let sessions: Vec<(String,)> = sqlx::query_as(sql!("SELECT session_id FROM {} WHERE state <> 'ended'", world.t("sessions"))).fetch_all(&state.pool).await?;
+    let sessions: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT session_id FROM {} WHERE state <> 'ended'",
+        world.t("sessions")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
     for (sid,) in sessions {
         domain::end_session(state, world, &sid, reason, &actor).await?;
     }
-    let devices: Vec<(String,)> = sqlx::query_as(sql!("SELECT device_id FROM {} WHERE removed_at IS NULL AND host_device_id IS NULL", world.t("devices")))
-        .fetch_all(&state.pool)
-        .await?;
+    let devices: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT device_id FROM {} WHERE removed_at IS NULL AND host_device_id IS NULL",
+        world.t("devices")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
     for (id,) in devices {
         if unpair {
             domain::unpair(state, world, &id, reason, &actor).await?;
@@ -127,9 +155,12 @@ pub async fn apply(
     body: axum::body::Bytes,
 ) -> AppResult<Response> {
     service_auth(&state, &headers)?;
-    let op: Operation = serde_json::from_slice(&body).map_err(|e| AppError::invalid(format!("Invalid lifecycle instruction: {e}")))?;
+    let op: Operation =
+        serde_json::from_slice(&body).map_err(|e| AppError::invalid(format!("Invalid lifecycle instruction: {e}")))?;
     if op.environment_id != env || op.operation_id != op_id || op.org_id != org {
-        return Err(AppError::invalid("The path and the body name different environments, operations or teams."));
+        return Err(AppError::invalid(
+            "The path and the body name different environments, operations or teams.",
+        ));
     }
     if op.testing_key.len() != 32 || !op.testing_key.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Err(AppError::invalid("testing_key must be 32 alphanumeric characters."));
@@ -137,27 +168,40 @@ pub async fn apply(
     let hash = extend_protocol::ids::hex_lower(&Sha256::digest(&body));
     if let Some((h, r)) = receipt_get(&state, env, op_id).await? {
         if h != hash {
-            return Err(AppError::new(ErrorCode::Conflict, "This operation id was already used with a different instruction."));
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "This operation id was already used with a different instruction.",
+            ));
         }
         return Ok((StatusCode::OK, axum::Json(r)).into_response());
     }
-    let existing: Option<(String, i64, i64)> =
-        sqlx::query_as("SELECT state, environment_revision, generation FROM extend_global.test_environments WHERE environment_id = $1")
-            .bind(env)
-            .fetch_optional(&state.pool)
-            .await?;
+    let existing: Option<(String, i64, i64)> = sqlx::query_as(
+        "SELECT state, environment_revision, generation FROM extend_global.test_environments WHERE environment_id = $1",
+    )
+    .bind(env)
+    .fetch_optional(&state.pool)
+    .await?;
     if let Some((_, rev, generation)) = &existing
-        && (op.environment_revision < *rev || op.generation < *generation) {
-            return Err(AppError::new(ErrorCode::Conflict, format!(
+        && (op.environment_revision < *rev || op.generation < *generation)
+    {
+        return Err(AppError::new(
+            ErrorCode::Conflict,
+            format!(
                 "Stale instruction: revision {} / generation {} is older than the environment's {rev} / {generation}.",
                 op.environment_revision, op.generation
-            )));
-        }
+            ),
+        ));
+    }
     let world = World::test(env);
     let target = match op.action.as_str() {
         "prepare" => {
-            if existing.as_ref().is_none_or(|(s, _, _)| s == "removed") && active_count(&state, env).await? >= TEST_ENVIRONMENT_LIMIT {
-                return Err(AppError::new(ErrorCode::TestEnvironmentLimit, "All 10 test environment slots are in use across Silicon Extend."));
+            if existing.as_ref().is_none_or(|(s, _, _)| s == "removed")
+                && active_count(&state, env).await? >= TEST_ENVIRONMENT_LIMIT
+            {
+                return Err(AppError::new(
+                    ErrorCode::TestEnvironmentLimit,
+                    "All 10 test environment slots are in use across Silicon Extend.",
+                ));
             }
             db::ensure_world(&state.pool, &world).await?;
             sqlx::query(
@@ -188,7 +232,10 @@ pub async fn apply(
             "ready"
         }
         "clean" => {
-            sqlx::query("UPDATE extend_global.test_environments SET state = 'cleaning' WHERE environment_id = $1").bind(env).execute(&state.pool).await?;
+            sqlx::query("UPDATE extend_global.test_environments SET state = 'cleaning' WHERE environment_id = $1")
+                .bind(env)
+                .execute(&state.pool)
+                .await?;
             end_everything(&state, &world, EndReason::EnvironmentCleaned, true).await?;
             db::truncate_world(&state.pool, &world).await?;
             sqlx::query("UPDATE extend_global.test_environments SET state = 'ready', generation = $2, environment_revision = $3 WHERE environment_id = $1")
@@ -201,14 +248,20 @@ pub async fn apply(
             "ready"
         }
         "disable" => {
-            sqlx::query("UPDATE extend_global.test_environments SET state = 'disabled' WHERE environment_id = $1").bind(env).execute(&state.pool).await?;
+            sqlx::query("UPDATE extend_global.test_environments SET state = 'disabled' WHERE environment_id = $1")
+                .bind(env)
+                .execute(&state.pool)
+                .await?;
             state.selections.write().await.clear();
             end_everything(&state, &world, EndReason::EnvironmentDisabled, false).await?;
             "disabled"
         }
         "restore" => {
             if active_count(&state, env).await? >= TEST_ENVIRONMENT_LIMIT {
-                return Err(AppError::new(ErrorCode::TestEnvironmentLimit, "Restoring needs a free slot; all 10 test environment slots are in use."));
+                return Err(AppError::new(
+                    ErrorCode::TestEnvironmentLimit,
+                    "Restoring needs a free slot; all 10 test environment slots are in use.",
+                ));
             }
             db::ensure_world(&state.pool, &world).await?;
             sqlx::query("UPDATE extend_global.test_environments SET state = 'ready', retired_at = NULL WHERE environment_id = $1").bind(env).execute(&state.pool).await?;
@@ -222,7 +275,9 @@ pub async fn apply(
             state.selections.write().await.clear();
             "removed"
         }
-        "import" | "refresh-import" | "retire-applications" => existing.as_ref().map_or("ready", |(s, _, _)| if s == "disabled" { "disabled" } else { "ready" }),
+        "import" | "refresh-import" | "retire-applications" => existing
+            .as_ref()
+            .map_or("ready", |(s, _, _)| if s == "disabled" { "disabled" } else { "ready" }),
         other => return Err(AppError::invalid(format!("Unknown lifecycle action {other:?}."))),
     };
     let r = make_receipt(&op, "completed", target);

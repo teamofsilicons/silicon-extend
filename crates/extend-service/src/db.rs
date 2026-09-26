@@ -17,10 +17,16 @@ pub struct World {
 
 impl World {
     pub fn production() -> Self {
-        Self { schema: "extend".into(), environment_id: None }
+        Self {
+            schema: "extend".into(),
+            environment_id: None,
+        }
     }
     pub fn test(environment_id: Uuid) -> Self {
-        Self { schema: format!("extend_test_{}", environment_id.simple()), environment_id: Some(environment_id) }
+        Self {
+            schema: format!("extend_test_{}", environment_id.simple()),
+            environment_id: Some(environment_id),
+        }
     }
     pub fn is_test(&self) -> bool {
         self.environment_id.is_some()
@@ -36,8 +42,7 @@ pub async fn connect(url: &str) -> anyhow::Result<PgPool> {
     Ok(pool)
 }
 
-const GLOBAL: &[&str] = &[
-    r#"
+const GLOBAL: &[&str] = &[r#"
 CREATE SCHEMA IF NOT EXISTS extend_global;
 CREATE TABLE IF NOT EXISTS extend_global.schema_versions (
     schema_name text PRIMARY KEY,
@@ -92,8 +97,7 @@ CREATE TABLE IF NOT EXISTS extend_global.local_test_apps (
     secret_digest text PRIMARY KEY,
     environment_id uuid NOT NULL
 );
-"#,
-];
+"#];
 
 /// Migrations for every world schema. `{s}` is replaced with the schema name.
 const WORLD: &[&str] = &[
@@ -318,7 +322,9 @@ pub async fn truncate_world(pool: &PgPool, world: &World) -> anyhow::Result<()> 
 
 pub async fn drop_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
     anyhow::ensure!(world.is_test(), "refusing to drop production");
-    sqlx::raw_sql(sql!("DROP SCHEMA IF EXISTS {} CASCADE", world.schema)).execute(pool).await?;
+    sqlx::raw_sql(sql!("DROP SCHEMA IF EXISTS {} CASCADE", world.schema))
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM extend_global.schema_versions WHERE schema_name = $1")
         .bind(&world.schema)
         .execute(pool)

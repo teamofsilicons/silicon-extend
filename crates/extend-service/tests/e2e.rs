@@ -15,8 +15,8 @@ use futures::{SinkExt as _, StreamExt as _};
 use silicon_extend_client::{Client, DeviceQuery, ListQuery};
 use sqlx::Connection as _;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
@@ -29,10 +29,16 @@ struct Env {
 }
 
 async fn start() -> Env {
-    let admin = std::env::var("EXTEND_TEST_ADMIN_URL").unwrap_or_else(|_| "postgres://extend:extend@127.0.0.1:5440/postgres".into());
+    let admin = std::env::var("EXTEND_TEST_ADMIN_URL")
+        .unwrap_or_else(|_| "postgres://extend:extend@127.0.0.1:5440/postgres".into());
     let db = format!("extend_e2e_{}", Uuid::new_v4().simple());
-    let mut conn = sqlx::PgConnection::connect(&admin).await.expect("PostgreSQL for tests (set EXTEND_TEST_ADMIN_URL)");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}"))).execute(&mut conn).await.unwrap();
+    let mut conn = sqlx::PgConnection::connect(&admin)
+        .await
+        .expect("PostgreSQL for tests (set EXTEND_TEST_ADMIN_URL)");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
+        .execute(&mut conn)
+        .await
+        .unwrap();
     let url = format!("{}/{db}", admin.rsplit_once('/').unwrap().0);
     let data = std::env::temp_dir().join(&db);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -93,7 +99,11 @@ async fn ws_connect(url: &str, auth: &str) -> Ws {
 
 async fn next_text(ws: &mut Ws) -> String {
     loop {
-        let m = tokio::time::timeout(Duration::from_secs(45), ws.next()).await.expect("frame in time").expect("socket open").unwrap();
+        let m = tokio::time::timeout(Duration::from_secs(45), ws.next())
+            .await
+            .expect("frame in time")
+            .expect("socket open")
+            .unwrap();
         if let Message::Text(t) = m {
             return t.to_string();
         }
@@ -107,11 +117,26 @@ impl Device {
             Some(s) => Client::builder(&env.base).testing_secret(s).connect().await.unwrap(),
             None => env.client.clone(),
         };
-        let e = client.enroll(&EnrollmentCreate { os, os_version: Some("1".into()), model: Some("Fake".into()), app_version: "1.0.0".into(), agent_device_version: None }).await.unwrap();
+        let e = client
+            .enroll(&EnrollmentCreate {
+                os,
+                os_version: Some("1".into()),
+                model: Some("Fake".into()),
+                app_version: "1.0.0".into(),
+                agent_device_version: None,
+            })
+            .await
+            .unwrap();
         assert_eq!(e.pairing_code.len(), 6);
-        let mut ews = ws_connect(&client.ws_url(&format!("/api/v1/enrollments/{}/connect", e.enrollment_id)), &format!("Extend-Enrollment {}", e.enrollment_secret)).await;
+        let mut ews = ws_connect(
+            &client.ws_url(&format!("/api/v1/enrollments/{}/connect", e.enrollment_id)),
+            &format!("Extend-Enrollment {}", e.enrollment_secret),
+        )
+        .await;
         let first: EnrollmentFrame = serde_json::from_str(&next_text(&mut ews).await).unwrap();
-        let EnrollmentFrame::Code { pairing_code, .. } = first else { panic!("expected code") };
+        let EnrollmentFrame::Code { pairing_code, .. } = first else {
+            panic!("expected code")
+        };
         let token = client.login(carbon).await.unwrap().access_token;
         let claim = PairingClaim {
             pairing_code: pairing_code.to_lowercase(),
@@ -123,11 +148,24 @@ impl Device {
         client.authed(&token, Some("acme")).pair(&claim).await.unwrap();
         let (id, credential) = loop {
             let f: EnrollmentFrame = serde_json::from_str(&next_text(&mut ews).await).unwrap();
-            if let EnrollmentFrame::Paired { device_id, device_credential, .. } = f {
+            if let EnrollmentFrame::Paired {
+                device_id,
+                device_credential,
+                ..
+            } = f
+            {
                 break (device_id.to_string(), device_credential);
             }
         };
-        let mut d = Device { ws: ws_connect(&client.ws_url("/api/v1/device/connect"), &format!("Extend-Device {credential}")).await, id, credential };
+        let mut d = Device {
+            ws: ws_connect(
+                &client.ws_url("/api/v1/device/connect"),
+                &format!("Extend-Device {credential}"),
+            )
+            .await,
+            id,
+            credential,
+        };
         d.hello(os).await;
         d
     }
@@ -149,7 +187,10 @@ impl Device {
     }
 
     async fn send(&mut self, f: &DeviceFrame) {
-        self.ws.send(Message::Text(serde_json::to_string(f).unwrap().into())).await.unwrap();
+        self.ws
+            .send(Message::Text(serde_json::to_string(f).unwrap().into()))
+            .await
+            .unwrap();
     }
 
     /// Next frame that isn't a ping (pings are answered).
@@ -173,15 +214,41 @@ impl Device {
                 let next = tokio::time::timeout(Duration::from_secs(30), self.recv()).await;
                 let Ok(f) = next else { break };
                 if let ServiceFrame::Command(c) = &f {
-                    let mut out = CommandOutcome { id: c.id, ok: true, output: serde_json::json!({"echo": c.args}), text: Some(format!("ran {} {}", c.command, c.args.join(" "))), error: None, files: vec![] };
+                    let mut out = CommandOutcome {
+                        id: c.id,
+                        ok: true,
+                        output: serde_json::json!({"echo": c.args}),
+                        text: Some(format!("ran {} {}", c.command, c.args.join(" "))),
+                        error: None,
+                        files: vec![],
+                    };
                     if c.command == "screenshot" {
                         let bytes = b"\x89PNG fake".to_vec();
-                        client.upload_artifact(&self.credential, c.upload_ids[0], "shot.png", "image/png", bytes.clone()).await.unwrap();
-                        out.files.push(ProducedFile { upload_id: c.upload_ids[0], name: "shot.png".into(), content_type: "image/png".into(), kind: FileKind::Screenshot, size_bytes: bytes.len() as i64 });
+                        client
+                            .upload_artifact(
+                                &self.credential,
+                                c.upload_ids[0],
+                                "shot.png",
+                                "image/png",
+                                bytes.clone(),
+                            )
+                            .await
+                            .unwrap();
+                        out.files.push(ProducedFile {
+                            upload_id: c.upload_ids[0],
+                            name: "shot.png".into(),
+                            content_type: "image/png".into(),
+                            kind: FileKind::Screenshot,
+                            size_bytes: bytes.len() as i64,
+                        });
                     }
                     if c.command == "is" {
                         out.ok = false;
-                        out.error = Some(CommandError { code: "assertion_failed".into(), message: "not visible".into(), details: serde_json::Value::Null });
+                        out.error = Some(CommandError {
+                            code: "assertion_failed".into(),
+                            message: "not visible".into(),
+                            details: serde_json::Value::Null,
+                        });
                     }
                     if c.command == "wait" {
                         tokio::time::sleep(Duration::from_millis(3000)).await;
@@ -226,7 +293,10 @@ async fn pairing_sessions_commands_and_files() {
     assert!(!d.commands.as_ref().unwrap().contains(&"terminal".to_owned()));
     // A Silicon outside the team can't see it.
     let stranger = login(&env.client, "si:stranger").await;
-    assert_eq!(code_of(env.client.authed(&stranger, Some("acme")).device(&id).await), ErrorCode::NotATeamMember);
+    assert_eq!(
+        code_of(env.client.authed(&stranger, Some("acme")).device(&id).await),
+        ErrorCode::NotATeamMember
+    );
 
     // Session: 3 hexadecimal characters.
     let sess = c.start_session(&id.parse().unwrap()).await.unwrap();
@@ -237,7 +307,14 @@ async fn pairing_sessions_commands_and_files() {
     // One Silicon at a time; the other gets the holder and the request command.
     let busy = s.start_session(&id.parse().unwrap()).await.unwrap_err();
     assert_eq!(busy.code(), ErrorCode::DeviceInUse);
-    assert!(busy.api().unwrap().hint.as_ref().unwrap().contains(&format!("extend request send {id}")));
+    assert!(
+        busy.api()
+            .unwrap()
+            .hint
+            .as_ref()
+            .unwrap()
+            .contains(&format!("extend request send {id}"))
+    );
     let r = s.send_request(&id, "Need it for an OTP, 2 minutes").await.unwrap();
     assert_eq!(r.to, "si:chef");
     assert_eq!(r.delivery, Delivery::Delivered);
@@ -275,10 +352,19 @@ async fn pairing_sessions_commands_and_files() {
     assert_eq!(a.files(ListQuery::default()).await.unwrap().items.len(), 1);
 
     // Refusals with precise codes.
-    assert_eq!(code_of(c.run(&sid, &cmd("terminal", &["run", "ls"])).await), ErrorCode::UnsupportedOnDevice);
+    assert_eq!(
+        code_of(c.run(&sid, &cmd("terminal", &["run", "ls"])).await),
+        ErrorCode::UnsupportedOnDevice
+    );
     assert_eq!(code_of(c.run(&sid, &cmd("boot", &[])).await), ErrorCode::UnknownCommand);
-    assert_eq!(code_of(c.run(&sid, &cmd("click", &["@e1", "--platform", "ios"])).await), ErrorCode::InvalidInput);
-    assert_eq!(code_of(s.run(&sid, &cmd("snapshot", &[])).await), ErrorCode::SessionNotFound);
+    assert_eq!(
+        code_of(c.run(&sid, &cmd("click", &["@e1", "--platform", "ios"])).await),
+        ErrorCode::InvalidInput
+    );
+    assert_eq!(
+        code_of(s.run(&sid, &cmd("snapshot", &[])).await),
+        ErrorCode::SessionNotFound
+    );
 
     // A command that outlives its deadline.
     let mut slow = cmd("wait", &["2500"]);
@@ -287,36 +373,64 @@ async fn pairing_sessions_commands_and_files() {
 
     // Takeover pauses the session.
     c.takeover(&sid, "Please approve the payment").await.unwrap();
-    assert_eq!(code_of(c.run(&sid, &cmd("snapshot", &[])).await), ErrorCode::SessionPaused);
+    assert_eq!(
+        code_of(c.run(&sid, &cmd("snapshot", &[])).await),
+        ErrorCode::SessionPaused
+    );
     c.release_takeover(&sid).await.unwrap();
     assert!(c.run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
 
     // Activity log: redacted text, commands, the request.
     let act = a.activity(&id, Default::default()).await.unwrap();
     let fill = act.items.iter().find(|e| e.command.as_deref() == Some("fill")).unwrap();
-    assert_eq!(fill.args.as_ref().unwrap(), &vec!["@e3".to_owned(), "[redacted 7 chars]".to_owned()]);
+    assert_eq!(
+        fill.args.as_ref().unwrap(),
+        &vec!["@e3".to_owned(), "[redacted 7 chars]".to_owned()]
+    );
     assert!(act.items.iter().any(|e| e.action == "request_sent"));
     assert!(act.items.iter().any(|e| e.action == "takeover_started"));
 
     // The Carbon stops it.
     let stopped = a.stop_device(&id).await.unwrap();
     assert_eq!(stopped.end_reason, Some(EndReason::StoppedByCarbon));
-    assert_eq!(code_of(c.run(&sid, &cmd("snapshot", &[])).await), ErrorCode::SessionEnded);
+    assert_eq!(
+        code_of(c.run(&sid, &cmd("snapshot", &[])).await),
+        ErrorCode::SessionEnded
+    );
 
     // Now sous can use it; revoking access mid-session ends it at once.
-    let s2 = s.start_session(&id.parse().unwrap()).await.unwrap().session_id.to_string();
+    let s2 = s
+        .start_session(&id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
     a.revoke(&id, "si:sous").await.unwrap();
     let ended = s.session(&s2).await.unwrap();
     assert_eq!(ended.end_reason, Some(EndReason::AccessRemoved));
 
     // Idle timeout (the scheduler honours idle_ends_at).
-    let s3 = c.start_session(&id.parse().unwrap()).await.unwrap().session_id.to_string();
-    sqlx::query("UPDATE extend.sessions SET idle_ends_at = now() - interval '1 second' WHERE session_id = $1").bind(&s3).execute(&env.pool).await.unwrap();
+    let s3 = c
+        .start_session(&id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    sqlx::query("UPDATE extend.sessions SET idle_ends_at = now() - interval '1 second' WHERE session_id = $1")
+        .bind(&s3)
+        .execute(&env.pool)
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(c.session(&s3).await.unwrap().end_reason, Some(EndReason::IdleTimeout));
 
     // Silicon logs out (IAM revocation) → its session ends.
-    let s4 = c.start_session(&id.parse().unwrap()).await.unwrap().session_id.to_string();
+    let s4 = c
+        .start_session(&id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
     reqwest::Client::new()
         .post(format!("{}/dev/iam/members", env.base))
         .json(&serde_json::json!({"type":"member","data":{"id":"si:chef","teams":["acme"],"revoke":true}}))
@@ -326,15 +440,29 @@ async fn pairing_sessions_commands_and_files() {
     let chef2 = login(&env.client, "si:chef").await;
     let ended = env.client.authed(&chef2, Some("acme")).session(&s4).await.unwrap();
     assert_eq!(ended.state, SessionState::Ended);
-    assert!(matches!(ended.end_reason, Some(EndReason::SiliconLoggedOut | EndReason::AccessRemoved)));
+    assert!(matches!(
+        ended.end_reason,
+        Some(EndReason::SiliconLoggedOut | EndReason::AccessRemoved)
+    ));
 
     // The device saw sessions start and end.
     a.remove_device(&id, None).await.unwrap();
     let frames = seen.await.unwrap();
     assert!(frames.iter().any(|f| matches!(f, ServiceFrame::SessionStarted { .. })));
-    assert!(frames.iter().any(|f| matches!(f, ServiceFrame::SessionEnded { reason: EndReason::StoppedByCarbon, .. })));
+    assert!(frames.iter().any(|f| matches!(
+        f,
+        ServiceFrame::SessionEnded {
+            reason: EndReason::StoppedByCarbon,
+            ..
+        }
+    )));
     assert!(frames.iter().any(|f| matches!(f, ServiceFrame::Takeover { .. })));
-    assert!(matches!(frames.last(), Some(ServiceFrame::Unpaired { reason: EndReason::DeviceRemoved })));
+    assert!(matches!(
+        frames.last(),
+        Some(ServiceFrame::Unpaired {
+            reason: EndReason::DeviceRemoved
+        })
+    ));
     // The credential no longer works.
     assert!(env.client.device_self("edc_").await.is_err());
 }
@@ -350,7 +478,13 @@ async fn pairing_rules_and_device_management() {
     let c = env.client.authed(&chef, Some("acme"));
 
     // Silicons can't pair; wrong codes are rate limited after 5.
-    let claim = |code: &str| PairingClaim { pairing_code: code.into(), name: "x".into(), visibility: None, pair_ttl_days: None, silicon_ids: vec![] };
+    let claim = |code: &str| PairingClaim {
+        pairing_code: code.into(),
+        name: "x".into(),
+        visibility: None,
+        pair_ttl_days: None,
+        silicon_ids: vec![],
+    };
     assert_eq!(code_of(c.pair(&claim("000000")).await), ErrorCode::CarbonOnly);
     for _ in 0..5 {
         assert_eq!(code_of(a.pair(&claim("000000")).await), ErrorCode::PairingCodeInvalid);
@@ -362,20 +496,90 @@ async fn pairing_rules_and_device_management() {
     let id = d.id.clone();
 
     // Team-visible: alice sees the basics, can't manage it; personal hides it.
-    let team = a.devices(DeviceQuery { scope: Some("team".into()), ..Default::default() }).await.unwrap();
+    let team = a
+        .devices(DeviceQuery {
+            scope: Some("team".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert_eq!(team.items.len(), 1);
     assert!(team.items[0].in_use.is_none() && team.items[0].pair_ttl_days.is_none());
     assert_eq!(code_of(a.stop_device(&id).await), ErrorCode::NotOwner);
-    b.update_device(&id, None, &DevicePatch { visibility: Some(Visibility::Personal), ..Default::default() }).await.unwrap();
-    assert!(a.devices(DeviceQuery { scope: Some("team".into()), ..Default::default() }).await.unwrap().items.is_empty());
+    b.update_device(
+        &id,
+        None,
+        &DevicePatch {
+            visibility: Some(Visibility::Personal),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        a.devices(DeviceQuery {
+            scope: Some("team".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .is_empty()
+    );
 
     // Rename, TTL bounds, stale version.
     let v = b.device(&id).await.unwrap().version.unwrap();
-    let renamed = b.update_device(&id, Some(v), &DevicePatch { name: Some("Studio Mac".into()), ..Default::default() }).await.unwrap();
+    let renamed = b
+        .update_device(
+            &id,
+            Some(v),
+            &DevicePatch {
+                name: Some("Studio Mac".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(renamed.name, "Studio Mac");
-    assert_eq!(code_of(b.update_device(&id, Some(v), &DevicePatch { pair_ttl_days: Some(20), ..Default::default() }).await), ErrorCode::VersionConflict);
-    assert_eq!(code_of(b.update_device(&id, None, &DevicePatch { pair_ttl_days: Some(31), ..Default::default() }).await), ErrorCode::InvalidInput);
-    let t = b.update_device(&id, None, &DevicePatch { pair_ttl_days: Some(1), ..Default::default() }).await.unwrap();
+    assert_eq!(
+        code_of(
+            b.update_device(
+                &id,
+                Some(v),
+                &DevicePatch {
+                    pair_ttl_days: Some(20),
+                    ..Default::default()
+                }
+            )
+            .await
+        ),
+        ErrorCode::VersionConflict
+    );
+    assert_eq!(
+        code_of(
+            b.update_device(
+                &id,
+                None,
+                &DevicePatch {
+                    pair_ttl_days: Some(31),
+                    ..Default::default()
+                }
+            )
+            .await
+        ),
+        ErrorCode::InvalidInput
+    );
+    let t = b
+        .update_device(
+            &id,
+            None,
+            &DevicePatch {
+                pair_ttl_days: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(t.pair_ttl_days, Some(1));
     // The device was told to refresh.
     assert!(matches!(d.recv().await, ServiceFrame::Refresh));
@@ -387,7 +591,15 @@ async fn pairing_rules_and_device_management() {
     assert_eq!(b.access(&id).await.unwrap().len(), 1);
 
     // A new connection supersedes the old one.
-    let mut d2 = Device { ws: ws_connect(&env.client.ws_url("/api/v1/device/connect"), &format!("Extend-Device {}", d.credential)).await, id: id.clone(), credential: d.credential.clone() };
+    let mut d2 = Device {
+        ws: ws_connect(
+            &env.client.ws_url("/api/v1/device/connect"),
+            &format!("Extend-Device {}", d.credential),
+        )
+        .await,
+        id: id.clone(),
+        credential: d.credential.clone(),
+    };
     loop {
         match d.recv().await {
             ServiceFrame::Refresh => continue,
@@ -400,14 +612,25 @@ async fn pairing_rules_and_device_management() {
     d2.hello(DeviceOs::Macos).await;
 
     // Pair expiry after inactivity.
-    sqlx::query("UPDATE extend.devices SET last_activity_at = now() - interval '2 days' WHERE device_id = $1").bind(&id).execute(&env.pool).await.unwrap();
+    sqlx::query("UPDATE extend.devices SET last_activity_at = now() - interval '2 days' WHERE device_id = $1")
+        .bind(&id)
+        .execute(&env.pool)
+        .await
+        .unwrap();
     let f = loop {
-        let f = tokio::time::timeout(Duration::from_secs(40), d2.recv()).await.expect("unpaired in time");
+        let f = tokio::time::timeout(Duration::from_secs(40), d2.recv())
+            .await
+            .expect("unpaired in time");
         if !matches!(f, ServiceFrame::Refresh) {
             break f;
         }
     };
-    assert!(matches!(f, ServiceFrame::Unpaired { reason: EndReason::PairExpired }));
+    assert!(matches!(
+        f,
+        ServiceFrame::Unpaired {
+            reason: EndReason::PairExpired
+        }
+    ));
     assert!(env.client.device_self(&d.credential).await.is_err());
 
     // Device-side revoke pair.
@@ -419,7 +642,12 @@ async fn pairing_rules_and_device_management() {
     let d4 = Device::pair(&env, "c:bob", DeviceOs::Linux, &["si:chef"], None).await;
     let _serve = d4.serve(env.base.clone());
     sqlx::query("INSERT INTO extend.session_ids SELECT lpad(to_hex(g), 3, '0') FROM generate_series(0, 4095) g ON CONFLICT DO NOTHING").execute(&env.pool).await.unwrap();
-    let dev4: String = sqlx::query_scalar("SELECT device_id FROM extend.devices WHERE removed_at IS NULL ORDER BY paired_at DESC LIMIT 1").fetch_one(&env.pool).await.unwrap();
+    let dev4: String = sqlx::query_scalar(
+        "SELECT device_id FROM extend.devices WHERE removed_at IS NULL ORDER BY paired_at DESC LIMIT 1",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
     let s = c.start_session(&dev4.parse().unwrap()).await.unwrap();
     assert_eq!(s.session_id.as_str().len(), 4);
 }
@@ -427,7 +655,10 @@ async fn pairing_rules_and_device_management() {
 async fn honeycomb(env: &Env, envid: Uuid, action: &str, revision: i64, generation: i64) -> reqwest::Response {
     let op = Uuid::new_v4();
     reqwest::Client::new()
-        .put(format!("{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{op}", env.base))
+        .put(format!(
+            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{op}",
+            env.base
+        ))
         .bearer_auth("hck_test")
         .json(&serde_json::json!({
             "operation_id": op, "environment_id": envid, "org_id": "acme", "app_id": "extend",
@@ -446,7 +677,11 @@ async fn test_environments_are_isolated() {
     let secret = extend_protocol::ids::new_secret("ask_");
     // Wrong service credential.
     let bad = reqwest::Client::new()
-        .put(format!("{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{}", env.base, Uuid::new_v4()))
+        .put(format!(
+            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{}",
+            env.base,
+            Uuid::new_v4()
+        ))
         .bearer_auth("nope")
         .json(&serde_json::json!({}))
         .send()
@@ -466,10 +701,18 @@ async fn test_environments_are_isolated() {
         .unwrap();
 
     // An unknown secret never falls back to production.
-    let wrong = Client::builder(&env.base).testing_secret(extend_protocol::ids::new_secret("ask_")).connect().await.unwrap();
+    let wrong = Client::builder(&env.base)
+        .testing_secret(extend_protocol::ids::new_secret("ask_"))
+        .connect()
+        .await
+        .unwrap();
     assert_eq!(code_of(wrong.login("c:alice").await), ErrorCode::TestingSecretInvalid);
 
-    let t = Client::builder(&env.base).testing_secret(&secret).connect().await.unwrap();
+    let t = Client::builder(&env.base)
+        .testing_secret(&secret)
+        .connect()
+        .await
+        .unwrap();
     let te = t.testing_environment().await.unwrap();
     assert_eq!(te.name, "checkout-e2e");
     // Member-id login works in testing only.
@@ -477,35 +720,81 @@ async fn test_environments_are_isolated() {
     assert_eq!(alice_t.testing_environment.as_ref().unwrap().environment_id, envid);
     // Production and test logins don't cross.
     let alice_p = login(&env.client, "c:alice").await;
-    assert_eq!(code_of(t.authed(&alice_p, Some("acme")).me().await), ErrorCode::TokenExpired);
+    assert_eq!(
+        code_of(t.authed(&alice_p, Some("acme")).me().await),
+        ErrorCode::TokenExpired
+    );
 
     // Pair five devices, the sixth is refused with the exact message.
     let mut devices = Vec::new();
     for _ in 0..5 {
         devices.push(Device::pair(&env, "c:alice", DeviceOs::Linux, &[], Some(&secret)).await);
     }
-    let e = t.enroll(&EnrollmentCreate { os: DeviceOs::Linux, os_version: None, model: None, app_version: "1.0.0".into(), agent_device_version: None }).await.unwrap();
+    let e = t
+        .enroll(&EnrollmentCreate {
+            os: DeviceOs::Linux,
+            os_version: None,
+            model: None,
+            app_version: "1.0.0".into(),
+            agent_device_version: None,
+        })
+        .await
+        .unwrap();
     let err = t
         .authed(&alice_t.access_token, Some("acme"))
-        .pair(&PairingClaim { pairing_code: e.pairing_code, name: "six".into(), visibility: None, pair_ttl_days: None, silicon_ids: vec![] })
+        .pair(&PairingClaim {
+            pairing_code: e.pairing_code,
+            name: "six".into(),
+            visibility: None,
+            pair_ttl_days: None,
+            silicon_ids: vec![],
+        })
         .await
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::TestDeviceLimit);
     assert_eq!(err.api().unwrap().message, extend_protocol::TEST_DEVICE_LIMIT_MESSAGE);
 
     // Production sees none of it.
-    let prod = env.client.authed(&alice_p, Some("acme")).devices(DeviceQuery::default()).await.unwrap();
+    let prod = env
+        .client
+        .authed(&alice_p, Some("acme"))
+        .devices(DeviceQuery::default())
+        .await
+        .unwrap();
     assert!(prod.items.is_empty());
-    assert_eq!(t.authed(&alice_t.access_token, Some("acme")).devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
+    assert_eq!(
+        t.authed(&alice_t.access_token, Some("acme"))
+            .devices(DeviceQuery::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        5
+    );
 
     // Clean: every device is unpaired and data is gone; the environment stays.
     let r = honeycomb(&env, envid, "clean", 2, 2).await;
     assert_eq!(r.status(), 200);
     let mut first = devices.remove(0);
     let f = first.recv().await;
-    assert!(matches!(f, ServiceFrame::Unpaired { reason: EndReason::EnvironmentCleaned }), "{f:?}");
+    assert!(
+        matches!(
+            f,
+            ServiceFrame::Unpaired {
+                reason: EndReason::EnvironmentCleaned
+            }
+        ),
+        "{f:?}"
+    );
     let alice_t2 = t.login("c:alice").await.unwrap();
-    assert!(t.authed(&alice_t2.access_token, Some("acme")).devices(DeviceQuery::default()).await.unwrap().items.is_empty());
+    assert!(
+        t.authed(&alice_t2.access_token, Some("acme"))
+            .devices(DeviceQuery::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
     // Stale instructions are refused; replays return the stored receipt.
     assert_eq!(honeycomb(&env, envid, "clean", 1, 1).await.status(), 409);
 
@@ -521,11 +810,21 @@ async fn test_environments_are_isolated() {
 #[tokio::test]
 async fn versioning_and_errors() {
     let env = start().await;
-    let r = reqwest::Client::new().get(format!("{}/api/version", env.base)).header("Silicon-Extend-Supported-API-Versions", "2, 3").send().await.unwrap();
+    let r = reqwest::Client::new()
+        .get(format!("{}/api/version", env.base))
+        .header("Silicon-Extend-Supported-API-Versions", "2, 3")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 400);
     let v: serde_json::Value = r.json().await.unwrap();
     assert_eq!(v["data"]["code"], "api_version_unsupported");
-    let r = reqwest::Client::new().get(format!("{}/api/v1/iam", env.base)).header("Silicon-Extend-API-Version", "2").send().await.unwrap();
+    let r = reqwest::Client::new()
+        .get(format!("{}/api/v1/iam", env.base))
+        .header("Silicon-Extend-API-Version", "2")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 400);
     let iam = env.client.iam().await.unwrap();
     assert_eq!(iam.app_id, "extend");
@@ -539,7 +838,12 @@ async fn versioning_and_errors() {
     let rep = env
         .client
         .authed(&t, Some("acme"))
-        .report(&ReportInput { message: "snapshot misses a button".into(), pr: Some("https://github.com/teamofsilicons/silicon-extend/pull/1".into()), client_version: "test".into(), context: serde_json::json!({}) })
+        .report(&ReportInput {
+            message: "snapshot misses a button".into(),
+            pr: Some("https://github.com/teamofsilicons/silicon-extend/pull/1".into()),
+            client_version: "test".into(),
+            context: serde_json::json!({}),
+        })
         .await
         .unwrap();
     assert_eq!(rep.notification, "simulated");

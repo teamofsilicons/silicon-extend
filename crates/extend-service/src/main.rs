@@ -5,7 +5,8 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let json = std::env::var("EXTEND_LOG_FORMAT").is_ok_and(|v| v == "json");
-    let filter = EnvFilter::try_from_env("EXTEND_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=info"));
+    let filter =
+        EnvFilter::try_from_env("EXTEND_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=info"));
     if json {
         tracing_subscriber::fmt().with_env_filter(filter).json().init();
     } else {

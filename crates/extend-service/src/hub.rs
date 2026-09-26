@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use extend_protocol::Capability;
 use extend_protocol::frames::{CommandOutcome, EnrollmentFrame, ServiceFrame};
 use extend_protocol::model::MissingCapability;
-use extend_protocol::Capability;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use uuid::Uuid;
 
@@ -62,7 +62,11 @@ impl Hub {
             drop(conns);
             // Anything waiting on this device will never be answered.
             let mut pending = self.pending.lock().await;
-            let dead: Vec<Uuid> = pending.iter().filter(|(_, (k, _))| k == key).map(|(id, _)| *id).collect();
+            let dead: Vec<Uuid> = pending
+                .iter()
+                .filter(|(_, (k, _))| k == key)
+                .map(|(id, _)| *id)
+                .collect();
             for id in dead {
                 pending.remove(&id);
             }
@@ -77,7 +81,11 @@ impl Hub {
     }
 
     pub async fn send(&self, key: &DeviceKey, frame: ServiceFrame) -> bool {
-        self.conns.read().await.get(key).is_some_and(|c| c.tx.send(frame).is_ok())
+        self.conns
+            .read()
+            .await
+            .get(key)
+            .is_some_and(|c| c.tx.send(frame).is_ok())
     }
 
     /// Drops a device's socket (used when its pair ends).
@@ -122,14 +130,20 @@ impl Hub {
     pub async fn resolve(&self, route: &DeviceKey, outcome: CommandOutcome) {
         let mut pending = self.pending.lock().await;
         if pending.get(&outcome.id).is_some_and(|(k, _)| k == route)
-            && let Some((_, tx)) = pending.remove(&outcome.id) {
-                let _ = tx.send(outcome);
-            }
+            && let Some((_, tx)) = pending.remove(&outcome.id)
+        {
+            let _ = tx.send(outcome);
+        }
     }
 
     /// Serialises commands within one session: they run one at a time, in order.
     pub async fn session_lock(&self, key: DeviceKey) -> Arc<Mutex<()>> {
-        self.session_locks.lock().await.entry(key).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+        self.session_locks
+            .lock()
+            .await
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     pub async fn register_enrollment(&self, id: Uuid) -> mpsc::UnboundedReceiver<EnrollmentFrame> {
@@ -143,7 +157,11 @@ impl Hub {
     }
 
     pub async fn send_enrollment(&self, id: Uuid, frame: EnrollmentFrame) -> bool {
-        self.enrollments.read().await.get(&id).is_some_and(|tx| tx.send(frame).is_ok())
+        self.enrollments
+            .read()
+            .await
+            .get(&id)
+            .is_some_and(|tx| tx.send(frame).is_ok())
     }
 
     pub async fn enrollment_connected(&self, id: Uuid) -> bool {

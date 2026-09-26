@@ -3,7 +3,10 @@
 
 use extend_protocol::capability::{DeviceKind, commands_for};
 use extend_protocol::frames::ServiceFrame;
-use extend_protocol::model::{Device, DeviceState, EndReason, InUse, Member, MemberKind, MissingCapability, Session, SessionState, Setup, Visibility};
+use extend_protocol::model::{
+    Device, DeviceState, EndReason, InUse, Member, MemberKind, MissingCapability, Session, SessionState, Setup,
+    Visibility,
+};
 use extend_protocol::{Capability, DeviceOs, ErrorCode};
 use sqlx::FromRow;
 use time::OffsetDateTime;
@@ -54,7 +57,10 @@ impl DeviceRow {
     }
     /// The socket commands for this device travel on: its own, or its host's.
     pub fn route(&self, world: &World) -> (String, String) {
-        (world.schema.clone(), self.host_device_id.clone().unwrap_or_else(|| self.device_id.clone()))
+        (
+            world.schema.clone(),
+            self.host_device_id.clone().unwrap_or_else(|| self.device_id.clone()),
+        )
     }
     pub fn capabilities(&self) -> Vec<Capability> {
         serde_json::from_value(self.capabilities.clone()).unwrap_or_default()
@@ -88,13 +94,22 @@ pub fn device_select(world: &World) -> String {
 }
 
 pub async fn load_device(state: &AppState, world: &World, device_id: &str) -> AppResult<Option<DeviceRow>> {
-    let sql = format!("{} WHERE d.device_id = $1 AND d.removed_at IS NULL", device_select(world));
-    Ok(sqlx::query_as::<_, DeviceRow>(sqlx::AssertSqlSafe(sql.clone())).bind(device_id).fetch_optional(&state.pool).await?)
+    let sql = format!(
+        "{} WHERE d.device_id = $1 AND d.removed_at IS NULL",
+        device_select(world)
+    );
+    Ok(sqlx::query_as::<_, DeviceRow>(sqlx::AssertSqlSafe(sql.clone()))
+        .bind(device_id)
+        .fetch_optional(&state.pool)
+        .await?)
 }
 
 pub fn device_not_found(device_id: &str) -> AppError {
-    AppError::new(ErrorCode::DeviceNotFound, format!("No device {device_id} is visible to you in this team and environment."))
-        .hint("List the devices you can see with `extend device ls`.")
+    AppError::new(
+        ErrorCode::DeviceNotFound,
+        format!("No device {device_id} is visible to you in this team and environment."),
+    )
+    .hint("List the devices you can see with `extend device ls`.")
 }
 
 /// What a member may do with a device.
@@ -114,30 +129,47 @@ pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Princ
         return Ok(Some(Access::Owner));
     }
     if p.is_silicon() {
-        let has: Option<(i32,)> = sqlx::query_as(sql!("SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2", world.t("device_access")))
-            .bind(&d.device_id)
-            .bind(p.id())
-            .fetch_optional(&state.pool)
-            .await?;
+        let has: Option<(i32,)> = sqlx::query_as(sql!(
+            "SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2",
+            world.t("device_access")
+        ))
+        .bind(&d.device_id)
+        .bind(p.id())
+        .fetch_optional(&state.pool)
+        .await?;
         return Ok(has.map(|_| Access::Silicon));
     }
     Ok((d.visibility == "team").then_some(Access::TeamViewer))
 }
 
 /// Loads a device the caller can see, with the access they have.
-pub async fn visible_device(state: &AppState, world: &World, device_id: &str, p: &Principal) -> AppResult<(DeviceRow, Access)> {
+pub async fn visible_device(
+    state: &AppState,
+    world: &World,
+    device_id: &str,
+    p: &Principal,
+) -> AppResult<(DeviceRow, Access)> {
     if device_id.parse::<extend_protocol::DeviceId>().is_err() {
-        return Err(AppError::invalid(format!("{device_id:?} is not a device id; device ids are 8 lowercase hexadecimal characters, like 7c1e09ab.")));
+        return Err(AppError::invalid(format!(
+            "{device_id:?} is not a device id; device ids are 8 lowercase hexadecimal characters, like 7c1e09ab."
+        )));
     }
-    let d = load_device(state, world, device_id).await?.ok_or_else(|| device_not_found(device_id))?;
-    let access = access_of(state, world, &d, p).await?.ok_or_else(|| device_not_found(device_id))?;
+    let d = load_device(state, world, device_id)
+        .await?
+        .ok_or_else(|| device_not_found(device_id))?;
+    let access = access_of(state, world, &d, p)
+        .await?
+        .ok_or_else(|| device_not_found(device_id))?;
     Ok((d, access))
 }
 
 pub async fn owned_device(state: &AppState, world: &World, device_id: &str, p: &Principal) -> AppResult<DeviceRow> {
     let (d, access) = visible_device(state, world, device_id, p).await?;
     if access != Access::Owner {
-        return Err(AppError::new(ErrorCode::NotOwner, format!("Only {} (the Carbon who paired {}) can do this.", d.owner_id, d.name)));
+        return Err(AppError::new(
+            ErrorCode::NotOwner,
+            format!("Only {} (the Carbon who paired {}) can do this.", d.owner_id, d.name),
+        ));
     }
     Ok(d)
 }
@@ -156,9 +188,16 @@ pub async fn is_online(state: &AppState, world: &World, d: &DeviceRow) -> bool {
 pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access: Access, detail: bool) -> Device {
     let os = d.os();
     let online = is_online(state, world, d).await;
-    let owner = Member { kind: MemberKind::Carbon, id: d.owner_id.clone(), display_name: None };
+    let owner = Member {
+        kind: MemberKind::Carbon,
+        id: d.owner_id.clone(),
+        display_name: None,
+    };
     let base = Device {
-        device_id: d.device_id.parse().unwrap_or_else(|_| extend_protocol::DeviceId::random()),
+        device_id: d
+            .device_id
+            .parse()
+            .unwrap_or_else(|_| extend_protocol::DeviceId::random()),
         name: d.name.clone(),
         os,
         os_version: None,
@@ -166,9 +205,17 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access:
         kind: os.kind(),
         owner,
         team: Some(d.team.clone()),
-        visibility: if d.visibility == "personal" { Visibility::Personal } else { Visibility::Team },
+        visibility: if d.visibility == "personal" {
+            Visibility::Personal
+        } else {
+            Visibility::Team
+        },
         host_device_id: None,
-        state: if d.state == "ready" { DeviceState::Ready } else { DeviceState::Setup },
+        state: if d.state == "ready" {
+            DeviceState::Ready
+        } else {
+            DeviceState::Setup
+        },
         online,
         last_seen_at: None,
         in_use: None,
@@ -188,7 +235,9 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access:
         return base;
     }
     let expires = d.last_activity_at + time::Duration::days(i64::from(d.pair_ttl_days));
-    let days_left = ((expires - OffsetDateTime::now_utc()).whole_hours() as f64 / 24.0).ceil().max(0.0) as i64;
+    let days_left = ((expires - OffsetDateTime::now_utc()).whole_hours() as f64 / 24.0)
+        .ceil()
+        .max(0.0) as i64;
     let in_use = match (&d.in_use_session, &d.in_use_silicon, d.in_use_since) {
         (Some(s), Some(si), Some(since)) => s.parse().ok().map(|session_id| InUse {
             silicon_id: si.clone(),
@@ -220,7 +269,13 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access:
         missing: detail.then(|| {
             let mut m = d.missing();
             if !online {
-                m.insert(0, MissingCapability { capability: Capability::ScreenRead, reason: "The device is offline, so nothing works on it right now.".into() });
+                m.insert(
+                    0,
+                    MissingCapability {
+                        capability: Capability::ScreenRead,
+                        reason: "The device is offline, so nothing works on it right now.".into(),
+                    },
+                );
             }
             m
         }),
@@ -248,8 +303,14 @@ pub struct SessionRow {
 impl SessionRow {
     pub fn view(&self) -> Session {
         Session {
-            session_id: self.session_id.parse().unwrap_or_else(|_| extend_protocol::SessionId::from_parts(0, 3)),
-            device_id: self.device_id.parse().unwrap_or_else(|_| extend_protocol::DeviceId::random()),
+            session_id: self
+                .session_id
+                .parse()
+                .unwrap_or_else(|_| extend_protocol::SessionId::from_parts(0, 3)),
+            device_id: self
+                .device_id
+                .parse()
+                .unwrap_or_else(|_| extend_protocol::DeviceId::random()),
             silicon_id: self.silicon_id.clone(),
             state: match self.state.as_str() {
                 "active" => SessionState::Active,
@@ -269,14 +330,16 @@ impl SessionRow {
     }
 }
 
-pub const SESSION_COLUMNS: &str =
-    "session_id, device_id, silicon_id, team, state, started_at, last_command_at, idle_ends_at, ended_at, end_reason, command_count, takeover";
+pub const SESSION_COLUMNS: &str = "session_id, device_id, silicon_id, team, state, started_at, last_command_at, idle_ends_at, ended_at, end_reason, command_count, takeover";
 
 pub async fn load_session(state: &AppState, world: &World, session_id: &str) -> AppResult<Option<SessionRow>> {
-    Ok(sqlx::query_as::<_, SessionRow>(sql!("SELECT {SESSION_COLUMNS} FROM {} WHERE session_id = $1", world.t("sessions")))
-        .bind(session_id)
-        .fetch_optional(&state.pool)
-        .await?)
+    Ok(sqlx::query_as::<_, SessionRow>(sql!(
+        "SELECT {SESSION_COLUMNS} FROM {} WHERE session_id = $1",
+        world.t("sessions")
+    ))
+    .bind(session_id)
+    .fetch_optional(&state.pool)
+    .await?)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -311,11 +374,21 @@ pub async fn log(
 }
 
 pub fn system_member() -> Member {
-    Member { kind: MemberKind::Carbon, id: "extend".into(), display_name: Some("Silicon Extend".into()) }
+    Member {
+        kind: MemberKind::Carbon,
+        id: "extend".into(),
+        display_name: Some("Silicon Extend".into()),
+    }
 }
 
 /// Ends a session: releases the device, tells the device, and logs why. Safe to call twice.
-pub async fn end_session(state: &AppState, world: &World, session_id: &str, reason: EndReason, actor: &Member) -> AppResult<Option<SessionRow>> {
+pub async fn end_session(
+    state: &AppState,
+    world: &World,
+    session_id: &str,
+    reason: EndReason,
+    actor: &Member,
+) -> AppResult<Option<SessionRow>> {
     let mut tx = state.pool.begin().await?;
     let row: Option<SessionRow> = sqlx::query_as(sql!(
         "UPDATE {} SET state = 'ended', ended_at = now(), end_reason = $2, idle_ends_at = NULL
@@ -326,30 +399,65 @@ pub async fn end_session(state: &AppState, world: &World, session_id: &str, reas
     .bind(reason.as_str())
     .fetch_optional(&mut *tx)
     .await?;
-    sqlx::query(sql!("DELETE FROM {} WHERE session_id = $1", world.t("device_locks"))).bind(session_id).execute(&mut *tx).await?;
+    sqlx::query(sql!("DELETE FROM {} WHERE session_id = $1", world.t("device_locks")))
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     let Some(row) = row else {
         return Ok(None);
     };
-    state.session_principals.write().await.remove(&(world.schema.clone(), session_id.to_owned()));
+    state
+        .session_principals
+        .write()
+        .await
+        .remove(&(world.schema.clone(), session_id.to_owned()));
     if let Some(d) = load_device(state, world, &row.device_id).await? {
         let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
         let _ = state
             .hub
-            .send(&d.route(world), ServiceFrame::SessionEnded { target, session_id: row.session_id.parse().unwrap_or_else(|_| extend_protocol::SessionId::from_parts(0, 3)), reason })
+            .send(
+                &d.route(world),
+                ServiceFrame::SessionEnded {
+                    target,
+                    session_id: row
+                        .session_id
+                        .parse()
+                        .unwrap_or_else(|_| extend_protocol::SessionId::from_parts(0, 3)),
+                    reason,
+                },
+            )
             .await;
     }
-    log(state, world, &row.device_id, actor, "session_ended", Some(session_id), serde_json::json!({"reason": reason.as_str(), "explain": reason.explain()})).await;
+    log(
+        state,
+        world,
+        &row.device_id,
+        actor,
+        "session_ended",
+        Some(session_id),
+        serde_json::json!({"reason": reason.as_str(), "explain": reason.explain()}),
+    )
+    .await;
     tracing::info!(world = %world.schema, session_id, reason = reason.as_str(), "session ended");
     Ok(Some(row))
 }
 
 /// Ends every running session on a device.
-pub async fn end_device_sessions(state: &AppState, world: &World, device_id: &str, reason: EndReason, actor: &Member) -> AppResult<()> {
-    let ids: Vec<(String,)> = sqlx::query_as(sql!("SELECT session_id FROM {} WHERE device_id = $1 AND state <> 'ended'", world.t("sessions")))
-        .bind(device_id)
-        .fetch_all(&state.pool)
-        .await?;
+pub async fn end_device_sessions(
+    state: &AppState,
+    world: &World,
+    device_id: &str,
+    reason: EndReason,
+    actor: &Member,
+) -> AppResult<()> {
+    let ids: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT session_id FROM {} WHERE device_id = $1 AND state <> 'ended'",
+        world.t("sessions")
+    ))
+    .bind(device_id)
+    .fetch_all(&state.pool)
+    .await?;
     for (id,) in ids {
         end_session(state, world, &id, reason, actor).await?;
     }
@@ -370,15 +478,20 @@ pub fn unpair<'a>(
             return Ok(());
         };
         end_device_sessions(state, world, device_id, reason, actor).await?;
-        let hosted: Vec<(String,)> =
-            sqlx::query_as(sql!("SELECT device_id FROM {} WHERE host_device_id = $1 AND removed_at IS NULL", world.t("devices")))
-                .bind(device_id)
-                .fetch_all(&state.pool)
-                .await?;
+        let hosted: Vec<(String,)> = sqlx::query_as(sql!(
+            "SELECT device_id FROM {} WHERE host_device_id = $1 AND removed_at IS NULL",
+            world.t("devices")
+        ))
+        .bind(device_id)
+        .fetch_all(&state.pool)
+        .await?;
         for (child,) in hosted {
             unpair(state, world, &child, reason, actor).await?;
         }
-        sqlx::query(sql!("DELETE FROM {} WHERE device_id = $1", world.t("device_access"))).bind(device_id).execute(&state.pool).await?;
+        sqlx::query(sql!("DELETE FROM {} WHERE device_id = $1", world.t("device_access")))
+            .bind(device_id)
+            .execute(&state.pool)
+            .await?;
         sqlx::query(sql!(
             "UPDATE {} SET removed_at = now(), removed_reason = $2, credential_digest = NULL WHERE device_id = $1",
             world.t("devices")
@@ -393,7 +506,10 @@ pub fn unpair<'a>(
                 .send(
                     &(world.schema.clone(), host.clone()),
                     ServiceFrame::Attach {
-                        device_id: d.device_id.parse().unwrap_or_else(|_| extend_protocol::DeviceId::random()),
+                        device_id: d
+                            .device_id
+                            .parse()
+                            .unwrap_or_else(|_| extend_protocol::DeviceId::random()),
                         os: d.os(),
                         name: d.name.clone(),
                         address: d.address.clone(),
@@ -413,7 +529,16 @@ pub fn unpair<'a>(
             EndReason::PairExpired => "pair_expired",
             _ => "removed",
         };
-        log(state, world, device_id, actor, action, None, serde_json::json!({"reason": reason.as_str()})).await;
+        log(
+            state,
+            world,
+            device_id,
+            actor,
+            action,
+            None,
+            serde_json::json!({"reason": reason.as_str()}),
+        )
+        .await;
         Ok(())
     })
 }

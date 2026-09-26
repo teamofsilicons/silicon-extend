@@ -68,14 +68,22 @@ fn who(auth: &Auth) -> String {
     if auth.p.is_silicon() {
         "f.created_by = $2".into()
     } else {
-        format!("EXISTS (SELECT 1 FROM {} d WHERE d.device_id = f.device_id AND d.owner_id = $2)", auth.world.t("devices"))
+        format!(
+            "EXISTS (SELECT 1 FROM {} d WHERE d.device_id = f.device_id AND d.owner_id = $2)",
+            auth.world.t("devices")
+        )
     }
 }
 
 pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
     let team = auth.team()?.to_owned();
     let lim = limit(q.limit)?;
-    let before: Option<Uuid> = q.cursor.as_deref().map(decode_cursor).transpose()?.and_then(|c| c.parse().ok());
+    let before: Option<Uuid> = q
+        .cursor
+        .as_deref()
+        .map(decode_cursor)
+        .transpose()?
+        .and_then(|c| c.parse().ok());
     let rows: Vec<FileRow> = sqlx::query_as(sql!(
         "SELECT {COLS} FROM {} f WHERE f.team = $1 AND {}
            AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())
@@ -122,15 +130,27 @@ pub async fn get(State(state): State<Shared>, auth: Auth, Path(file_id): Path<Uu
 pub async fn keep(State(state): State<Shared>, auth: Auth, Path(file_id): Path<Uuid>) -> AppResult<Response> {
     let f = visible(&state, &auth, file_id).await?;
     if f.created_by != auth.p.id() {
-        return Err(AppError::new(ErrorCode::NotSessionOwner, format!("Only {} (the Silicon that made it) can make this file permanent.", f.created_by)));
+        return Err(AppError::new(
+            ErrorCode::NotSessionOwner,
+            format!(
+                "Only {} (the Silicon that made it) can make this file permanent.",
+                f.created_by
+            ),
+        ));
     }
     if f.permanent {
-        return Err(AppError::new(ErrorCode::NotSelfDestructing, "This file is already permanent."));
+        return Err(AppError::new(
+            ErrorCode::NotSelfDestructing,
+            "This file is already permanent.",
+        ));
     }
-    sqlx::query(sql!("UPDATE {} SET permanent = true, self_destruct_at = NULL WHERE file_id = $1", auth.world.t("files")))
-        .bind(file_id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(sql!(
+        "UPDATE {} SET permanent = true, self_destruct_at = NULL WHERE file_id = $1",
+        auth.world.t("files")
+    ))
+    .bind(file_id)
+    .execute(&state.pool)
+    .await?;
     Ok(ok("file", visible(&state, &auth, file_id).await?.view()))
 }
 
