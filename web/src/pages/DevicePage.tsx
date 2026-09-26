@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
-import { ArrowLeft, Check, CircleStop, Pencil, Trash2 } from "lucide-solid";
+import { ArrowLeft, Check, CircleStop, Hand, Pencil, Trash2 } from "lucide-solid";
 import { session } from "../lib/session";
 import { ifMatchValue, toApiError, type ApiError } from "../lib/api";
 import type { AccessGrant, ActivityEntry, ExtendRequest, Device, DeviceDetail, Takeover, Visibility } from "../lib/types";
@@ -7,7 +7,8 @@ import { usePoll } from "../lib/poll";
 import { Link, navigate } from "../lib/router";
 import { OS_LABEL, POLL_MS } from "../config";
 import { activitySummary, clock, dateTime, day, duration, plural, relativeTime } from "../lib/format";
-import { Button, DeviceIcon, ErrorNote, Modal, OnlineDot, Spinner, toast } from "../components/ui";
+import { Button, DeviceIcon, ErrorNote, MemberTag, memberType, Modal, OnlineDot, Spinner, StatusDot, toast } from "../components/ui";
+import { devicesChanged } from "../lib/refresh";
 import { TtlSlider } from "../components/TtlSlider";
 import { AccessPicker } from "../components/AccessPicker";
 import { SetupSteps } from "../components/SetupSteps";
@@ -45,6 +46,7 @@ export default function DevicePage(props: { id: string }) {
       const { device: updated, etag: tag } = await s.client().updateDevice(d.device_id, change, ifMatchValue(etag(), d.version));
       setDevice({ ...d, ...updated });
       setEtag(tag);
+      devicesChanged();
       void s.client().telemetry({ event: "device_update", step: `web.device.${Object.keys(change).join("+")}`, success: true, duration_ms: performance.now() - started, device_os: d.os });
       return null;
     } catch (e) {
@@ -58,7 +60,7 @@ export default function DevicePage(props: { id: string }) {
   return (
     <section class="page device-page" data-testid="device-page">
       <Link href="/devices" class="back-link">
-        <ArrowLeft size={15} aria-hidden="true" /> Devices
+        <ArrowLeft size={15} aria-hidden="true" /> All devices
       </Link>
       <ErrorNote error={loadError()} testid="device-load-error" />
       <Show when={device()} fallback={<Show when={!loadError()}><Spinner label="Loading the device…" /></Show>}>
@@ -109,9 +111,12 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
     }
   }
   return (
-    <div class="device-header">
-      <DeviceIcon device={d()} size={28} />
+    <header class="device-header">
+      <DeviceIcon device={d()} size={26} />
       <div class="device-header-main">
+        <p class="eyebrow">
+          {d().kind === "tv" ? "TV" : d().kind === "computer" ? "Computer" : d().kind === "tablet" ? "Tablet" : "Phone"} · {d().visibility === "personal" ? "Only you see it" : `Visible in ${d().team ?? "the team"}`}
+        </p>
         <Show
           when={editing()}
           fallback={
@@ -134,7 +139,7 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
           </form>
         </Show>
         <p class="device-meta">
-          <OnlineDot online={d().online} />
+          <OnlineDot online={d().online} inUse={!!d().in_use} />
           <span>
             {OS_LABEL[d().os] ?? d().os}
             {d().os_version ? ` ${d().os_version}` : ""}
@@ -152,7 +157,7 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
         </p>
         <ErrorNote error={error()} compact />
       </div>
-    </div>
+    </header>
   );
 }
 
@@ -184,6 +189,7 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
     try {
       const ended = await s.client().stopDevice(props.device.device_id);
       toast(`Stopped ${ended.silicon_id} (session ${ended.session_id})`);
+      devicesChanged();
     } catch (e) {
       setError(toApiError(e));
     } finally {
@@ -199,6 +205,7 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
       await s.client().releaseTakeover(sessionId);
       setTakeover(null);
       toast(`${siliconId} can carry on`);
+      devicesChanged();
     } catch (e) {
       setError(toApiError(e));
     } finally {
@@ -212,25 +219,30 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
       <Show
         when={props.device.in_use}
         fallback={
-          <p class="muted">
-            No Silicon is using {props.device.name} right now.
-            <Show when={props.device.last_used_at}> Last used {relativeTime(props.device.last_used_at, props.now)}.</Show>
-          </p>
+          <div class="in-use-idle">
+            <p class="eyebrow">Not in use</p>
+            <p class="muted">
+              No Silicon is using {props.device.name} right now.
+              <Show when={props.device.last_used_at}> Last used {relativeTime(props.device.last_used_at, props.now)}.</Show>
+            </p>
+          </div>
         }
       >
         {(u) => (
           <>
             <div class="in-use-row">
-              <span class="pulse" aria-hidden="true" />
               <div>
-                <p>
-                  <strong data-testid="in-use-silicon">{u().silicon_id}</strong> {u().paused ? "handed the device to you" : "is using it now"}
+                <p class="eyebrow in-use-eyebrow">
+                  <StatusDot status="in-use" /> {u().paused ? "Paused for you" : "In use"}
+                </p>
+                <p class="in-use-line">
+                  <MemberTag type="silicon" /> <strong data-testid="in-use-silicon">{u().silicon_id}</strong> {u().paused ? "handed the device to you" : "is using it now"}
                 </p>
                 <p class="fine">
                   Since {clock(u().since)} ({duration(u().since, props.now)}) · session <span class="mono">{u().session_id}</span>
                 </p>
               </div>
-              <Button variant="danger" onClick={stop} busy={busy() === "stop"} data-testid="stop-session">
+              <Button variant="danger" class="stop" onClick={stop} busy={busy() === "stop"} data-testid="stop-session">
                 <CircleStop size={16} aria-hidden="true" /> Stop
               </Button>
             </div>
@@ -239,7 +251,9 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
                 <Show when={takeover()} fallback={<p class="fine">The Silicon paused its session and is waiting for you on the device.</p>}>
                   {(t) => (
                     <>
-                      <p class="takeover-label">It needs you to:</p>
+                      <p class="takeover-label eyebrow">
+                        <Hand size={13} aria-hidden="true" /> It needs you to
+                      </p>
                       <blockquote data-testid="takeover-reason">{t().reason}</blockquote>
                       <p class="fine">
                         Do it on the device, then choose Done so {u().silicon_id} can carry on. If you don't, the session ends at {clock(t().expires_at)}.
@@ -283,6 +297,7 @@ function Access(props: { device: DeviceDetail; onChanged: () => void }) {
     try {
       await s.client().revokeAccess(props.device.device_id, id);
       toast(`${id} can no longer use ${props.device.name}`);
+      devicesChanged();
       await load();
       props.onChanged();
     } catch (e) {
@@ -294,7 +309,7 @@ function Access(props: { device: DeviceDetail; onChanged: () => void }) {
 
   return (
     <div class="card" data-testid="access-card">
-      <h2 class="card-title">Silicons with access</h2>
+      <h2 class="card-title">Silicons with access.</h2>
       <ErrorNote error={error()} compact />
       <Show when={grants()} fallback={<Show when={!error()}><Spinner inline label="Loading access…" /></Show>}>
         {(list) => (
@@ -304,10 +319,13 @@ function Access(props: { device: DeviceDetail; onChanged: () => void }) {
                 {(g) => (
                   <li class="grant" data-testid="grant" data-silicon={g.silicon_id}>
                     <div>
-                      <strong>{g.silicon_id}</strong>
-                      <Show when={props.device.in_use?.silicon_id === g.silicon_id}>
-                        <span class="badge live">Using it now</span>
-                      </Show>
+                      <p class="grant-who">
+                        <MemberTag type="silicon" />
+                        <strong>{g.silicon_id}</strong>
+                        <Show when={props.device.in_use?.silicon_id === g.silicon_id}>
+                          <span class="badge live">Using it now</span>
+                        </Show>
+                      </p>
                       <p class="fine">
                         Given by {g.granted_by} on {day(g.granted_at)} · last used {relativeTime(g.last_used_at)}
                       </p>
@@ -385,7 +403,7 @@ function Settings(props: { device: DeviceDetail; patch: (c: { visibility?: Visib
   }
   return (
     <div class="card" data-testid="settings-card">
-      <h2 class="card-title">Pairing</h2>
+      <h2 class="card-title">Pairing.</h2>
       <TtlSlider
         id="device-ttl"
         value={ttl()}
@@ -459,7 +477,7 @@ const CAPABILITY_LABEL: Record<string, string> = {
 function Capabilities(props: { device: DeviceDetail }) {
   return (
     <details class="card" data-testid="capabilities">
-      <summary class="card-title">What a Silicon can do here</summary>
+      <summary class="card-title">What a Silicon can do here.</summary>
       <ul class="capabilities">
         <For each={props.device.capabilities}>{(c) => <li title={c}>{CAPABILITY_LABEL[c] ?? c}</li>}</For>
       </ul>
@@ -530,7 +548,7 @@ function Activity(props: { device: DeviceDetail }) {
 
   return (
     <div class="card" data-testid="activity">
-      <h2 class="card-title">Activity</h2>
+      <h2 class="card-title">Activity.</h2>
       <p class="fine">Every action on this device, who did it and when. Typed text is redacted.</p>
       <form
         class="filters"
@@ -585,7 +603,10 @@ function Activity(props: { device: DeviceDetail }) {
                     <time datetime={a.at} title={dateTime(a.at)}>
                       {relativeTime(a.at)}
                     </time>
-                    <span class="actor">{a.actor.id}</span>
+                    <span class="actor">
+                      <MemberTag type={a.actor.type} />
+                      <span>{a.actor.id}</span>
+                    </span>
                     <span class="action">
                       {a.action === "command" && a.command ? (
                         <span class="mono">
@@ -642,7 +663,7 @@ function Requests(props: { device: DeviceDetail }) {
   onMount(() => load());
   return (
     <div class="card" data-testid="requests">
-      <h2 class="card-title">Requests between Silicons</h2>
+      <h2 class="card-title">Requests between Silicons.</h2>
       <p class="fine">When a Silicon wants the device while another one is using it, it asks with a reason. Extend delivers it through Ting.</p>
       <ErrorNote error={error()} compact />
       <Show when={items()} fallback={<Show when={!error()}><Spinner inline label="Loading requests…" /></Show>}>
@@ -652,7 +673,8 @@ function Requests(props: { device: DeviceDetail }) {
               <For each={list()}>
                 {(r) => (
                   <li class="request" data-testid="request">
-                    <p>
+                    <p class="request-who">
+                      <MemberTag type={memberType(r.from)} />
                       <strong>{r.from}</strong> asked <strong>{r.to}</strong> <span class="muted">· {relativeTime(r.created_at)}</span>
                       <span class={`badge ${r.delivery === "failed" ? "warn" : "muted"}`}>{r.delivery}</span>
                     </p>
@@ -701,6 +723,7 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
       await s.client().removeDevice(props.device.device_id, ifMatchValue(props.etag, props.device.version));
       setOpen(false);
       toast(`Removed ${props.device.name}`);
+      devicesChanged();
       navigate("/devices", { replace: true });
     } catch (e) {
       setError(toApiError(e));
@@ -711,9 +734,9 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
 
   return (
     <div class="card danger" data-testid="danger-zone">
-      <h2 class="card-title">Remove device</h2>
+      <h2 class="card-title">Remove device.</h2>
       <p class="fine">Ends any session, takes access away from every Silicon and unpairs the device. The activity log stays readable. To use it again you pair it again.</p>
-      <Button variant="danger" onClick={openDialog} data-testid="remove-device">
+      <Button variant="danger" class="quiet" onClick={openDialog} data-testid="remove-device">
         <Trash2 size={16} aria-hidden="true" /> Remove {props.device.name}
       </Button>
       <Modal open={open()} title={`Remove ${props.device.name}?`} onClose={() => setOpen(false)} testid="remove-dialog">

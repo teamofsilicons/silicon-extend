@@ -1,17 +1,31 @@
-import { createEffect, createSignal, For, on, Show } from "solid-js";
-import { Plus, RefreshCw } from "lucide-solid";
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
+import { Plus, RefreshCw, Search } from "lucide-solid";
 import { session } from "../lib/session";
 import { toApiError, type ApiError } from "../lib/api";
 import type { Device } from "../lib/types";
 import { usePoll } from "../lib/poll";
 import { Link } from "../lib/router";
+import { devicesTick } from "../lib/refresh";
 import { OS_LABEL, POLL_MS } from "../config";
 import { duration, plural, relativeTime } from "../lib/format";
-import { Button, DeviceIcon, Empty, ErrorNote, OnlineDot, Spinner } from "../components/ui";
+import { Button, DeviceIcon, Empty, ErrorNote, MemberTag, OnlineDot, Spinner } from "../components/ui";
+import Shader from "../components/Shader";
+import DevicePage from "./DevicePage";
 
 type Scope = "mine" | "team" | "accessible";
 
-export default function Devices() {
+const EYEBROW: Record<Scope, string> = {
+  mine: "Your paired devices",
+  team: "Your team's devices",
+  accessible: "Devices you can use",
+};
+
+/**
+ * Devices, Interface-style: the list on the left (the Carbon's devices, or the team's), and the
+ * selected device's page on the right. With nothing selected the right pane is a short overview.
+ * At phone width only one of the two shows: the list, or the device.
+ */
+export default function Devices(props: { selected?: string | null }) {
   const s = session();
   const isSilicon = () => s.member()?.type === "silicon";
   const [scope, setScope] = createSignal<Scope>(isSilicon() ? "accessible" : "mine");
@@ -21,6 +35,7 @@ export default function Devices() {
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [refreshedAt, setRefreshedAt] = createSignal<number | null>(null);
   const [now, setNow] = createSignal(Date.now());
+  const [filter, setFilter] = createSignal("");
 
   /** Reloads everything shown so far in one request (up to 100), so polling doesn't drop pages. */
   async function load(reset = false) {
@@ -61,170 +76,281 @@ export default function Devices() {
       load(true);
     }),
   );
+  // Opening or leaving a device, or changing one, re-reads the list at once.
+  createEffect(on([() => props.selected, devicesTick], () => load(), { defer: true }));
   usePoll(() => load(), POLL_MS);
 
   const hostName = (id: string | null | undefined) => (id ? (items()?.find((d) => d.device_id === id)?.name ?? id) : null);
+  const shown = createMemo(() => {
+    const words = filter().trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const list = items() ?? [];
+    if (!words.length) return list;
+    return list.filter((d) => {
+      const text = `${d.name} ${d.device_id} ${OS_LABEL[d.os] ?? d.os} ${d.model ?? ""} ${d.in_use?.silicon_id ?? ""} ${d.owner.id}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
+  });
+  const empty = () => items() !== null && items()!.length === 0;
+  /** At phone width: the device when one is open, or the empty state when there is nothing to list. */
+  const showMain = () => !!props.selected || (empty() && !error());
 
   return (
-    <section class="page" data-testid="devices-page">
-      <div class="page-head">
-        <div>
-          <h1 class="page-title">Devices</h1>
-          <p class="subtitle">
-            {isSilicon() ? "Devices you can use" : "Devices you paired"} in team <strong>{s.team()}</strong>
-            <Show when={refreshedAt()}>
-              <span class="muted"> · updated {relativeTime(new Date(refreshedAt()!).toISOString(), now())}</span>
+    <div class={`devices-view ${showMain() ? "show-main" : "show-list"}`} data-testid={props.selected ? "devices-view" : "devices-page"}>
+      <aside class="list-column" aria-label="Devices">
+        <div class="list-inner">
+          <header class="list-title">
+            <div>
+              <p class="eyebrow">{EYEBROW[scope()]}</p>
+              <h1>Devices.</h1>
+            </div>
+            <Show when={!isSilicon()}>
+              <Link href="/devices/new" class="icon-button outlined" aria-label="Add a device" title="Add a device" data-testid="add-device">
+                <Plus size={17} aria-hidden="true" />
+              </Link>
             </Show>
+          </header>
+
+          <Show when={isSilicon()}>
+            <p class="notice list-notice">
+              You are signed in as a Silicon. This website is where Carbons pair and manage devices; Silicons use them through the <code>extend</code> CLI. See the <Link href="/docs">docs</Link>.
+            </p>
+          </Show>
+
+          <label class="search-field list-search">
+            <Search size={15} aria-hidden="true" />
+            <span class="visually-hidden">Find a device</span>
+            <input type="search" placeholder="Find a device" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} data-testid="device-filter" />
+          </label>
+
+          <Show when={!isSilicon()}>
+            <div class="filter-chips" role="tablist" aria-label="Whose devices">
+              <button role="tab" aria-selected={scope() === "mine"} class={scope() === "mine" ? "selected" : ""} onClick={() => setScope("mine")} data-testid="tab-mine">
+                My devices
+              </button>
+              <button role="tab" aria-selected={scope() === "team"} class={scope() === "team" ? "selected" : ""} onClick={() => setScope("team")} data-testid="tab-team">
+                Team devices
+              </button>
+            </div>
+          </Show>
+
+          <div class="list-label">
+            <span>
+              {scope() === "team" ? "Visible in " : "In "}
+              {s.team()}
+              <Show when={items()}> · {items()!.length}</Show>
+            </span>
+            <span class="list-label-tail">
+              <Show when={refreshedAt()}>
+                <span title="Refreshes every few seconds">{relativeTime(new Date(refreshedAt()!).toISOString(), now())}</span>
+              </Show>
+              <button class="icon-button small-icon" aria-label="Refresh" title="Refresh" onClick={() => load()}>
+                <RefreshCw size={13} />
+              </button>
+            </span>
+          </div>
+
+          <div class="list-body">
+            <ErrorNote error={error()} compact />
+            <Show when={items()} fallback={<Show when={!error()}><Spinner label="Loading devices…" /></Show>}>
+              {(list) => (
+                <Show
+                  when={list().length}
+                  fallback={
+                    <p class="small-empty">
+                      {scope() === "mine"
+                        ? "Nothing paired yet."
+                        : scope() === "team"
+                          ? "No other Carbon in this team has made a device visible."
+                          : "No Carbon has given you a device in this team yet."}
+                    </p>
+                  }
+                >
+                  <Show when={shown().length} fallback={<p class="small-empty">No device matches “{filter().trim()}”. Try a name, an id or a Silicon.</p>}>
+                    <Show
+                      when={scope() !== "team"}
+                      fallback={
+                        <ul class="device-list team" data-testid="team-device-list">
+                          <For each={shown()}>
+                            {(d) => (
+                              <li class="device-row readonly" data-testid="device-row">
+                                <DeviceIcon device={d} />
+                                <span class="device-copy">
+                                  <span class="device-top">
+                                    <strong class="device-name">{d.name}</strong>
+                                  </span>
+                                  <span class="device-sub">
+                                    {OS_LABEL[d.os] ?? d.os} · paired by {d.owner.display_name ? `${d.owner.display_name} (${d.owner.id})` : d.owner.id}
+                                  </span>
+                                  <span class="device-state">
+                                    <OnlineDot online={d.online} />
+                                  </span>
+                                </span>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      }
+                    >
+                      <nav class="device-list" aria-label="Your devices" data-testid="device-list">
+                        <For each={shown()}>
+                          {(d) => (
+                            <Link
+                              href={`/devices/${d.device_id}`}
+                              class={`device-row ${props.selected === d.device_id ? "active" : ""}`}
+                              aria-current={props.selected === d.device_id ? "page" : undefined}
+                              data-testid="device-row"
+                              data-device-id={d.device_id}
+                            >
+                              <DeviceIcon device={d} />
+                              <span class="device-copy">
+                                <span class="device-top">
+                                  <strong class="device-name">{d.name}</strong>
+                                  <small title="Last used">{d.last_used_at ? relativeTime(d.last_used_at, now()) : "never used"}</small>
+                                </span>
+                                <span class="device-sub">
+                                  {OS_LABEL[d.os] ?? d.os}
+                                  {d.os_version ? ` ${d.os_version}` : ""}
+                                  <Show when={d.host_device_id}> · through {hostName(d.host_device_id)}</Show>
+                                  <Show when={d.visibility === "personal"}> · personal</Show>
+                                </span>
+                                <span class="device-state">
+                                  <OnlineDot online={d.online} inUse={!!d.in_use} />
+                                  <Show when={d.state === "setup"}>
+                                    <span class="badge warn">Setup unfinished</span>
+                                  </Show>
+                                  <Show when={d.days_left !== undefined}>
+                                    <span
+                                      class={d.days_left! <= 3 ? "days-left warn" : "days-left"}
+                                      title={d.pair_expires_at ? `Unpairs on ${new Date(d.pair_expires_at).toLocaleString()} unless used` : undefined}
+                                    >
+                                      Pair ends {d.days_left === 0 ? "today" : `in ${plural(d.days_left!, "day")}`}
+                                    </span>
+                                  </Show>
+                                </span>
+                                <Show when={d.in_use}>
+                                  {(u) => (
+                                    <span class="in-use" data-testid="in-use">
+                                      <MemberTag type="silicon" />
+                                      <strong>{u().silicon_id}</strong>
+                                      <span>
+                                        {" "}
+                                        · {duration(u().since, now())}
+                                        {u().paused ? " · paused for you" : ""}
+                                      </span>
+                                    </span>
+                                  )}
+                                </Show>
+                              </span>
+                            </Link>
+                          )}
+                        </For>
+                      </nav>
+                    </Show>
+                  </Show>
+                  <Show when={next()}>
+                    <Button onClick={loadMore} busy={loadingMore()} small class="load-more">
+                      Load more
+                    </Button>
+                  </Show>
+                </Show>
+              )}
+            </Show>
+          </div>
+
+          <p class="list-note">
+            <span class="status-dot" aria-hidden="true" /> One Silicon at a time. Stop it any time.
           </p>
         </div>
-        <div class="page-actions">
-          <button class="icon-button" aria-label="Refresh" title="Refresh" onClick={() => load()}>
-            <RefreshCw size={16} />
-          </button>
-          <Show when={!isSilicon()}>
-            <Link href="/devices/new" class="button primary" data-testid="add-device">
-              <Plus size={16} aria-hidden="true" /> Add a device
-            </Link>
-          </Show>
-        </div>
+      </aside>
+
+      <div class="main-pane">
+        <Show when={props.selected} keyed fallback={<Overview items={items()} scope={scope()} isSilicon={isSilicon()} />}>
+          {(id) => <DevicePage id={id} />}
+        </Show>
       </div>
+    </div>
+  );
+}
 
-      <Show when={isSilicon()}>
-        <p class="notice">
-          You are signed in as a Silicon. This website is where Carbons pair and manage devices; Silicons use them through the <code>extend</code> CLI. See the{" "}
-          <Link href="/docs">docs</Link>.
-        </p>
-      </Show>
-
-      <Show when={!isSilicon()}>
-        <div class="tabs" role="tablist">
-          <button role="tab" aria-selected={scope() === "mine"} class={scope() === "mine" ? "active" : ""} onClick={() => setScope("mine")} data-testid="tab-mine">
-            My devices
-          </button>
-          <button role="tab" aria-selected={scope() === "team"} class={scope() === "team" ? "active" : ""} onClick={() => setScope("team")} data-testid="tab-team">
-            Team devices
-          </button>
-        </div>
-      </Show>
-
-      <ErrorNote error={error()} />
-
-      <Show when={items()} fallback={<Show when={!error()}><Spinner label="Loading devices…" /></Show>}>
-        {(list) => (
-          <Show
-            when={list().length}
-            fallback={
-              <Show
-                when={scope() === "mine"}
-                fallback={
-                  <Empty title={scope() === "team" ? "No team devices to show" : "No devices yet"}>
-                    <p>
-                      {scope() === "team"
-                        ? "Other Carbons in this team haven't made any of their devices visible to the team."
-                        : "No Carbon has given you access to a device in this team yet."}
-                    </p>
-                  </Empty>
-                }
-              >
-                <Empty title="No devices paired yet">
-                  <p>Pair a phone, computer or TV, then choose which Silicons can use it. It takes a few minutes.</p>
-                  <Link href="/devices/new" class="button primary">
-                    <Plus size={16} aria-hidden="true" /> Add your first device
-                  </Link>
-                </Empty>
-              </Show>
-            }
-          >
+/** The right pane with no device open: what is here at a glance, or where to start. */
+function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: boolean }) {
+  const s = session();
+  const count = (f: (d: Device) => boolean) => (props.items ?? []).filter(f).length;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return (
+    <Show when={props.items}>
+      {(list) => (
+        <Show
+          when={list().length}
+          fallback={
             <Show
-              when={scope() !== "team"}
+              when={props.scope === "mine"}
               fallback={
-                <ul class="device-list team" data-testid="team-device-list">
-                  <For each={list()}>
-                    {(d) => (
-                      <li class="device-row readonly" data-testid="device-row">
-                        <DeviceIcon device={d} />
-                        <div class="device-main">
-                          <span class="device-name">{d.name}</span>
-                          <span class="device-sub">
-                            {OS_LABEL[d.os] ?? d.os} · paired by {d.owner.display_name ? `${d.owner.display_name} (${d.owner.id})` : d.owner.id}
-                          </span>
-                        </div>
-                        <OnlineDot online={d.online} />
-                      </li>
-                    )}
-                  </For>
-                </ul>
+                <Empty eyebrow={s.team() ?? undefined} title={props.scope === "team" ? "No team devices to show." : "No devices yet."}>
+                  <p>
+                    {props.scope === "team"
+                      ? "Other Carbons in this team haven't made any of their devices visible to the team."
+                      : "No Carbon has given you access to a device in this team yet. Ask the Carbon who owns it."}
+                  </p>
+                </Empty>
               }
             >
-              <div class="device-table" role="table" aria-label="Devices" data-testid="device-list">
-                <div class="device-table-head" role="row">
-                  <span role="columnheader">Device</span>
-                  <span role="columnheader">Status</span>
-                  <span role="columnheader">In use by</span>
-                  <span role="columnheader">Last used</span>
-                  <span role="columnheader">Pair ends</span>
+              <Empty eyebrow={`Extend · ${s.team() ?? ""}`} title="No devices paired yet.">
+                <p>Pair a phone, computer or TV, then choose which Silicons can use it. It takes a few minutes.</p>
+                <Link href="/devices/new" class="button primary">
+                  <Plus size={16} aria-hidden="true" /> Add your first device
+                </Link>
+              </Empty>
+            </Show>
+          }
+        >
+          <section class="overview" aria-label="At a glance">
+            <p class="eyebrow">
+              Extend · {s.team()}
+            </p>
+            <h2 class="overview-title">Pick a device.</h2>
+            <p class="overview-lead">
+              {props.isSilicon
+                ? "Choose one on the left to see what you can do on it. You use it through the extend CLI."
+                : "Choose one on the left to see who is using it, change which Silicons can, or stop a session."}
+            </p>
+            <figure class="tally" aria-label="Your devices at a glance">
+              <div class="tally-print">
+                <Shader variant="ticket" seed={2.4} />
+                <span class="print-caption top">
+                  {props.scope === "team" ? "Team" : props.scope === "accessible" ? "Yours to use" : "Paired"} · {s.team()}
+                </span>
+                <span class="print-caption top right">Silicon Extend</span>
+              </div>
+              <dl class="tally-numbers">
+                <div>
+                  <dt>{props.scope === "team" ? "Visible" : props.scope === "accessible" ? "Yours to use" : "Paired"}</dt>
+                  <dd>{two(list().length)}</dd>
                 </div>
-                <For each={list()}>
-                  {(d) => (
-                    <Link href={`/devices/${d.device_id}`} class="device-row" role="row" data-testid="device-row" data-device-id={d.device_id}>
-                      <span class="cell device-cell" role="cell">
-                        <DeviceIcon device={d} />
-                        <span class="device-main">
-                          <span class="device-name">{d.name}</span>
-                          <span class="device-sub">
-                            {OS_LABEL[d.os] ?? d.os}
-                            {d.os_version ? ` ${d.os_version}` : ""}
-                            <Show when={d.host_device_id}> · through {hostName(d.host_device_id)}</Show>
-                            <Show when={d.visibility === "personal"}> · personal</Show>
-                          </span>
-                        </span>
-                      </span>
-                      <span class="cell" role="cell">
-                        <OnlineDot online={d.online} />
-                        <Show when={d.state === "setup"}>
-                          <span class="badge warn">Setup unfinished</span>
-                        </Show>
-                      </span>
-                      <span class="cell in-use-cell" role="cell">
-                        <span class="cell-label">In use by</span>
-                        <Show when={d.in_use} fallback={<span class="muted">Nobody</span>}>
-                          {(u) => (
-                            <span class="in-use" data-testid="in-use">
-                              <strong>{u().silicon_id}</strong>
-                              <span class="muted">
-                                {" "}
-                                · {duration(u().since, now())}
-                                {u().paused ? " · paused for you" : ""}
-                              </span>
-                            </span>
-                          )}
-                        </Show>
-                      </span>
-                      <span class="cell" role="cell">
-                        <span class="cell-label">Last used</span>
-                        {relativeTime(d.last_used_at, now())}
-                      </span>
-                      <span class="cell" role="cell">
-                        <span class="cell-label">Pair ends</span>
-                        <Show when={d.days_left !== undefined} fallback="—">
-                          <span class={d.days_left! <= 3 ? "days-left warn" : "days-left"} title={d.pair_expires_at ? `Unpairs on ${new Date(d.pair_expires_at).toLocaleString()} unless used` : undefined}>
-                            {d.days_left === 0 ? "today" : `in ${plural(d.days_left!, "day")}`}
-                          </span>
-                        </Show>
-                      </span>
-                    </Link>
-                  )}
-                </For>
+                <div>
+                  <dt>Online</dt>
+                  <dd class={count((d) => d.online) ? "" : "zero"}>{two(count((d) => d.online))}</dd>
+                </div>
+                <div>
+                  <dt>In use</dt>
+                  {/* Cobalt only when a Silicon is actually at work. */}
+                  <dd class={count((d) => !!d.in_use) ? "in-use-number" : "zero"}>{two(count((d) => !!d.in_use))}</dd>
+                </div>
+              </dl>
+            </figure>
+            <Show when={!props.isSilicon}>
+              <div class="overview-actions">
+                <Link href="/devices/new" class="button primary">
+                  <Plus size={16} aria-hidden="true" /> Add a device
+                </Link>
+                <Link href="/docs" class="button secondary">
+                  How it works
+                </Link>
               </div>
             </Show>
-            <Show when={next()}>
-              <Button onClick={loadMore} busy={loadingMore()} class="load-more">
-                Load more
-              </Button>
-            </Show>
-          </Show>
-        )}
-      </Show>
-    </section>
+          </section>
+        </Show>
+      )}
+    </Show>
   );
 }

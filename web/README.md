@@ -4,8 +4,21 @@ The configuration website at `extend.teamofsilicons.com`, where a Carbon signs i
 pairs devices and decides which Silicons can use them. It is a subset of the `extend` CLI and talks
 only to the public Extend API (`../understanding/api.yaml`).
 
-Vite + SolidJS + TypeScript, with the Silicon Interface's type and colour tokens (IBM Plex Sans,
-Source Serif 4, IBM Plex Mono), light and dark.
+Vite + SolidJS + TypeScript. It is a sibling of Silicon Interface: the same tokens and type (IBM
+Plex Sans, Source Serif 4 titles that end in a period, IBM Plex Mono eyebrows and badges) and the
+same shell: a narrow icon rail with the Extend mark, a breadcrumb bar (`extend / <team> ⌄`, ⌘K
+search), a list column on `--surface` and a main pane on `--paper` with Interface's paper grain.
+Devices work like Interface's conversations: the list stays on the left and the open device fills
+the right; at phone width the rail becomes a bottom bar and one pane shows at a time.
+
+Accents come from the Carbon's "Silicon" board: `src/components/Shader.tsx` ports Interface's
+grainy colour study and prints it through an ordered dither (four blues and a warm horizon, with
+edges that thin out through the same screen) for empty states, the sign-in page, the overview and
+the pairing code, which is set as a printed ticket in poster-size mono. Poster credits sit on their
+own hairline rules, clear of the print. Device status is a 5×5 pixel dot, always with its word
+(Online, In use with a shimmering rim, Offline as a 50% checker), and Stop and danger use a
+risograph orange-red in both themes. Colours are tokens in `src/styles.css`, redefined for dark mode; motion stops
+under `prefers-reduced-motion`.
 
 ## Run
 
@@ -35,9 +48,19 @@ pnpm test:e2e:real   # against a running Rust service (EXTEND_REAL_URL, default 
 
 The e2e suites write full-page screenshots at 1280 px and 390 px to `test-results/screenshots/`
 (mock) and `test-results/screenshots-real/` (real service), and fail if a page scrolls sideways at
-phone width. The real-service suite needs the service in `EXTEND_IAM_MODE=local`; it plays an Extend
+phone width. `e2e/restyle.spec.ts` is a visual tour at 1440×900 and 390×844, light and dark, into
+`test-results/restyle/`; it also checks that the dithered print drew with WebGL and that nothing
+animates under reduced motion, and that the wizard's step strip keeps the current step in view
+(a narrow desktop) or becomes a one-line pixel progress bar (a phone). If another process holds the
+default ports, move them with
+`E2E_MOCK_PORT` / `E2E_WEB_PORT` (for example `E2E_MOCK_PORT=8496 E2E_WEB_PORT=5196 pnpm test:e2e`).
+
+The real-service suite needs the service in `EXTEND_IAM_MODE=local`; it plays an Extend
 app over the real device socket (`e2e-real/service.ts`) and creates a test environment through the
-Honeycomb lifecycle endpoint with the token in `../e2e/dev.env`.
+Honeycomb lifecycle endpoint with the token in `../e2e/dev.env`. The service allows 60 new
+enrollments per hour from one address, counted in memory; if a shared dev service answers
+`rate_limited`, run a second instance with the same `dev.env` on another port and its own database,
+and point `EXTEND_REAL_URL` at it.
 
 ## Build and deploy
 
@@ -73,7 +96,9 @@ src/lib/session.ts          worlds (production / test environment), tokens, team
 src/lib/auth.ts             IAM consent redirect and callback
 src/lib/pairing.ts          pairing-code and Silicon-id parsing
 src/lib/wizard.ts           "Add a device" state machine
-src/pages/*                 sign-in, callback, devices, add a device, device page, settings, docs, download
+src/pages/*                 sign-in, callback, devices (list + device), add a device, device page, settings, docs, download
+src/components/Shader.tsx   the dithered colour study (WebGL, with a CSS fallback)
+src/components/CommandMenu.tsx  ⌘K: find a device or a page
 mock/                       in-memory mock of the service + stand-in IAM consent screen
 e2e/, e2e-real/             Playwright suites (mock, real service)
 tests/unit/                 vitest

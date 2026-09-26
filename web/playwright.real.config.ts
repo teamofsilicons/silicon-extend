@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 // EXTEND_IAM_MODE=local on EXTEND_REAL_URL (default http://127.0.0.1:8480). This config does not
 // start or stop the service; it only starts the website, proxied to it.
 const REAL = process.env.EXTEND_REAL_URL || "http://127.0.0.1:8480";
-const WEB_PORT = 5192;
+const WEB_PORT = Number(process.env.E2E_WEB_PORT || 5192);
 
 export default defineConfig({
   testDir: "e2e-real",

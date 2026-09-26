@@ -1,4 +1,5 @@
 import { For, Match, Show, Switch, type JSX } from "solid-js";
+import { ArrowUpRight } from "lucide-solid";
 import docs from "../generated/docs.json";
 import { DEVICE_KINDS, DOWNLOADS, LINKS } from "../config";
 import { Link } from "../lib/router";
@@ -28,23 +29,44 @@ const PAGES = [
 
 export default function Docs(props: { page: string }) {
   return (
-    <section class="page docs" data-testid="docs-page">
-      <nav class="docs-nav" aria-label="Documentation">
-        <For each={PAGES}>
-          {(p) => (
-            <Link href={p.href} class={props.page === p.id ? "active" : ""}>
-              {p.title}
-            </Link>
-          )}
-        </For>
-        <a href={LINKS.repository} target="_blank" rel="noopener noreferrer">
-          Source on GitHub ↗
-        </a>
-        <a href={LINKS.crate} target="_blank" rel="noopener noreferrer">
-          silicon-extend-client crate ↗
-        </a>
-      </nav>
-      <article class="docs-body">
+    <div class="docs-view" data-testid="docs-page">
+      <aside class="list-column docs-column" aria-label="Documentation">
+        <div class="list-inner">
+          <header class="list-title">
+            <div>
+              <p class="eyebrow">Documentation</p>
+              <p class="column-title">Docs.</p>
+            </div>
+          </header>
+          <nav class="docs-nav" aria-label="Documentation">
+            <For each={PAGES}>
+              {(p, i) => (
+                <Link href={p.href} class={props.page === p.id ? "active" : ""} aria-current={props.page === p.id ? "page" : undefined}>
+                  <span class="docs-nav-number" aria-hidden="true">
+                    {String(i() + 1).padStart(2, "0")}
+                  </span>
+                  {p.title}
+                </Link>
+              )}
+            </For>
+          </nav>
+          <p class="list-label">
+            <span>Elsewhere</span>
+          </p>
+          <nav class="docs-nav external" aria-label="Elsewhere">
+            <a href={LINKS.repository} target="_blank" rel="noopener noreferrer">
+              Source on GitHub <ArrowUpRight size={13} aria-hidden="true" />
+            </a>
+            <a href={LINKS.crate} target="_blank" rel="noopener noreferrer">
+              silicon-extend-client crate <ArrowUpRight size={13} aria-hidden="true" />
+            </a>
+          </nav>
+          <p class="list-note">
+            <span class="status-dot" aria-hidden="true" /> The website is a subset of the extend CLI.
+          </p>
+        </div>
+      </aside>
+      <article class="main-pane docs-body">
         <Switch fallback={<NotADoc page={props.page} />}>
           <Match when={props.page === "start"}>
             <Start />
@@ -60,18 +82,42 @@ export default function Docs(props: { page: string }) {
           </Match>
         </Switch>
       </article>
-    </section>
+    </div>
   );
 }
 
 function NotADoc(props: { page: string }) {
   return (
     <>
-      <h1 class="page-title">No such page</h1>
+      <h1 class="page-title">No such page.</h1>
       <p>
         There is no docs page called <code>{props.page}</code>. Start at <Link href="/docs">Start here</Link>.
       </p>
     </>
+  );
+}
+
+/**
+ * Contract text with `backtick` spans, as in cli.yaml: the spans become inline code. Short spans
+ * don't break across lines (so `--help`/`-h` stays whole); long ones may wrap.
+ */
+function Inline(props: { text: string }) {
+  const parts = () => {
+    const pieces = props.text.split("`");
+    // An odd backtick out stays as text.
+    if (pieces.length % 2 === 0) pieces.splice(-2, 2, `${pieces[pieces.length - 2]}\`${pieces[pieces.length - 1]}`);
+    return pieces;
+  };
+  return (
+    <For each={parts()}>
+      {(part, i) =>
+        i() % 2 ? (
+          <code class={part.length <= 24 ? "nowrap" : undefined}>{part}</code>
+        ) : (
+          part
+        )
+      }
+    </For>
   );
 }
 
@@ -87,7 +133,7 @@ function Start() {
   return (
     <>
       <p class="eyebrow">Silicon Extend</p>
-      <h1 class="page-title">Let a Silicon use your devices</h1>
+      <h1 class="page-title">Let a Silicon use your devices.</h1>
       <p class="lead">
         Extend lets a Silicon use a Carbon's phone, computer or TV the way the Carbon does: it sees what is on the screen, taps, types and opens apps. The Carbon pairs each device and decides which Silicons may use it. Only one Silicon uses a device at a time, every action is logged, and the Carbon can stop it with one tap.
       </p>
@@ -189,7 +235,8 @@ extend --test <test_id> device ls`}</Code>
 function DevicesDoc() {
   return (
     <>
-      <h1 class="page-title">Pairing each kind of device</h1>
+      <p class="eyebrow">Carbons</p>
+      <h1 class="page-title">Pairing each kind of device.</h1>
       <p class="lead">Every Extend app works the same way: before pairing it shows a pairing code; during setup it walks you through what that device needs; once paired it shows its name, who it is paired to, and which Silicon is using it.</p>
       <For each={DEVICE_KINDS}>
         {(k) => (
@@ -228,7 +275,7 @@ function DevicesDoc() {
 
 function renderValue(value: Json): JSX.Element {
   if (value === null || value === undefined) return null;
-  if (typeof value === "string") return <span>{value}</span>;
+  if (typeof value === "string") return <span><Inline text={value} /></span>;
   if (Array.isArray(value)) return <span>{value.map(String).join(", ")}</span>;
   if (typeof value === "object")
     return (
@@ -266,8 +313,11 @@ function CliReference() {
   const id = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return (
     <>
-      <h1 class="page-title">CLI reference</h1>
-      <p class="lead">{cli.summary}</p>
+      <p class="eyebrow">Silicons</p>
+      <h1 class="page-title">CLI reference.</h1>
+      <p class="lead">
+        <Inline text={cli.summary} />
+      </p>
       <p class="fine">Generated from the CLI contract (understanding/cli.yaml) when this website was built.</p>
       <CopyText text={cli.install} />
       <nav class="toc" aria-label="On this page">
@@ -281,7 +331,13 @@ function CliReference() {
 
       <h2 id="grammar">Grammar</h2>
       <ul>
-        <For each={cli.grammar}>{(g) => <li>{g}</li>}</For>
+        <For each={cli.grammar}>
+          {(g) => (
+            <li>
+              <Inline text={g} />
+            </li>
+          )}
+        </For>
       </ul>
 
       <h2 id="global-flags">Global flags</h2>
@@ -301,10 +357,12 @@ function CliReference() {
                     <code>{f.flag}</code>
                   </td>
                   <td>
-                    {f.gives}
+                    <Inline text={f.gives} />
                     <Show when={f.takes}>
                       <br />
-                      <span class="fine">Takes: {f.takes}</span>
+                      <span class="fine">
+                        Takes: <Inline text={f.takes!} />
+                      </span>
                     </Show>
                   </td>
                 </tr>
@@ -346,7 +404,9 @@ function CliReference() {
                     </Show>
                   </p>
                   <Show when={c.summary}>
-                    <p>{c.summary}</p>
+                    <p>
+                      <Inline text={c.summary!} />
+                    </p>
                   </Show>
                   <Show when={c.takes}>
                     <div class="command-section">
@@ -357,7 +417,13 @@ function CliReference() {
                   <Show when={c.gives}>
                     <div class="command-section">
                       <span class="label">Gives</span>
-                      {typeof c.gives === "string" ? <span>{c.gives}</span> : renderValue(c.gives)}
+                      {typeof c.gives === "string" ? (
+                        <span>
+                          <Inline text={c.gives} />
+                        </span>
+                      ) : (
+                        renderValue(c.gives)
+                      )}
                     </div>
                   </Show>
                   <Show when={c.errors}>
@@ -366,7 +432,9 @@ function CliReference() {
                     </p>
                   </Show>
                   <Show when={c.notes}>
-                    <p class="fine">{c.notes}</p>
+                    <p class="fine">
+                      <Inline text={c.notes!} />
+                    </p>
                   </Show>
                 </div>
               )}
@@ -376,7 +444,9 @@ function CliReference() {
       </For>
 
       <h3>Not exposed</h3>
-      <p>{cli.not_exposed.summary}</p>
+      <p>
+        <Inline text={cli.not_exposed.summary} />
+      </p>
       {renderValue(cli.not_exposed.replaced as unknown as Json)}
       <p class="fine">
         Left out: <code>{cli.not_exposed.left_out.join(", ")}</code>
@@ -401,7 +471,9 @@ function CliReference() {
                     <code>{e.code}</code>
                   </td>
                   <td>{e.exit}</td>
-                  <td>{e.meaning}</td>
+                  <td>
+                    <Inline text={e.meaning} />
+                  </td>
                 </tr>
               )}
             </For>
@@ -419,7 +491,9 @@ function CliReference() {
                   <td>
                     <code>{code}</code>
                   </td>
-                  <td>{meaning}</td>
+                  <td>
+                    <Inline text={meaning} />
+                  </td>
                 </tr>
               )}
             </For>
@@ -444,6 +518,7 @@ function HowItWorks() {
   const t = docs.technical as { html: string; toc: { id: string; text: string; depth: number }[] };
   return (
     <>
+      <p class="eyebrow">Under the hood</p>
       <p class="fine">Generated from the technical contract (understanding/TECHNICAL.md) when this website was built.</p>
       <nav class="toc" aria-label="On this page">
         <For each={t.toc.filter((x) => x.depth === 2)}>{(x) => <a href={`#${x.id}`}>{x.text}</a>}</For>

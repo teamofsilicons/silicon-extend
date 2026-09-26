@@ -153,6 +153,9 @@ function createSession() {
     updateEnvironment(environment: TestingEnvironment) {
       const w = world();
       if (w.kind !== "testing" || w.environment.environment_id !== environment.environment_id) return;
+      // Unchanged: keep the same world. A new one would re-run everything that follows the world,
+      // including the read that called this, and loop.
+      if (JSON.stringify(w.environment) === JSON.stringify(environment)) return;
       writeJson("session", KEYS.testing, { secret: w.secret, environment });
       setWorld({ ...w, environment });
     },

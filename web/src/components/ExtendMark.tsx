@@ -1,13 +1,18 @@
-/** Extend's mark: two devices joined by an arch. */
+/**
+ * Extend's mark (public/brand/mark.svg): Interface's ring of squares, with its north-east square
+ * stepped one gutter out, reaching a square beyond it (another device). Drawn in `currentColor`, so
+ * it takes the ink of whatever holds it, like Interface's mark in its rail.
+ */
+const MARK =
+  "M0 22h9v9h-9zM4 13h9v9h-9zM13 9h9v9h-9zM26 22h9v9h-9zM22 31h9v9h-9zM13 35h9v9h-9zM4 31h9v9h-9z" +
+  "M17.5 16.79L27.21 26.5L17.5 36.21L7.79 26.5z" +
+  "M26 9h9v9h-9zM35 0h9v9h-9z";
+
 export function ExtendMark(props: { size?: number }) {
   const size = () => props.size ?? 28;
   return (
-    <svg class="extend-mark" width={size()} height={size()} viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="1" y="1" width="30" height="30" rx="8" fill="var(--blue)" />
-      <path d="M7 21.5c2.2-7.2 15.8-7.2 18 0" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" />
-      <rect x="5" y="20" width="5" height="6" rx="1.4" fill="#fff" />
-      <rect x="22" y="20" width="5" height="6" rx="1.4" fill="#fff" />
-      <circle cx="16" cy="11.8" r="1.8" fill="#fff" />
+    <svg class="extend-mark" width={size()} height={size()} viewBox="0 0 44 44" fill="currentColor" aria-hidden="true">
+      <path d={MARK} />
     </svg>
   );
 }

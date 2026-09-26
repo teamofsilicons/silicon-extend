@@ -2,9 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 // The e2e suite runs the website against the in-memory mock of the Extend service, on ports of its
 // own so it doesn't collide with `pnpm dev:mock`. Tests share the mock's state, so they run one at a
-// time and reset it first.
-const MOCK_PORT = 8491;
-const WEB_PORT = 5191;
+// time and reset it first. E2E_MOCK_PORT and E2E_WEB_PORT move them if something else holds them.
+const MOCK_PORT = Number(process.env.E2E_MOCK_PORT || 8491);
+const WEB_PORT = Number(process.env.E2E_WEB_PORT || 5191);
 
 export default defineConfig({
   testDir: "e2e",

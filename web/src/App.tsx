@@ -1,15 +1,15 @@
-import { createEffect, createSignal, Match, on, onMount, Show, Switch, type JSX } from "solid-js";
-import { BookOpen, FlaskConical, LogOut, Plus, Settings as SettingsIcon, Smartphone } from "lucide-solid";
+import { createEffect, createSignal, For, Match, on, onMount, Show, Switch, type JSX } from "solid-js";
+import { BookOpen, ChevronDown, FlaskConical, LogIn, LogOut, Plus, Search, Settings as SettingsIcon, Smartphone } from "lucide-solid";
 import { Link, match, navigate, useLocation } from "./lib/router";
 import { session } from "./lib/session";
 import { toApiError, type ApiError } from "./lib/api";
-import { ErrorNote, Toasts } from "./components/ui";
+import { ErrorNote, MemberTag, Toasts } from "./components/ui";
 import { ExtendMark } from "./components/ExtendMark";
+import { CommandMenu, openCommandMenu } from "./components/CommandMenu";
 import SignIn from "./pages/SignIn";
 import Callback from "./pages/Callback";
 import Devices from "./pages/Devices";
 import AddDevice from "./pages/AddDevice";
-import DevicePage from "./pages/DevicePage";
 import Settings from "./pages/Settings";
 import Docs from "./pages/Docs";
 import Download from "./pages/Download";
@@ -62,6 +62,7 @@ export default function App() {
 
   const path = () => loc().pathname.replace(/\/+$/, "") || "/";
   const signedIn = () => !!s.pair();
+  const isCarbon = () => s.member()?.type !== "silicon";
 
   /** Pages that need a login show sign-in in place, then come back here. */
   const guarded = (page: () => JSX.Element) => (
@@ -81,46 +82,117 @@ export default function App() {
     </Show>
   );
 
-  const deviceParams = () => match("/devices/:id", path());
+  const deviceParams = () => (path() === "/devices/new" ? null : match("/devices/:id", path()));
   const docsParams = () => match("/docs/:page", path());
   const downloadParams = () => match("/download/:platform", path());
+  /** The device list stays mounted while moving between it and a device, like Interface's conversations. */
+  const devicesRoute = () => path() === "/devices" || !!deviceParams() || (path() === "/" && signedIn());
+
+  const onDevices = () => path() === "/devices" || !!deviceParams() || (path() === "/" && signedIn());
+  const crumb = () =>
+    path() === "/devices/new"
+      ? "Add a device"
+      : path().startsWith("/docs")
+        ? "Docs"
+        : path() === "/settings"
+          ? "Settings"
+          : path().startsWith("/download")
+            ? "Download"
+            : null;
 
   return (
-    <div class="frame">
-      <TestingBanner error={environmentError()} />
-      <header class="topbar">
-        <div class="topbar-inner">
-          <Link href={signedIn() ? "/devices" : "/"} class="brand" aria-label="Silicon Extend home">
-            <ExtendMark />
-            <span>
-              Extend
-              <small>Silicon Extend</small>
-            </span>
+    <div class={`application ${s.world().kind === "testing" ? "testing" : ""}`}>
+      <a
+        class="skip-link"
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
+        Skip to content
+      </a>
+      <aside class="app-rail" aria-label="Main navigation">
+        <div class="rail-inner">
+          <Link href={signedIn() ? "/devices" : "/"} class="rail-brand" aria-label="Silicon Extend home">
+            <ExtendMark size={26} />
           </Link>
-          <nav class="nav" aria-label="Main">
+          <span class="rail-divider" aria-hidden="true" />
+          <nav aria-label="Main">
             <Show when={signedIn()}>
-              <Link href="/devices" class={path() === "/devices" || (path().startsWith("/devices/") && path() !== "/devices/new") ? "active" : ""}>
-                <Smartphone size={16} aria-hidden="true" /> Devices
-              </Link>
-              <Show when={s.member()?.type !== "silicon"}>
-                <Link href="/devices/new" class={path() === "/devices/new" ? "active" : ""}>
-                  <Plus size={16} aria-hidden="true" /> Add a device
-                </Link>
+              <RailLink href="/devices" label="Devices" short="Devices" active={onDevices()}>
+                <Smartphone size={21} stroke-width={1.6} />
+              </RailLink>
+              <Show when={isCarbon()}>
+                <RailLink href="/devices/new" label="Add a device" short="Add" active={path() === "/devices/new"}>
+                  <Plus size={22} stroke-width={1.6} />
+                </RailLink>
               </Show>
             </Show>
-            <Link href="/docs" class={path().startsWith("/docs") ? "active" : ""}>
-              <BookOpen size={16} aria-hidden="true" /> Docs
-            </Link>
-            <Link href="/settings" class={path() === "/settings" ? "active" : ""}>
-              <SettingsIcon size={16} aria-hidden="true" /> Settings
-            </Link>
-          </nav>
-          <Show when={signedIn()}>
-            <div class="account">
-              <TeamPicker />
-              <span class="member-id" title={s.member()?.display_name ?? undefined} data-testid="member-id">
-                {s.member()?.id}
+            <Show when={!signedIn()}>
+              <RailLink href="/" label="Sign in" short="Sign in" active={path() === "/" || path() === "/sign-in"}>
+                <LogIn size={20} stroke-width={1.6} />
+              </RailLink>
+            </Show>
+            <RailLink href="/docs" label="Docs" short="Docs" active={path().startsWith("/docs")}>
+              <BookOpen size={20} stroke-width={1.6} />
+            </RailLink>
+            <button class="rail-button rail-search" aria-label="Search devices and pages" onClick={openCommandMenu}>
+              <Search size={19} stroke-width={1.6} />
+              <span class="rail-tooltip" aria-hidden="true">
+                Search · ⌘ K
               </span>
+            </button>
+            <RailLink href="/settings" label="Settings" short="Settings" active={path() === "/settings"} class="rail-settings">
+              <SettingsIcon size={20} stroke-width={1.6} />
+            </RailLink>
+          </nav>
+        </div>
+      </aside>
+
+      <div class="workspace-body">
+        <TestingBanner error={environmentError()} />
+        <header class="workspace-topbar">
+          <div class="workspace-breadcrumb">
+            <Link href={signedIn() ? "/devices" : "/"} class="topbar-mark" aria-label="Silicon Extend home">
+              <ExtendMark size={18} />
+            </Link>
+            <span class="breadcrumb-root">extend</span>
+            <Show when={signedIn() && s.teams().length > 0}>
+              <span class="breadcrumb-slash" aria-hidden="true">
+                /
+              </span>
+              <TeamPicker />
+            </Show>
+            <Show when={crumb()}>
+              <span class="breadcrumb-page">
+                <span class="breadcrumb-slash" aria-hidden="true">
+                  /
+                </span>
+                {crumb()}
+              </span>
+            </Show>
+          </div>
+          <div class="topbar-right">
+            <Show when={s.telemetryOff()}>
+              <span class="demo-label" title="Settings › Telemetry">
+                Telemetry off
+              </span>
+            </Show>
+            <Show when={signedIn()}>
+              <span class="member" title={s.member()?.display_name ?? undefined}>
+                <MemberTag type={s.member()?.type} />
+                <span class="member-id" data-testid="member-id">
+                  {s.member()?.id}
+                </span>
+              </span>
+            </Show>
+            <button class="topbar-command" aria-label="Search devices and pages" onClick={openCommandMenu} data-testid="open-search">
+              <Search size={14} aria-hidden="true" />
+              <span class="topbar-command-label">Search</span>
+              <kbd>⌘ K</kbd>
+            </button>
+            <Show when={signedIn()}>
               <button
                 class="icon-button"
                 aria-label="Sign out"
@@ -132,72 +204,74 @@ export default function App() {
                   await s.signOut().catch(() => undefined);
                 }}
               >
-                <LogOut size={17} />
+                <LogOut size={16} />
               </button>
-            </div>
-          </Show>
-        </div>
-      </header>
-      <main class="main">
-        <ErrorNote error={serviceError()} />
-        <Switch fallback={<NotFound />}>
-          <Match when={path() === "/"}>
-            <Show when={signedIn()} fallback={<SignIn reason={s.signedOutReason()} next="/devices" onSignedIn={() => navigate("/devices", { replace: true })} />}>
-              <Devices />
             </Show>
-          </Match>
-          <Match when={path() === "/sign-in"}>
-            <SignIn reason={s.signedOutReason()} next="/devices" onSignedIn={() => navigate("/devices", { replace: true })} />
-          </Match>
-          <Match when={path() === "/auth/callback"}>
-            <Callback />
-          </Match>
-          <Match when={path() === "/devices"}>{guarded(() => <Devices />)}</Match>
-          <Match when={path() === "/devices/new"}>{guarded(() => <AddDevice />)}</Match>
-          <Match when={deviceParams()}>{(params) => guarded(() => <DevicePage id={params().id} />)}</Match>
-          <Match when={path() === "/settings"}>
-            <Settings />
-          </Match>
-          <Match when={path() === "/docs"}>
-            <Docs page="start" />
-          </Match>
-          <Match when={docsParams()}>{(params) => <Docs page={params().page} />}</Match>
-          <Match when={downloadParams()}>{(params) => <Download platform={params().platform} />}</Match>
-        </Switch>
-      </main>
-      <footer class="footer">
-        <span>Silicon Extend</span>
-        <a href="https://github.com/teamofsilicons/silicon-extend" target="_blank" rel="noopener noreferrer">
-          Source
-        </a>
-        <Link href="/docs">Docs</Link>
-        <Show when={s.telemetryOff()}>
-          <span>Telemetry off</span>
+          </div>
+        </header>
+        <Show when={serviceError()}>
+          <div class="service-error">
+            <ErrorNote error={serviceError()} />
+          </div>
         </Show>
-      </footer>
+        <main class="workspace-content" id="main-content" tabindex="-1">
+          <Switch fallback={<NotFound />}>
+            <Match when={(path() === "/" && !signedIn()) || path() === "/sign-in"}>
+              <SignIn reason={s.signedOutReason()} next="/devices" onSignedIn={() => navigate("/devices", { replace: true })} />
+            </Match>
+            <Match when={path() === "/auth/callback"}>
+              <Callback />
+            </Match>
+            <Match when={path() === "/devices/new"}>
+              {/* A new ?kind= starts the wizard over, even when it is already open. */}
+              {guarded(() => <For each={[loc().search]}>{() => <AddDevice />}</For>)}
+            </Match>
+            <Match when={devicesRoute()}>{guarded(() => <Devices selected={deviceParams()?.id ?? null} />)}</Match>
+            <Match when={path() === "/settings"}>
+              <Settings />
+            </Match>
+            <Match when={path() === "/docs"}>
+              <Docs page="start" />
+            </Match>
+            <Match when={docsParams()}>{(params) => <Docs page={params().page} />}</Match>
+            <Match when={downloadParams()}>{(params) => <Download platform={params().platform} />}</Match>
+          </Switch>
+        </main>
+      </div>
+      <CommandMenu />
       <Toasts />
     </div>
+  );
+}
+
+function RailLink(props: { href: string; label: string; short: string; active: boolean; class?: string; children: JSX.Element }) {
+  return (
+    <Link href={props.href} class={`rail-button ${props.active ? "active" : ""} ${props.class ?? ""}`} aria-label={props.label} aria-current={props.active ? "page" : undefined}>
+      {props.children}
+      <span class="rail-label" aria-hidden="true">
+        {props.short}
+      </span>
+      <span class="rail-tooltip" aria-hidden="true">
+        {props.label}
+      </span>
+    </Link>
   );
 }
 
 function TeamPicker() {
   const s = session();
   return (
-    <Show when={s.teams().length > 0}>
-      <label class="team-picker">
-        <span class="visually-hidden">Team</span>
-        <select
-          value={s.team() ?? ""}
-          data-testid="team-picker"
-          disabled={s.teams().length < 2}
-          onChange={(e) => s.setTeam(e.currentTarget.value)}
-        >
-          {s.teams().map((t) => (
-            <option value={t}>{t}</option>
-          ))}
-        </select>
-      </label>
-    </Show>
+    <label class={`team-picker ${s.teams().length < 2 ? "single" : ""}`}>
+      <span class="visually-hidden">Team</span>
+      <select value={s.team() ?? ""} data-testid="team-picker" disabled={s.teams().length < 2} onChange={(e) => s.setTeam(e.currentTarget.value)}>
+        {s.teams().map((t) => (
+          <option value={t}>{t}</option>
+        ))}
+      </select>
+      <Show when={s.teams().length > 1}>
+        <ChevronDown size={11} aria-hidden="true" />
+      </Show>
+    </label>
   );
 }
 
@@ -209,15 +283,13 @@ function TestingBanner(props: { error: ApiError | null }) {
       {(world) => (
         <div class="testing-banner" role="status" data-testid="testing-banner">
           <div class="testing-banner-label">
-            <FlaskConical size={15} aria-hidden="true" />
-            <span>
+            <FlaskConical size={14} aria-hidden="true" />
+            <span class="testing-banner-name">
               Test environment: <strong data-testid="testing-name">{world().environment.name}</strong>
               <Show when={world().environment.state !== "ready"}> ({world().environment.state})</Show>
             </span>
-            <span class="sep">·</span>
-            <span>{s.member() ? <>signed in as <strong>{s.member()!.id}</strong></> : "not signed in"}</span>
+            <span class="testing-banner-who">{s.member() ? <>signed in as <strong>{s.member()!.id}</strong></> : "not signed in"}</span>
             <Show when={props.error}>
-              <span class="sep">·</span>
               <span class="banner-error" title={props.error!.hint ?? undefined}>
                 {props.error!.message}
               </span>
@@ -246,11 +318,16 @@ function TestingBanner(props: { error: ApiError | null }) {
 function NotFound() {
   const loc = useLocation();
   return (
-    <section class="page narrow">
-      <h1 class="page-title">Nothing here</h1>
-      <p class="lead">
-        There is no page at <code>{loc().pathname}</code>. Go to <Link href="/devices">your devices</Link> or the <Link href="/docs">docs</Link>.
-      </p>
+    <section class="page-main narrow">
+      <header class="page-heading">
+        <div>
+          <p class="eyebrow">Not found</p>
+          <h1 class="page-title">Nothing here.</h1>
+          <p class="lead">
+            There is no page at <code>{loc().pathname}</code>. Go to <Link href="/devices">your devices</Link> or the <Link href="/docs">docs</Link>.
+          </p>
+        </div>
+      </header>
     </section>
   );
 }

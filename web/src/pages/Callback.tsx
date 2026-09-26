@@ -30,9 +30,10 @@ export default function Callback() {
   });
 
   return (
-    <section class="page narrow">
+    <section class="page-main narrow">
       <Show when={error()} fallback={<Spinner label="Signing you in…" />}>
-        <h1 class="page-title">Sign-in didn't finish</h1>
+        <p class="eyebrow">Silicon IAM</p>
+        <h1 class="page-title">Sign-in didn't finish.</h1>
         <ErrorNote error={error()} />
         <p>
           <Link href="/sign-in" class="button primary">

@@ -6,12 +6,13 @@ import { Link } from "../lib/router";
 export default function Download(props: { platform: string }) {
   const download = () => DOWNLOADS[props.platform as Platform];
   return (
-    <section class="page narrow" data-testid="download-page">
+    <section class="page-main narrow" data-testid="download-page">
       <Show
         when={download()}
         fallback={
           <>
-            <h1 class="page-title">No such download</h1>
+            <p class="eyebrow">Download</p>
+            <h1 class="page-title">No such download.</h1>
             <p class="lead">
               There is no Extend app called <code>{props.platform}</code>. See <Link href="/devices/new">Add a device</Link> for the right one.
             </p>
@@ -21,7 +22,7 @@ export default function Download(props: { platform: string }) {
         {(d) => (
           <>
             <p class="eyebrow">Download</p>
-            <h1 class="page-title">{d().app}</h1>
+            <h1 class="page-title">{d().app}.</h1>
             <p class="lead">{d().note}</p>
             <div class="notice">
               <p>

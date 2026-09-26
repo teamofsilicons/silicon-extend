@@ -5,6 +5,7 @@ import { ApiError, toApiError } from "../lib/api";
 import { beginIamLogin } from "../lib/auth";
 import { Button, ErrorNote } from "../components/ui";
 import { ExtendMark } from "../components/ExtendMark";
+import Shader from "../components/Shader";
 import { TestingSecretForm } from "../components/TestingSecretForm";
 import { navigate } from "../lib/router";
 import { write } from "../lib/storage";
@@ -64,11 +65,13 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
   }
 
   return (
-    <section class="page sign-in" data-testid="sign-in">
+    <section class="welcome sign-in" data-testid="sign-in">
       <div class="sign-in-card">
-        <ExtendMark size={40} />
-        <h1 class="page-title">
-          Let your Silicons use <em>your devices</em>
+        <p class="eyebrow welcome-eyebrow">
+          <ExtendMark size={16} /> Silicon Extend{testing() ? " · test environment" : ""}
+        </p>
+        <h1 class="welcome-title">
+          Let your Silicons use <em>your devices.</em>
         </h1>
         <p class="lead">
           Pair your phones, computers and TVs with Silicon Extend, then choose which Silicons can use each one. You can stop a Silicon at any time.
@@ -141,6 +144,20 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
           </div>
         </Show>
       </div>
+      {/* The credits sit on their own rules above and below the print, never on its pixels. */}
+      <figure class="welcome-art" aria-hidden="true">
+        <div class="print-credits top">
+          <span>Extend / 01</span>
+          <span>Phones · computers · TVs</span>
+        </div>
+        <div class="welcome-print">
+          <Shader variant="field" seed={1.1} cell={3} />
+        </div>
+        <div class="print-credits bottom">
+          <span>One Silicon at a time.</span>
+          <span>Stop it any time.</span>
+        </div>
+      </figure>
     </section>
   );
 }

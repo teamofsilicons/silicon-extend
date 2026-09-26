@@ -1,9 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { createTestEnvironment, FakeDevice, login, pairViaApi, startSession, takeover } from "./service";
+import { createTestEnvironment, FakeDevice, login, pairViaApi, purgeTestEnvironment, startSession, takeover } from "./service";
 
 const SHOTS = "test-results/screenshots-real";
 mkdirSync(SHOTS, { recursive: true });
+
+// Test environments this run made, purged afterwards even when a test fails (purgeTestEnvironment).
+const madeEnvironments: string[] = [];
+test.afterEach(async () => {
+  for (const id of madeEnvironments.splice(0)) await purgeTestEnvironment(id);
+});
 
 async function signIn(page: Page, slt = "c:alice") {
   await page.goto("/");
@@ -122,7 +128,8 @@ test("IAM consent round trip through the local stand-in", async ({ page }) => {
 });
 
 test("test environment: banner, test member login, device limit, exit back to production", async ({ page }) => {
-  const { secret } = await createTestEnvironment(`web-e2e-${Date.now().toString(36)}`);
+  const { environmentId, secret } = await createTestEnvironment(`web-e2e-${Date.now().toString(36)}`);
+  madeEnvironments.push(environmentId);
   await signIn(page, "c:alice");
   await page.goto("/settings");
   await page.getByTestId("testing-secret-input").fill("ask_" + "z".repeat(43));

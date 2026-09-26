@@ -112,19 +112,29 @@ export class FakeDevice {
   }
 }
 
-/** Creates a ready test environment through Honeycomb's lifecycle endpoint and registers its app secret with local IAM. */
-export async function createTestEnvironment(name: string) {
+/** Sends one Honeycomb lifecycle instruction for a test environment, as Honeycomb would. */
+async function lifecycle(environmentId: string, action: string, name?: string) {
   const env = readFileSync(new URL("../../e2e/dev.env", import.meta.url), "utf8");
   const token = /^EXTEND_HONEYCOMB_SERVICE_TOKEN=(.+)$/m.exec(env)?.[1]?.trim();
   if (!token) throw new Error("e2e/dev.env has no EXTEND_HONEYCOMB_SERVICE_TOKEN");
-  const environmentId = randomUUID();
   const op = randomUUID();
   const res = await fetch(`${REAL}/internal/honeycomb/organizations/acme/testing-environments/${environmentId}/operations/${op}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ operation_id: op, environment_id: environmentId, org_id: "acme", app_id: "extend", environment_revision: 1, generation: 1, key_version: 1, action: "prepare", testing_key: "abcdefghijklmnopqrstuvwxyz012345", name }),
+    body: JSON.stringify({ operation_id: op, environment_id: environmentId, org_id: "acme", app_id: "extend", environment_revision: 1, generation: 1, key_version: 1, action, testing_key: "abcdefghijklmnopqrstuvwxyz012345", name }),
   });
-  if (!res.ok) throw new Error(`prepare → ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`${action} → ${res.status} ${await res.text()}`);
+}
+
+/** Frees a test environment's slot: the service allows 10 across all of Extend, and each run makes one. */
+export async function purgeTestEnvironment(environmentId: string) {
+  await lifecycle(environmentId, "purge");
+}
+
+/** Creates a ready test environment through Honeycomb's lifecycle endpoint and registers its app secret with local IAM. */
+export async function createTestEnvironment(name: string) {
+  const environmentId = randomUUID();
+  await lifecycle(environmentId, "prepare", name);
   const secret = "ask_" + randomUUID().replace(/-/g, "") + "abcdefghijk";
   await call("POST", "/dev/iam/test-apps", { body: { type: "test_app", data: { secret, environment_id: environmentId } } });
   return { environmentId, secret };

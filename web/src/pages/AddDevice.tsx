@@ -1,13 +1,14 @@
-import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js";
-import { ArrowLeft, ArrowRight, Check, Download, Laptop, Monitor, Smartphone, Tablet, Tv } from "lucide-solid";
+import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Laptop, Monitor, Smartphone, Tablet, Tv } from "lucide-solid";
 import { session } from "../lib/session";
 import { toApiError, type ApiError } from "../lib/api";
 import type { AttachOs, Device } from "../lib/types";
-import { canAdvance, initialState, nameProblem, reduce, STEP_TITLE, stepsFor, type WizardEvent } from "../lib/wizard";
+import { canAdvance, initialState, nameProblem, reduce, STEP_TITLE, stepsFor, type Step, type WizardEvent } from "../lib/wizard";
 import { displayPairingCode, formatCodeInput, normalizePairingCode } from "../lib/pairing";
 import { DEVICE_KINDS, DOWNLOADS, deviceKind, OS_LABEL, type DeviceKind, type DeviceKindId } from "../config";
 import { Link, navigate, query } from "../lib/router";
 import { Button, CopyText, ErrorNote, OnlineDot, Spinner } from "../components/ui";
+import Shader from "../components/Shader";
 import { TtlSlider } from "../components/TtlSlider";
 import { SetupSteps } from "../components/SetupSteps";
 import { AccessPicker } from "../components/AccessPicker";
@@ -41,6 +42,9 @@ export default function AddDevice() {
   const [lastError, setLastError] = createSignal<ApiError | null>(null);
   const kind = createMemo(() => deviceKind(state().kind ?? undefined));
   const order = createMemo(() => stepsFor(kind()).filter((step) => step !== "kind" || !state().device));
+  /** The steps the rail shows (everything after choosing the kind), and where the Carbon is in them. */
+  const railSteps = createMemo<Step[]>(() => order().filter((step) => step !== "kind"));
+  const railIndex = () => railSteps().indexOf(state().step);
 
   const defaultName = () => {
     const k = kind();
@@ -87,46 +91,67 @@ export default function AddDevice() {
   const shownError = () => (state().error ? lastError() : null);
 
   return (
-    <section class="page wizard" data-testid="add-device" data-step={state().step}>
-      <div class="page-head">
+    <section class="page-main wizard" data-testid="add-device" data-step={state().step}>
+      <header class="page-heading">
         <div>
-          <p class="eyebrow">Add a device</p>
-          <h1 class="page-title">{kind() ? `Pair ${articleFor(kind()!)}` : "What are you pairing?"}</h1>
+          <p class="eyebrow">Add a device{s.team() ? ` · ${s.team()}` : ""}</p>
+          <h1 class="page-title">{kind() ? `Pair ${articleFor(kind()!)}.` : "What are you pairing?"}</h1>
+          <Show when={!kind()}>
+            <p class="lead">Pick the kind of device. Phones, computers and some TVs run the Extend app; the rest pair through a computer you already paired.</p>
+          </Show>
         </div>
         <Show when={s.world().kind === "testing"}>
           <span class="badge testing">Pairs into the test environment</span>
         </Show>
-      </div>
+      </header>
 
       <Show when={kind()}>
-        <ol class="rail" aria-label="Steps">
-          <For each={order().filter((step) => step !== "kind")}>
-            {(step, i) => {
-              const position = () => order().indexOf(step);
-              const current = () => order().indexOf(state().step);
-              return (
-                <li class={position() < current() ? "done" : position() === current() ? "current" : ""} aria-current={position() === current() ? "step" : undefined}>
-                  <span class="rail-dot">{position() < current() ? <Check size={12} /> : i() + 1}</span>
-                  <span class="rail-label">{STEP_TITLE[step]}</span>
-                </li>
-              );
-            }}
-          </For>
-        </ol>
+        <StepRail steps={railSteps()} current={railIndex()} />
+        <div class="step-progress" data-testid="step-progress">
+          <p class="step-progress-label">
+            Step <strong>{railIndex() + 1}</strong> of {railSteps().length} · {STEP_TITLE[state().step]}.
+          </p>
+          <span class="step-progress-bar" aria-hidden="true">
+            <For each={railSteps()}>{(_, i) => <span class={i() < railIndex() ? "done" : i() === railIndex() ? "current" : ""} />}</For>
+          </span>
+        </div>
       </Show>
 
       <div class="wizard-body">
         <Switch>
           {/* 1. Kind */}
           <Match when={state().step === "kind"}>
-            <div class="kind-grid" role="list">
-              <For each={DEVICE_KINDS}>
-                {(k) => (
-                  <button role="listitem" class="kind-card" data-testid={`kind-${k.id}`} onClick={() => dispatch({ type: "choose_kind", kind: k.id })}>
-                    <KindIcon kind={k} />
-                    <span class="kind-label">{k.label}</span>
-                    <span class="kind-via">{k.via === "app" ? "Extend app on the device" : k.host === "mac" ? "Through your paired Mac" : "Through a paired computer"}</span>
-                  </button>
+            <div class="kind-groups">
+              <For each={KIND_GROUPS}>
+                {(group) => (
+                  <section class="kind-group" aria-labelledby={`kind-group-${group.via}`}>
+                    <header class="kind-group-head">
+                      <h2 class="eyebrow" id={`kind-group-${group.via}`}>
+                        {group.title}
+                      </h2>
+                      <p class="fine">{group.note}</p>
+                    </header>
+                    <ul class="kind-list">
+                      <For each={DEVICE_KINDS.filter((k) => k.via === group.via)}>
+                        {(k) => (
+                          <li>
+                            <button class="kind-option" data-testid={`kind-${k.id}`} onClick={() => dispatch({ type: "choose_kind", kind: k.id })}>
+                              <span class="kind-icon" aria-hidden="true">
+                                <KindIcon kind={k} size={19} />
+                              </span>
+                              <span class="kind-copy">
+                                <span class="kind-label">{k.label}</span>
+                                <Show when={k.via === "host"}>
+                                  <span class="kind-via">{k.host === "mac" ? "Needs a paired Mac" : "Any paired computer"}</span>
+                                </Show>
+                              </span>
+                              <ChevronRight size={16} class="kind-go" aria-hidden="true" />
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </section>
                 )}
               </For>
             </div>
@@ -216,8 +241,9 @@ export default function AddDevice() {
                 }}
               >
                 <Show when={k().via === "app"}>
-                  <p class="fine">
-                    Pairing code <strong class="mono">{displayPairingCode(state().code)}</strong>
+                  <p class="code-stub">
+                    <span>Pairing code</span>
+                    <strong class="mono">{displayPairingCode(state().code)}</strong>
                   </p>
                 </Show>
                 <label for="device-name">Name</label>
@@ -264,9 +290,10 @@ export default function AddDevice() {
           <Match when={state().step === "setup" && state().device}>
             {(device) => (
               <div class="card" data-testid="setup-step-card">
+                <p class="eyebrow">Setup · on the device</p>
                 <p class="success-line">
-                  <Check size={16} aria-hidden="true" /> <strong>{device().name}</strong> is paired{s.world().kind === "testing" ? " in the test environment" : ""}. Now finish its setup
-                  {kind()?.via === "host" ? " — the host computer's Extend app walks you through it." : " on the device."}
+                  <Check size={16} aria-hidden="true" /> <span><strong>{device().name}</strong> is paired{s.world().kind === "testing" ? " in the test environment" : ""}. Now finish its setup
+                  {kind()?.via === "host" ? " — the host computer's Extend app walks you through it." : " on the device."}</span>
                 </p>
                 <SetupSteps device={device()} onComplete={() => dispatch({ type: "setup_complete" })} />
                 <div class="wizard-nav">
@@ -283,6 +310,7 @@ export default function AddDevice() {
           <Match when={state().step === "access" && state().device}>
             {(device) => (
               <div class="card" data-testid="access-step">
+                <p class="eyebrow">Access</p>
                 <h2 class="card-title">Which Silicons can use {device().name}?</h2>
                 <p class="fine">You can change this any time on the device's page. Only one Silicon uses the device at a time; the others can ask it for a turn.</p>
                 <AccessPicker deviceId={device().device_id} onGranted={(ids) => dispatch({ type: "access_done", granted: [...state().granted, ...ids] })} />
@@ -301,7 +329,7 @@ export default function AddDevice() {
             {(device) => (
               <div class="card done" data-testid="wizard-done">
                 <h2 class="card-title">
-                  <Check size={18} aria-hidden="true" /> {device().name} is paired
+                  <Check size={18} aria-hidden="true" /> {device().name} is paired.
                 </h2>
                 <Show when={state().granted.length} fallback={<p>No Silicon can use it yet. Give access from its page when you're ready.</p>}>
                   <p>
@@ -323,6 +351,46 @@ export default function AddDevice() {
         </Switch>
       </div>
     </section>
+  );
+}
+
+const KIND_GROUPS: { via: DeviceKind["via"]; title: string; note: string }[] = [
+  { via: "app", title: "Runs the Extend app", note: "Install the app on it; it shows a pairing code." },
+  { via: "host", title: "Pairs through a computer", note: "Pair the Mac or computer first." },
+];
+
+/**
+ * The steps as a strip of chips. When the strip is wider than the page it keeps the current step
+ * in view (scrolling only itself, never the page) and fades the edge that has more.
+ */
+function StepRail(props: { steps: Step[]; current: number }) {
+  let rail!: HTMLOListElement;
+  const [edges, setEdges] = createSignal({ left: false, right: false });
+  const measure = () => setEdges({ left: rail.scrollLeft > 2, right: rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 2 });
+  const centre = () => {
+    const item = rail.children[props.current] as HTMLElement | undefined;
+    if (!item || rail.scrollWidth <= rail.clientWidth) return measure();
+    const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    rail.scrollTo({ left: item.offsetLeft - (rail.clientWidth - item.offsetWidth) / 2, behavior: still ? "auto" : "smooth" });
+    measure();
+  };
+  createEffect(on(() => props.current, () => requestAnimationFrame(centre)));
+  onMount(() => {
+    const resize = new ResizeObserver(centre);
+    resize.observe(rail);
+    onCleanup(() => resize.disconnect());
+  });
+  return (
+    <ol ref={rail} class={`step-rail ${edges().left ? "more-left" : ""} ${edges().right ? "more-right" : ""}`} aria-label="Steps" onScroll={measure}>
+      <For each={props.steps}>
+        {(step, i) => (
+          <li class={i() < props.current ? "done" : i() === props.current ? "current" : ""} aria-current={i() === props.current ? "step" : undefined}>
+            <span class="step-rail-dot">{i() < props.current ? <Check size={12} aria-hidden="true" /> : String(i() + 1).padStart(2, "0")}</span>
+            <span class="step-rail-label">{STEP_TITLE[step]}</span>
+          </li>
+        )}
+      </For>
+    </ol>
   );
 }
 
@@ -364,44 +432,61 @@ function Nav(props: {
   );
 }
 
+/**
+ * The pairing code as a printed ticket: a dithered colour block with poster credits, a tear line,
+ * then the code itself in poster-scale mono type.
+ */
 function CodeStep(props: { code: string; onInput: (code: string) => void; onBack: () => void; onNext: () => void; error: ReturnType<typeof toApiError> | null }) {
   const normalized = () => normalizePairingCode(props.code);
   return (
     <form
-      class="card code-step"
+      class="card code-step ticket"
       data-testid="code-step"
+      data-valid={normalized().valid ? "true" : "false"}
       onSubmit={(e) => {
         e.preventDefault();
         if (normalized().valid) props.onNext();
       }}
     >
-      <label for="pairing-code">Pairing code shown in the Extend app</label>
-      <input
-        id="pairing-code"
-        class="code-input"
-        autocomplete="off"
-        autocapitalize="characters"
-        spellcheck={false}
-        inputmode="text"
-        placeholder="4F9 C2A"
-        value={props.code}
-        data-testid="pairing-code-input"
-        aria-describedby="code-help"
-        onInput={(e) => props.onInput(formatCodeInput(e.currentTarget.value))}
-        ref={(el) => setTimeout(() => el.focus())}
-      />
-      <p id="code-help" class={normalized().problem ? "field-problem" : "fine"} data-testid="code-help">
-        {normalized().valid ? (
-          <>
-            Looks right: <strong class="mono">{displayPairingCode(normalized().code)}</strong>
-          </>
-        ) : (
-          (normalized().problem ?? "6 characters, 0–9 and A–F. Spaces, dashes and lowercase are fine.")
-        )}
-      </p>
-      <p class="fine">The code changes every 5 minutes and works once. If it just changed, use the new one.</p>
-      <ErrorNote error={props.error} testid="code-error" />
-      <Nav onBack={props.onBack} submit nextLabel="Next" disabled={!normalized().valid} />
+      <div class="ticket-print" aria-hidden="true">
+        <Shader variant="ticket" seed={4.2} />
+        <span class="print-caption top">Pairing code</span>
+        <span class="print-caption top right">Admit one device</span>
+      </div>
+      <div class="ticket-tear" aria-hidden="true" />
+      <div class="ticket-body">
+        <label for="pairing-code">Pairing code shown in the Extend app</label>
+        <input
+          id="pairing-code"
+          class="code-input"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck={false}
+          inputmode="text"
+          placeholder="4F9 C2A"
+          value={props.code}
+          data-testid="pairing-code-input"
+          aria-describedby="code-help"
+          onInput={(e) => props.onInput(formatCodeInput(e.currentTarget.value))}
+          ref={(el) => setTimeout(() => el.focus())}
+        />
+        <p id="code-help" class={normalized().problem ? "field-problem" : "fine"} data-testid="code-help">
+          {normalized().valid ? (
+            <>
+              Looks right: <strong class="mono">{displayPairingCode(normalized().code)}</strong>
+            </>
+          ) : (
+            (normalized().problem ?? "6 characters, 0–9 and A–F. Spaces, dashes and lowercase are fine.")
+          )}
+        </p>
+        <p class="fine">The code changes every 5 minutes and works once. If it just changed, use the new one.</p>
+        <ErrorNote error={props.error} testid="code-error" />
+        <Nav onBack={props.onBack} submit nextLabel="Next" disabled={!normalized().valid} />
+        <p class="ticket-credits" aria-hidden="true">
+          <span>6 characters · 0–9 A–F</span>
+          <span>New every 5 min · works once</span>
+        </p>
+      </div>
     </form>
   );
 }

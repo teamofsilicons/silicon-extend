@@ -14,7 +14,8 @@ test.describe("signing in", () => {
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
     const pixel = page.locator(`[data-device-id="${DEVICE_PIXEL}"]`);
     await expect(pixel).toContainText("Saket's Pixel");
-    await expect(pixel).toContainText("Online");
+    // In use: the label says what the cobalt dot says.
+    await expect(pixel).toContainText("In use");
     await expect(pixel.getByTestId("in-use")).toContainText("si:chef");
     await expect(pixel).toContainText("in 14 days");
     await expect(page.locator('[data-device-id="0d44e1f2"]')).toContainText("Offline");

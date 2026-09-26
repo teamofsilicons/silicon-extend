@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show, splitProps, type JSX 
 import { Check, CircleAlert, Laptop, LoaderCircle, Monitor, Smartphone, Tablet, Tv, X } from "lucide-solid";
 import type { ApiError } from "../lib/api";
 import type { Device } from "../lib/types";
+import Shader from "./Shader";
 
 /** Shows exactly what Extend said: the message, the hint, and the ids to report it with. */
 export function ErrorNote(props: { error: ApiError | null | undefined; compact?: boolean; testid?: string }) {
@@ -97,13 +98,69 @@ export function Modal(props: { open: boolean; title: string; onClose: () => void
   );
 }
 
-export function OnlineDot(props: { online: boolean; label?: boolean }) {
+export type DeviceStatus = "online" | "in-use" | "offline";
+
+/**
+ * A 5×5 pixel dot, printed rather than drawn: solid for online, cobalt with a shimmering dithered
+ * rim for in use (still with reduced motion), and a 50% checker for offline. The colour is never
+ * the only signal; the label beside it says the same thing.
+ */
+const DOT_PIXELS: Record<DeviceStatus, string[]> = {
+  online: [".oXo.", "oXXXo", "XXXXX", "oXXXo", ".oXo."],
+  "in-use": [".oXo.", "oXXXo", "XXXXX", "oXXXo", ".oXo."],
+  offline: ["..X..", ".X.X.", "X.X.X", ".X.X.", "..X.."],
+};
+
+export function StatusDot(props: { status: DeviceStatus }) {
+  const pixels = () => {
+    const out: { x: number; y: number; rim: boolean; i: number }[] = [];
+    let i = 0;
+    DOT_PIXELS[props.status].forEach((row, y) =>
+      [...row].forEach((c, x) => {
+        if (c !== ".") out.push({ x, y, rim: c === "o", i: i++ });
+      }),
+    );
+    return out;
+  };
   return (
-    <span class={`online ${props.online ? "is-online" : "is-offline"}`}>
-      <span class="dot" aria-hidden="true" />
-      <Show when={props.label !== false}>{props.online ? "Online" : "Offline"}</Show>
+    <svg class={`pixel-dot ${props.status}`} width="10" height="10" viewBox="0 0 5 5" shape-rendering="crispEdges" aria-hidden="true">
+      <For each={pixels()}>{(p) => <rect x={p.x} y={p.y} width="1" height="1" class={p.rim ? "rim" : undefined} style={p.rim ? { "animation-delay": `${(p.i * 137) % 900}ms` } : undefined} />}</For>
+    </svg>
+  );
+}
+
+export function deviceStatus(device: { online: boolean; in_use?: unknown }): DeviceStatus {
+  return device.in_use ? "in-use" : device.online ? "online" : "offline";
+}
+
+/** "Online", "In use" or "Offline" with its pixel dot: the words always say what the colour says. */
+export function OnlineDot(props: { online: boolean; inUse?: boolean; label?: boolean }) {
+  const status = (): DeviceStatus => (props.inUse ? "in-use" : props.online ? "online" : "offline");
+  return (
+    <span class={`online ${props.online ? "is-online" : "is-offline"} ${props.inUse ? "is-in-use" : ""}`}>
+      <StatusDot status={status()} />
+      <Show when={props.label !== false}>{STATUS_LABEL[status()]}</Show>
     </span>
   );
+}
+
+const STATUS_LABEL: Record<DeviceStatus, string> = { online: "Online", "in-use": "In use", offline: "Offline" };
+
+/** The SILICON / CARBON tag Interface puts beside a member's name. */
+export function MemberTag(props: { type: "carbon" | "silicon" | string | undefined }) {
+  return (
+    <Show when={props.type === "carbon" || props.type === "silicon"}>
+      <span class={`member-tag ${props.type}`}>{props.type === "carbon" ? "Carbon" : "Silicon"}</span>
+    </Show>
+  );
+}
+
+/** Whether an id names a Silicon (si:…) or a Carbon (c:…), for the tag. */
+export function memberType(id: string | null | undefined): "carbon" | "silicon" | undefined {
+  if (!id) return undefined;
+  if (id.startsWith("si:")) return "silicon";
+  if (id.startsWith("c:")) return "carbon";
+  return undefined;
 }
 
 export function DeviceIcon(props: { device: Pick<Device, "kind" | "os">; size?: number }) {
@@ -125,9 +182,14 @@ export function DeviceIcon(props: { device: Pick<Device, "kind" | "os">; size?: 
   );
 }
 
-export function Empty(props: { title: string; children?: JSX.Element }) {
+/** An empty state: a dithered colour study, a serif sentence, a line of help and what to do. */
+export function Empty(props: { title: string; eyebrow?: string; children?: JSX.Element; testid?: string }) {
   return (
-    <div class="empty">
+    <div class="empty" data-testid={props.testid}>
+      <Shader variant="orb" class="empty-orb" />
+      <Show when={props.eyebrow}>
+        <p class="eyebrow">{props.eyebrow}</p>
+      </Show>
       <h2>{props.title}</h2>
       {props.children}
     </div>

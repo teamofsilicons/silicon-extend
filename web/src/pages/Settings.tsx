@@ -3,7 +3,7 @@ import { FlaskConical } from "lucide-solid";
 import { session } from "../lib/session";
 import { apiBaseUrl, LINKS } from "../config";
 import { navigate } from "../lib/router";
-import { Button } from "../components/ui";
+import { Button, MemberTag } from "../components/ui";
 import { TestingSecretForm } from "../components/TestingSecretForm";
 import { applyTheme, currentTheme, type Theme } from "../lib/theme";
 
@@ -14,15 +14,22 @@ export default function Settings() {
   const world = () => s.world();
 
   return (
-    <section class="page narrow" data-testid="settings-page">
-      <h1 class="page-title">Settings</h1>
+    <section class="page-main narrow" data-testid="settings-page">
+      <header class="page-heading">
+        <div>
+          <p class="eyebrow">This browser · your account</p>
+          <h1 class="page-title">Settings.</h1>
+          <p class="lead">Who you are signed in as, test environments, telemetry and how the site looks.</p>
+        </div>
+      </header>
 
       <div class="card">
-        <h2 class="card-title">Account</h2>
+        <h2 class="card-title">Account.</h2>
         <Show when={s.member()} fallback={<p class="muted">Not signed in{world().kind === "testing" ? " in this test environment" : ""}.</p>}>
           {(m) => (
             <>
-              <p>
+              <p class="account-line">
+                <MemberTag type={m().type} />
                 Signed in as <strong>{m().id}</strong>
                 {m().display_name ? ` (${m().display_name})` : ""}, a {m().type === "carbon" ? "Carbon" : "Silicon"}
                 {world().kind === "testing" ? " in the test environment" : ""}.
@@ -43,7 +50,7 @@ export default function Settings() {
 
       <div class="card" data-testid="settings-testing">
         <h2 class="card-title">
-          <FlaskConical size={17} aria-hidden="true" /> Test environment
+          <FlaskConical size={17} aria-hidden="true" /> Test environment.
         </h2>
         <Show
           when={world().kind === "testing" ? (world() as Extract<ReturnType<typeof world>, { kind: "testing" }>) : null}
@@ -83,7 +90,7 @@ export default function Settings() {
       </div>
 
       <div class="card">
-        <h2 class="card-title">Telemetry</h2>
+        <h2 class="card-title">Telemetry.</h2>
         <label class="switch">
           <input type="checkbox" checked={!s.telemetryOff()} onChange={(e) => s.setTelemetry(e.currentTarget.checked)} data-testid="telemetry-toggle" />
           <span>Send usage events to help fix problems</span>
@@ -95,13 +102,13 @@ export default function Settings() {
       </div>
 
       <div class="card">
-        <h2 class="card-title">Appearance</h2>
+        <h2 class="card-title">Appearance.</h2>
         <div class="segmented" role="radiogroup" aria-label="Theme">
           {(["auto", "light", "dark"] as Theme[]).map((t) => (
             <button
               role="radio"
               aria-checked={theme() === t}
-              class={theme() === t ? "active" : ""}
+              class={theme() === t ? "selected" : ""}
               onClick={() => {
                 applyTheme(t);
                 setTheme(t);
@@ -114,7 +121,7 @@ export default function Settings() {
       </div>
 
       <div class="card">
-        <h2 class="card-title">About</h2>
+        <h2 class="card-title">About.</h2>
         <dl class="about">
           <dt>Extend service</dt>
           <dd class="mono">{apiBaseUrl() || `${location.origin} (same origin)`}</dd>
