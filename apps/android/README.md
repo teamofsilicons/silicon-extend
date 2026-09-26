@@ -233,3 +233,23 @@ external files directory. Decode variable-rate Android video with its source tim
 `ffmpeg -v error -i proof.mp4 -enc_time_base demux -fps_mode passthrough -f null -`.
 These are manual instrumentation lanes; full 30-minute/1-GiB and physical-device recording
 coverage remain separate gates.
+
+
+For long-video relay/upload/download through the real local development service, leave the
+emulator's on-device debugging client enabled with the opt-in instrumentation setup:
+
+```sh
+adb -s emulator-5554 shell am instrument -w \
+  -e class com.teamofsilicons.bridge.LocalAdbTest#connectLocalForService -e service_test true \
+  com.teamofsilicons.bridge.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-5554 shell am start -n com.teamofsilicons.bridge/.ui.MainActivity
+python3 e2e/android-recording-service.py <paired-emulator-device-id>
+```
+
+Run the Python command from the repository root. The emulator must be paired to the local
+service, have its accessibility service active and grant `si:chef` access; the local device
+owner is `c:alice`. The lane opens only its animated test activity, captures for 187 seconds,
+checks uploaded video decoding and late frames, and compares downloads by Silicon and Carbon.
+It ends its session and closes its fixture without removing the existing device pairing.
+Artifacts and logs are kept under `target/android-recording/`. Local IAM/storage evidence
+does not verify production IAM/OBO or Briefcase.

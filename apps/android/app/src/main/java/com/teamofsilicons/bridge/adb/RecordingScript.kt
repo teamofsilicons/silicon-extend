@@ -30,6 +30,7 @@ internal object RecordingScript {
           seconds=$segmentSeconds
           [ "${'$'}remaining" -ge $segmentSeconds ] || seconds=${'$'}remaining
           file="${'$'}dir/chunk-${'$'}index.mp4"
+          read segment_start rest </proc/uptime
           screenrecord --time-limit "${'$'}seconds" --bit-rate ${if (highQuality) 10000000 else 8000000} "${'$'}file" &
           child=${'$'}!
           echo "${'$'}child" >"${'$'}dir/pid"
@@ -58,6 +59,8 @@ internal object RecordingScript {
           wait "${'$'}child"
           status=${'$'}?
           child=''
+          read segment_end rest </proc/uptime
+          echo "${'$'}segment_start ${'$'}segment_end ${'$'}seconds" >"${'$'}file.timing"
           if [ "${'$'}status" -ne 0 ] && [ "${'$'}stopping" -eq 0 ] && [ ! -f "${'$'}dir/stop" ]; then
             reason=source-error
             break

@@ -19,6 +19,14 @@ import java.util.UUID
 /** Run on the dedicated test emulator after `adb tcpip 5555`; never targets an external device. */
 @RunWith(AndroidJUnit4::class)
 class LocalAdbTest {
+    @Test fun connectLocalForService() = runBlocking {
+        org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("service_test") == "true")
+        org.junit.Assume.assumeTrue(android.os.Build.HARDWARE in setOf("ranchu", "goldfish"))
+        val adb = Bridge.get(InstrumentationRegistry.getInstrumentation().targetContext).adb
+        assertTrue(adb.lastError, adb.connect(5555))
+        assertEquals("2000", adb.shell("id -u").text.trim())
+        // Keep the explicit emulator connection enabled for the separately running service lane.
+    }
     @Test fun wirelessPairing() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
         org.junit.Assume.assumeTrue("Pass the current Android pairing port and code to run TLS pairing", args.containsKey("adb_pairing_port"))

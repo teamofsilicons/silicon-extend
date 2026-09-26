@@ -11,7 +11,18 @@ import java.nio.ByteBuffer
 
 /** Combines finalized H.264 segments without decoding or loading an entire video in memory. */
 internal object RecordingMuxer {
-    suspend fun combine(parts: List<File>, output: File) {
+    data class Segment(val file: File, val maximumDurationUs: Long)
+
+    fun segment(file: File, timing: String): Segment {
+        val values = timing.trim().split(Regex("\\s+"))
+        require(values.size == 3) { "Recording segment has no native timing evidence" }
+        val elapsed = ((values[1].toBigDecimal() - values[0].toBigDecimal()) * 1_000_000.toBigDecimal()).toLong()
+        val capSeconds = values[2].toLong()
+        require(elapsed > 0 && capSeconds in 1..180) { "Invalid recording segment timing" }
+        return Segment(file, minOf(elapsed, capSeconds * 1_000_000))
+    }
+
+    suspend fun combine(parts: List<Segment>, output: File) {
         require(parts.isNotEmpty()) { "Android produced no recording segments" }
         val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         var started = false
@@ -24,7 +35,7 @@ internal object RecordingMuxer {
                 currentCoroutineContext().ensureActive()
                 val extractor = MediaExtractor()
                 try {
-                    extractor.setDataSource(part.absolutePath)
+                    extractor.setDataSource(part.file.absolutePath)
                     val video = (0 until extractor.trackCount).firstOrNull {
                         extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME) == "video/avc"
                     } ?: error("Android recording segment has no H.264 video")
@@ -46,7 +57,6 @@ internal object RecordingMuxer {
                     val firstUs = extractor.sampleTime
                     require(firstUs >= 0) { "Android recording segment contains no frames" }
                     var lastUs = -1L
-                    var frameUs = 33_333L
                     while (extractor.sampleTime >= 0) {
                         currentCoroutineContext().ensureActive()
                         val size = extractor.sampleSize
@@ -56,17 +66,23 @@ internal object RecordingMuxer {
                         val read = extractor.readSampleData(buffer, 0)
                         require(read == size.toInt()) { "Could not read a complete recording frame" }
                         val timeUs = extractor.sampleTime - firstUs
+                        if (timeUs >= part.maximumDurationUs) break
                         require(timeUs > lastUs) { "Recording timestamps are not increasing" }
-                        if (lastUs >= 0) frameUs = timeUs - lastUs
                         val flags = if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
                         val info = MediaCodec.BufferInfo().apply { set(0, read, offsetUs + timeUs, flags) }
                         muxer.writeSampleData(track, buffer, info)
                         lastUs = timeUs
                         extractor.advance()
                     }
-                    offsetUs += lastUs + frameUs
+                    val durationUs = minOf(next.getLong(MediaFormat.KEY_DURATION) - firstUs, part.maximumDurationUs)
+                    require(durationUs > lastUs) { "Recording segment has an invalid duration" }
+                    offsetUs += durationUs
                 } finally { extractor.release() }
             }
+            // Sparse screen updates have long frame gaps. Preserve the declared final sample
+            // duration instead of letting the muxer repeat the preceding gap at the tail.
+            val end = MediaCodec.BufferInfo().apply { set(0, 0, offsetUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM) }
+            muxer.writeSampleData(track, buffer, end)
             muxer.stop()
             started = false
             require(output.length() in 1..RecordingScript.MAX_BYTES) { "Recording exceeded the 1 GiB limit" }

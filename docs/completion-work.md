@@ -6,7 +6,7 @@ An implementation or passing mock does not close a physical-device or production
 
 ## Open gates
 
-- Android: physical-device coverage, large APK/Briefcase inputs, long-recording service transfer
+- Android: physical-device coverage, large APK/Briefcase inputs, production file transfer
   and full 30-minute/1-GiB recording stress. Local ADB pairing, command execution, installation, logs and
   recording are implemented; see the verification record for exercised paths.
 - Desktop: Mac recording stress/recovery, hidden-stage/multi-display coverage and active-session update policy; notarized helper distribution;
@@ -36,7 +36,7 @@ An implementation or passing mock does not close a physical-device or production
   real-service CLI tests have passed. Crash/reconnect and the 84-check phone regression pass.
   See `docs/verification.md` and `apps/android/README.md` for exact scope and limits.
 - Remaining Android coverage includes physical phones/TVs, large APK/Briefcase inputs,
-  long-recording service transfer and full 30-minute/1-GiB stress. Do not infer full contract completion from
+  production file transfer and full 30-minute/1-GiB stress. Do not infer full contract completion from
   the small installation fixture or a short MP4 recording.
 - Next implementation area: desktop missing recording/input capabilities and release packaging.
 - Mac native `fill`/`type`/`focus` now pass live AppKit and packaged local-driver tests without
@@ -95,3 +95,17 @@ An implementation or passing mock does not close a physical-device or production
   cleanup pass. Native restarts can leave brief capture gaps. The current device inventory also
   includes a connected Pixel 8; this continuation used only the emulator and does not establish
   physical-phone coverage.
+
+
+- Release repository discovery: `teamofsilicons/silicon-bridge` exists privately on GitHub,
+  with main at `cb3257effb349ef76d44e7fe5388b67ddf13e935` (initial commit, 2026-08-24).
+  It contains `UNDERSTANDING.md` and `interface-api-ref.html`. This checkout still has no
+  configured remote and begins at a different root commit. Integrating histories must preserve
+  those existing files; no push, overwrite or CI run has been performed by this check.
+
+
+- Android long recording now passes the actual local Bridge service path with a verified animated
+  fixture: 186.9295 seconds, 2,104 frames, 43,286,430 bytes, full decode and identical Silicon/Carbon
+  downloads. A sparse-video timing bug found during this check was corrected using native segment
+  timing evidence and an explicit final timestamp. Local transfer is verified; production IAM/OBO
+  and Briefcase, physical-device capture and full recording limits remain open.

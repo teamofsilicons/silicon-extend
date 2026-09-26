@@ -187,14 +187,15 @@ class AdbExecutor(private val adb: LocalAdb, private val cache: File) {
                 .filter { it.matches(Regex("chunk-[0-9]+\\.mp4")) }
                 .sortedBy { it.removePrefix("chunk-").removeSuffix(".mp4").toInt() }.toList()
             val parts = names.map { name ->
-                File(dir, ".source-$name").also { adb.pull("${capture.directory}/$name", it) }
+                val source = File(dir, ".source-$name").also { adb.pull("${capture.directory}/$name", it) }
+                RecordingMuxer.segment(source, adb.shell("cat ${quote("${capture.directory}/$name.timing")}").text)
             }
             RecordingMuxer.combine(parts, file)
             val reason = adb.shell("cat ${quote(capture.directory)}/completed", check = false).text.trim()
             adb.shell("rm -rf ${quote(capture.directory)}")
             pending.remove(capture.directory)
             persist()
-            parts.forEach { it.delete() }
+            parts.forEach { it.file.delete() }
             val note = if (parts.size > 1) " Combined ${parts.size} segments; native recorder restarts can leave brief capture gaps." else ""
             return Result("Saved ${capture.name} ($reason).$note", Artifact(file, "video/mp4", "recording"))
         } catch (e: CancellationException) {

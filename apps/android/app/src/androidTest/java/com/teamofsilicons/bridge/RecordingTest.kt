@@ -1,11 +1,7 @@
 package com.teamofsilicons.bridge
 
-import android.app.Activity
 import android.content.Intent
-import android.graphics.Canvas
 import android.media.MediaMetadataRetriever
-import android.os.Bundle
-import android.view.View
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.teamofsilicons.bridge.adb.AdbCommand
@@ -32,7 +28,7 @@ class RecordingTest {
         assertTrue(adb.lastError, adb.connect(5555))
         val directory = "/data/local/tmp/silicon-bridge-${UUID.randomUUID()}"
         val local = File(context.cacheDir, "record-limit-${UUID.randomUUID()}").apply { mkdirs() }
-        instrumentation.context.startActivity(Intent(instrumentation.context, RecordingFixtureActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        instrumentation.context.startActivity(Intent(instrumentation.context, RecordingFixtureActivity::class.java).putExtra("interval_ms", 2000).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         try {
             val script = File(local, "capture.sh").apply { writeText(RecordingScript.create(directory, false, durationSeconds = 7, segmentSeconds = 3)) }
             adb.shell("mkdir -m 700 ${AdbWire.quote(directory)}")
@@ -41,13 +37,26 @@ class RecordingTest {
             assertEquals("duration-limit", adb.shell("cat $directory/completed").text.trim())
             val names = adb.shell("ls $directory/chunk-*.mp4").text.lineSequence().filter { it.isNotBlank() }.toList()
             assertTrue("The supervisor must roll over", names.size >= 2)
-            val parts = names.mapIndexed { index, name -> File(local, "part-$index.mp4").also { adb.pull(name.trim(), it) } }
+            val parts = names.mapIndexed { index, name ->
+                val path = name.trim()
+                val file = File(local, "part-$index.mp4").also { adb.pull(path, it) }
+                RecordingMuxer.segment(file, adb.shell("cat $path.timing").text)
+            }
             val output = File(context.getExternalFilesDir(null), "duration-recording-proof.mp4")
             RecordingMuxer.combine(parts, output)
             val media = MediaMetadataRetriever()
             try {
                 media.setDataSource(output.absolutePath)
-                assertTrue(media.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toLong() >= 4000)
+                val actual = media.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toLong()
+                val expected = parts.sumOf { part ->
+                    val source = MediaMetadataRetriever()
+                    try {
+                        source.setDataSource(part.file.absolutePath)
+                        minOf(source.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toLong(), part.maximumDurationUs / 1000)
+                    } finally { source.release() }
+                }
+                assertTrue("Combined duration $actual must match source duration $expected", kotlin.math.abs(actual - expected) < 100)
+                assertTrue(actual in 4000..7100)
             } finally { media.release() }
         } finally {
             try {
@@ -88,21 +97,4 @@ class RecordingTest {
             instrumentation.runOnMainSync { RecordingFixtureActivity.current?.finish() }
         }
     } }
-}
-
-class RecordingFixtureActivity : Activity() {
-    companion object { var current: RecordingFixtureActivity? = null }
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        current = this
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setContentView(object : View(this) {
-            private var frame = 0
-            override fun onDraw(canvas: Canvas) {
-                canvas.drawRGB((frame++ * 7) % 256, 80, 160)
-                postInvalidateDelayed(80)
-            }
-        })
-    }
-    override fun onDestroy() { current = null; super.onDestroy() }
 }

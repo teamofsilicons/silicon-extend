@@ -399,3 +399,40 @@ compatibility. These checks do not establish completion of the entire product co
   was modified. A connected Pixel 8 was inventoried, not exercised. Full 30-minute/1-GiB limits,
   large APKs, long-video service/Briefcase transfer, physical recording and release signing remain
   unverified. No production deployment or release is claimed.
+
+
+### 2026-09-26 — Android long recording through the local service and timing correction
+
+- Added `e2e/android-recording-service.py`, using the existing paired emulator, isolated CLI homes
+  and local IAM users. It opens the test fixture, records for 187 seconds, runs public record stop
+  with download, decodes the full MP4, checks late animated frames and duration, then verifies
+  identical additional downloads as the Silicon and device-owning Carbon. Sessions and fixtures
+  are cleaned up; the existing pairing is retained.
+- The first relay/upload/download run succeeded but was not accepted as complete recording proof:
+  a 187-second request exported a 206.369589-second MP4. The fixture process had also crashed with
+  `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`. The test APK launches it separately from
+  the target app, so Kotlin classes supplied only by the target APK were unavailable. Earlier tests
+  did not check that the requested animated fixture stayed alive; they therefore do not establish
+  the intended animated scene even where video export/decode passed.
+- Replaced that fixture with a standalone Android/Java activity. The service lane now checks its
+  process, more than 500 encoded frames, multiple frames after 181 seconds and a bounded overall
+  duration. The final run's foreground activity was verified as RecordingFixtureActivity.
+- Fixed sparse-video timeline inflation. Each native segment writes monotonic start/end timing
+  and its requested native limit. The muxer bounds samples and durations by that evidence,
+  preserves the declared duration within those bounds, and writes an explicit end-of-stream
+  timestamp so the last frame gap is not extrapolated. Android's
+  [MediaMuxer contract](https://developer.android.com/reference/android/media/MediaMuxer)
+  documents explicit final-sample duration using this timestamp. Invalid timing evidence fails
+  finalization while retaining source files.
+- Final result: 186.9295 seconds, 43,286,430 bytes, 2,104 packets, final frame at 186.830433 seconds;
+  full decoding and strictly increasing timestamps pass. Creator and Carbon downloads have SHA-256
+  `0e98634cfbc0fd74b897c42fd775772c215ddfb6c693170c328acb3f40b552a5`.
+  Evidence: `/tmp/bridge-android-service-long-final.log`, ignored
+  `target/android-recording/service-ghqrk9z3/verification.json` and `recording.mp4`.
+- All 64 JVM tests, app/test APK builds and the strengthened reduced-duration native timing test
+  pass (`/tmp/bridge-android-service-final-build.log`, `/tmp/bridge-android-sparse-bounded.log`).
+  After cleanup there were no capture processes or capture directories. Instrumentation/reinstall
+  had left previously granted accessibility/notification listeners unbound; only the emulator's
+  existing Bridge grants were rebound. The physical Pixel 8 was not modified.
+- This closes local long-recording relay/upload/download verification on Android 16. Production
+  IAM/OBO/Briefcase, full 30-minute/1-GiB tests, physical phones/TVs and release signing remain open.
