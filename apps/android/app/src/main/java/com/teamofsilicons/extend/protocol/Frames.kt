@@ -248,6 +248,22 @@ object Frames {
     const val CLOSE_SUPERSEDED = 4409
     const val CLOSE_UPGRADE_REQUIRED = 4426
 
+    /**
+     * Largest `result` the app sends. The service refuses device messages over 16 MiB, and OkHttp
+     * closes the socket instead of queueing more than 16 MiB, which would drop every other answer.
+     */
+    const val MAX_RESULT_BYTES = 15 * 1024 * 1024
+
+    /** [result] itself, or a failure in its place when it is too large to send in one message. */
+    fun fitResult(result: DeviceFrame.Result, limit: Int = MAX_RESULT_BYTES): DeviceFrame.Result {
+        val size = encode(result).toByteArray(Charsets.UTF_8).size
+        if (size <= limit) return result
+        val message = "This command's result was ${(size + 1024 * 1024 - 1) / (1024 * 1024)} MiB, more than the " +
+            "${limit / (1024 * 1024)} MiB one device message can carry, so it was not sent. Ask for less output, " +
+            "for example by writing it to a file on the device and fetching that with adb pull."
+        return DeviceFrame.Result(result.id, false, JsonNull, message, CommandError("action_failed", message), result.files)
+    }
+
     fun encode(frame: DeviceFrame): String {
         val (type, body) = when (frame) {
             is DeviceFrame.Hello -> "hello" to fields(DeviceFrame.Hello.serializer(), frame)

@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive launcher foreground: the Extend mark in cobalt, 44dp, centred inside the 66dp safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <group android:translateX="30" android:translateY="30">
-        <path android:fillColor="#FF5B8CFF"
-            android:pathData="M4,18h40v4H4zM10,22h4v18h-4zM34,22h4v18h-4zM6,18c6,-10 30,-10 36,0h-4.8c-5.6,-6 -20.8,-6 -26.4,0z" />
+    <group android:translateX="32" android:translateY="32">
+        <path android:fillColor="#FF1736B8"
+            android:pathData="M0 22h9v9h-9zM4 13h9v9h-9zM13 9h9v9h-9zM26 22h9v9h-9zM22 31h9v9h-9zM13 35h9v9h-9zM4 31h9v9h-9zM17.5 16.79L27.21 26.5L17.5 36.21L7.79 26.5zM26 9h9v9h-9zM35 0h9v9h-9z" />
     </group>
 </vector>

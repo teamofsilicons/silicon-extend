@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+// Modified by Silicon Extend (2026): isConnected() no longer waits for the connection lock,
+// connections can require TLS, and the paired device's GUID is kept after pairing.
 
 package io.github.muntashirakon.adb;
 
@@ -29,8 +31,12 @@ import io.github.muntashirakon.adb.android.AdbMdns;
 @SuppressWarnings("unused")
 public abstract class AbsAdbConnectionManager implements Closeable {
     private final Object mLock = new Object();
+    // Volatile so isConnected() can read it without waiting for a connect() that holds mLock.
     @Nullable
-    private AdbConnection mAdbConnection;
+    private volatile AdbConnection mAdbConnection;
+    private volatile boolean mRequireTls = false;
+    @Nullable
+    private volatile String mPairedDeviceGuid;
     private String mHostAddress = "127.0.0.1";
     private int mApi = Build.VERSION_CODES.BASE;
     private long mTimeout = Long.MAX_VALUE;
@@ -161,9 +167,28 @@ public abstract class AbsAdbConnectionManager implements Closeable {
      * @return {@code true} if connected, {@code false} otherwise.
      */
     public boolean isConnected() {
-        synchronized (mLock) {
-            return mAdbConnection != null && mAdbConnection.isConnected() && mAdbConnection.isConnectionEstablished();
-        }
+        // Read without mLock: connect() and pair() hold it for their whole timeout, and callers
+        // (for example a UI thread) must not block on them.
+        AdbConnection connection = mAdbConnection;
+        return connection != null && connection.isConnected() && connection.isConnectionEstablished();
+    }
+
+    /**
+     * Require the next connections to upgrade to TLS before the peer is trusted: a peer that answers
+     * CNXN in plain text or asks for RSA authentication is refused. Wireless debugging always starts
+     * TLS, so this keeps a local impostor from being used or from obtaining signatures.
+     */
+    public void setRequireTls(boolean requireTls) {
+        mRequireTls = requireTls;
+    }
+
+    /**
+     * The GUID the device announced during the last successful {@link #pair(String, int, String)}, or
+     * {@code null}. Wireless debugging advertises its connection service as {@code adb-<guid>}.
+     */
+    @Nullable
+    public String getPairedDeviceGuid() {
+        return mPairedDeviceGuid;
     }
 
     /**
@@ -273,6 +298,7 @@ public abstract class AbsAdbConnectionManager implements Closeable {
                     .setApi(mApi)
                     .setKeyPair(getAdbKeyPair())
                     .setDeviceName(Objects.requireNonNull(getDeviceName()))
+                    .setRequireTls(mRequireTls)
                     .build();
             return mAdbConnection.connect(mTimeout, mTimeoutUnit, mThrowOnUnauthorised);
         }
@@ -316,6 +342,7 @@ public abstract class AbsAdbConnectionManager implements Closeable {
                     .setApi(mApi)
                     .setKeyPair(getAdbKeyPair())
                     .setDeviceName(Objects.requireNonNull(getDeviceName()))
+                    .setRequireTls(mRequireTls)
                     .build();
             return mAdbConnection.connect(mTimeout, mTimeoutUnit, mThrowOnUnauthorised);
         }
@@ -344,6 +371,7 @@ public abstract class AbsAdbConnectionManager implements Closeable {
                     .setApi(mApi)
                     .setKeyPair(getAdbKeyPair())
                     .setDeviceName(Objects.requireNonNull(getDeviceName()))
+                    .setRequireTls(mRequireTls)
                     .build();
             return mAdbConnection.connect(mTimeout, mTimeoutUnit, mThrowOnUnauthorised);
         }
@@ -376,6 +404,7 @@ public abstract class AbsAdbConnectionManager implements Closeable {
                     .setApi(mApi)
                     .setKeyPair(getAdbKeyPair())
                     .setDeviceName(Objects.requireNonNull(getDeviceName()))
+                    .setRequireTls(mRequireTls)
                     .build();
             return mAdbConnection.connect(mTimeout, mTimeoutUnit, mThrowOnUnauthorised);
         }
@@ -478,6 +507,7 @@ public abstract class AbsAdbConnectionManager implements Closeable {
                     StringCompat.getBytes(Objects.requireNonNull(pairingCode), "UTF-8"), keyPair, getDeviceName())) {
                 // TODO: 5/12/21 Return true/false instead of only exceptions
                 pairingClient.start();
+                mPairedDeviceGuid = pairingClient.getPeerGuid();
             }
             return true;
         }

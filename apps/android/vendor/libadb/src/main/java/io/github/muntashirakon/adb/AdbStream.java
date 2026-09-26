@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause AND (GPL-3.0-or-later OR Apache-2.0)
+// Modified by Silicon Extend (2026): records whether the daemon acknowledged the stream's OPEN,
+// so the opener waits for that state under the reader's monitor; received data is acknowledged
+// (OKAY) only when the reader takes it, so a stream holds at most a few unread payloads.
 
 package io.github.muntashirakon.adb;
 
@@ -56,6 +59,18 @@ public class AdbStream implements Closeable {
     private volatile boolean mPendingClose;
 
     /**
+     * Why the connection closed this stream itself (the peer broke flow control), or null.
+     */
+    private volatile String mFailure;
+
+    /**
+     * The daemon sends one WRTE and then waits for our OKAY before the next, and the OKAY is sent
+     * only when {@link #read} takes a payload, so at most one payload is normally waiting here. A
+     * peer that keeps sending without acknowledgements is refused before it can exhaust memory.
+     */
+    static final int MAX_UNREAD_PAYLOADS = 8;
+
+    /**
      * Creates a new AdbStream object on the specified AdbConnection
      * with the given local ID.
      *
@@ -81,20 +96,46 @@ public class AdbStream implements Closeable {
     }
 
     /**
-     * Called by the connection thread to indicate newly received data.
+     * Called by the connection thread to indicate newly received data. It is acknowledged when
+     * {@link #read} takes it, which lets the peer send the next payload.
      *
      * @param payload Data inside the WRTE message
+     * @return {@code false} if the peer sent more unacknowledged data than flow control allows
      */
-    void addPayload(byte[] payload) {
+    boolean addPayload(byte[] payload) {
         synchronized (mReadQueue) {
+            if (mReadQueue.size() >= MAX_UNREAD_PAYLOADS) {
+                return false;
+            }
             mReadQueue.add(payload);
             mReadQueue.notifyAll();
+            return true;
         }
     }
 
     /**
-     * Called by the connection thread to send an OKAY packet, allowing the
-     * other side to continue transmission.
+     * Called by the connection thread when the peer broke flow control on this stream: readers get
+     * an error carrying {@code reason} instead of the rest of the data.
+     */
+    void fail(String reason) {
+        mFailure = reason;
+        synchronized (mReadQueue) {
+            mReadQueue.clear();
+        }
+        notifyClose(false);
+    }
+
+    /**
+     * Why the connection closed this stream (the peer broke flow control), or {@code null} when it
+     * closed normally.
+     */
+    public String getFailure() {
+        return mFailure;
+    }
+
+    /**
+     * Sends an OKAY packet, allowing the other side to continue transmission. Called by
+     * {@link #read} once it has taken a payload, never while holding the queue's lock.
      *
      * @throws IOException If the connection fails while sending the packet
      */
@@ -154,6 +195,8 @@ public class AdbStream implements Closeable {
         if (mReadBuffer.hasRemaining()) {
             return readBuffer(bytes, offset, length);
         }
+        int count = -1;
+        boolean took = false;
         // Buffer has no data, grab from the queue
         synchronized (mReadQueue) {
             byte[] data;
@@ -168,25 +211,37 @@ public class AdbStream implements Closeable {
             }
             // Add data to the buffer
             if (data != null) {
+                took = true;
                 mReadBuffer.clear();
                 mReadBuffer.put(data);
                 mReadBuffer.flip();
                 if (mReadBuffer.hasRemaining()) {
-                    return readBuffer(bytes, offset, length);
+                    count = readBuffer(bytes, offset, length);
                 }
             }
 
-            if (mIsClosed) {
-                throw new IOException("Stream closed.");
-            }
+            if (count < 0) {
+                String failure = mFailure;
+                if (failure != null) {
+                    throw new IOException(failure);
+                }
+                if (mIsClosed) {
+                    throw new IOException("Stream closed.");
+                }
 
-            if (mPendingClose && mReadQueue.isEmpty()) {
-                // The peer closed the stream, and we've finished reading the stream data, so this stream is finished
-                mIsClosed = true;
+                if (mPendingClose && mReadQueue.isEmpty()) {
+                    // The peer closed the stream, and we've finished reading the stream data, so this stream is finished
+                    mIsClosed = true;
+                }
             }
         }
+        // The payload is ours now: let the peer send the next one. Outside the queue's lock, so the
+        // connection thread can always deliver packets while this write waits on the socket.
+        if (took && !mIsClosed && !mPendingClose) {
+            sendReady();
+        }
 
-        return -1;
+        return count;
     }
 
     private int readBuffer(byte[] bytes, int offset, int length) {

@@ -9,10 +9,23 @@ import java.net.NetworkInterface
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
-/** Only use advertisements for this device; the actual connection always uses loopback. */
+/**
+ * Finds this device's Wireless debugging port. Only advertisements for this device's own
+ * addresses count, and the connection always uses loopback.
+ *
+ * Any installed app can advertise `_adb-tls-connect._tcp`, so a discovered port is only a
+ * candidate: [LocalAdb] requires TLS on it and then has the peer prove it is Android's shell.
+ */
 object AdbDiscovery {
+    /** Whether an advertised instance name belongs to the device that announced [guid] while pairing. */
+    fun matches(serviceName: String?, guid: String?): Boolean {
+        if (guid == null) return true
+        val name = serviceName ?: return false
+        return name == guid || name == "adb-$guid" || name.startsWith("adb-$guid ")
+    }
+
     @Suppress("DEPRECATION")
-    suspend fun port(context: Context): Int? = withTimeoutOrNull(5000) {
+    suspend fun port(context: Context, guid: String? = null): Int? = withTimeoutOrNull(5000) {
         suspendCancellableCoroutine { continuation ->
             val finished = AtomicBoolean(false)
             val nsd = context.getSystemService(NsdManager::class.java)
@@ -31,6 +44,8 @@ object AdbDiscovery {
                 override fun onServiceLost(info: NsdServiceInfo) = Unit
                 override fun onServiceFound(info: NsdServiceInfo) {
                     if (!continuation.isActive) return
+                    // After pairing, only the paired device's own service name is a candidate.
+                    if (!matches(info.serviceName, guid)) return
                     nsd.resolveService(info, object : NsdManager.ResolveListener {
                         override fun onResolveFailed(info: NsdServiceInfo, code: Int) = Unit
                         override fun onServiceResolved(info: NsdServiceInfo) {

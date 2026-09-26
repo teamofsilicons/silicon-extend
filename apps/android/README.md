@@ -63,15 +63,23 @@ access; the setup help says so.
 
 ## Tests
 
-- **JVM unit tests** (`app/src/test`, 58 tests): every frame example in `docs/device-protocol.md`
+- **JVM unit tests** (`app/src/test`, 104 tests): every frame example in `docs/device-protocol.md`
   decoded/encoded (plus the `{"type","data"}` envelope form and unknown frames), argument parsing for
   every command (and the refusals), selector parsing/matching, snapshot filtering/ref assignment/
-  text/JSON/diff, alert detection, `.ad`/batch parsing, reconnect backoff.
+  text/JSON/diff, alert detection, `.ad`/batch parsing, reconnect backoff; and for Android
+  debugging: recording timeline placement, shell output capture limits, the result size budget,
+  answers for cancelled commands, session retention across a dropped socket, reconnect back-off,
+  upload file names and the licence notices; `UiLookTest` checks the look (the idle orb's outer
+  ring is paper, no dither ink uses a Stop colour, the TV badge names the Silicon and stays short).
+  `vendor/libadb/src/test` (10 tests: `ExtendTransportTest` 7, `AndroidPubkeyTest` 3) covers the
+  transport changes against a scripted peer. `app/src/androidTest` has 19 instrumented tests
+  (below).
 - **Fake service** `tools/fake-service/fake_extend.py` (Python standard library only: HTTP + a
   minimal WebSocket). It implements the device half of the protocol, checks upload digests, and
   runs scenarios. `tools/fake-service/run-emulator-test.sh phone|tv` does everything on a running
   emulator: install, launch pointed at the fake, check the code on screen equals the service's, grant
-  access with adb, claim the code, run the scenario (83 checks on a phone, 36 on a TV).
+  access with adb, claim the code, run the scenario (84 checks on a phone and 36 on a TV passed on
+  2026-09-26; the scenario was not rerun on 2026-09-27).
   `tools/fake-service/bcmd <command> [args…]` sends one command to a device paired with a running
   fake (`/_test/command`); `/_test/frame` and `/_test/close` send any frame or close code.
 - **Real service** (`crates/extend-service` on `http://127.0.0.1:8480`, emulator `10.0.2.2:8480`,
@@ -121,8 +129,29 @@ access; the setup help says so.
 8. **Attachments** (`docs/device-protocol.md`, "Attachments") are written to a per-command scratch
    directory and `attachment:<name>` arguments replaced by the path; the directory is deleted after
    the command (the display keeps its own copy).
-9. **Cancel** cancels the running command and sends no `result` (the service already answered
-   `command_timeout`). Commands run one at a time. The command budget is `timeout_ms − 750 ms`.
+9. **Cancel** cancels the running command and answers its `result` with `ok:false`, code
+   `cancelled` (the service has usually already answered `command_timeout`). Commands run one at a
+   time. The command budget is `timeout_ms − 750 ms`.
+
+## Look (2026-09-27)
+
+The app follows Silicon Interface's system: paper and cobalt tokens (`ui/Theme.kt`, `Tokens`),
+IBM Plex Sans for text, IBM Plex Mono for eyebrows, codes and ids, and Source Serif 4 for titles
+written as sentences ending in a period. The fonts are bundled in `res/font` (SIL Open Font
+License 1.1, listed in the notices). Stop and danger use a risograph orange-red; decoration is a
+dithered, grainy print (`ui/Grain.kt`, with a static bitmap fallback before Android 13). The launcher
+icon is Extend's mark as an adaptive icon with a monochrome layer; the TV banner uses it on paper.
+On TVs the corner badge (`ui/InUseBadge.kt`, placed by `a11y/TvBadgeOverlay.kt`) is a cobalt pill
+naming the Silicon while it works, and turns ink with an orange-red edge and the reason when a
+Silicon is waiting for the Carbon; the app's own TV top bar hides its "IN USE" pill while the badge
+is up. The pairing code is the one poster-sized element.
+
+Checked on the phone (API 36) and TV (API 34) emulators against the fake service, state by state,
+from screenshots. Not checked: TalkBack itself (only semantics through `uiautomator dump`), a
+360 dp screen at 1.3x font scale, scrolling the licences screen with a TV D-pad, and physical
+devices. Open low-severity notes from the design review: the TV focus ring is ink rather than
+cobalt, the in-use notification has no accent colour, the licences text is hard-wrapped at 72
+columns, and a takeover reason is set in the serif title style without a period.
 
 ## What works (verified on emulators)
 
@@ -168,72 +197,173 @@ Phone (Android 16 emulator) and TV (Android TV 14 emulator):
 
 ## Android debugging (2026-09-26 follow-up)
 
-The paired app now has an **Android debugging** setup card. On Android 11+, enable Wireless
+The paired app has an **Android debugging** setup card. On Android 11+, enable Wireless
 Debugging, keep Android's pairing-code dialog beside Extend in split screen, and enter Android's
 pairing port and six-digit code. These are separate from the Extend enrollment code. After pairing,
 Extend discovers this device's connection port; it also accepts the port shown on the main Wireless
 Debugging screen. TVs with TCP debugging can connect to their local port (commonly 5555) and approve
-Android's RSA prompt. Connections are restricted to loopback, and discovery only accepts this
-host's own addresses. Credentials are encrypted with the Android Keystore. Reconnect runs while
-paired; after a reboot the owner may still need to enable Wireless Debugging again.
+Android's RSA prompt. Connections are restricted to loopback, and credentials are encrypted with the
+Android Keystore. The app never opens a debugging connection in response to a remote command.
+
+Trusting the peer. Any installed app can listen on a loopback port or advertise
+`_adb-tls-connect._tcp`, so Extend checks every new connection before using it:
+- A discovered port, and any port once the device was paired with a pairing code, must start TLS;
+  a peer that answers in plain text or asks for RSA authentication is refused, so it never gets
+  a signature from Extend's key.
+- After pairing, discovery only accepts the service name of the device that paired (`adb-<guid>`).
+- Every connection must prove it is Android's shell: it has to deliver a broadcast with a fresh
+  nonce to a receiver that only accepts senders holding `WRITE_SECURE_SETTINGS`, which the shell
+  has and ordinary apps can't get. Otherwise Extend disconnects and says why.
+- A TV's legacy port is never replaced by a discovered one. "Disconnect Android debugging" also
+  forgets the TLS-only mode, so a TV can then connect to its legacy port.
+
+Reconnecting runs while paired, backing off from 15 seconds to 15 minutes while it fails; it
+skips discovery while Wireless debugging is off, and starts again at once when the network comes
+back, Wireless debugging is switched on, or the Carbon opens the app. After a reboot the Carbon may
+still need to switch Wireless debugging on. The connection state is read without waiting for a
+connect in progress, so the UI never stalls on it.
 
 Connected debugging enables `adb`, `install`/`reinstall`, `logs`, and phone `record` commands.
 Accessibility remains the semantic screen/input driver. Capabilities are withdrawn when debugging
-is disconnected. The app never opens a debugging connection in response to a remote command.
+is disconnected.
 
-- `extend adb shell <command>` preserves exit failures; `exec-out` returns a binary artifact.
+- `extend adb shell <command>` answers like the computer `terminal` command: `output` has
+  `stdout`, `stderr` and `exit_code`; a non-zero exit fails with `command_failed` and
+  `details.exit_code`. Each stream keeps 256 KiB inline; longer output is attached in full as
+  `stdout.txt` / `stderr.txt` (up to 256 MiB in total; more stops the command and fails with
+  `action_failed` and a hint to redirect to a file and `adb pull` it). `adb logcat -d` and
+  `adb uninstall` answer the same way. `exec-out` returns stdout as a binary artifact. A result
+  larger than 15 MiB is replaced by an `action_failed` result instead of closing the device socket.
+- Output streams to disk as it arrives: the ADB transport acknowledges each packet only when it has
+  been read (ADB flow control), so a stream never holds more than a couple of packets in memory and
+  output far larger than the app's heap (192 MiB on the test emulator) can't crash the app.
+- Processes a Silicon starts with `adb shell` carry `EXTEND_SESSION=<session id>` in their
+  environment; when the session ends (Stop, session end, unpair) Extend kills every process still
+  carrying it, including ones detached with `nohup`, `setsid` or `&`. A process that clears its
+  environment escapes this, and a takeover does not stop them (the session continues).
 - `extend adb push <local file> <device path>` and `pull <device path> --out <local file>` use ADB
-  sync and Extend's artifact uploads. The CLI attaches local inputs for ADB push/install only.
-- `extend install <package.name> <local.apk>` checks APK package identity before installation;
-  `reinstall` requests replacement. `adb install [-r] <local.apk>` and `adb uninstall <package>`
-  are also supported. The existing service limit of 8 MiB total inline attachments still applies;
-  large APKs and Briefcase file-id inputs remain follow-up work.
+  sync and Extend's artifact uploads. `pull` takes files up to 256 MiB; a larger file fails with
+  `action_failed` and a hint to split it on the device first. File names with non-ASCII characters work (the upload header
+  carries an ASCII form; the file keeps its name). The CLI attaches local inputs for push/install.
+- `extend install <package.name> <local.apk>` checks APK package identity, then installs over any
+  existing copy, keeping its data. `reinstall` gives fresh data as agent-device does: it uninstalls
+  the app (and its data) first, then installs; if that install then fails, the app stays removed and
+  the message says so. `adb install [-r] <local.apk>` and `adb uninstall <package>` are also
+  supported. The service limit of 8 MiB total inline attachments still applies; large APKs and
+  Briefcase file-id inputs remain follow-up work.
 - `extend logs start`, `mark <label>`, `stop --out <file>`, `clear` stream up to 16 MiB of device
-  logs. The app closes the live stream on session end or disconnect.
+  logs. A capture starts with a `SiliconExtend: Extend log capture started` line, so `logs start`
+  works right after `logs clear` on a quiet device.
 - `extend record start [name] [--scope device] [--quality normal|high]` and
   `record stop --out <file.mp4>` use supervised screenrecord segments (up to 180 seconds each),
-  combined into one MP4 on stop. The supervisor bounds the overall capture to 30 minutes or
-  1 GiB; native restarts can leave brief capture gaps, disclosed in the stop result. Encoder or
-  dimension changes between segments fail finalization and retain source segments for retry.
-  App-only scope and custom frame rates are explicitly unsupported by this backend.
-  Recordings and pulled files are streamed from disk during upload. Stop, revoke and connection
-  loss clean up session-owned capture processes. Recorder PID checks include its unique output
-  directory, so cleanup cannot signal a recycled PID. Interrupted recording directories are
-  tracked for cleanup on the next debugging connection.
+  bounded to 30 minutes or 1 GiB. On stop each segment is pulled and appended in turn (then its
+  copy deleted), after checking there is room for the segments plus the output. Each segment is
+  placed at its wall-clock start and lasts its wall-clock length (from `/proc/uptime` around each
+  screenrecord run), so still screens, bursts and restart gaps keep video time in step with device
+  log time; a segment's first frame can show up to about a second early. A segment that is empty or
+  can't be read is left out and named in the result; if the picture size changes (rotation) the
+  recording continues in `<name>-2.mp4` and so on (up to four files per `record stop`; run it again
+  for the rest). If nothing usable was recorded, the recording is discarded and the result says a
+  retry can't help. App-only scope and custom frame rates are explicitly unsupported.
+- A saved recording or log file is kept on the device until it has been uploaded. If the upload
+  fails or runs out of time, the error says so and the next `record stop` / `logs stop` in the same
+  session sends it again (a new `record start` / `logs start` is refused until then). Pull, append
+  and upload must fit one command timeout (30 s by default, 300 s at most): pass a longer
+  `--timeout` for long recordings; at 300 s a 1 GiB recording needs about 29 Mbit/s of upload.
+- Sessions keep their recordings, logs and snapshot references through a dropped device socket:
+  Extend keeps a session for 120 s after it notices the device offline and announces it again on
+  reconnect. Noticing takes up to 60 s (no answer to its pings for 45 s, checked every 15 s), so
+  Extend can keep a session up to 183 s after the device lost contact. The app ends a session's
+  captures when Extend says it ended, when the Carbon presses Stop, on unpair, when
+  `GET /api/v1/device` after a reconnect shows another session or none, or 240 s after the app
+  noticed the drop without the session being announced again (`SessionRetention.GRACE_MS`; a unit
+  test checks it against the timing constants in `crates/extend-protocol`). If Extend announces a
+  session again after the app gave up on it (for example after Extend itself was down), `record
+  stop` / `logs stop` in it fail with `action_failed` saying the capture was discarded because the
+  device was out of contact for more than 4 minutes, instead of "No recording in this session".
+  Commands running when the socket drops stop without an answer (Extend reports the device
+  offline).
+- Stop on the device, and Extend ending the session, answer running and queued commands of that
+  session with `session_ended`; Extend's `cancel` frame answers with `cancelled`;
+  "Disconnect Android debugging" answers the debugging commands in flight with `device_not_ready`
+  and leaves other commands running.
+- Recorder PID checks include its unique output directory, so cleanup never signals a recycled
+  PID. They read `/proc/<pid>/cmdline` with `grep -qzF` (grep opens the file and stops on a read
+  error); piping it through toybox `tr` spun forever when the process exited mid-read and hung
+  `record stop`. The list of capture directories to recover is kept in the app's no-backup files directory
+  (not the cache). After each debugging connection Extend also removes `silicon-extend-*`
+  directories in `/data/local/tmp` that no session owns, that this app created (or that carry no
+  owner) and that nothing changed for ten minutes. Uninstalling the app mid-recording can still
+  leave a directory until the app is installed and connected again.
 
-The ADB implementation uses the patched libadb-android 3.1.1 source in `vendor/libadb`
-(Apache-2.0 option; upstream BSD notices retained), Conscrypt 2.5.3 and
-BouncyCastle 1.81. APKs remain development-signed; release signing is a separate gate.
+The ADB implementation uses the patched libadb-android 3.1.1 source in `vendor/libadb` (used under
+Apache-2.0, its BSD-3-Clause and MIT parts noted; see `vendor/libadb/README.extend.md`), SPAKE2
+from spake2-android 2.2.1 (LGPL-3.0, from JitPack), Conscrypt 2.5.3 and BouncyCastle 1.81. The
+app shows every component's notice and licence text under **Open-source licences** (below the
+version on every screen), from `app/src/main/assets/open_source_licences.txt`; regenerate it
+with `python3 tools/notices/generate_notices.py` whenever dependencies change (it fails on a
+licence it doesn't know). APKs remain development-signed; release signing is a separate gate.
+
+From the CLI, `extend adb` arguments reach the device exactly as typed from the first `adb`
+argument on; Extend's own flags go before it (`extend --json adb shell df -h`,
+`extend adb --out shot.png exec-out screencap -p`). An APK or pushed file travels as an attachment
+(8 MiB in total per command); for a larger file, split it with `split -b 8m`, push the parts to
+`/data/local/tmp`, join them with `extend adb shell 'cat …part.* > …'` and install with
+`extend adb shell pm install -r /data/local/tmp/<file>`. That recipe was checked on the emulator
+with host adb, not through Extend's own ADB connection.
+
+Known problems (2026-09-27): Wireless-debugging discovery uses the first matching mDNS
+advertisement, so a stale `adb-<guid>` advertisement can keep a TLS reconnect failing (seen on the
+emulator; try every candidate). The app's argument parser does not treat `--` as the end of flags,
+`adb shell -- ls` runs `--` as a program, and an `attachment:` token inside `adb shell` arguments is
+rewritten. An HTTP 429 from the service shows as "Can't reach Extend", although the service was
+reachable and rate-limiting. After `am instrument` or an app update the foreground service returns
+only when the app is opened, and the accessibility service may need to be toggled to rebind.
+
+Dependency verification: `gradle/verification-metadata.xml` pins the SHA-256 of every dependency
+and plugin, including the prebuilt `libspake2.so` inside spake2-android, which JitPack builds from
+a mutable Git tag. A changed artifact fails the build. After adding or upgrading a dependency run
+`./gradlew --write-verification-metadata sha256 help :app:assembleDebug :app:assembleRelease
+:app:assembleDebugAndroidTest :app:testDebugUnitTest :libadb:testDebugUnitTest`, and review the
+diff before committing it.
 
 Verification commands:
 
 ```sh
 ./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest
-# On the dedicated test emulator, enable TCP debugging once and approve the test app's RSA key.
-adb tcpip 5555
-adb shell am instrument -w -e class com.teamofsilicons.extend.LocalAdbTest#realLocalDaemon \
+adb -s emulator-5554 install -r -g app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-5554 install -r -g app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+# Legacy lane, dedicated emulator only: enable TCP debugging once and approve the app's RSA prompt.
+adb -s emulator-5554 tcpip 5555
+adb -s emulator-5554 shell am instrument -w -e class com.teamofsilicons.extend.LocalAdbTest \
+  -e local_daemon true com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-5554 shell am instrument -w -e class com.teamofsilicons.extend.RecordingTest \
   com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner
-# With this device paired to the local Extend backend and debugging connected:
+# TLS lane, dedicated emulator only: pairs through Android's own pairing-code dialog.
+python3 tools/wireless-debugging-lane.py --serial emulator-5554
+# With this device paired to the local Extend service and debugging connected:
 ../../e2e/android-adb.sh <device-id>
 ```
 
-`LocalAdbTest#wirelessPairing` additionally accepts `adb_pairing_port`, `adb_pairing_code`, and
-optionally `adb_connect_port` instrumentation arguments. `#wirelessReconnect -e adb_tls true`
-verifies mDNS discovery and reuse of the saved identity in a new app process. The test-only APK
-fixture has no executable code or runtime permissions and is uninstalled after the test.
+Every test that touches a real daemon or the app's saved debugging state needs emulator hardware
+(`ranchu`/`goldfish`) and, for `realLocalDaemon`, `-e local_daemon true`, so running the suite on a
+physical device never changes its Android debugging. `LocalAdbTest#wirelessPairing` takes
+`adb_pairing_port`, `adb_pairing_code` and optionally `adb_connect_port`;
+`#wirelessReconnect -e adb_tls true` checks discovery of the paired service, TLS and the shell
+proof in a new app process. `#anImpostorDaemonIsRefused` runs a plain-text fake daemon on
+loopback. The test-only APK fixture has no executable code or runtime permissions and is
+uninstalled after the test.
 
-
-Long Android recording verification (dedicated emulator only): build/install the app and
-instrumentation APK, then run `RUN_LONG=1 bash e2e/android-recording.sh emulator-5554` from
-the repository root. The underlying instrumentation uses `RecordingTest#nativeDurationLimit` for reduced automatic-stop
-and segment-rollover coverage. `RecordingTest#beyondNativeLimit` with `-e long_recording true`
-runs for about 190 seconds and requires real frames after the native 180-second boundary.
-Both use an animated fixture in the test APK. Proof videos are saved under the target app's
-external files directory. Decode variable-rate Android video with its source time base, e.g.
+`RecordingTest` uses 3-second native segments and checks durations against the test's own clock:
+a still screen (one-frame segments), a burst followed by a still screen, an automatic stop at the
+duration limit, left-out empty and corrupt segments, a retried delivery and too little free space.
+Long Android recording verification (dedicated emulator only): `RUN_LONG=1 bash
+e2e/android-recording.sh emulator-5554` from the repository root also runs
+`RecordingTest#beyondNativeLimit` (about 190 seconds, requires frames after the 180-second
+boundary). Proof videos are saved under the target app's external files directory. Decode
+variable-rate Android video with its source time base, e.g.
 `ffmpeg -v error -i proof.mp4 -enc_time_base demux -fps_mode passthrough -f null -`.
-These are manual instrumentation lanes; full 30-minute/1-GiB and physical-device recording
-coverage remain separate gates.
-
+Full 30-minute/1-GiB and physical-device recording coverage remain separate gates.
 
 For long-video relay/upload/download through the real local development service, leave the
 emulator's on-device debugging client enabled with the opt-in instrumentation setup:

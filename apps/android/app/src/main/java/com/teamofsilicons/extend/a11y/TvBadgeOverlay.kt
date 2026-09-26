@@ -1,13 +1,11 @@
 package com.teamofsilicons.extend.a11y
 
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
-import android.widget.TextView
 import com.teamofsilicons.extend.core.UiState
+import com.teamofsilicons.extend.ui.InUseBadge
+import com.teamofsilicons.extend.ui.InUseBadgeView
 
 /**
  * The TV's in-use indicator: a small badge in the top-right corner, drawn as an accessibility
@@ -16,29 +14,16 @@ import com.teamofsilicons.extend.core.UiState
  */
 class TvBadgeOverlay(private val service: ExtendAccessibilityService) {
     private val wm = service.getSystemService(WindowManager::class.java)
-    private var view: TextView? = null
+    private var view: InUseBadgeView? = null
 
     fun render(state: UiState) {
-        val text = when {
-            !state.isTv -> null
-            state.takeover != null -> "${state.session?.siliconId ?: "A Silicon"} is waiting for you: ${state.takeover.reason}"
-            state.session != null -> "${state.session.siliconId} is using this TV" + if (state.session.stopping) " (stopping…)" else ""
-            else -> null
-        }
-        if (text == null) remove() else show(text)
+        val badge = InUseBadge.from(state)
+        if (badge == null) remove() else show(badge)
     }
 
-    private fun show(text: String) {
-        val v = view ?: TextView(service).also { tv ->
-            tv.setTextColor(Color.WHITE)
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            val pad = dp(10)
-            tv.setPadding(pad * 2, pad, pad * 2, pad)
-            tv.background = GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
-                setColor(Color.argb(220, 20, 24, 32))
-                setStroke(dp(2), Color.rgb(91, 140, 255))
-            }
+    private fun show(badge: InUseBadge) {
+        // The view and its look live in ui/InUseBadge.kt, with the rest of the app's styling.
+        val v = view ?: InUseBadgeView(service).also { tv ->
             val lp = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -48,15 +33,17 @@ class TvBadgeOverlay(private val service: ExtendAccessibilityService) {
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT,
             ).apply {
+                // Inside a TV's overscan-safe area (48 dp from the side, at least 27 dp from the
+                // top), centred on the Extend app's top bar row so it sits in line with it there.
                 gravity = Gravity.TOP or Gravity.END
-                x = dp(24)
-                y = dp(24)
+                x = dp(48)
+                y = dp(40)
                 title = "Silicon Extend in-use badge"
             }
             runCatching { wm.addView(tv, lp) }.onFailure { return }
             view = tv
         }
-        v.text = "● $text"
+        v.bind(badge)
     }
 
     fun remove() {

@@ -10,11 +10,14 @@ import com.teamofsilicons.extend.core.UiState
 import com.teamofsilicons.extend.driver.CommandExecutor
 import com.teamofsilicons.extend.net.ExtendApi
 import com.teamofsilicons.extend.security.SecretStore
+import com.teamofsilicons.extend.adb.AdbReconnectPolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -38,20 +41,48 @@ class Extend private constructor(val context: Context) {
     val state: StateFlow<UiState> = _state
 
     val adb = com.teamofsilicons.extend.adb.LocalAdb(context)
-    val adbExecutor = com.teamofsilicons.extend.adb.AdbExecutor(adb, java.io.File(context.cacheDir, "adb-output"))
+    val adbExecutor = com.teamofsilicons.extend.adb.AdbExecutor(
+        adb,
+        cache = java.io.File(context.cacheDir, "adb-output"),
+        // Captures and saved recordings must survive cache trimming until they are delivered.
+        state = java.io.File(context.noBackupFilesDir, "adb-state"),
+        owner = context.packageName,
+    )
+    private val adbWake = Channel<Unit>(Channel.CONFLATED)
     val executor = CommandExecutor(this)
     val connection = ConnectionManager(this)
 
     init {
         scope.launch {
+            val policy = AdbReconnectPolicy()
             while (true) {
-                if (config.deviceId != null && adb.enabled && !adb.connected) {
-                    runCatching { if (adb.reconnect()) adbExecutor.recover() }
-                    onCapabilitiesMayHaveChanged()
+                val wait = when {
+                    config.deviceId == null || !adb.enabled || adb.connected -> policy.idle()
+                    // Discovery can't find anything until the Carbon turns Wireless debugging on.
+                    adb.pairedWithCode && adb.wirelessDebuggingOff -> policy.afterFailure()
+                    else -> {
+                        val connected = try { adb.reconnect() } catch (e: CancellationException) { throw e } catch (e: Exception) { false }
+                        if (connected) runCatching { adbExecutor.recover() }
+                        onCapabilitiesMayHaveChanged()
+                        if (connected) policy.idle() else policy.afterFailure()
+                    }
                 }
-                delay(15_000)
+                if (withTimeoutOrNull(wait) { adbWake.receive() } != null) policy.reset()
             }
         }
+        runCatching {
+            context.contentResolver.registerContentObserver(
+                android.provider.Settings.Global.getUriFor("adb_wifi_enabled"), false,
+                object : android.database.ContentObserver(null) {
+                    override fun onChange(selfChange: Boolean) = wakeAdbReconnect()
+                },
+            )
+        }
+    }
+
+    /** Try reconnecting Android debugging now (network back, Wireless debugging switched, app opened). */
+    fun wakeAdbReconnect() {
+        adbWake.trySend(Unit)
     }
 
     fun update(f: (UiState) -> UiState) = _state.update(f)

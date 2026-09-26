@@ -3,7 +3,18 @@ package com.teamofsilicons.extend.driver
 import kotlinx.serialization.json.JsonElement
 
 /** A command that failed; becomes `result` with `ok:false` and this `error`. */
-class CommandFailure(val code: String, message: String, val details: JsonElement? = null) : Exception(message) {
+/**
+ * A command that failed. [output] and [text] carry what the command produced anyway (for example
+ * a shell command's stdout and stderr when it exited non-zero); by default the result has no
+ * output and the message as its text.
+ */
+class CommandFailure(
+    val code: String,
+    message: String,
+    val details: JsonElement? = null,
+    val output: JsonElement? = null,
+    val text: String? = null,
+) : Exception(message) {
     companion object {
         const val INVALID_ARGS = "invalid_args"
         const val UNSUPPORTED = "unsupported_on_device"
@@ -17,6 +28,12 @@ class CommandFailure(val code: String, message: String, val details: JsonElement
         const val NOT_READY = "device_not_ready"
         const val UPLOAD_FAILED = "upload_failed"
         const val APP_NOT_FOUND = "app_not_found"
+        /** A shell command exited non-zero (as the computer `terminal` command reports it). */
+        const val COMMAND_FAILED = "command_failed"
+        /** Extend cancelled the command before it finished. */
+        const val CANCELLED = "cancelled"
+        /** The command's session ended (for example the Carbon pressed Stop) before it finished. */
+        const val SESSION_ENDED = "session_ended"
 
         fun invalid(message: String) = CommandFailure(INVALID_ARGS, message)
         fun unsupported(message: String) = CommandFailure(UNSUPPORTED, message)

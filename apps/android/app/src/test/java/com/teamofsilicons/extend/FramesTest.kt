@@ -22,6 +22,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -201,5 +203,18 @@ class FramesTest {
         val o = Frames.parseObject("""{"type":"error","data":{"code":"enrollment_gone","message":"Gone"}}""")!!
         assertEquals("enrollment_gone", o["code"]!!.jsonPrimitive.content)
         assertEquals("error", o["type"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun oversizedResultsBecomeAFailureThatFitsOneMessage() {
+        val big = "x".repeat(2_000_000)
+        val result = DeviceFrame.Result("c1", true, kotlinx.serialization.json.JsonPrimitive(big), big, null, emptyList())
+        val fitted = Frames.fitResult(result, limit = 1_000_000)
+        assertFalse(fitted.ok)
+        assertEquals("action_failed", fitted.error!!.code)
+        assertTrue(fitted.error!!.message.contains("MiB"))
+        assertTrue(Frames.encode(fitted).length < 1_000_000)
+        val small = DeviceFrame.Result("c2", true, kotlinx.serialization.json.JsonNull, "ok", null, emptyList())
+        assertSame(small, Frames.fitResult(small, limit = 1_000_000))
     }
 }

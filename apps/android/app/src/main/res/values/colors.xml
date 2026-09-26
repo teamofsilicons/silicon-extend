@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="extend_background">#FF0E1116</color>
-    <color name="extend_accent">#FF5B8CFF</color>
-    <color name="extend_icon_bg">#FF0E1116</color>
+    <!-- Silicon Interface's tokens (its styles.css :root); the Compose
+         theme in ui/Theme.kt carries the full set. -->
+    <color name="extend_paper">#FFFFFDF9</color>
+    <color name="extend_surface">#FFF8F7F3</color>
+    <color name="extend_ink">#FF262A29</color>
+    <color name="extend_cobalt">#FF1736B8</color>
 </resources>

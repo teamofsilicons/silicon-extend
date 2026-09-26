@@ -21,6 +21,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.a11y.ExtendAccessibilityService
+import com.teamofsilicons.extend.core.SessionRetention
 import com.teamofsilicons.extend.core.SetupReport
 import com.teamofsilicons.extend.display.DisplayActivity
 import com.teamofsilicons.extend.net.ApiException
@@ -31,7 +32,6 @@ import com.teamofsilicons.extend.protocol.DeviceFrame
 import com.teamofsilicons.extend.protocol.ProducedFile
 import com.teamofsilicons.extend.protocol.ServiceFrame
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -67,7 +67,11 @@ data class Outcome(val output: JsonElement, val text: String)
  * at a time (as agent-device's daemon serialises a session); refs from `snapshot` are kept per
  * session until the next snapshot.
  */
-class CommandExecutor(private val extend: Extend) {
+class CommandExecutor(
+    private val extend: Extend,
+    /** How long a session is kept while the device socket is down; tests shorten it. */
+    retentionGraceMs: Long = SessionRetention.GRACE_MS,
+) {
     private class Session {
         var last: Snapshot? = null
         var baseline: Snapshot? = null
@@ -84,50 +88,95 @@ class CommandExecutor(private val extend: Extend) {
     }
 
     private val sessions = ConcurrentHashMap<String, Session>()
-    private val jobs = ConcurrentHashMap<String, Job>()
-    private val commandSessions = ConcurrentHashMap<String, String>()
+    private val jobs = CommandJobs(extend.scope)
     private val stoppedSessions = ConcurrentHashMap.newKeySet<String>()
+    private val retention = SessionRetention(retentionGraceMs)
+    private var retentionJob: Job? = null
     private val lock = Mutex()
     private val context get() = extend.context
 
+    /** Extend announced a session (new, or again after a reconnect: it continues with its state). */
     fun beginSession(sessionId: String) {
         stoppedSessions.remove(sessionId)
-        sessions[sessionId] = Session()
+        retention.confirmed(sessionId)
+        sessions.getOrPut(sessionId) { Session() }
     }
 
-    fun endSession(sessionId: String) {
+    /**
+     * The session ended (Extend said so, or the Carbon pressed Stop): its running and queued
+     * commands answer `session_ended`, and its recordings, logs and shell processes end.
+     * [lostReason] means the device gave up on the session itself (offline too long): should
+     * Extend announce it again, record stop and logs stop explain that the capture was discarded.
+     */
+    fun endSession(sessionId: String, lostReason: String? = null) {
         stoppedSessions.add(sessionId)
-        commandSessions.filterValues { it == sessionId }.keys.forEach(::cancel)
+        retention.forget(sessionId)
+        val reason = CommandError(
+            CommandFailure.SESSION_ENDED,
+            "The session ended on the device (the Carbon pressed Stop, or Extend ended it) before this command finished, so it was stopped. Start a new session to continue.",
+        )
+        jobs.cancelSession(sessionId, reason)
         sessions.remove(sessionId)
-        extend.scope.launch { extend.adbExecutor.endSession(sessionId) }
+        extend.scope.launch { extend.adbExecutor.endSession(sessionId, lostReason) }
     }
 
+    /** Extend cancelled one command (it gave up waiting for it). */
     fun cancel(commandId: String) {
-        jobs.remove(commandId)?.cancel()
+        jobs.cancel(commandId, CommandError(CommandFailure.CANCELLED, "Extend cancelled this command."))
     }
 
-    fun cancelAll() {
-        jobs.values.forEach { it.cancel() }
-        jobs.clear()
+    /**
+     * The device socket dropped. Running commands can't answer any more, so they stop. Sessions
+     * keep their state: Extend keeps them alive while the device is briefly offline and announces
+     * them again on reconnect ([SessionRetention]).
+     */
+    fun connectionLost() {
+        jobs.cancelAll()
+        retention.disconnected(sessions.keys + extend.adbExecutor.sessionIds(), SystemClock.elapsedRealtime())
+        scheduleRetention()
+    }
+
+    /** After a reconnect, Extend's current session is [active]: sessions it no longer announces have ended. */
+    fun reconcile(active: String?) {
+        retention.reconcile(active).forEach(::endSession)
+    }
+
+    @Synchronized private fun scheduleRetention() {
+        retentionJob?.cancel()
+        retentionJob = extend.scope.launch {
+            while (true) {
+                val next = retention.nextDeadline() ?: break
+                delay((next - SystemClock.elapsedRealtime()).coerceAtLeast(0))
+                retention.expired(SystemClock.elapsedRealtime()).forEach { endSession(it, OFFLINE_TOO_LONG) }
+            }
+        }
+    }
+
+    /** The device was unpaired: everything stops and every session's state goes. */
+    fun forgetAll() {
+        jobs.cancelAll()
+        retentionJob?.cancel()
+        for (id in sessions.keys + retention.pending()) retention.forget(id)
         sessions.clear()
         extend.scope.launch { extend.adbExecutor.endAll() }
     }
 
-    fun submit(frame: ServiceFrame.Command, send: (DeviceFrame.Result) -> Unit) {
-        val job = extend.scope.launch(start = CoroutineStart.LAZY) {
-            val result = lock.withLock { run(frame) }
-            send(result)
-        }
-        jobs[frame.id] = job
-        commandSessions[frame.id] = frame.sessionId
-        job.invokeOnCompletion { jobs.remove(frame.id); commandSessions.remove(frame.id) }
-        job.start()
+    /** The Carbon disconnected Android debugging: commands that need it answer `device_not_ready`. */
+    fun cancelAdbCommands() {
+        val reason = CommandError(
+            CommandFailure.NOT_READY,
+            "The Carbon disconnected Android debugging on the device while this command ran, so it was stopped. Ask the Carbon to connect Android debugging in the Extend app, then try again.",
+        )
+        jobs.cancelCommands(ADB_COMMANDS, reason)
     }
+
+    fun submit(frame: ServiceFrame.Command, send: (DeviceFrame.Result) -> Unit) =
+        jobs.submit(frame, { lock.withLock { run(frame) } }, send)
 
     /** Runs one command frame to its `result`. */
     suspend fun run(frame: ServiceFrame.Command): DeviceFrame.Result {
         if (frame.sessionId in stoppedSessions) return DeviceFrame.Result(
-            frame.id, false, JsonNull, "This session has ended.", CommandError("session_ended", "This session has ended."), emptyList(),
+            frame.id, false, JsonNull, "This session has ended.", CommandError(CommandFailure.SESSION_ENDED, "This session has ended. Start a new session to continue."), emptyList(),
         )
         val session = sessions.getOrPut(frame.sessionId) { Session() }
         val budget = (frame.timeoutMs - 750).coerceAtLeast(1_000)
@@ -141,9 +190,14 @@ class CommandExecutor(private val extend: Extend) {
                 ?: throw CommandFailure(CommandFailure.TIMEOUT, "${frame.command} didn't finish within ${budget} ms (timeout_ms ${frame.timeoutMs}).")
             DeviceFrame.Result(frame.id, true, outcome.output, outcome.text, null, run.files)
         } catch (f: CommandFailure) {
-            DeviceFrame.Result(frame.id, false, JsonNull, f.message, CommandError(f.code, f.message ?: f.code, f.details), run.files)
+            DeviceFrame.Result(frame.id, false, f.output ?: JsonNull, f.text ?: f.message, CommandError(f.code, f.message ?: f.code, f.details), run.files)
         } catch (c: CancellationException) {
-            throw c
+            if (kotlin.coroutines.coroutineContext[Job]?.isActive != true) throw c
+            // This command was not cancelled: a time limit inside it escaped as a cancellation.
+            // Answer it as a failure instead of leaving the Silicon waiting for its whole timeout.
+            Extend.log("command ${frame.command}: an inner time limit escaped", c)
+            val message = "${frame.command} hit a time limit inside the device and was stopped (${c.message ?: "timed out"}). Try again; if it keeps happening, reconnect Android debugging in the Extend app."
+            DeviceFrame.Result(frame.id, false, JsonNull, message, CommandError(CommandFailure.ACTION_FAILED, message), run.files)
         } catch (e: Exception) {
             Extend.log("command ${frame.command} crashed", e)
             DeviceFrame.Result(
@@ -257,27 +311,81 @@ class CommandExecutor(private val extend: Extend) {
                 ?: throw CommandFailure.invalid("The attachment is not a valid APK.")
             if (info.packageName != install.app) throw CommandFailure.invalid("APK package ${info.packageName} does not match ${install.app}.")
         }
+        val sessionId = run.frame.sessionId
         val result = try {
-            extend.adbExecutor.execute(run.frame.sessionId, cmd.command, run.localFiles.values)
+            extend.adbExecutor.execute(sessionId, cmd.command, run.localFiles.values)
+        } catch (e: com.teamofsilicons.extend.adb.AdbWire.LimitExceeded) {
+            // Android debugging works; the output or file is just too large. The message says what to do.
+            throw CommandFailure(CommandFailure.ACTION_FAILED, e.message ?: "The output is larger than Extend accepts.")
         } catch (e: java.io.IOException) {
-            throw CommandFailure(CommandFailure.ACTION_FAILED, e.message ?: "Android debugging failed")
+            throw CommandFailure(
+                CommandFailure.ACTION_FAILED,
+                "Android debugging failed: ${e.message ?: e.javaClass.simpleName}. If Android debugging disconnected, ask the Carbon to reconnect it in the Extend app.",
+            )
         }
-        val artifact = result.artifact
-        return try {
-            val file = artifact?.let {
-                val id = run.frame.uploadIds.getOrNull(run.uploadCursor++)
-                    ?: throw CommandFailure(CommandFailure.UPLOAD_FAILED, "No upload slot is available for ${it.file.name}.")
-                val cred = extend.secrets.readCredential() ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired.")
-                try { extend.api.uploadFile(cred, id, it.file, it.contentType) }
-                catch (e: ApiException) { throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Upload failed: ${e.message}") }
-                catch (e: java.io.IOException) { throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Upload failed: ${e.message}") }
-                ProducedFile(id, it.file.name, it.contentType, it.kind, it.file.length()).also { run.files += it }
+        val uploaded = ArrayList<ProducedFile>()
+        try {
+            for ((i, artifact) in result.artifacts.withIndex()) {
+                uploaded += uploadArtifact(run, artifact, result.artifacts.size - i - 1)
+                if (artifact.retained) extend.adbExecutor.delivered(sessionId, artifact)
             }
-            Outcome(buildJsonObject {
-                put("message", result.text)
-                if (file != null) put("files", JsonArray(listOf(JsonPrimitive(file.uploadId))))
-            }, result.text)
-        } finally { artifact?.file?.parentFile?.deleteRecursively() }
+        } finally {
+            // Files that aren't kept for a retry go now, uploaded or not.
+            result.artifacts.filterNot { it.retained }.forEach { it.file.parentFile?.deleteRecursively() }
+        }
+        val files = JsonArray(uploaded.map { JsonPrimitive(it.uploadId) })
+        val output = result.output?.let { JsonObject(it + ("files" to files)) } ?: buildJsonObject {
+            put("message", result.text)
+            if (uploaded.isNotEmpty()) put("files", files)
+        }
+        val exit = result.exitCode
+        if (exit != null && exit != 0) {
+            val verb = (cmd.command as? com.teamofsilicons.extend.adb.AdbCommand.Raw)?.args?.firstOrNull() ?: run.frame.command
+            throw CommandFailure(
+                CommandFailure.COMMAND_FAILED,
+                "adb $verb exited with code $exit.",
+                buildJsonObject { put("exit_code", exit) },
+                output,
+                result.text.ifEmpty { "adb $verb exited with code $exit." },
+            )
+        }
+        return Outcome(output, result.text)
+    }
+
+    /**
+     * Uploads one ADB artifact within the command's deadline. [left] files come after it. A
+     * retained file stays on the device when this fails, and the message says how to get it.
+     */
+    private suspend fun uploadArtifact(run: Run, artifact: com.teamofsilicons.extend.adb.AdbExecutor.Artifact, left: Int): ProducedFile {
+        val file = artifact.file
+        val size = file.length()
+        val sizeText = if (size >= 1024 * 1024) "${(size + 1024 * 1024 - 1) / (1024 * 1024)} MiB" else "${(size + 1023) / 1024} KiB"
+        val again = when {
+            !artifact.retained -> "Run the command again (with a longer --timeout, up to 300000 ms, for a large file)."
+            else -> {
+                val stop = if (artifact.kind == "recording") "record stop" else "logs stop"
+                "The file is kept on the device: run $stop again (with a longer --timeout, up to 300000 ms, for a large file) to send it" +
+                    (if (left > 0) " and the $left file(s) after it." else ".")
+            }
+        }
+        val id = run.frame.uploadIds.getOrNull(run.uploadCursor)
+            ?: throw CommandFailure(CommandFailure.UPLOAD_FAILED, "The command came with ${run.frame.uploadIds.size} upload slots, all used, so ${file.name} wasn't sent. $again")
+        run.uploadCursor++
+        val cred = extend.secrets.readCredential()
+            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired, so ${file.name} can't be uploaded. Pair it again in the Extend app.")
+        val budget = run.remainingMs() - 250
+        val sent = try {
+            if (budget <= 0) null else withTimeoutOrNull(budget) { extend.api.uploadFile(cred, id, file, artifact.contentType) }
+        } catch (e: ApiException) {
+            throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Uploading ${file.name} ($sizeText) failed: HTTP ${e.status} ${e.message?.trimEnd('.')}. $again")
+        } catch (e: java.io.IOException) {
+            throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Uploading ${file.name} ($sizeText) failed: ${(e.message ?: e.javaClass.simpleName).trimEnd('.')}. $again")
+        }
+        if (sent == null) throw CommandFailure(
+            CommandFailure.UPLOAD_FAILED,
+            "Uploading ${file.name} ($sizeText) didn't finish within the command's time limit (timeout_ms ${run.frame.timeoutMs}). $again",
+        )
+        return ProducedFile(id, file.name, artifact.contentType, artifact.kind, size).also { run.files += it }
     }
 
     // ───────────── seeing the screen ─────────────
@@ -1491,5 +1599,14 @@ class CommandExecutor(private val extend: Extend) {
         val out = buildJsonObject { put("results", JsonArray(results)); put("failed", failed); put("passed", scripts.size - failed) }
         if (failed > 0) throw CommandFailure(CommandFailure.ASSERTION_FAILED, lines.joinToString("\n"), out)
         return Outcome(out, lines.joinToString("\n"))
+    }
+
+    internal companion object {
+        /** Commands that run through Android debugging. */
+        private val ADB_COMMANDS = setOf("adb", "install", "reinstall", "record", "logs")
+
+        /** Why a session's captures were discarded when the device gave up on it while offline. */
+        val OFFLINE_TOO_LONG = "this device lost contact with Extend for more than ${SessionRetention.GRACE_MS / 60_000} minutes " +
+            "during the session, longer than Extend keeps a session for an offline device, so the device ended the capture and deleted it."
     }
 }

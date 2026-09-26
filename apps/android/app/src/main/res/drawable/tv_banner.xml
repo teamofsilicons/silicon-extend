@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 320x180 launcher banner for Android TV. -->
+<!-- 320x180 launcher banner for Android TV: the cobalt Extend mark on Interface's paper. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
             <size android:width="320dp" android:height="180dp" />
-            <solid android:color="#FF0E1116" />
+            <solid android:color="#FFFFFDF9" />
         </shape>
     </item>
     <item android:drawable="@drawable/ic_launcher_foreground" android:gravity="center"

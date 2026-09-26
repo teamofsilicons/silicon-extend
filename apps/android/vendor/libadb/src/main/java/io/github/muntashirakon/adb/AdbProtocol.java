@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause AND (GPL-3.0-or-later OR Apache-2.0)
+// Modified by Silicon Extend (2026): OPEN destinations are sized by their UTF-8 bytes.
 
 package io.github.muntashirakon.adb;
 
@@ -292,8 +293,11 @@ final class AdbProtocol {
      */
     @NonNull
     public static byte[] generateOpen(int localId, @NonNull String destination) {
-        ByteBuffer bbuf = ByteBuffer.allocate(destination.length() + 1);
-        bbuf.put(StringCompat.getBytes(destination, "UTF-8"));
+        // Sized by the UTF-8 bytes, not the characters: a destination with non-ASCII text (for
+        // example a shell command naming "résumé.pdf") overflowed the buffer.
+        byte[] bytes = StringCompat.getBytes(destination, "UTF-8");
+        ByteBuffer bbuf = ByteBuffer.allocate(bytes.length + 1);
+        bbuf.put(bytes);
         bbuf.put((byte) 0);
         return generateMessage(A_OPEN, localId, 0, bbuf.array());
     }

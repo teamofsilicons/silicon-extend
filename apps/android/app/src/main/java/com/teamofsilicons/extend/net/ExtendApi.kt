@@ -99,7 +99,7 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
                 .url(baseUrl() + "/api/v1/device/artifacts/$uploadId")
                 .header("Authorization", "Extend-Device $credential")
                 .header("X-Content-SHA256", sha256Hex(bytes))
-                .header("X-File-Name", fileName)
+                .header("X-File-Name", headerSafeName(fileName))
                 .put(bytes.toRequestBody(contentType.toMediaType()))
                 .build()
             client.newCall(request).execute().use { expectSuccess(it) }
@@ -121,7 +121,7 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
             .url(baseUrl() + "/api/v1/device/artifacts/$uploadId")
             .header("Authorization", "Extend-Device $credential")
             .header("X-Content-SHA256", hash)
-            .header("X-File-Name", file.name)
+            .header("X-File-Name", headerSafeName(file.name))
             .put(file.asRequestBody(contentType.toMediaType()))
             .build()
         val call = client.newCall(request)
@@ -176,6 +176,15 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
             // WebSocket-level pings so a dead connection is noticed even between app-level pings.
             .pingInterval(20, TimeUnit.SECONDS)
             .build()
+
+        /**
+         * `X-File-Name` for [name]: HTTP header values are printable ASCII, and the service refuses
+         * slashes. Other characters become `_` (the name in the command's result keeps them).
+         */
+        fun headerSafeName(name: String): String {
+            val safe = name.map { c -> if (c in ' '..'~' && c != '/' && c != '\\') c else '_' }.joinToString("").trim().take(255)
+            return safe.ifEmpty { "file" }
+        }
 
         fun sha256Hex(bytes: ByteArray): String =
             MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

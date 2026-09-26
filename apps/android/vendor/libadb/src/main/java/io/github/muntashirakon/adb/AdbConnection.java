@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause AND (GPL-3.0-or-later OR Apache-2.0)
+// Modified by Silicon Extend (2026): stream opening waits on an acknowledged state under the
+// reader's monitor, cancelled opens close their stream, concurrent opens get distinct IDs, an
+// acknowledgement for an abandoned open closes the daemon's end, connections can require TLS,
+// connection failures keep their cause, and received data is acknowledged by the stream's reader
+// (flow control) instead of on arrival.
 
 package io.github.muntashirakon.adb;
 
@@ -140,6 +145,13 @@ public class AdbConnection implements Closeable {
 
     private volatile boolean mIsTls = false;
 
+    /**
+     * Whether the peer must upgrade to TLS (STLS) before it is trusted. Set by Silicon Extend for
+     * Wireless debugging, which always starts TLS: a peer that answers in plain text or asks for
+     * RSA authentication is not Android's debugging service.
+     */
+    private volatile boolean mRequireTls = false;
+
     @GuardedBy("lock")
     @NonNull
     private final Object mLock = new Object();
@@ -251,6 +263,13 @@ public class AdbConnection implements Closeable {
                             // Get the stream object corresponding to the packet
                             AdbStream waitingStream = mOpenedStreams.get(msg.arg1);
                             if (waitingStream == null) {
+                                if (msg.command == AdbProtocol.A_OKAY) {
+                                    // The opener gave up (it was interrupted) before the daemon
+                                    // acknowledged the stream. Its CLSE could not name the daemon's
+                                    // id, so close the daemon's end now or it stays open until the
+                                    // whole connection closes.
+                                    sendPacket(AdbProtocol.generateClose(msg.arg1, msg.arg0));
+                                }
                                 continue;
                             }
 
@@ -263,11 +282,19 @@ public class AdbConnection implements Closeable {
                                     // Notify an open/write
                                     waitingStream.notify();
                                 } else if (msg.command == AdbProtocol.A_WRTE) {
-                                    // Got some data from our partner
-                                    waitingStream.addPayload(msg.payload);
-
-                                    // Tell it we're ready for more
-                                    waitingStream.sendReady();
+                                    // Got some data from our partner. The OKAY that lets it send
+                                    // more goes out when the stream's reader takes this payload
+                                    // (AdbStream.read), not now: acknowledging on arrival let a
+                                    // fast command queue its whole output in memory.
+                                    if (!waitingStream.addPayload(msg.payload)) {
+                                        mOpenedStreams.remove(msg.arg1);
+                                        waitingStream.fail("The debugging service sent more than "
+                                                + AdbStream.MAX_UNREAD_PAYLOADS + " unacknowledged data packets on one"
+                                                + " stream, which Android's debugging service never does, so Extend"
+                                                + " closed that stream. Reconnect Android debugging in the Extend app"
+                                                + " and try again.");
+                                        sendPacket(AdbProtocol.generateClose(msg.arg1, msg.arg0));
+                                    }
                                 } else { // if (msg.command == AdbProtocol.A_CLSE) {
                                     mOpenedStreams.remove(msg.arg1);
                                     // Notify readers and writers
@@ -298,6 +325,11 @@ public class AdbConnection implements Closeable {
                             if (mIsTls) {
                                 break;
                             }
+                            if (mRequireTls) {
+                                throw new PeerNotTrustedException("The debugging service on port " + mPort
+                                        + " asked for legacy RSA authentication instead of starting TLS, which Android's"
+                                        + " Wireless debugging always does, so it was not trusted.");
+                            }
                             if (msg.arg0 != AdbProtocol.ADB_AUTH_TOKEN) {
                                 break;
                             }
@@ -324,6 +356,11 @@ public class AdbConnection implements Closeable {
                             break;
                         }
                         case AdbProtocol.A_CNXN: {
+                            if (mRequireTls && !mIsTls) {
+                                throw new PeerNotTrustedException("The debugging service on port " + mPort
+                                        + " answered without starting TLS, which Android's Wireless debugging always"
+                                        + " does, so it was not trusted.");
+                            }
                             synchronized (AdbConnection.this) {
                                 mProtocolVersion = msg.arg0;
                                 mMaxData = msg.arg1;
@@ -554,7 +591,11 @@ public class AdbConnection implements Closeable {
                             }
                         }
                     }
-                    throw new IOException("Connection failed");
+                    if (connectionException instanceof PeerNotTrustedException) {
+                        throw new IOException(connectionException.getMessage(), connectionException);
+                    }
+                    throw new IOException(connectionException != null && connectionException.getMessage() != null
+                            ? "Connection failed: " + connectionException.getMessage() : "Connection failed", connectionException);
                 }
             }
         }
@@ -600,6 +641,17 @@ public class AdbConnection implements Closeable {
         }
     }
 
+    /** The peer is not Android's debugging service. */
+    public static final class PeerNotTrustedException extends IOException {
+        PeerNotTrustedException(String message) {
+            super(message);
+        }
+    }
+
+    void setRequireTls(boolean requireTls) {
+        mRequireTls = requireTls;
+    }
+
     void sendPacket(byte[] packet) throws IOException {
         synchronized (mLock) {
             OutputStream os = getOutputStream();
@@ -622,6 +674,7 @@ public class AdbConnection implements Closeable {
         private Certificate mCertificate;
         private KeyPair mKeyPair;
         private String mDeviceName;
+        private boolean mRequireTls;
 
         public Builder() {
         }
@@ -691,6 +744,14 @@ public class AdbConnection implements Closeable {
         }
 
         /**
+         * Refuse a peer that does not upgrade to TLS before CNXN, or that asks for RSA authentication.
+         */
+        public Builder setRequireTls(boolean requireTls) {
+            this.mRequireTls = requireTls;
+            return this;
+        }
+
+        /**
          * Creates a new {@link AdbConnection} associated with the socket and crypto object specified.
          *
          * @throws IOException If there was an error while establishing a socket connection
@@ -706,6 +767,7 @@ public class AdbConnection implements Closeable {
             if (mDeviceName != null) {
                 adbConnection.setDeviceName(mDeviceName);
             }
+            adbConnection.setRequireTls(mRequireTls);
             return adbConnection;
         }
 

@@ -12,7 +12,7 @@ internal object RecordingScript {
         child=''
         stopping=0
         child_running() {
-          [ -n "${'$'}child" ] && tr '\0' ' ' </proc/"${'$'}child"/cmdline 2>/dev/null | grep -F -- "${'$'}dir/" >/dev/null
+          [ -n "${'$'}child" ] && ${AdbExecutor.NAMES_IN_CMDLINE} "${'$'}dir/" /proc/"${'$'}child"/cmdline 2>/dev/null
         }
         stop_capture() {
           stopping=1

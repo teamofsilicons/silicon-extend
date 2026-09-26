@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+// Modified by Silicon Extend (2026): keeps the GUID the device announces while pairing.
 
 package io.github.muntashirakon.adb;
 
@@ -64,6 +65,8 @@ public final class PairingConnectionCtx implements Closeable {
     private DataOutputStream mOutputStream;
     private PairingAuthCtx mPairingAuthCtx;
     private State mState = State.Ready;
+    @Nullable
+    private volatile String mPeerGuid;
 
     public PairingConnectionCtx(@NonNull String host, int port, @NonNull byte[] pswd, @NonNull KeyPair keyPair,
                                 @NonNull String deviceName)
@@ -114,6 +117,12 @@ public final class PairingConnectionCtx implements Closeable {
                     throw new IOException("Connection closed with errors.");
             }
         }
+    }
+
+    /** The GUID the device announced during pairing, once {@link #start()} has succeeded. */
+    @Nullable
+    public String getPeerGuid() {
+        return mPeerGuid;
     }
 
     private void notifyResult() {
@@ -270,6 +279,7 @@ public final class PairingConnectionCtx implements Closeable {
 
         PeerInfo theirPeerInfo = PeerInfo.readFrom(ByteBuffer.wrap(decryptedMsg));
         Log.d(TAG, theirPeerInfo.toString());
+        mPeerGuid = theirPeerInfo.guid();
         return true;
     }
 
@@ -309,6 +319,18 @@ public final class PairingConnectionCtx implements Closeable {
         public PeerInfo(byte type, byte[] data) {
             this.type = type;
             System.arraycopy(data, 0, this.data, 0, Math.min(data.length, MAX_PEER_INFO_SIZE - 1));
+        }
+
+        /** The device's GUID: the data up to its first NUL, when it is printable ASCII. */
+        @Nullable
+        String guid() {
+            int end = 0;
+            while (end < data.length && data[end] != 0) end++;
+            if (end == 0 || end > 255) return null;
+            for (int i = 0; i < end; i++) {
+                if (data[i] < 0x21 || data[i] > 0x7e) return null;
+            }
+            return new String(data, 0, end, java.nio.charset.StandardCharsets.US_ASCII);
         }
 
         public void writeTo(@NonNull ByteBuffer buffer) {

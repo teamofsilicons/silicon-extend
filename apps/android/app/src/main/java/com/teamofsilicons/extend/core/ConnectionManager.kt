@@ -81,6 +81,7 @@ class ConnectionManager(private val extend: Extend) {
                 object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
                         netWake.trySend(Unit)
+                        extend.wakeAdbReconnect()
                     }
                 },
             )
@@ -298,7 +299,9 @@ class ConnectionManager(private val extend: Extend) {
             } finally {
                 socket = null
                 sock.close()
-                extend.executor.cancelAll()
+                // Running commands stop; sessions keep their recordings and logs through a brief
+                // outage, as Extend keeps the sessions themselves (CommandExecutor.connectionLost).
+                extend.executor.connectionLost()
             }
             if (pendingUnpair) return Exit.UNPAIRED
             if (exit != null) return exit
@@ -351,6 +354,8 @@ class ConnectionManager(private val extend: Extend) {
         try {
             val d = extend.api.device(credential)
             config.environment = d.environment
+            // Sessions that ended while the socket was down are no longer in use.
+            extend.executor.reconcile(d.inUse?.sessionId)
             extend.update {
                 it.copy(
                     device = d,
@@ -461,7 +466,7 @@ class ConnectionManager(private val extend: Extend) {
         config.clearPair()
         sentCaps = null
         sentSetup = null
-        extend.executor.cancelAll()
+        extend.executor.forgetAll()
         extend.update {
             it.copy(
                 phase = Phase.UNPAIRED, device = null, deviceId = null, session = null, takeover = null,

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Two pillars and a span: an extend. -->
+<!-- Silicon Extend's mark: Interface's ring of squares, one square stepping out to reach another. Notification icon: a white silhouette in a 20dp live area. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
-    android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FFFFFFFF"
-        android:pathData="M2,9h20v2H2zM5,11h2v9H5zM17,11h2v9h-2zM3,9c3,-5 15,-5 18,0h-2.4c-2.8,-3 -10.4,-3 -13.2,0z" />
+    android:viewportWidth="52.8" android:viewportHeight="52.8">
+    <group android:translateX="4.4" android:translateY="4.4">
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M0 22h9v9h-9zM4 13h9v9h-9zM13 9h9v9h-9zM26 22h9v9h-9zM22 31h9v9h-9zM13 35h9v9h-9zM4 31h9v9h-9zM17.5 16.79L27.21 26.5L17.5 36.21L7.79 26.5zM26 9h9v9h-9zM35 0h9v9h-9z" />
+    </group>
 </vector>
