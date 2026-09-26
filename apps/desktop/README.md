@@ -153,7 +153,12 @@ agent-device/GTK4 limitation, noted for later.
 
 Packaging: `linux/build-in-docker.sh` builds the tarball and `.deb` into `target/desktop/linux/`,
 installs the `.deb` into the container, and runs `bridge-agent probe` and a terminal command from
-`/usr/bin`. Layout:
+`/usr/bin`. It rebuilds the bundled agent-device fork before packaging. Node is pinned to
+22.23.3; both Linux architecture checksums in `linux/node-sha256.txt` come from
+`https://nodejs.org/dist/v22.23.3/SHASUMS256.txt`. Cached and offline archives are verified.
+The `.deb` derives native dependencies and minimum versions from the agent and bundled Node
+using `dpkg-shlibdeps` (dpkg-dev). Build on the oldest distro you intend to support; a package
+built on Debian trixie is not evidence of compatibility with older distributions. Layout:
 
 ```
 bin/bridge-agent
@@ -162,10 +167,25 @@ lib/silicon-bridge/node/bin/node
 share/applications/silicon-bridge.desktop
 ```
 
-- Runtime dependencies: `libssl3`, which the hosted TV drivers' native-tls needs. GTK 3,
-  WebKitGTK 4.1 and libxdo, for the tray build. `python3-gi`, `gir1.2-atspi-2.0` and
-  `at-spi2-core`, for screen reading.
-- Recommended: xdotool, xclip, ImageMagick and xdg-utils.
+- Runtime dependencies include GTK 3, WebKitGTK 4.1, libxdo and their native dependencies,
+  plus `python3-gi`, `gir1.2-atspi-2.0` and `at-spi2-core` for screen reading. The generated
+  `.deb` metadata carries the exact native requirements of that build.
+- Recommended: xdotool, xclip, ImageMagick, xdg-utils, ffmpeg, x11-utils and libxcomposite1.
+
+To check an installed package against a local development service with local IAM members
+`c:alice` and `si:chef`, run from the host (requires the built CLI and ffmpeg):
+
+```sh
+python3 apps/desktop/linux-e2e/record-service-e2e.py --package target/desktop/linux/silicon-bridge_1.0.0_arm64.deb
+```
+
+The lane installs the `.deb` into a disposable container and runs it as an unprivileged user
+with no source runtime mounted. It pairs its own device, opens an animated fixture, records
+app and device scopes, uploads through the service, downloads through the CLI, fully decodes
+both videos and compares repeat downloads byte for byte. It ends its session, removes its
+device and stops its container. Artifacts stay under `target/desktop/linux-recording/`.
+Use `--service-url` and `--container-service-url` when the host/container addresses differ.
+This verifies local relay and file storage, not production IAM or Briefcase integration.
 
 ## Windows
 

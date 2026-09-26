@@ -16,7 +16,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 PROFILE="${PROFILE:-release}"
-NODE_MAJOR="${NODE_MAJOR:-22}"
+NODE_VERSION="22.23.3"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT="${OUT:-$TARGET_DIR/desktop/linux}"
 AD="$ROOT/vendor/agent-device"
@@ -30,11 +30,17 @@ if [[ -z "${BRIDGE_AGENT_BIN:-}" ]]; then
 fi
 
 mkdir -p "$OUT/.cache"
+NAME="node-v$NODE_VERSION-linux-$ARCH.tar.xz"
 if [[ -z "${NODE_TARBALL:-}" ]]; then
-  NAME="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/" | grep -o "node-v${NODE_MAJOR}[.0-9]*-linux-${ARCH}.tar.xz" | head -1)"
   NODE_TARBALL="$OUT/.cache/$NAME"
-  [[ -f "$NODE_TARBALL" ]] || curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$NAME" -o "$NODE_TARBALL"
+  if [[ ! -f "$NODE_TARBALL" ]]; then
+    curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/$NAME" -o "$NODE_TARBALL.partial"
+    mv "$NODE_TARBALL.partial" "$NODE_TARBALL"
+  fi
 fi
+EXPECTED="$(awk -v name="$NAME" '$2 == name {print $1}' "$ROOT/apps/desktop/linux/node-sha256.txt")"
+ACTUAL="$(sha256sum "$NODE_TARBALL" | awk '{print $1}')"
+[[ -n "$EXPECTED" && "$ACTUAL" == "$EXPECTED" ]] || { echo "Node checksum mismatch: $NODE_TARBALL" >&2; exit 1; }
 
 NAME="silicon-bridge-$VERSION-linux-$ARCH"
 STAGE="$OUT/$NAME"
@@ -75,9 +81,19 @@ tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
 echo "tarball: $OUT/$NAME.tar.gz"
 
 if command -v dpkg-deb >/dev/null; then
-  DEB="$OUT/deb/silicon-bridge_${VERSION}_${DEB_ARCH}"
+  command -v dpkg-shlibdeps >/dev/null || { echo "Install dpkg-dev to derive package library requirements" >&2; exit 1; }
+  DEB="$OUT/deb/debian/silicon-bridge"
   rm -rf "$DEB"; mkdir -p "$DEB/DEBIAN" "$DEB/usr"
   cp -a "$STAGE/." "$DEB/usr/"
+  cat > "$OUT/deb/debian/control" <<EOF
+Source: silicon-bridge
+
+Package: silicon-bridge
+Architecture: any
+EOF
+  SHLIBS="$(cd "$OUT/deb" && dpkg-shlibdeps -O -e"$DEB/usr/bin/bridge-agent" -e"$DEB/usr/lib/silicon-bridge/node/bin/node")"
+  DEPENDS="$(printf '%s\n' "$SHLIBS" | sed -n 's/^shlibs:Depends=//p')"
+  [[ -n "$DEPENDS" ]] || { echo "Could not derive native library dependencies" >&2; exit 1; }
   cat > "$DEB/DEBIAN/control" <<EOF
 Package: silicon-bridge
 Version: $VERSION
@@ -85,7 +101,7 @@ Architecture: $DEB_ARCH
 Maintainer: Team of Silicons <team@teamofsilicons.com>
 Section: utils
 Priority: optional
-Depends: libc6, libssl3 | libssl3t64, libgtk-3-0 | libgtk-3-0t64, libwebkit2gtk-4.1-0, libxdo3, python3, python3-gi, gir1.2-atspi-2.0, at-spi2-core
+Depends: $DEPENDS, python3, python3-gi, gir1.2-atspi-2.0, at-spi2-core
 Recommends: xdotool, xclip, imagemagick, xdg-utils, ffmpeg, x11-utils, libxcomposite1, libayatana-appindicator3-1
 Description: Silicon Bridge for Linux
  Lets the Silicons a Carbon chooses use this computer, with an always-visible

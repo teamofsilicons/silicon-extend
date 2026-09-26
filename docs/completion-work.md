@@ -78,4 +78,12 @@ An implementation or passing mock does not close a physical-device or production
 - The native X11 recording worker now passes real unprivileged Xvfb/GTK tests for short window
   and device capture, reduced limits, owner loss and supervisor death. Public whole-screen command wiring and daemon-crash recovery now pass. Single mapped-window
   app binding and capture beneath an overlapping app pass in Xvfb. Multiwindow/minimized apps,
-  physical desktops, Wayland portal support, real service transfer and release verification remain open.
+  physical desktops, Wayland portal support, production file transfer and cross-distro/architecture
+  release verification remain open.
+
+
+- Linux arm64 optimized tarball and `.deb` now build and install on Debian trixie. Packaging
+  rebuilds agent-device, pins/checks Node, and derives native dependency versions from both
+  binaries. An installed unprivileged app with no source runtime mounted passed app/device
+  recording through the local service, upload, full decode and repeat CLI download. This closes
+  local Linux recording transfer; production IAM/Briefcase, x64 and other distros remain open.

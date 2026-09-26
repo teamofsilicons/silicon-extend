@@ -4,7 +4,9 @@
 # Output: target/desktop/linux/
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-IMAGE=silicon-bridge-linux-e2e
+IMAGE="${IMAGE:-silicon-bridge-linux-e2e}"
+# Bundle the current source, even when an older dist directory already exists.
+(cd "$ROOT/vendor/agent-device" && pnpm install --frozen-lockfile && pnpm build)
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$ROOT/apps/desktop/linux-e2e"
 mkdir -p "$ROOT/target/desktop/linux"
 docker run --rm \

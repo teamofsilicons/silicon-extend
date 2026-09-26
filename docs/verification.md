@@ -334,3 +334,33 @@ compatibility. These checks do not establish completion of the entire product co
 - Wayland, multiwindow apps, minimized-window starts, resize continuation, live gesture-overlay
   rendering, physical desktops, full recording caps, service transfer and release packaging remain
   open. The nested-workspace affected gate remains unavailable; no release or deployment is claimed.
+
+
+### 2026-09-26 — installed Linux package and local-service recording
+
+- Rebuilt the Linux arm64 package with the current runtime and native XComposite helper.
+  The Docker packaging wrapper now rebuilds agent-device first, preventing stale dist reuse.
+  Node 22.23.3 is pinned with official SHA-256 entries for Linux arm64/x64; cached and offline
+  tarballs are checked. A deliberately corrupt archive was refused before assembly.
+- Dependency inspection found that the old `.deb` declared no libc minimum despite this build
+  needing glibc 2.39. Packaging now runs dpkg-shlibdeps over both the agent and bundled Node,
+  recording the actual library packages and minimum versions. This does not establish older
+  distro compatibility; build on the oldest intended distribution before widening that claim.
+- Built the optimized tray-enabled agent on Debian trixie arm64, installed the `.deb`, and ran
+  version, headless capability probe and terminal execution using the installed runtime. Final
+  build log: `/tmp/bridge-linux-package-release-final.log`. Tarball: 51,414,281 bytes; `.deb`:
+  33,279,808 bytes. All 595 packaged regular files match between tarball, staging and `.deb`
+  staging. Artifact hashes and runtime identity are in ignored `target/desktop/linux/verification.json`.
+- New manual lane `apps/desktop/linux-e2e/record-service-e2e.py` installs the package in a fresh
+  test container, runs the agent as Carbon (unprivileged), and mounts only harness/output/package,
+  never the source runtime. It pairs a new owned device to the existing local development service
+  and uses separate CLI homes for the development Carbon and Silicon accounts.
+- Both debug and optimized packages passed app-only and whole-screen recording via the real
+  Bridge CLI/service/agent. Each video was uploaded, downloaded, fully decoded, checked for
+  expected geometry and changing frames, then downloaded again with identical SHA-256. The
+  optimized evidence is `/tmp/bridge-linux-service-record-release.log` and ignored artifacts
+  `target/desktop/linux-recording/service-recording-rh6ph038/`. Test sessions ended, test devices
+  were removed and their containers stopped successfully. The existing service remained running.
+- Shell/Python syntax and diff checks pass. These checks exercise Xvfb, headless agent operation,
+  local IAM and local file storage. Production IAM/OBO/Briefcase, graphical Linux tray interaction,
+  physical desktops, Wayland, x64 packages, other distributions and public publication remain open.
