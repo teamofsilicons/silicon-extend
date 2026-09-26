@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from x11_composite import WindowPixels, WindowFeed
 
 MAX_BYTES = 1024 ** 3
 MAX_DURATION_MS = 30 * 60 * 1000
@@ -26,7 +27,9 @@ def options():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--status', required=True, type=Path)
-    parser.add_argument('--window-id', type=lambda value: int(value, 0))
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument('--window-id', type=lambda value: int(value, 0))
+    target.add_argument('--app-id', help='Exact X11 application class or executable/desktop-file name')
     parser.add_argument('--fps', type=int, default=30)
     parser.add_argument('--max-bytes', type=int, default=MAX_BYTES)
     parser.add_argument('--max-duration-ms', type=int, default=MAX_DURATION_MS)
@@ -79,18 +82,40 @@ def geometry(window_id):
     return tuple(int(match.group(1)) for match in dimensions)
 
 
+def resolve_app_window(app):
+    if not shutil.which('xdotool'):
+        raise RuntimeError('app recording requires xdotool to resolve the application window')
+    name = Path(app).name.removesuffix('.desktop')
+    if not name or '://' in app:
+        raise RuntimeError('app recording requires an application identifier, not a URL')
+    result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--class', '^' + re.escape(name) + '$'],
+                            capture_output=True, text=True, timeout=5)
+    windows = sorted({int(value) for value in result.stdout.split() if value.isdecimal()})
+    if result.returncode not in (0, 1) or not windows:
+        raise RuntimeError(f'no mapped window has application class {name!r}')
+    if len(windows) != 1:
+        raise RuntimeError(f'application class {name!r} has multiple mapped windows; select a single window before recording')
+    return windows[0]
+
+
 def run(args):
-    width, height = geometry(args.window_id)
+    if args.app_id is not None:
+        args.window_id = resolve_app_window(args.app_id)
+    pixels = WindowPixels(args.window_id) if args.window_id is not None else None
+    width, height = (pixels.width, pixels.height) if pixels else geometry(None)
     if width < 1 or height < 1:
         raise RuntimeError('the requested X11 window has no pixels')
     reserve = min(16 * 1024 ** 2, args.max_bytes // 4)
     threshold = args.max_bytes - reserve
     command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-n',
-               '-progress', 'pipe:1', '-stats_period', '0.1', '-f', 'x11grab',
-               '-framerate', str(args.fps), '-video_size', f'{width}x{height}', '-draw_mouse', '1']
-    if args.window_id is not None:
-        command += ['-window_id', str(args.window_id)]
-    command += ['-i', os.environ['DISPLAY'], '-an', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+               '-progress', 'pipe:1', '-stats_period', '0.1']
+    if pixels:
+        command += ['-f', 'rawvideo', '-pixel_format', pixels.pixel_format, '-video_size', f'{width}x{height}',
+                    '-framerate', str(args.fps), '-i', 'pipe:0']
+    else:
+        command += ['-f', 'x11grab', '-framerate', str(args.fps), '-video_size', f'{width}x{height}',
+                    '-draw_mouse', '1', '-i', os.environ['DISPLAY']]
+    command += ['-an', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
                 '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
                 '-pix_fmt', 'yuv420p', '-b:v', '8M', '-maxrate', '8M', '-bufsize', '8M',
                 '-t', str(args.max_duration_ms / 1000), '-fs', str(threshold),
@@ -116,8 +141,14 @@ def run(args):
 
     os.umask(0o077)
     with tempfile.TemporaryFile() as errors:
-        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors,
-                                 preexec_fn=encoder_parent_death)
+        try:
+            child = subprocess.Popen(command, stdin=subprocess.PIPE if pixels else subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=errors, preexec_fn=encoder_parent_death)
+        except BaseException:
+            if pixels:
+                pixels.close()
+            raise
+        feed = WindowFeed(pixels, child.stdin, args.fps) if pixels else None
         first_frame = False
         started = time.monotonic()
         stop_at = None
@@ -128,6 +159,8 @@ def run(args):
                 poller.register(child.stdout, selectors.EVENT_READ)
                 while child.poll() is None:
                     now = time.monotonic()
+                    if feed and feed.failure:
+                        reason = reason or 'source-ended'
                     if os.getppid() != parent:
                         reason = reason or 'owner-exited'
                     if not first_frame and now - started > 10:
@@ -135,6 +168,8 @@ def run(args):
                     if now - started > args.max_duration_ms / 1000 + 10:
                         reason = reason or 'duration-timeout'
                     if reason and stop_at is None:
+                        if feed:
+                            feed.stop()
                         child.send_signal(signal.SIGINT)
                         stop_at = now
                     if stop_at is not None and now - stop_at > 5:
@@ -182,6 +217,8 @@ def run(args):
             publish(args.status, state='completed', reason=reason, frames=frames,
                     durationMs=round(duration * 1000), bytes=size)
         finally:
+            if feed:
+                feed.stop()
             if child.poll() is None:
                 child.send_signal(signal.SIGINT)
                 try:
@@ -190,6 +227,8 @@ def run(args):
                     child.kill()
                     child.wait()
             child.stdout.close()
+            if feed:
+                feed.join()
 
 
 def main():

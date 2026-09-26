@@ -74,6 +74,7 @@ async function startRecording(
   const statusPath = `${input.outputPath}.${randomUUID()}.status.json`;
   const args = [worker, '--out', input.outputPath, '--status', statusPath];
   if (input.fps !== undefined) args.push('--fps', String(input.fps));
+  if (input.appId !== undefined) args.push('--app-id', input.appId);
   const background = runCmdBackground('python3', args, { allowFailure: true, captureOutput: true });
   let result: HostCommandResult | undefined;
   let failure: unknown;

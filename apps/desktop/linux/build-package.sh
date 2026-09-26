@@ -66,7 +66,9 @@ Screen reading needs the AT-SPI bus (at-spi2-core, python3-gi, gir1.2-atspi-2.0)
 typing need xdotool (X11) or ydotool (Wayland); screenshots need gnome-screenshot, scrot or
 ImageMagick (grim on Wayland); the clipboard needs xclip or xsel (wl-clipboard on Wayland).
 Whole-screen X11 recording needs ffmpeg (with ffprobe) and x11-utils (xwininfo). App-only
-recording and Wayland ScreenCast portal support are still under development.
+recording also needs xdotool and libxcomposite1: the named app must match exactly one mapped
+WM_CLASS. Covered windows are captured; resizing or unmapping ends capture. Wayland
+ScreenCast portal support remains under development.
 EOF
 
 tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
@@ -84,7 +86,7 @@ Maintainer: Team of Silicons <team@teamofsilicons.com>
 Section: utils
 Priority: optional
 Depends: libc6, libssl3 | libssl3t64, libgtk-3-0 | libgtk-3-0t64, libwebkit2gtk-4.1-0, libxdo3, python3, python3-gi, gir1.2-atspi-2.0, at-spi2-core
-Recommends: xdotool, xclip, imagemagick, xdg-utils, ffmpeg, x11-utils, libayatana-appindicator3-1
+Recommends: xdotool, xclip, imagemagick, xdg-utils, ffmpeg, x11-utils, libxcomposite1, libayatana-appindicator3-1
 Description: Silicon Bridge for Linux
  Lets the Silicons a Carbon chooses use this computer, with an always-visible
  indicator and a Stop button.

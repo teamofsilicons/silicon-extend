@@ -308,3 +308,29 @@ compatibility. These checks do not establish completion of the entire product co
   path. No new Linux release package or public deployment was produced. App identity/isolation,
   Wayland portal/PipeWire support, live gesture-overlay rendering, full-size/full-duration caps,
   service upload/download and current physical desktops remain open.
+
+
+### 2026-09-26 — isolated X11 app recording
+
+- Reproduced black app video with ffmpeg x11grab when an opaque peer covered the target.
+  The new XComposite source captures the named window's off-screen pixels. Pixmap XImages
+  report zero RGB masks, so pixel interpretation uses the window's TrueColor visual.
+- Public `open <app>` now retains a named app identity; URLs do not acquire one. App recording
+  resolves exactly one mapped WM_CLASS matching the executable or desktop-file basename.
+  Missing and ambiguous targets fail without recording the desktop. The identity survives
+  durable-resource recovery. Additional app/window-manager coverage remains necessary.
+- The unprivileged Xvfb public lane passed with the target covered before recording began:
+  bound identity, unchanged foreground, target-colored output, full MP4 decode, native-file
+  retirement, and missing/ambiguous app refusal. Evidence: `/tmp/bridge-linux-public-app-final.log`,
+  artifacts `target/desktop/linux-recording/public-app-recording-sfz4714y/`.
+- Native isolation lanes passed target resize and unmap: both ended with `source-ended` and
+  playable target-only video (`/tmp/bridge-linux-isolation-resize.log` and
+  `/tmp/bridge-linux-isolation-unmap.log`). The native lifecycle suite also passed manual stop,
+  reduced duration/file limits, owner exit, supervisor SIGKILL and root-screen capture with the
+  new source (`/tmp/bridge-linux-composite-lifecycle.log`). These are manual container lanes.
+- All 64 focused Linux/host TypeScript tests, full workspace typechecking, lint and runtime build
+  pass. Python syntax, package-script syntax and diff whitespace checks pass. CLI help, desktop
+  instructions and Linux package dependency guidance describe the supported single-window path.
+- Wayland, multiwindow apps, minimized-window starts, resize continuation, live gesture-overlay
+  rendering, physical desktops, full recording caps, service transfer and release packaging remain
+  open. The nested-workspace affected gate remains unavailable; no release or deployment is claimed.

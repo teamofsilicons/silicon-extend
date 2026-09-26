@@ -194,7 +194,7 @@ not exercise updating during an active device session.
 ### X11 recording worker development (2026-09-26)
 
 `vendor/agent-device/linux/screen-record.py` is the native recording worker under development.
-It accepts a root screen or explicit X11 window ID, writes H.264 MP4, publishes first-frame
+It accepts a root screen, explicit X11 window ID or exact application class, writes H.264 MP4, publishes first-frame
 readiness, and enforces duration/file limits. SIGINT/TERM/HUP and owner exit finalize the video;
 Linux parent-death signaling also stops the encoder if its supervisor is killed.
 
@@ -214,14 +214,20 @@ in a fresh directory. The lane tests manual stop, reduced duration/file limits, 
 supervisor SIGKILL, window/device dimensions, full decoding, nonblank frames and invalid inputs.
 It is a manual lane, not selected by CI.
 
-The public runtime now connects this worker for `record start --scope device/system`, including
+The public runtime connects this worker for `record start --scope device/system`, including
 fps, quality, hide-touches and daemon-crash recovery. Bridge returns a copied recording artifact
-and retains its export for retry. App identity resolution, isolated obscured/hidden-window capture,
-real service artifact-transfer tests and Wayland portal support remain necessary. X11 window capture uses ffmpeg's
-[documented x11grab window ID input](https://ffmpeg.org/ffmpeg-devices.html#x11grab); a successful
-window recording alone does not prove hidden or occluded app isolation. Wayland deliberately
-refuses this worker, including XWayland displays; its portal/PipeWire implementation remains open.
+and retains its export for retry. App scope binds the active named app to exactly one mapped
+WM_CLASS matching its executable or desktop-file basename. It requires xdotool and libXcomposite.
+XComposite captures the window's off-screen pixels even when another app covers it. Multiple
+matching windows are refused; resizing or unmapping the window ends recording without switching
+to desktop pixels. Minimized-window starts and multiwindow apps remain unsupported.
 
+Set `RECORD_LANE=record-app-e2e.py` to exercise public named-app open/start/stop with an already
+covered target and missing/ambiguous-target refusal. `RECORD_LANE=record-isolation-e2e.py` tests
+native isolation; add `RECORD_ISOLATION_EDGE=unmap` or `resize` to verify finalization on source
+changes. These are manual Xvfb lanes, not CI or physical-desktop evidence. Real service transfer,
+other desktop/app coverage and Wayland portal/PipeWire support remain open. Wayland deliberately
+refuses this worker, including XWayland displays.
 
 The public daemon and Bridge driver lane is `record-runtime-e2e.py`. Set
 `RECORD_LANE=record-runtime-e2e.py` on the container command above to exercise the daemon;

@@ -10,7 +10,7 @@ An implementation or passing mock does not close a physical-device or production
   native 180-second limit. Local ADB pairing, command execution, installation, logs and
   recording are implemented; see the verification record for exercised paths.
 - Desktop: Mac recording stress/recovery, hidden-stage/multi-display coverage and active-session update policy; notarized helper distribution;
-  Windows runtime and recording; Linux app isolation, Wayland recording and current desktop support.
+  Windows runtime and recording; Linux multiwindow/minimized-app coverage, Wayland recording and current desktop support.
 - Hardware: physical Android/Fire TV, iPhone/iPad, Apple TV, Samsung/LG TVs. Record actual
   device/OS and exercised operations; simulator/mock results remain separate.
 - Integrations: Briefcase and Ting through real IAM OBO, file sharing and retention;
@@ -76,5 +76,6 @@ An implementation or passing mock does not close a physical-device or production
   full caps remain unverified. See the recording limits entry for exact results.
 
 - The native X11 recording worker now passes real unprivileged Xvfb/GTK tests for short window
-  and device capture, reduced limits, owner loss and supervisor death. Public whole-screen command wiring and daemon-crash recovery now pass. App binding/isolation,
-  Wayland portal support, real service transfer and release verification remain in progress.
+  and device capture, reduced limits, owner loss and supervisor death. Public whole-screen command wiring and daemon-crash recovery now pass. Single mapped-window
+  app binding and capture beneath an overlapping app pass in Xvfb. Multiwindow/minimized apps,
+  physical desktops, Wayland portal support, real service transfer and release verification remain open.

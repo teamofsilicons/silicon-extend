@@ -4,9 +4,15 @@ import os
 import sys
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GdkPixbuf, GLib
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
-window = Gtk.Window(title='Bridge Recording Fixture')
+peer = '--peer' in sys.argv
+GLib.set_prgname('bridge-recording-peer' if peer else 'bridge-recording-fixture')
+Gdk.set_program_class('bridge-recording-peer' if peer else 'bridge-recording-fixture')
+if os.environ.get('BRIDGE_RECORD_FIXTURE_PID_FILE') and not peer:
+    from pathlib import Path
+    Path(os.environ['BRIDGE_RECORD_FIXTURE_PID_FILE']).write_text(str(os.getpid()))
+window = Gtk.Window(title='Bridge Recording Peer' if peer else 'Bridge Recording Fixture')
 window.set_default_size(641, 481)
 image = Gtk.Image()
 window.add(image)
@@ -17,7 +23,7 @@ def tick():
     global frame
     frame += 1
     # A fresh noisy picture exercises the size cap without depending on an external video.
-    data = os.urandom(641 * 481 * 3) if '--noise' in sys.argv else bytes([frame % 256, 80, 160]) * (641 * 481)
+    data = bytes([5, 245, 5]) * (641 * 481) if peer else os.urandom(641 * 481 * 3) if '--noise' in sys.argv else bytes([frame % 256, 80, 160]) * (641 * 481)
     pixels = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(data), GdkPixbuf.Colorspace.RGB, False, 8, 641, 481, 641 * 3)
     image.set_from_pixbuf(pixels)
     return True

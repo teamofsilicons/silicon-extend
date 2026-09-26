@@ -21,7 +21,7 @@ export type LinuxScreenRecordingHost = Readonly<{
     Readonly<{ available: true }> | Readonly<{ available: false; hint: string }>
   >;
   start(
-    input: Readonly<{ outputPath: string; fps?: number }>,
+    input: Readonly<{ outputPath: string; fps?: number; appId?: string }>,
     signal?: AbortSignal,
   ): Promise<ScreenRecordingBackgroundProcess>;
   inspectProcess(marker: ManagedProcessIdentity): Promise<ManagedProcessOwnership>;

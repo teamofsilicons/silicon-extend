@@ -168,10 +168,10 @@ test.each(['device', 'version', 'native-path', 'process'])(
   },
 );
 
-test('rejects unisolated app scope before preparing output or spawning a recorder', async () => {
+test('rejects app scope without a named app before preparing output or spawning a recorder', async () => {
   const { operations, host } = setup();
   await expect(operations.screenRecordingStart({ ...input, scope: 'app' })).rejects.toMatchObject({
-    code: 'UNSUPPORTED_OPERATION',
+    code: 'INVALID_ARGS',
   });
   expect(host.outputs.prepare).not.toHaveBeenCalled();
   expect(host.linux.start).not.toHaveBeenCalled();
@@ -187,4 +187,24 @@ test('cancelled startup terminates the just-created recorder', async () => {
   });
   await expect(operations.screenRecordingStart(input)).rejects.toThrow();
   expect(terminate).toHaveBeenCalledOnce();
+});
+
+test('app scope forwards the bound identity and keeps it across durable recovery', async () => {
+  const { operations, host } = setup();
+  const start = await operations.screenRecordingStart({
+    ...input,
+    scope: 'app',
+    activeSessionApp: { bundleId: 'org.example.Target' },
+  });
+  expect(host.linux.start).toHaveBeenCalledWith(
+    { outputPath: '/session/video.native.mp4', fps: 12, appId: 'org.example.Target' },
+    expect.any(AbortSignal),
+  );
+  const recovered = await operations.screenRecordingReattach({ envelope: start.envelope });
+  expect(recovered.status).toBe('active');
+  if (recovered.status !== 'active') throw new Error('expected recovered app recording');
+  expect(recovered.handle.inspect()).toMatchObject({
+    scope: 'app',
+    activeSessionApp: { bundleId: 'org.example.Target' },
+  });
 });

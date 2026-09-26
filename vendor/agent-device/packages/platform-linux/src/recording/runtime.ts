@@ -62,7 +62,7 @@ export function createLinuxRecordingOperations(params: {
       typeof recording.startedAt !== 'number' ||
       !Number.isFinite(recording.startedAt) ||
       (recording.clientOutPath !== undefined && typeof recording.clientOutPath !== 'string') ||
-      (recording.scope !== 'device' && recording.scope !== 'system') ||
+      (recording.scope === 'app' && !isRecord(recording.activeSessionApp)) ||
       typeof body.nativePath !== 'string' ||
       body.nativePath !== nativeRecordingPath(recording.outPath) ||
       !Array.isArray(body.processes) ||
@@ -83,7 +83,14 @@ export function createLinuxRecordingOperations(params: {
       validate(input);
       const nativePath = nativeRecordingPath(input.outputPath);
       await host.outputs.prepare(nativePath);
-      const process = await host.linux.start({ outputPath: nativePath, fps: input.fps }, signal);
+      const process = await host.linux.start(
+        {
+          outputPath: nativePath,
+          fps: input.fps,
+          ...(input.scope === 'app' ? { appId: input.activeSessionApp!.bundleId } : {}),
+        },
+        signal,
+      );
       const markers = process.markers;
       try {
         signal.throwIfAborted();
@@ -174,12 +181,12 @@ export function createLinuxRecordingOperations(params: {
 }
 
 function validate(input: ScreenRecordingStartInput): void {
-  if (input.scope !== 'device' && input.scope !== 'system')
+  if (input.scope === 'app' && !input.activeSessionApp?.bundleId) {
     throw new AppError(
-      'UNSUPPORTED_OPERATION',
-      'Linux app-scoped recording requires isolated window capture; use --scope device for the whole X11 screen.',
-      { reason: 'unsupported-device-scope' },
+      'INVALID_ARGS',
+      'App-scoped Linux recording requires an active named app session',
     );
+  }
   if (!input.outputPath.startsWith('/') || !input.outputPath.toLowerCase().endsWith('.mp4'))
     throw new AppError('INVALID_ARGS', 'Linux recording requires an absolute .mp4 output path');
   if (input.fps !== undefined && (!Number.isInteger(input.fps) || input.fps < 1 || input.fps > 60))
