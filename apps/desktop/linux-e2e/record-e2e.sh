@@ -8,4 +8,4 @@ export DISPLAY=:99
 unset WAYLAND_DISPLAY
 export XDG_SESSION_TYPE=x11
 for _ in $(seq 50); do xdpyinfo >/dev/null 2>&1 && break; sleep .1; done
-python3 /src/apps/desktop/linux-e2e/record-e2e.py
+python3 "/src/apps/desktop/linux-e2e/${RECORD_LANE:-record-e2e.py}"

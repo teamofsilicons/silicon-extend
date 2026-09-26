@@ -30,6 +30,7 @@ pub struct LinuxFacts {
     pub input_tool: Option<String>,
     pub screenshot_tool: Option<String>,
     pub clipboard_tool: Option<String>,
+    pub recording_tools: bool,
     pub xdg_open: bool,
 }
 
@@ -143,10 +144,17 @@ pub fn build_probe(facts: &LinuxFacts, input: &ProbeInput<'_>) -> Probe {
         steps.push(needs_step("screen_capture", "Allow screen capture", shot_help));
     }
 
-    if input.supports("record") && facts.screenshot_tool.is_some() {
+    if display == DisplayServer::X11 && facts.recording_tools && input.commands.is_some_and(|commands| commands.iter().any(|command| command == "record")) {
         caps.push(ScreenRecord);
     } else {
-        miss(ScreenRecord, "Screen recording isn't available on Linux in this version of Silicon Bridge.", &mut missing);
+        let reason = if display == DisplayServer::Wayland {
+            "Wayland recording requires the ScreenCast portal; this version does not implement portal recording yet."
+        } else if !facts.recording_tools {
+            "Install python3, ffmpeg (including ffprobe) and x11-utils (xwininfo) for X11 recording."
+        } else {
+            "The installed recording runtime did not report support. Update Silicon Bridge and retry."
+        };
+        miss(ScreenRecord, reason, &mut missing);
     }
     if !input.supports("logs") {
         miss(Logs, "Device logs aren't available on Linux in this version of Silicon Bridge.", &mut missing);
@@ -211,7 +219,7 @@ pub fn gather() -> LinuxFacts {
         Some(DisplayServer::Wayland) => (first(&["ydotool"]), first(&["grim", "gnome-screenshot"]), first(&["wl-paste"])),
     };
     let atspi = if display.is_some() { check_atspi() } else { Err("no screen".into()) };
-    LinuxFacts { display, atspi, input_tool, screenshot_tool, clipboard_tool, xdg_open: have("xdg-open") }
+    LinuxFacts { display, atspi, input_tool, screenshot_tool, clipboard_tool, recording_tools: ["python3", "ffmpeg", "ffprobe", "xwininfo"].iter().all(|tool| have(tool)), xdg_open: have("xdg-open") }
 }
 
 /// Asks the AT-SPI registry for the desktop, the same way agent-device's dumper starts.
@@ -261,6 +269,7 @@ mod tests {
             input_tool: Some("xdotool".into()),
             screenshot_tool: Some("import".into()),
             clipboard_tool: Some("xclip".into()),
+            recording_tools: true,
             xdg_open: true,
         }
     }
@@ -278,7 +287,7 @@ mod tests {
 
     #[test]
     fn a_server_gets_terminal_apps_and_replay_only() {
-        let facts = LinuxFacts { display: None, atspi: Err("no screen".into()), input_tool: None, screenshot_tool: None, clipboard_tool: None, xdg_open: false };
+        let facts = LinuxFacts { display: None, atspi: Err("no screen".into()), input_tool: None, screenshot_tool: None, clipboard_tool: None, recording_tools: false, xdg_open: false };
         let p = build_probe(&facts, &input());
         assert_eq!(p.capabilities, vec![Capability::AppsLaunch, Capability::Replay]);
         assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRead && m.reason == NO_SCREEN_REASON));
@@ -295,10 +304,23 @@ mod tests {
         for c in [Capability::ScreenRead, Capability::ScreenCapture, Capability::InputPointer, Capability::InputText, Capability::Clipboard, Capability::Links, Capability::Takeover] {
             assert!(p.capabilities.contains(&c), "{c:?}");
         }
-        // agent-device can't record or read logs on Linux; say so.
+        // This runtime inventory reports neither recording nor logs.
         assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRecord));
         assert!(p.missing.iter().any(|m| m.capability == Capability::Logs));
         assert_eq!(p.setup.state, SetupState::Complete);
+    }
+
+    #[test]
+    fn recording_support_is_independent_of_screenshot_tools_and_refuses_wayland() {
+        let commands = vec!["record".to_owned()];
+        let admitted = ProbeInput { problem: None, commands: Some(&commands) };
+        let facts = LinuxFacts { screenshot_tool: None, ..desktop() };
+        assert!(build_probe(&facts, &admitted).capabilities.contains(&Capability::ScreenRecord));
+        let missing = LinuxFacts { recording_tools: false, ..desktop() };
+        assert!(!build_probe(&missing, &admitted).capabilities.contains(&Capability::ScreenRecord));
+        assert!(!build_probe(&desktop(), &input()).capabilities.contains(&Capability::ScreenRecord));
+        let wayland = LinuxFacts { display: Some(DisplayServer::Wayland), ..desktop() };
+        assert!(!build_probe(&wayland, &admitted).capabilities.contains(&Capability::ScreenRecord));
     }
 
     #[test]

@@ -35,6 +35,7 @@ import { touchRuntimeOperationFacts } from '@agent-device/contracts/touch-runtim
 import type { DeviceInfo } from '@agent-device/kernel/device';
 import { AppError } from '@agent-device/kernel/errors';
 import { bindLinuxApplicationLifecycle } from './lifecycle.ts';
+import { createLinuxRecordingOperations } from './recording/runtime.ts';
 
 const supported = Object.freeze({ available: true } as const);
 const linuxOwner = localRuntimeOwner('linux');
@@ -124,7 +125,7 @@ export function createLinuxPlatformRuntime(host: PlatformRuntimeHost): PlatformR
   return Object.freeze({
     owner: linuxOwner,
     ownsDevice: (device) => device.platform === 'linux',
-    inspectFacts: async (device) => linuxFacts(device),
+    inspectFacts: async (device) => linuxFacts(device, host),
     bind: async (request) => {
       if (
         request.intent.kind === 'exact-owner' &&
@@ -135,7 +136,7 @@ export function createLinuxPlatformRuntime(host: PlatformRuntimeHost): PlatformR
       if (request.device.platform !== 'linux') {
         throw new AppError('UNSUPPORTED_PLATFORM', 'Linux runtime cannot bind this device');
       }
-      const facts = linuxFacts(request.device);
+      const facts = await linuxFacts(request.device, host);
       const lifecycle = bindLinuxApplicationLifecycle({
         host: host.localInteractors,
         device: request.device,
@@ -151,6 +152,9 @@ export function createLinuxPlatformRuntime(host: PlatformRuntimeHost): PlatformR
             ? linuxSnapshotOperations(host, request)
             : {}),
           ...linuxInteractionOperations(host, request, facts),
+          ...(request.device.kind === 'device'
+            ? admittedRecordingOperations(host, request, facts)
+            : {}),
         }),
         [Symbol.asyncDispose]: async () => undefined,
       }) satisfies DeviceBinding<PlatformRuntimeOperations>;
@@ -177,7 +181,18 @@ function linuxInteractionOperations(
   });
 }
 
-function linuxFacts(device: DeviceInfo): RuntimeFacts<PlatformRuntimeOperations> {
+async function linuxFacts(
+  device: DeviceInfo,
+  host: PlatformRuntimeHost,
+): Promise<RuntimeFacts<PlatformRuntimeOperations>> {
+  const recording =
+    device.kind === 'device'
+      ? await host.screenRecording.linux.availability()
+      : { available: false as const, hint: 'Recording requires the Linux desktop device.' };
+  const recordingStart: RuntimeOperationFact = recording.available
+    ? supported
+    : { ...recording, reason: 'owner-capability-missing' };
+  const recordingRecovery = device.kind === 'device' ? supported : unsupportedPlatformLeaf;
   const openTarget = device.kind === 'device' ? supported : openTargetKindUnavailable;
   const closeTarget = device.kind === 'device' ? supported : closeTargetKindUnavailable;
   const unavailable = createUnavailablePlatformRuntimeFacts(device, linuxOwner, {
@@ -230,6 +245,9 @@ function linuxFacts(device: DeviceInfo): RuntimeFacts<PlatformRuntimeOperations>
     device: unavailable.device,
     operations: {
       ...unavailable.operations,
+      screenRecordingStart: recordingStart,
+      screenRecordingReattach: recordingRecovery,
+      screenRecordingCleanup: recordingRecovery,
       ...snapshotRuntimeOperationFacts({
         capture: linuxDesktopFact(device, snapshotKindUnavailable),
         customActions: snapshotCustomActionsUnavailable,
@@ -321,4 +339,24 @@ function unavailableLinuxRuntimeFact(
   return Object.freeze(
     hint === undefined ? { available: false, reason } : { available: false, reason, hint },
   );
+}
+
+function admittedRecordingOperations(
+  host: PlatformRuntimeHost,
+  request: Parameters<PlatformRuntimeOwner['bind']>[0],
+  facts: RuntimeFacts<PlatformRuntimeOperations>,
+) {
+  const operations = createLinuxRecordingOperations({
+    host: host.screenRecording,
+    device: request.device,
+    owner: linuxOwner,
+    signal: request.scope.signal,
+  });
+  return {
+    ...(facts.operations.screenRecordingStart.available
+      ? { screenRecordingStart: operations.screenRecordingStart }
+      : {}),
+    screenRecordingReattach: operations.screenRecordingReattach,
+    screenRecordingCleanup: operations.screenRecordingCleanup,
+  };
 }

@@ -167,6 +167,11 @@ function lifecycleHost(
   return {
     localInteractors: { resolve: async () => ({}) },
     snapshot: { captureSurface },
+    screenRecording: {
+      linux: {
+        availability: async () => ({ available: false, hint: 'No recorder in this fixture' }),
+      },
+    },
   } as unknown as PlatformRuntimeHost;
 }
 

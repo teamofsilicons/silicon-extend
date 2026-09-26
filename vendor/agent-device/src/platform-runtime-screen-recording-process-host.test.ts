@@ -203,3 +203,22 @@ test('ends the persisted markers when the host process table cannot be read', as
   ).resolves.toBe('terminated');
   expect(state.signaled[0]).toEqual({ pids: [41, 42], signal: 'SIGINT' });
 });
+
+test('a supervisor can finalize its own descendants without a second signal to its encoder', async () => {
+  state.alive.set(41, true);
+  state.alive.set(42, true);
+  state.starts.set(41, 'root-start');
+  state.starts.set(42, 'child-start');
+  state.commands.set(41, 'wrapper');
+  state.commands.set(42, 'recorder child');
+  await expect(
+    terminateManagedProcessSet(
+      [{ pid: 41, startTime: 'root-start', command: 'wrapper' }],
+      undefined,
+      undefined,
+      { discoverDescendants: false },
+    ),
+  ).resolves.toBe('terminated');
+  expect(state.signaled).toEqual([{ pids: [41], signal: 'SIGINT' }]);
+  expect(state.alive.get(42)).toBe(true);
+});

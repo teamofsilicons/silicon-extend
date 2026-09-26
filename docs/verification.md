@@ -272,3 +272,39 @@ compatibility. These checks do not establish completion of the entire product co
   recovery, overlay/export/transfer, obscured/hidden windows, full 30-minute/1-GiB limits, current
   Wayland portal support and release packaging remain open. No Linux capability was enabled
   solely from these native-worker results.
+
+
+### 2026-09-26 — public X11 recording and export recovery
+
+- Connected the native worker to Linux recording admission, the host process authority and
+  durable runtime resources. Whole-screen `--scope device/system` supports fps, export quality
+  and hide-touches. App scope is explicitly refused until isolated app capture is implemented;
+  Wayland/XWayland and headless hosts do not advertise this X11 recorder. Recovery remains
+  callable when start dependencies are unavailable. Worker and encoder identities are persisted.
+- The first public stop exposed a double-signal bug: generic cleanup signaled both supervisor
+  and encoder, then the supervisor signaled ffmpeg again, leaving MP4 without a moov atom.
+  Linux now stops its supervisor first and only then cleans a surviving identity-matched encoder.
+  Shared process cleanup keeps its original tree behavior unless the supervisor owner opts out.
+- Real unprivileged Debian/Xvfb tests passed public start/stop and full decode; daemon SIGKILL
+  followed by a new public stop recovered the video and reported unavailable touch events.
+  Both device and system scopes ran. Native artifacts were retired only after successful export.
+- Built the Linux agent and exercised Bridge's driver probe and public `exec record` path.
+  This exposed two existing wrapper bugs: `outPath` was not recognized, and moving the export
+  invalidated the runtime's durable path. Both regressions failed before correction. Bridge now
+  recognizes `outPath`, copies for upload, retains the committed source and reports missing/copy
+  errors instead of success with no file. Unit checks cover repeated exports and copy refusal.
+- Final live run: `/tmp/bridge-linux-driver-record-final.log`, artifacts in ignored
+  `target/desktop/linux-recording/runtime-recording-l2sf3ujf/`. The driver returned one recording
+  artifact, full ffmpeg decoding passed, and the manifest's source remained present. Test daemons
+  and fixtures were stopped; all screen activity was inside the owned Xvfb container.
+- Checks: 70 Linux/shared-recording TypeScript tests, full workspace typechecking/lint, runtime
+  build, 115 agent unit tests and 7 integration tests pass. A stale clipboard test expected the
+  old direct-xclip call; it now checks the existing detached-output command and stdin contract.
+  The Linux probe's screenshot-independence regression also failed before correction.
+- `check:affected --run` still fails before selecting gates because it resolves this nested
+  workspace's root as Silicon Bridge and looks for its nonexistent package.json. The depgraph
+  likewise does not recognize nested tracked paths. These remain unpassed gates.
+- CLI help and Linux package dependency guidance now describe the implemented whole-screen
+  path. No new Linux release package or public deployment was produced. App identity/isolation,
+  Wayland portal/PipeWire support, live gesture-overlay rendering, full-size/full-duration caps,
+  service upload/download and current physical desktops remain open.

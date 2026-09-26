@@ -214,9 +214,18 @@ in a fresh directory. The lane tests manual stop, reduced duration/file limits, 
 supervisor SIGKILL, window/device dimensions, full decoding, nonblank frames and invalid inputs.
 It is a manual lane, not selected by CI.
 
-This worker is **not yet connected to the public `record` command**. Durable runtime ownership,
-recovery, app identity resolution, obscured/hidden-window behavior and artifact-transfer tests
-remain necessary. X11 window capture uses ffmpeg's
+The public runtime now connects this worker for `record start --scope device/system`, including
+fps, quality, hide-touches and daemon-crash recovery. Bridge returns a copied recording artifact
+and retains its export for retry. App identity resolution, isolated obscured/hidden-window capture,
+real service artifact-transfer tests and Wayland portal support remain necessary. X11 window capture uses ffmpeg's
 [documented x11grab window ID input](https://ffmpeg.org/ffmpeg-devices.html#x11grab); a successful
 window recording alone does not prove hidden or occluded app isolation. Wayland deliberately
 refuses this worker, including XWayland displays; its portal/PipeWire implementation remains open.
+
+
+The public daemon and Bridge driver lane is `record-runtime-e2e.py`. Set
+`RECORD_LANE=record-runtime-e2e.py` on the container command above to exercise the daemon;
+also mount the built Linux agent and set `BRIDGE_RECORD_DRIVER` to its path to test Bridge's
+capability probe and recording artifact handoff. Build agent-device before running this lane.
+It deliberately crashes only its own isolated daemon, verifies the recovered export, then
+stops its daemons using their own state directories.

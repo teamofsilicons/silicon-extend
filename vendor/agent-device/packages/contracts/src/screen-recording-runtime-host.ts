@@ -15,6 +15,21 @@ export type ScreenRecordingBackgroundProcess = Readonly<{
   terminate(): Promise<void>;
 }>;
 
+/** Local Linux capture and identity-fenced process cleanup. */
+export type LinuxScreenRecordingHost = Readonly<{
+  availability(): Promise<
+    Readonly<{ available: true }> | Readonly<{ available: false; hint: string }>
+  >;
+  start(
+    input: Readonly<{ outputPath: string; fps?: number }>,
+    signal?: AbortSignal,
+  ): Promise<ScreenRecordingBackgroundProcess>;
+  inspectProcess(marker: ManagedProcessIdentity): Promise<ManagedProcessOwnership>;
+  terminateProcesses(
+    markers: readonly ManagedProcessIdentity[],
+  ): Promise<'terminated' | 'already-missing' | 'ownership-lost'>;
+}>;
+
 /** Closed Apple runner requests used by the recording facet. */
 export type AppleScreenRecordingRunnerRequest =
   | Readonly<{
@@ -282,6 +297,7 @@ export type ScreenRecordingOutputHost = Readonly<{
 
 /** Focused host authorities consumed only by package-owned screen-recording mechanics. */
 export type ScreenRecordingRuntimeHost = Readonly<{
+  linux: LinuxScreenRecordingHost;
   apple: AppleScreenRecordingHost;
   android: AndroidScreenRecordingHost;
   harmony: HarmonyScreenRecordingHost;

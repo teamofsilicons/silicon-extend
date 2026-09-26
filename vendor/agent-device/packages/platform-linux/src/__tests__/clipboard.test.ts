@@ -57,13 +57,17 @@ test('readLinuxClipboard falls back to xsel on X11', async () => {
   assert.equal(mockRunCmd.mock.calls[0]![0], 'xsel');
 });
 
-test('writeLinuxClipboard uses xclip with stdin on X11', async () => {
+test('writeLinuxClipboard detaches the selection owner output and sends text over stdin', async () => {
   setupX11();
   mockWhichCmd.mockImplementation(async (cmd) => cmd === 'xclip');
   mockRunCmd.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
 
   await writeLinuxClipboard('hello');
-  assert.equal(mockRunCmd.mock.calls[0]![0], 'xclip');
+  assert.equal(mockRunCmd.mock.calls[0]![0], 'sh');
+  assert.deepEqual(mockRunCmd.mock.calls[0]![1], [
+    '-c',
+    'exec xclip -selection clipboard >/dev/null 2>&1',
+  ]);
   assert.equal((mockRunCmd.mock.calls[0]![2] as Record<string, unknown>).stdin, 'hello');
 });
 

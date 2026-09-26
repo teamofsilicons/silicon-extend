@@ -57,6 +57,7 @@ export function createScreenRecordingRuntimeHost(
       clear: () => {},
     });
   return Object.freeze({
+    linux: createLazyLinuxHost(),
     apple: createLazyAppleHost(),
     android,
     harmony: createLazyHarmonyHost(),
@@ -112,5 +113,19 @@ function createLazyHarmonyHost(): ScreenRecordingRuntimeHost['harmony'] {
       await (await load()).remove(device, remotePath, signal),
     removeMedia: async (device, mediaUri, signal) =>
       await (await load()).removeMedia(device, mediaUri, signal),
+  });
+}
+
+function createLazyLinuxHost(): ScreenRecordingRuntimeHost['linux'] {
+  const load = async () => {
+    const { createLinuxScreenRecordingHost } =
+      await import('./platform-runtime-screen-recording-linux-host.ts');
+    return createLinuxScreenRecordingHost();
+  };
+  return Object.freeze({
+    availability: async () => (await load()).availability(),
+    start: async (input, signal) => (await load()).start(input, signal),
+    inspectProcess: async (marker) => (await load()).inspectProcess(marker),
+    terminateProcesses: async (markers) => (await load()).terminateProcesses(markers),
   });
 }

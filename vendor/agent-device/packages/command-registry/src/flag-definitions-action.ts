@@ -43,7 +43,7 @@ export const ACTION_FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     max: 120,
     usageLabel: '--fps <n>',
     usageDescription:
-      'Record: target frames per second (native macOS capture or iOS physical device runner)',
+      'Record: target frames per second (native macOS or Linux X11 capture, or iOS physical device runner)',
     projectConfig: true,
     recorded: true,
   },

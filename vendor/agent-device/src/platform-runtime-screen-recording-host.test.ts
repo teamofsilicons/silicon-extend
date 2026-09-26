@@ -8,6 +8,7 @@ test('composes the focused recording host capabilities', () => {
     'apple',
     'finalize',
     'harmony',
+    'linux',
     'outputs',
     'ownedProcesses',
     'web',

@@ -457,7 +457,7 @@ fn find_json(stdout: &str) -> Option<serde_json::Value> {
 
 /// A file path agent-device reported in its result (`path`, `outputPath`, …) that exists.
 pub fn reported_path(data: &serde_json::Value) -> Option<PathBuf> {
-    for key in ["outputPath", "path", "videoPath", "output", "file", "logPath"] {
+    for key in ["outPath", "outputPath", "path", "videoPath", "output", "file", "logPath"] {
         if let Some(p) = data.get(key).and_then(|v| v.as_str()) {
             let p = PathBuf::from(p);
             if p.is_file() {
@@ -670,13 +670,18 @@ impl Driver for AgentDeviceDriver {
                 let remembered = self.facts(inv.session_id).recording;
                 self.update_facts(inv.session_id, |f| f.recording = None);
                 let found = reported_path(&out.output).or(remembered.filter(|p| p.is_file()));
-                if let Some(src) = found {
-                    let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("recording.mp4").to_owned();
-                    let dst = inv.workdir.join(&name);
-                    if tokio::fs::rename(&src, &dst).await.is_ok() || tokio::fs::copy(&src, &dst).await.is_ok() {
-                        out.files.push(LocalFile { path: dst, content_type: content_type_for(&name).into(), name, kind: FileKind::Recording });
+                let Some(src) = found else {
+                    return Output::fail("recording_export_failed", "The recording stopped but its exported file is missing. Keep the session open and retry `record stop`.");
+                };
+                let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("recording.mp4").to_owned();
+                let dst = inv.workdir.join(&name);
+                // The completed recording manifest still names src; retain it for a retried export.
+                if src != dst {
+                    if let Err(error) = tokio::fs::copy(&src, &dst).await {
+                        return Output::fail("recording_export_failed", format!("Couldn't copy the recording for upload: {error}. The original is retained; retry `record stop`."));
                     }
                 }
+                out.files.push(LocalFile { path: dst, content_type: content_type_for(&name).into(), name, kind: FileKind::Recording });
             }
             After::LogsStarted => self.update_facts(inv.session_id, |f| f.logs_running = true),
             After::LogsStopped => {
@@ -884,6 +889,16 @@ mod tests {
     }
 
     #[test]
+    fn recording_out_path_survives_a_new_driver_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("recording.mp4");
+        std::fs::write(&output, b"recorded bytes").unwrap();
+        assert_eq!(reported_path(&serde_json::json!({ "recording": "stopped", "outPath": output })), Some(output));
+        assert_eq!(reported_path(&serde_json::json!({ "outPath": dir.path() })), None);
+        assert_eq!(reported_path(&serde_json::json!({ "outPath": dir.path().join("missing.mp4") })), None);
+    }
+
+    #[test]
     fn plain_commands_pass_through() {
         let e = Env::new();
         let p = e.plan("click", &["@e2", "--button", "secondary"]).unwrap();
@@ -1037,6 +1052,43 @@ mod tests {
         assert_eq!(map_error_code("COMMAND_FAILED"), "command_failed");
         let out = parse_result("", "node: not found", false);
         assert_eq!(out.error.unwrap().code, "command_failed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recording_export_keeps_the_manifest_source_and_reports_copy_failure() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let source = state.join("recording.mp4");
+        std::fs::write(&source, b"retryable recording").unwrap();
+        let response = serde_json::json!({ "success": true, "data": { "recording": "stopped", "outPath": source } });
+        std::fs::write(state.join("response.json"), response.to_string()).unwrap();
+        let script = dir.path().join("fake-ad");
+        std::fs::write(&script, "#!/bin/sh\ncat \"$AGENT_DEVICE_STATE_DIR/response.json\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let driver = AgentDeviceDriver::new(
+            Some(vec![script.display().to_string()]), None, "linux", state.clone(),
+            dir.path().join("sessions"), std::sync::Arc::new(|_: &ProbeInput<'_>| unreachable!()),
+        );
+        for (name, blocked) in [("first", false), ("retry", false), ("blocked", true)] {
+            let work = dir.path().join(name);
+            std::fs::create_dir(&work).unwrap();
+            if blocked { std::fs::create_dir(work.join("recording.mp4")).unwrap(); }
+            let args = s(&["stop"]);
+            let result = driver.run(Invocation { id: uuid::Uuid::new_v4(), session_id: "abc", command: "record", args: &args,
+                attachments: &[], workdir: &work, timeout: Duration::from_secs(10), cancel: CancelToken::new() }).await;
+            if blocked {
+                assert!(!result.ok);
+                assert_eq!(result.error.unwrap().code, "recording_export_failed");
+            } else {
+                assert!(result.ok, "{result:?}");
+                assert_eq!(result.files.len(), 1);
+                assert_eq!(std::fs::read(&result.files[0].path).unwrap(), b"retryable recording");
+            }
+            assert_eq!(std::fs::read(&source).unwrap(), b"retryable recording");
+        }
     }
 
     #[cfg(unix)]

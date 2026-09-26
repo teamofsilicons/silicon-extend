@@ -126,6 +126,7 @@ export async function terminateManagedProcessSet(
   persisted: readonly ManagedProcessIdentity[],
   background?: ManagedScreenRecordingProcess,
   commandMatches: ManagedProcessCommandMatcher = exactCommandMatch,
+  options: Readonly<{ discoverDescendants?: boolean }> = {},
 ): Promise<'terminated' | 'already-missing' | 'ownership-lost'> {
   // `child.kill` is Node's own handle, which stops reaching the pid once the child has
   // exited, so the process this owner spawned is the one pid it may signal while the host is
@@ -143,7 +144,9 @@ export async function terminateManagedProcessSet(
   const root = persistedEvidence[0];
   const persistedPids = new Set(persisted.map(({ pid }) => pid));
   const descendants =
-    root !== undefined && endable(root) ? await resolveManagedProcessTree(root.marker) : [];
+    options.discoverDescendants !== false && root !== undefined && endable(root)
+      ? await resolveManagedProcessTree(root.marker)
+      : [];
   const found = await Promise.all(
     descendants
       .filter(({ pid }) => !persistedPids.has(pid))
