@@ -138,9 +138,8 @@ data class SetupReport(
                 )
             }
 
-            // 5–6. Developer options and wireless/network debugging. Optional in this version:
-            // only Android debugging (adb, install, logs) needs them, and that bridge isn't built yet.
-            val optionalNote = " Optional for now: only Android debugging (adb, installing apps, device logs) needs it, and this version of the app doesn't use it yet."
+            // ADB augments accessibility with installation, logs and recording.
+            val optionalNote = " Then connect Android debugging below to enable installation, logs and recording."
             items += SetupItem(
                 SetupStep(
                     "developer_options",
@@ -186,6 +185,7 @@ data class SetupReport(
                 )
             }
 
+            val adbConnected = com.teamofsilicons.bridge.Bridge.get(context).adb.connected
             // Capabilities: exactly what works right now.
             val caps = ArrayList<String>()
             val missing = ArrayList<MissingCapability>()
@@ -214,11 +214,11 @@ data class SetupReport(
             if (!tv) {
                 if (listenerConnected) caps += C.NOTIFICATIONS
                 else missing += MissingCapability(C.NOTIFICATIONS, "Allow notification access: " + items.first { it.step.key == "notification_access" }.step.help)
-                missing += MissingCapability(C.SCREEN_RECORD, C.RECORD_REASON)
+                if (adbConnected) caps += C.SCREEN_RECORD else missing += MissingCapability(C.SCREEN_RECORD, C.RECORD_REASON)
             }
-            missing += MissingCapability(C.APPS_INSTALL, C.adbReason("Installing apps"))
-            missing += MissingCapability(C.LOGS, C.adbReason("Reading device logs"))
-            missing += MissingCapability(C.ADB, C.adbReason("Android debugging (adb)"))
+            for ((cap, what) in listOf(C.APPS_INSTALL to "Installing apps", C.LOGS to "Reading device logs", C.ADB to "Running adb commands")) {
+                if (adbConnected) caps += cap else missing += MissingCapability(cap, C.adbReason(what))
+            }
 
             val full = if (tv) C.ANDROID_TV_FULL else C.ANDROID_FULL
             return SetupReport(

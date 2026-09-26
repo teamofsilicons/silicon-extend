@@ -83,12 +83,7 @@ object Capabilities {
         "display" to listOf(DISPLAY),
     )
 
-    const val RECORD_REASON =
-        "Screen recording on Android needs the Carbon to approve a screen-capture prompt every time a recording starts " +
-            "(MediaProjection), which a Silicon can't do; it will come with the wireless-debugging bridge in a later version."
-
-    const val ADB_REASON =
-        "{what} needs the wireless-debugging bridge, which isn't built into this version of the Silicon Bridge Android app."
-
+    const val RECORD_REASON = "Connect Android debugging in the Bridge app's setup to enable screen recording."
+    const val ADB_REASON = "{what} needs Android debugging. Turn on Wireless or Network debugging, then connect it in the Bridge app's setup."
     fun adbReason(what: String) = ADB_REASON.replace("{what}", what)
 }

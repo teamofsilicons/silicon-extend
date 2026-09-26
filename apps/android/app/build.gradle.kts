@@ -84,8 +84,24 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation(project(":libadb"))
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
 
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
+
+// The installation fixture is generated only for instrumentation tests.
+android.sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("generated/adb-test-assets"))
+val generateAdbFixture by tasks.registering(Exec::class) {
+    val output = layout.buildDirectory.dir("generated/adb-test-assets")
+    inputs.files(rootProject.file("tools/adb-test-fixture/AndroidManifest.xml"), rootProject.file("tools/adb-test-fixture/build.sh"))
+    outputs.file(output.map { it.file("fixture.apk") })
+    environment("JAVA_HOME", System.getProperty("java.home"))
+    commandLine("bash", rootProject.file("tools/adb-test-fixture/build.sh"), android.sdkDirectory, output.get().asFile)
+}
+tasks.matching { it.name == "mergeDebugAndroidTestAssets" }.configureEach { dependsOn(generateAdbFixture) }

@@ -1,5 +1,6 @@
 package com.teamofsilicons.bridge
 
+import com.teamofsilicons.bridge.adb.AdbCommand
 import com.teamofsilicons.bridge.driver.Cmd
 import com.teamofsilicons.bridge.driver.CommandFailure
 import com.teamofsilicons.bridge.driver.CommandParser
@@ -132,10 +133,14 @@ class CommandParserTest {
     }
 
     @Test
-    fun recordIsMissing() {
-        val msg = fails("unsupported_on_device", "record", "start")
-        assertTrue(msg.contains("MediaProjection"))
-        fails("unsupported_on_device", "record", "stop")
+    fun recording() {
+        assertEquals(Cmd.Debug(AdbCommand.Record("start")), p("record", "start"))
+        assertEquals(Cmd.Debug(AdbCommand.Record("stop")), p("record", "stop"))
+        assertEquals(Cmd.Debug(AdbCommand.Record("start", "demo", "high")), p("record", "start", "demo", "--quality", "high"))
+        fails("invalid_args", "record", "start", "../escape")
+        fails("invalid_args", "record", "start", "--quality", "bad")
+        fails("invalid_args", "record", "stop", "extra")
+        fails("unsupported_on_device", "record", "start", "--scope", "app")
     }
 
     @Test
@@ -288,8 +293,9 @@ class CommandParserTest {
         assertEquals(Cmd.Apps(false), p("apps"))
         assertEquals(Cmd.Apps(true), p("apps", "--all"))
         assertEquals(Cmd.AppState, p("appstate"))
-        assertTrue(fails("unsupported_on_device", "install", "com.x", "app.apk").contains("wireless-debugging bridge"))
-        fails("unsupported_on_device", "reinstall", "com.x", "app.apk")
+        assertEquals(Cmd.Debug(AdbCommand.Install("com.x", "app.apk", false)), p("install", "com.x", "app.apk"))
+        assertEquals(Cmd.Debug(AdbCommand.Install("com.x", "app.apk", true)), p("reinstall", "com.x", "app.apk"))
+        fails("invalid_args", "install", "bad;name", "app.apk")
     }
 
     @Test
@@ -330,8 +336,10 @@ class CommandParserTest {
 
     @Test
     fun bridgeAdditionsAndUnknown() {
-        assertTrue(fails("unsupported_on_device", "adb", "shell", "dumpsys").contains("adb"))
-        fails("unsupported_on_device", "logs", "start")
+        assertEquals(Cmd.Debug(AdbCommand.Raw(listOf("shell", "dumpsys", "--help"))), p("adb", "shell", "dumpsys", "--help"))
+        assertEquals(Cmd.Debug(AdbCommand.Logs("start")), p("logs", "start"))
+        assertEquals(Cmd.Debug(AdbCommand.Logs("mark", "hello world")), p("logs", "mark", "hello", "world"))
+        fails("invalid_args", "logs", "mark")
         assertTrue(fails("unsupported_on_device", "terminal", "run", "ls").contains("computers"))
         assertTrue(fails("unsupported_on_device", "hover", "@e1").contains("pointer"))
         assertTrue(fails("unsupported_on_device", "teleport").contains("Commands:"))

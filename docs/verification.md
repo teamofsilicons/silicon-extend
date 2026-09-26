@@ -41,3 +41,40 @@ and what has **not** been verified. Rerun the automated part with `e2e/run-all.s
 - **Space Station export**: implemented; no ingest key was available to send real events.
 - **Production**: nothing deployed; no DNS, no Vercel, no Honeycomb release upload.
 - **Android `adb`, `install`, `logs`, screen recording**: not built in 1.0 (reported as missing, with why).
+
+## Android debugging follow-up — 2026-09-26
+
+The earlier “not built” entry for Android ADB, installation, logs and recording is superseded
+by this follow-up. Release and physical-device gates above remain open.
+
+- 64 Android JVM tests pass, including binary shell framing, malformed/oversized frames,
+  command parsing, streaming upload bytes/checksum and upload cancellation.
+- CLI unit tests (4) and CLI clippy pass. Local-input attachment handling now includes ADB
+  push/install while leaving remote shell/pull paths untouched.
+- Android 16 phone emulator: real local ADB shell (40 rapid commands), nonzero exit/stderr,
+  140 KB binary sync round-trip, APK install/reinstall/uninstall using a generated test fixture,
+  cancellation of a blocked command, logs with marker, MP4 capture, session cleanup and
+  termination of the recorder when the debugging transport closes.
+- Real Android TLS pairing succeeded using the pairing code/port from Settings. A separate
+  app process reused the saved identity and discovered the current port with mDNS.
+- Final wireless reconnect testing exposed asynchronous preference writes lost at process
+  exit; connection preferences now commit on the IO dispatcher. The vendored libadb source
+  also fixes a lost OPEN acknowledgement and allocates stream IDs atomically. With these
+  changes, 100 rapid TLS shell commands and the complete real-service CLI suite pass.
+- `e2e/android-adb.sh` passed against the local Rust Bridge service and PostgreSQL with the
+  Android emulator: CLI shell, install/reinstall, binary push/pull with artifact retrieval,
+  logs/marker, downloaded MP4, Carbon Stop, refusal after Stop and cleanup before a new session.
+  IAM, Briefcase and Ting in this run were the development stand-ins.
+- Force-stopping the app during recording and reopening it exercised recovery of its saved
+  recording directory. Instrumentation separately proves that transport closure stops the
+  recorder; the recorder now uses a live PTY instead of a detached process.
+- Existing phone/emulator regression suite: 84/84 checks pass, including local Stop, refusal
+  of further commands from the ended session, reconnect, revoke confirmation and re-enrollment.
+  The longer setup screen exposed stale Compose accessibility descendants; snapshots now clear
+  the accessibility cache on Android 13+ before traversal.
+- Inspected the actual setup UI: local pairing/connection controls and connected capabilities
+  render correctly. Desktop, physical hardware and production were not tested in this batch.
+
+Limits still requiring follow-up: 8 MiB inline APK/attachment limit, Briefcase file-id input,
+180-second native recording cap, custom recording frame rate/app-only scope, and physical TV
+compatibility. These checks do not establish completion of the entire product contract.

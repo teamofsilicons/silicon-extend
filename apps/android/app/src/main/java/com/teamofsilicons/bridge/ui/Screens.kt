@@ -268,7 +268,7 @@ private fun PairedScreen(bridge: Bridge, state: UiState, onRequestNotifications:
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                if (setup.state == "complete") "Everything a Silicon needs is allowed." else "Do these on this ${if (tv) "TV" else "device"}, one at a time.",
+                if (setup.state == "complete") "Core device control is ready. Android debugging below adds app installation, logs and recording." else "Do these on this ${if (tv) "TV" else "device"}, one at a time.",
                 color = Muted,
                 fontSize = body,
             )
@@ -287,6 +287,7 @@ private fun PairedScreen(bridge: Bridge, state: UiState, onRequestNotifications:
             }
         }
 
+        AndroidDebuggingCard(bridge)
         Spacer(Modifier.height(32.dp))
         OutlinedButton(
             onClick = { confirmRevoke = true },
@@ -484,5 +485,55 @@ fun DeveloperSettingsScreen(bridge: Bridge, state: UiState, onClose: () -> Unit)
         }
         message?.let { Text(it, color = Muted) }
         Text("Device id: ${state.deviceId ?: "—"} · os: ${bridge.os} · build ${BuildConfig.BUILD_TYPE}", color = Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun AndroidDebuggingCard(bridge: Bridge) {
+    val scope = rememberCoroutineScope()
+    var pairingPort by remember { mutableStateOf("") }
+    var pairingCode by remember { mutableStateOf("") }
+    var connectionPort by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var connected by remember { mutableStateOf(bridge.adb.connected) }
+    LaunchedEffect(Unit) {
+        while (true) { connected = bridge.adb.connected; delay(1000) }
+    }
+    fun act(action: suspend () -> String) {
+        busy = true
+        scope.launch {
+            try { message = action() }
+            catch (e: Exception) { message = e.message ?: "Android debugging failed" }
+            finally { busy = false; connected = bridge.adb.connected; bridge.onCapabilitiesMayHaveChanged() }
+        }
+    }
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp).background(Card, RoundedCornerShape(16.dp)).padding(16.dp)) {
+        Text("Android debugging", fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
+        Text(if (connected) "Connected · app installation, device logs and recording are available."
+            else "Enable Wireless debugging in Developer options. Open ‘Pair device with pairing code’ in split screen beside Bridge, then enter its port and code here. These are Android's values, separate from your Bridge pairing code.", color = Muted)
+        if (!connected) {
+            OutlinedTextField(pairingPort, { pairingPort = it }, label = { Text("Android pairing port") }, singleLine = true, enabled = !busy)
+            OutlinedTextField(pairingCode, { pairingCode = it }, label = { Text("Android six-digit pairing code") }, singleLine = true, enabled = !busy)
+            Button(enabled = !busy, onClick = { act {
+                bridge.adb.pair(pairingPort.toIntOrNull() ?: error("Enter the pairing port."), pairingCode)
+                pairingCode = ""
+                if (bridge.adb.connect()) "Paired and connected." else "Paired. Enter the connection port from the main Wireless debugging page, then tap Connect."
+            } }) { Text("Pair Android debugging") }
+            Text("Already paired, or using a TV with network debugging? Enter the connection port (usually 5555 on TVs), then approve Android's debugging prompt. Leave blank to discover this device's port.", color = Muted)
+            OutlinedTextField(connectionPort, { connectionPort = it }, label = { Text("Android connection port") }, singleLine = true, enabled = !busy)
+            Button(enabled = !busy, onClick = { act {
+                val port = if (connectionPort.isBlank()) 0 else connectionPort.toIntOrNull() ?: error("Enter a valid connection port.")
+                if (bridge.adb.connect(port)) "Connected." else bridge.adb.lastError ?: "Could not connect."
+            } }) { Text("Connect Android debugging") }
+        } else {
+            OutlinedButton(enabled = !busy, onClick = { act {
+                bridge.executor.cancelAll()
+                bridge.adbExecutor.endAll()
+                bridge.adb.disconnect()
+                "Disconnected. You can also forget Silicon Bridge in Android's Wireless debugging settings."
+            } }) { Text("Disconnect Android debugging") }
+        }
+        message?.let { Text(it, color = if (connected) Ok else Warn) }
     }
 }

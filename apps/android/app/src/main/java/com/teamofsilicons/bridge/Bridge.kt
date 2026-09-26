@@ -13,6 +13,8 @@ import com.teamofsilicons.bridge.security.SecretStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -35,8 +37,22 @@ class Bridge private constructor(val context: Context) {
     )
     val state: StateFlow<UiState> = _state
 
+    val adb = com.teamofsilicons.bridge.adb.LocalAdb(context)
+    val adbExecutor = com.teamofsilicons.bridge.adb.AdbExecutor(adb, java.io.File(context.cacheDir, "adb-output"))
     val executor = CommandExecutor(this)
     val connection = ConnectionManager(this)
+
+    init {
+        scope.launch {
+            while (true) {
+                if (config.deviceId != null && adb.enabled && !adb.connected) {
+                    runCatching { if (adb.reconnect()) adbExecutor.recover() }
+                    onCapabilitiesMayHaveChanged()
+                }
+                delay(15_000)
+            }
+        }
+    }
 
     fun update(f: (UiState) -> UiState) = _state.update(f)
 

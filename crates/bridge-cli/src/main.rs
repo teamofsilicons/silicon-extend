@@ -1326,6 +1326,15 @@ fn parse_ttl(s: &str) -> R<u32> {
     Ok(minutes)
 }
 
+/// Only ADB push/install read local input; shell arguments and pull paths belong to the device.
+fn adb_local_input(args: &[String], index: usize) -> bool {
+    match args.first().map(String::as_str) {
+        Some("push") => args.len() == 3 && index == 1,
+        Some("install") => index == args.len().saturating_sub(1) && index > 0 && !args[index].starts_with('-'),
+        _ => false,
+    }
+}
+
 async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
     let sid = ctx.session_id()?;
     // Bridge's own flags for file-making commands; everything else goes to the device untouched.
@@ -1353,13 +1362,14 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
         }
     // Scripts and media are read here, on the caller's machine, and sent along.
     let mut attachments = Vec::new();
-    let reads_files = matches!(name, "replay" | "test" | "install" | "reinstall" | "display" | "batch");
+    let reads_files = matches!(name, "replay" | "test" | "install" | "reinstall" | "display" | "batch" | "adb");
     if reads_files {
         for (i, a) in args.clone().iter().enumerate() {
             let prev = i.checked_sub(1).map(|p| args[p].as_str());
             let is_path_flag = matches!(prev, Some("--image" | "--video" | "--steps-file"));
             let positional_file = !a.starts_with('-') && std::path::Path::new(a).is_file() && matches!(name, "replay" | "test" | "install" | "reinstall");
-            if (is_path_flag || positional_file) && std::path::Path::new(a).is_file() {
+            let adb_file = name == "adb" && adb_local_input(&args, i);
+            if (is_path_flag || positional_file || adb_file) && std::path::Path::new(a).is_file() {
                 let bytes = std::fs::read(a).map_err(|e| CliError::usage(format!("reading {a}: {e}")))?;
                 if bytes.len() > 8 << 20 {
                     return Err(CliError::usage(format!("{a} is larger than 8 MiB; upload it to Briefcase and pass the link instead")));
@@ -1445,6 +1455,16 @@ mod tests {
         assert_eq!(g.test.as_deref(), Some("abc"));
         assert!(g.json);
         assert_eq!(rest, vec!["snapshot", "-i"]);
+    }
+
+    #[test]
+    fn adb_files_only_attach_local_inputs() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(adb_local_input(&args(&["push", "file.bin", "/sdcard/file.bin"]), 1));
+        assert!(!adb_local_input(&args(&["push", "file.bin", "/sdcard/file.bin"]), 2));
+        assert!(adb_local_input(&args(&["install", "-r", "app.apk"]), 2));
+        assert!(!adb_local_input(&args(&["shell", "cat", "file.bin"]), 2));
+        assert!(!adb_local_input(&args(&["pull", "/sdcard/file.bin"]), 1));
     }
 
     #[test]

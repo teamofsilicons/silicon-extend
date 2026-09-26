@@ -561,8 +561,8 @@ async def phone_scenario(sc: Scenario):
     for c in ["screen.read", "screen.capture", "input.touch", "input.text", "nav.system", "apps.launch", "apps.list", "takeover", "links", "alerts"]:
         sc.check(f"capability {c}", c in caps, sorted(caps))
     sc.check("no TV-only capabilities on a phone", not ({"input.remote", "display"} & caps), sorted(caps))
-    sc.check("screen.record reported missing with the MediaProjection reason",
-             any(m["capability"] == "screen.record" and "MediaProjection" in m["reason"] for m in hello["missing"]))
+    sc.check("screen.record requires Android debugging setup",
+             any(m["capability"] == "screen.record" and "Android debugging" in m["reason"] for m in hello["missing"]))
 
     r = await sc.cmd("home")
     sc.check("home", r["ok"], r)
@@ -725,14 +725,24 @@ async def ui_checks(sc: Scenario, tv: bool):
     await sc.send({"type": "takeover_ended", "target": None, "session_id": sc.session})
     await sc.cmd("wait", ["800"])
     await sc.drain_events()
-    r = await sc.cmd("find", ["Stop", "click"])
-    sc.check("tap Stop", r["ok"], r)
+    # Stop cancels every command in this session, including this synthetic tap. A result
+    # from the cancelled command is not required; the Stop frame is the observable action.
+    click_stop = asyncio.create_task(sc.cmd("find", ["Stop", "click"]))
     stop = await sc.expect_event("stop", 5)
+    sc.check("tap Stop", stop is not None)
     sc.check("Stop -> stop frame", stop is not None)
+    click_stop.cancel()
     await sc.send({"type": "session_ended", "target": None, "session_id": sc.session, "reason": "stopped_by_carbon"})
-    await sc.cmd("wait", ["800"])
-    snap = await sc.cmd("snapshot")
-    sc.check("indicator cleared after session_ended", "No Silicon is using this" in (snap.get("text") or ""), snap.get("text"))
+    refused = await sc.cmd("snapshot")
+    sc.check("ended session cannot issue another command", refused.get("error", {}).get("code") == "session_ended", refused)
+    # Observe the now-idle app through the emulator harness, outside the ended Silicon session.
+    await asyncio.sleep(0.8)
+    adb = os.environ.get("ADB", os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"))
+    dump = await asyncio.create_subprocess_exec(adb, "shell", "uiautomator", "dump", "/sdcard/bridge-stopped.xml", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    await dump.communicate()
+    read = await asyncio.create_subprocess_exec(adb, "shell", "cat", "/sdcard/bridge-stopped.xml", stdout=asyncio.subprocess.PIPE)
+    xml, _ = await read.communicate()
+    sc.check("indicator cleared after session_ended", b"No Silicon is using this" in xml, xml.decode()[:1000])
 
     # Reconnect after the service drops the socket.
     hellos = len(st.hellos)
@@ -744,6 +754,7 @@ async def ui_checks(sc: Scenario, tv: bool):
 
     # Revoke pair from the app, with its confirmation dialog.
     sc.session = "b71"
+    await sc.send({"type": "session_started", "target": None, "session_id": sc.session, "silicon_id": "si:chef", "since": now_iso()})
     await sc.cmd("open", ["com.teamofsilicons.bridge"])
     await sc.cmd("wait", ["1000"])
     await sc.cmd("scroll", ["bottom"])

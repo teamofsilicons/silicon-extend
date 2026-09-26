@@ -18,8 +18,8 @@ import javax.crypto.spec.GCMParameterSpec
  * (Written directly on the Keystore instead of androidx.security's EncryptedSharedPreferences,
  * which is deprecated.)
  */
-class SecretStore(context: Context) {
-    private val prefs = context.getSharedPreferences("bridge_secrets", Context.MODE_PRIVATE)
+class SecretStore(context: Context, namespace: String = "bridge_secrets") {
+    private val prefs = context.getSharedPreferences(namespace, Context.MODE_PRIVATE)
 
     fun readCredential(): String? {
         val stored = prefs.getString(KEY_CREDENTIAL, null) ?: return null

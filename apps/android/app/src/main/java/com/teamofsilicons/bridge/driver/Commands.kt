@@ -34,6 +34,7 @@ enum class Direction { UP, DOWN, LEFT, RIGHT }
 
 /** A parsed command, ready to run. */
 sealed interface Cmd {
+    data class Debug(val command: com.teamofsilicons.bridge.adb.AdbCommand) : Cmd
     data class Snapshot(val options: SnapshotOptions, val diff: Boolean) : Cmd
     data class Get(val what: String, val target: Target) : Cmd
     data class Find(val locator: String, val query: String, val action: String, val value: String?, val waitMs: Long?, val pick: String?) : Cmd
@@ -90,13 +91,16 @@ object CommandParser {
     /** Commands this app never runs, each with the precise reason. */
     val UNSUPPORTED: Map<String, String> = mapOf(
         "hover" to "hover needs a mouse pointer; Android touch screens and TVs have none. Use longpress for the touch equivalent.",
-        "terminal" to "terminal is for computers (Mac, Windows, Linux); an Android device has no shell a Silicon can use through the Bridge app.",
+        "terminal" to "terminal is for computers (Mac, Windows, Linux); use adb shell for Android debugging.",
     )
 
     private val GLOBAL_BOOLEAN_FLAGS = setOf("--json", "--settle", "--verbose", "--permanent", "--force-full", "--no-settle")
     private val GLOBAL_VALUE_FLAGS = setOf("--timeout", "--ttl")
 
     fun parse(command: String, args: List<String>): Cmd {
+        if (command in setOf("adb", "install", "reinstall", "record", "logs")) {
+            return Cmd.Debug(com.teamofsilicons.bridge.adb.AdbCommands.parse(command, args))
+        }
         val a = Args.of(args)
         return when (command) {
             "snapshot" -> parseSnapshot(a, diffAlias = false)
@@ -130,7 +134,6 @@ object CommandParser {
                 if (a.positionals.size > 1) throw CommandFailure.invalid("screenshot takes at most one name, got ${a.positionals}")
                 Cmd.Screenshot(a.positional(0), scale, overlay, cropOn)
             }
-            "record" -> throw CommandFailure.unsupported(Capabilities.RECORD_REASON)
             "click" -> {
                 val button = a.value("--button")
                 if (button != null && button != "primary") {
@@ -267,9 +270,6 @@ object CommandParser {
                 Cmd.Apps(all)
             }
             "appstate" -> { a.noUnknownFlags(); Cmd.AppState }
-            "install", "reinstall" -> throw CommandFailure.unsupported(Capabilities.ADB_REASON.replace("{what}", "Installing apps"))
-            "logs" -> throw CommandFailure.unsupported(Capabilities.ADB_REASON.replace("{what}", "Reading device logs"))
-            "adb" -> throw CommandFailure.unsupported(Capabilities.ADB_REASON.replace("{what}", "Android debugging (adb)"))
             "alert" -> {
                 a.noUnknownFlags()
                 val action = a.positional(0) ?: "get"

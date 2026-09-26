@@ -16,6 +16,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import java.io.File
 import okhttp3.Response
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -102,6 +104,42 @@ class BridgeApi(private val baseUrl: () -> String, val client: OkHttpClient = de
                 .build()
             client.newCall(request).execute().use { expectSuccess(it) }
         }
+
+    /** Recordings are streamed from disk; never load an entire video into the app heap. */
+    suspend fun uploadFile(credential: String, uploadId: String, file: File, contentType: String) = withContext(Dispatchers.IO) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        val hash = digest.digest().joinToString("") { "%02x".format(it) }
+        val request = Request.Builder()
+            .url(baseUrl() + "/api/v1/device/artifacts/$uploadId")
+            .header("Authorization", "Bridge-Device $credential")
+            .header("X-Content-SHA256", hash)
+            .header("X-File-Name", file.name)
+            .put(file.asRequestBody(contentType.toMediaType()))
+            .build()
+        val call = client.newCall(request)
+        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(e))
+                }
+                override fun onResponse(call: okhttp3.Call, response: Response) {
+                    response.use {
+                        val result = runCatching { expectSuccess(it) }
+                        if (continuation.isActive) continuation.resumeWith(result)
+                    }
+                }
+            })
+        }
+    }
 
     private fun expectSuccess(response: Response) {
         if (!response.isSuccessful) throw toApiException(response)

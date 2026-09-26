@@ -112,6 +112,8 @@ class BridgeAccessibilityService : AccessibilityService() {
 
     /** Every window's tree, bottom window first. Our own overlay badge is left out. */
     fun capture(): Capture {
+        // Compose can update bounds without invalidating every cached virtual descendant.
+        if (android.os.Build.VERSION.SDK_INT >= 33) clearCache()
         val screen = screenBounds()
         val roots = ArrayList<UiNode>()
         val windows = runCatching { windows }.getOrDefault(emptyList())

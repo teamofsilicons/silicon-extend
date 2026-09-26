@@ -85,15 +85,21 @@ class CommandExecutor(private val bridge: Bridge) {
 
     private val sessions = ConcurrentHashMap<String, Session>()
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val commandSessions = ConcurrentHashMap<String, String>()
+    private val stoppedSessions = ConcurrentHashMap.newKeySet<String>()
     private val lock = Mutex()
     private val context get() = bridge.context
 
     fun beginSession(sessionId: String) {
+        stoppedSessions.remove(sessionId)
         sessions[sessionId] = Session()
     }
 
     fun endSession(sessionId: String) {
+        stoppedSessions.add(sessionId)
+        commandSessions.filterValues { it == sessionId }.keys.forEach(::cancel)
         sessions.remove(sessionId)
+        bridge.scope.launch { bridge.adbExecutor.endSession(sessionId) }
     }
 
     fun cancel(commandId: String) {
@@ -103,6 +109,8 @@ class CommandExecutor(private val bridge: Bridge) {
     fun cancelAll() {
         jobs.values.forEach { it.cancel() }
         jobs.clear()
+        sessions.clear()
+        bridge.scope.launch { bridge.adbExecutor.endAll() }
     }
 
     fun submit(frame: ServiceFrame.Command, send: (DeviceFrame.Result) -> Unit) {
@@ -111,12 +119,16 @@ class CommandExecutor(private val bridge: Bridge) {
             send(result)
         }
         jobs[frame.id] = job
-        job.invokeOnCompletion { jobs.remove(frame.id) }
+        commandSessions[frame.id] = frame.sessionId
+        job.invokeOnCompletion { jobs.remove(frame.id); commandSessions.remove(frame.id) }
         job.start()
     }
 
     /** Runs one command frame to its `result`. */
     suspend fun run(frame: ServiceFrame.Command): DeviceFrame.Result {
+        if (frame.sessionId in stoppedSessions) return DeviceFrame.Result(
+            frame.id, false, JsonNull, "This session has ended.", CommandError("session_ended", "This session has ended."), emptyList(),
+        )
         val session = sessions.getOrPut(frame.sessionId) { Session() }
         val budget = (frame.timeoutMs - 750).coerceAtLeast(1_000)
         val run = Run(frame, session, SystemClock.elapsedRealtime() + budget)
@@ -203,6 +215,7 @@ class CommandExecutor(private val bridge: Bridge) {
     // ───────────── dispatch ─────────────
 
     private suspend fun exec(cmd: Cmd, run: Run): Outcome = when (cmd) {
+        is Cmd.Debug -> debugging(cmd, run)
         is Cmd.Snapshot -> snapshot(cmd, run)
         is Cmd.Get -> get(cmd, run)
         is Cmd.Find -> find(cmd, run)
@@ -233,6 +246,38 @@ class CommandExecutor(private val bridge: Bridge) {
         is Cmd.Batch -> steps("batch", Scripts.parseBatch(cmd.stepsJson), run)
         is Cmd.Replay -> replay(cmd, run)
         is Cmd.TestSuite -> testSuite(cmd, run)
+    }
+
+    private suspend fun debugging(cmd: Cmd.Debug, run: Run): Outcome {
+        val install = cmd.command as? com.teamofsilicons.bridge.adb.AdbCommand.Install
+        if (install != null) {
+            val file = run.localFiles.values.firstOrNull { it.absolutePath == install.path }
+                ?: throw CommandFailure.invalid("Send the APK as an attachment.")
+            val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+                ?: throw CommandFailure.invalid("The attachment is not a valid APK.")
+            if (info.packageName != install.app) throw CommandFailure.invalid("APK package ${info.packageName} does not match ${install.app}.")
+        }
+        val result = try {
+            bridge.adbExecutor.execute(run.frame.sessionId, cmd.command, run.localFiles.values)
+        } catch (e: java.io.IOException) {
+            throw CommandFailure(CommandFailure.ACTION_FAILED, e.message ?: "Android debugging failed")
+        }
+        val artifact = result.artifact
+        return try {
+            val file = artifact?.let {
+                val id = run.frame.uploadIds.getOrNull(run.uploadCursor++)
+                    ?: throw CommandFailure(CommandFailure.UPLOAD_FAILED, "No upload slot is available for ${it.file.name}.")
+                val cred = bridge.secrets.readCredential() ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired.")
+                try { bridge.api.uploadFile(cred, id, it.file, it.contentType) }
+                catch (e: ApiException) { throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Upload failed: ${e.message}") }
+                catch (e: java.io.IOException) { throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Upload failed: ${e.message}") }
+                ProducedFile(id, it.file.name, it.contentType, it.kind, it.file.length()).also { run.files += it }
+            }
+            Outcome(buildJsonObject {
+                put("message", result.text)
+                if (file != null) put("files", JsonArray(listOf(JsonPrimitive(file.uploadId))))
+            }, result.text)
+        } finally { artifact?.file?.parentFile?.deleteRecursively() }
     }
 
     // ───────────── seeing the screen ─────────────

@@ -109,8 +109,8 @@ access; the setup help says so.
    report returns `unsupported_on_device` with the `missing` reason.
 4. **Setup state.** Required steps: accessibility, notifications (phones, API 33+), background use
    (battery optimisation), notification access (phones). Developer options and wireless/network
-   debugging are listed with their real status (`done` or `todo`) and marked optional, because
-   nothing in this version uses them; `setup.state` is `complete` once the required steps are done.
+   debugging are listed with their real status (`done` or `todo`). Core accessibility control
+   remains available without debugging; installation, logs and recording require its connection.
 5. **TV in-use badge** is a `TYPE_ACCESSIBILITY_OVERLAY` window (no "display over other apps"
    permission), not focusable or touchable, left out of snapshots.
 6. **Credential storage**: AES-256-GCM key in the Android Keystore; only ciphertext on disk
@@ -153,11 +153,6 @@ Phone (Android 16 emulator) and TV (Android TV 14 emulator):
 
 ## What doesn't (reported in `missing` or as `unsupported_on_device`, with the reason)
 
-- `screen.record` (`record`): MediaProjection needs the Carbon's consent prompt for every recording;
-  no way around it without Android debugging.
-- `adb`, `apps.install` (`install`/`reinstall`), `logs`: the wireless-debugging bridge (an on-device
-  ADB client with TLS pairing) is not built in this version. This is what Developer options and
-  wireless/network debugging will be for.
 - `tv-remote press menu|power` and long-presses other than select: an accessibility service can't
   send those keys (power is also refused on purpose: nothing could turn the TV back on).
 - `hover`, `click --button secondary`, `open --surface` (computer-only), `gesture transform`,
@@ -170,3 +165,56 @@ Phone (Android 16 emulator) and TV (Android TV 14 emulator):
 - Not verified: physical devices, physical Fire TV (`amazon.hardware.fire_tv` detection and the
   Fire OS settings paths are from documentation), Android 11–12 devices (minSdk 30; D-pad buttons
   need Android 13+, and older TVs report `input.remote` missing), video playback in `display`.
+
+## Android debugging (2026-09-26 follow-up)
+
+The paired app now has an **Android debugging** setup card. On Android 11+, enable Wireless
+Debugging, keep Android's pairing-code dialog beside Bridge in split screen, and enter Android's
+pairing port and six-digit code. These are separate from the Bridge enrollment code. After pairing,
+Bridge discovers this device's connection port; it also accepts the port shown on the main Wireless
+Debugging screen. TVs with TCP debugging can connect to their local port (commonly 5555) and approve
+Android's RSA prompt. Connections are restricted to loopback, and discovery only accepts this
+host's own addresses. Credentials are encrypted with the Android Keystore. Reconnect runs while
+paired; after a reboot the owner may still need to enable Wireless Debugging again.
+
+Connected debugging enables `adb`, `install`/`reinstall`, `logs`, and phone `record` commands.
+Accessibility remains the semantic screen/input driver. Capabilities are withdrawn when debugging
+is disconnected. The app never opens a debugging connection in response to a remote command.
+
+- `bridge adb shell <command>` preserves exit failures; `exec-out` returns a binary artifact.
+- `bridge adb push <local file> <device path>` and `pull <device path> --out <local file>` use ADB
+  sync and Bridge's artifact uploads. The CLI attaches local inputs for ADB push/install only.
+- `bridge install <package.name> <local.apk>` checks APK package identity before installation;
+  `reinstall` requests replacement. `adb install [-r] <local.apk>` and `adb uninstall <package>`
+  are also supported. The existing service limit of 8 MiB total inline attachments still applies;
+  large APKs and Briefcase file-id inputs remain follow-up work.
+- `bridge logs start`, `mark <label>`, `stop --out <file>`, `clear` stream up to 16 MiB of device
+  logs. The app closes the live stream on session end or disconnect.
+- `bridge record start [name] [--scope device] [--quality normal|high]` and
+  `record stop --out <file.mp4>` use Android's screenrecord process, capped at 180 seconds per
+  recording. App-only scope and custom frame rates are explicitly unsupported by this backend.
+  Recordings and pulled files are streamed from disk during upload. Stop, revoke and connection
+  loss clean up session-owned capture processes. Recorder PID checks include its unique output
+  directory, so cleanup cannot signal a recycled PID. Interrupted recording directories are
+  tracked for cleanup on the next debugging connection.
+
+The ADB implementation uses the patched libadb-android 3.1.1 source in `vendor/libadb`
+(Apache-2.0 option; upstream BSD notices retained), Conscrypt 2.5.3 and
+BouncyCastle 1.81. APKs remain development-signed; release signing is a separate gate.
+
+Verification commands:
+
+```sh
+./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest
+# On the dedicated test emulator, enable TCP debugging once and approve the test app's RSA key.
+adb tcpip 5555
+adb shell am instrument -w -e class com.teamofsilicons.bridge.LocalAdbTest#realLocalDaemon \
+  com.teamofsilicons.bridge.test/androidx.test.runner.AndroidJUnitRunner
+# With this device paired to the local Bridge backend and debugging connected:
+../../e2e/android-adb.sh <device-id>
+```
+
+`LocalAdbTest#wirelessPairing` additionally accepts `adb_pairing_port`, `adb_pairing_code`, and
+optionally `adb_connect_port` instrumentation arguments. `#wirelessReconnect -e adb_tls true`
+verifies mDNS discovery and reuse of the saved identity in a new app process. The test-only APK
+fixture has no executable code or runtime permissions and is uninstalled after the test.

@@ -417,6 +417,7 @@ class ConnectionManager(private val bridge: Bridge) {
     /** Stop: ends the Silicon's session. */
     fun stopSession() {
         val session = bridge.state.value.session ?: return
+        bridge.executor.endSession(session.sessionId)
         bridge.update { it.copy(session = session.copy(stopping = true)) }
         bridge.scope.launch {
             if (!send(DeviceFrame.Stop)) {
