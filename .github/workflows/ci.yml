@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.9-bookworm
+        env: {POSTGRES_USER: bridge, POSTGRES_PASSWORD: bridge, POSTGRES_DB: bridge}
+        ports: ['5440:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --locked
+        env: {BRIDGE_TEST_ADMIN_URL: 'postgres://bridge:bridge@127.0.0.1:5440/postgres'}
+      - name: CLI end-to-end
+        run: |
+          cargo build -p bridge-cli -p bridge-service --example fake_device
+          set -a; . e2e/dev.env; set +a
+          ./target/debug/bridge-service & sleep 3
+          bash e2e/cli-e2e.sh
+  web:
+    runs-on: ubuntu-24.04
+    defaults: {run: {working-directory: web}}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium && pnpm test:e2e
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: npx @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash

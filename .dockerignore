@@ -1,0 +1,8 @@
+target
+web/node_modules
+web/dist
+apps
+e2e/.state
+vendor/agent-device
+**/node_modules
+.git

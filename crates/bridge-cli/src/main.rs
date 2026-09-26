@@ -603,6 +603,16 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 me.teams.iter().map(|t| if Some(t) == default.as_ref() { format!("{t} (default)") } else { t.clone() }).collect::<Vec<_>>().join("\n")
             });
         }
+        Some("silicons") => {
+            let list = ctx.call(|c, t, team| async move { c.authed(&t, team.as_deref()).team_silicons().await }).await?;
+            emit(ctx, json!({"items": list}), || {
+                if list.is_empty() {
+                    "No Silicons in this team.".into()
+                } else {
+                    list.iter().map(|s| match &s.display_name { Some(n) => format!("{}  {n}", s.id), None => s.id.clone() }).collect::<Vec<_>>().join("\n")
+                }
+            });
+        }
         Some("use") => {
             let t = args.get(1).cloned().ok_or_else(|| CliError::usage("missing team handle").hint("Usage: bridge team use <handle>"))?;
             if !auth.teams.contains(&t) {
@@ -613,7 +623,7 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             ctx.auth = Some(auth);
             emit(ctx, json!({"default": t}), || format!("Default team is now {t}."));
         }
-        Some(other) => return Err(CliError::usage(format!("unknown `bridge team {other}`")).hint("Usage: bridge team ls | bridge team use <handle>")),
+        Some(other) => return Err(CliError::usage(format!("unknown `bridge team {other}`")).hint("Usage: bridge team ls | bridge team silicons | bridge team use <handle>")),
     }
     Ok(0)
 }

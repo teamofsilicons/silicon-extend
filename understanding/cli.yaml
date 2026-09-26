@@ -152,6 +152,12 @@ commands:
     gives: {text: 'acme (default), labs', json: '{teams: [..], default: "acme"}'}
     api: GET /api/v1/auth/me
 
+  - usage: bridge team silicons
+    who: both
+    summary: The Silicons in the team, to pick who gets access to a device.
+    gives: {text: 'si:chef  Chef', json: '{items: [{id, display_name}]}'}
+    api: GET /api/v1/team/silicons
+
   - usage: bridge config home <dir>
     who: both
     summary: Move where Bridge keeps its state. Default {SILICON_HOME or ~}/.bridge.

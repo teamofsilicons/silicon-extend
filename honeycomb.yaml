@@ -1,0 +1,35 @@
+# Maps the bridge command to the six required release targets.
+format_version: 1
+
+app_id: "bridge"
+version: "1.0.0"
+
+bin:
+  bridge: "app"
+
+targets:
+  linux-x86_64:
+    root: "targets/linux-x86_64"
+    executables: &unix_executables
+      app: "bin/bridge"
+
+  linux-aarch64:
+    root: "targets/linux-aarch64"
+    executables: *unix_executables
+
+  windows-x86_64:
+    root: "targets/windows-x86_64"
+    executables: &windows_executables
+      app: "bin/bridge.exe"
+
+  windows-aarch64:
+    root: "targets/windows-aarch64"
+    executables: *windows_executables
+
+  macos-x86_64:
+    root: "targets/macos-x86_64"
+    executables: *unix_executables
+
+  macos-aarch64:
+    root: "targets/macos-aarch64"
+    executables: *unix_executables

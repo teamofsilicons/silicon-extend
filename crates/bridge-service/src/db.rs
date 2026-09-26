@@ -248,6 +248,10 @@ CREATE TABLE IF NOT EXISTS {s}.telemetry (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 "#,
+    r#"
+ALTER TABLE {s}.telemetry ADD COLUMN IF NOT EXISTS exported_at timestamptz;
+CREATE INDEX IF NOT EXISTS telemetry_pending ON {s}.telemetry (id) WHERE exported_at IS NULL;
+"#,
 ];
 
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {

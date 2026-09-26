@@ -605,6 +605,17 @@ pub async fn command(State(state): State<Shared>, auth: Auth, Path(session_id): 
         });
     }
     let _ = FileKind::Other;
+    crate::telemetry::record(
+        &state,
+        &auth.world,
+        Some(auth.p.id()),
+        serde_json::json!({
+            "source": "service", "event": "command", "step": "session.command.relay", "success": outcome.ok,
+            "duration_ms": duration_ms, "command": spec.name, "device_os": d.os().as_str(), "session_id": session_id,
+            "command_id": command_id, "files": files.len(), "error_code": outcome.error.as_ref().map(|e| e.code.clone()),
+        }),
+    )
+    .await;
     let idle = log_command(
         if outcome.ok { "ok" } else { "failed" },
         files.iter().map(|f| f.file_id).collect(),

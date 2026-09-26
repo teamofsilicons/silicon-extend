@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#FFFDF9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141615" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="Silicon Bridge: pair your devices and decide which Silicons can use them." />
+    <title>Silicon Bridge</title>
+    <script>
+      try {
+        var t = localStorage.getItem("bridge.theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>Silicon Bridge needs JavaScript. The bridge CLI works without a browser: honeycomb install 'bridge'.</noscript>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>

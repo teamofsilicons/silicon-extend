@@ -21,6 +21,7 @@ pub mod revocation;
 pub mod routes;
 pub mod scheduler;
 pub mod state;
+pub mod telemetry;
 pub mod ting;
 
 use std::sync::Arc;
@@ -31,6 +32,8 @@ use state::{AppState, Shared};
 /// Builds the shared state from configuration: connects the database, runs migrations, and wires
 /// IAM, Briefcase and Ting (or their local stand-ins).
 pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
+    // Space Station's HTTP stack needs a process-wide TLS provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let pool = db::connect(&cfg.database_url).await?;
     db::migrate_global(&pool).await?;
     std::fs::create_dir_all(cfg.data_dir.join("uploads"))?;

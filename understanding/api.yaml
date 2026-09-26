@@ -20,6 +20,8 @@ info:
     - Retry a POST after an uncertain result with the same `Idempotency-Key` and the identical body.
     - Test environments: send the test application's `app_secret` in `X-Testing-Application-Secret`.
       Omit it for production. An invalid secret is an error, never a silent fall back to production.
+    - Browsers: CORS mirrors the request's origin, methods and headers, and exposes `ETag`, `X-Request-ID` and
+      `Silicon-Bridge-API-Version`.
 servers:
   - url: https://backend.bridge.teamofsilicons.com
 security:
@@ -161,6 +163,11 @@ paths:
                     properties:
                       app_id: {type: string, example: bridge}
                       iam_base_url: {type: string, format: uri, example: 'https://backend.iam.teamofsilicons.com'}
+                      iam_login_url:
+                        type: [string, 'null']
+                        format: uri
+                        example: 'https://auth.iam.teamofsilicons.com/login'
+                        description: 'Send a Carbon here to sign in: {iam_login_url}?app_id=<app_id>&redirect_uri=<url>. IAM appends slt=<token> to redirect_uri.'
                       api_base_url: {type: string, format: uri, example: 'https://backend.bridge.teamofsilicons.com'}
                       website_url: {type: string, format: uri, example: 'https://bridge.teamofsilicons.com'}
                       docs_url: {type: string, format: uri}
@@ -837,6 +844,38 @@ paths:
         '204': {description: 'Revoked, or there was no grant'}
         '403': {$ref: '#/components/responses/Error'}
 
+  /api/v1/team/silicons:
+    get:
+      tags: [Access]
+      operationId: teamSilicons
+      summary: Silicons in the team, for choosing who gets access
+      description: Any signed-in member of the team named by X-Org-ID. Read live from Silicon IAM.
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+      responses:
+        '200':
+          description: Silicons
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: team_silicons}
+                  data:
+                    type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          required: [id]
+                          properties:
+                            id: {$ref: '#/components/schemas/SiliconId'}
+                            display_name: {type: [string, 'null']}
+
   # ───────────────────────────── Sessions ─────────────────────────────
   /api/v1/sessions:
     post:
@@ -1024,6 +1063,7 @@ paths:
       tags: [Sessions]
       operationId: getTakeover
       summary: Whether the session is paused for the Carbon (`bridge takeover status`)
+      description: The session's Silicon, or the Carbon who owns the device (the website shows the reason and a Done button from this).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1041,7 +1081,8 @@ paths:
     delete:
       tags: [Sessions]
       operationId: releaseTakeover
-      summary: Resume the session (`bridge takeover release`)
+      summary: Resume the session (`bridge takeover release`, or the Carbon's Done on the website)
+      description: The session's Silicon, or the Carbon who owns the device.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1165,7 +1206,8 @@ paths:
         Silicons with access only, and only while another Silicon is using the device (otherwise 409
         `device_not_in_use` with a hint to start a session). Delivered through Ting to the Silicon using the device,
         with the reason exactly as sent. One open request per Silicon per device per 60 s; a repeat inside that
-        window returns the existing request.
+        window returns the existing request (200). If Ting is unreachable the request is stored with `delivery: pending`
+        and retried in the background (up to 6 attempts), so the answer is still 201.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1200,7 +1242,6 @@ paths:
         '403': {$ref: '#/components/responses/Error'}
         '409': {$ref: '#/components/responses/Error'}
         '422': {$ref: '#/components/responses/Error'}
-        '502': {description: 'Ting refused or is unreachable; the request is stored and retried, delivery is pending', $ref: '#/components/responses/Error'}
     get:
       tags: [Requests]
       operationId: listDeviceRequests
@@ -1709,8 +1750,8 @@ components:
     IfMatch:
       name: If-Match
       in: header
-      required: true
-      description: The device version from its ETag. Stale is 412.
+      required: false
+      description: The device version from its ETag. Stale is 412. Without it the change applies to the current version.
       schema: {type: string, pattern: '^"?[1-9][0-9]*"?$'}
     Limit:
       name: limit
@@ -1876,6 +1917,7 @@ components:
               title: {type: string, example: Turn on wireless debugging}
               status: {type: string, enum: [todo, in_progress, needs_carbon, done, failed]}
               help: {type: [string, 'null'], description: Where to find it on this device}
+              input: {type: [string, 'null'], enum: [code, null], description: 'What the Carbon enters on the website for this step: "code" for the PIN an Apple TV shows'}
               error: {type: [string, 'null']}
 
     EnrollmentState:
