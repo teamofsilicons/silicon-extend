@@ -206,13 +206,7 @@ pub(crate) struct Server {
 
 #[cfg(test)]
 impl Server {
-    pub fn new<D: Digest>(
-        group: Group,
-        user: &[u8],
-        password: &[u8],
-        salt: &[u8],
-        private: &[u8],
-    ) -> Self {
+    pub fn new<D: Digest>(group: Group, user: &[u8], password: &[u8], salt: &[u8], private: &[u8]) -> Self {
         let inner = hash::<D>(&[user, b":", password]);
         let x = hash_int::<D>(&[&bytes(&BigUint::from_bytes_be(salt)), &inner]);
         let v = group.g.modpow(&x, &group.n);
@@ -236,14 +230,7 @@ impl Server {
         let u = hash_int::<D>(&[&self.group.pad(&a_pub), &self.group.pad(&self.b_pub)]);
         let s = (&a_pub * self.v.modpow(&u, n)).modpow(&self.b, n);
         let key = hash::<D>(&[&bytes(&s)]);
-        let m1 = proof_m1::<D>(
-            &self.group,
-            &self.user,
-            &self.salt,
-            &a_pub,
-            &self.b_pub,
-            &key,
-        );
+        let m1 = proof_m1::<D>(&self.group, &self.user, &self.salt, &a_pub, &self.b_pub, &key);
         let m2 = proof_m2::<D>(&a_pub, &m1, &key);
         (key, m1, m2)
     }
@@ -255,8 +242,7 @@ mod tests {
     use sha2::Sha512;
 
     fn vectors() -> serde_json::Value {
-        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/hap-vectors.json");
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hap-vectors.json");
         serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
     }
 
@@ -270,23 +256,14 @@ mod tests {
         let v = vectors();
         let group = group_1024();
         let salt = hex::decode("BEB25379D1A8581EB5A727673A2441EE").unwrap();
-        let a = hex::decode("60975527035CF2AD1989806F0407210BC81EDC04E2762A56AFD529DDDA2D4393")
-            .unwrap();
-        let b = hex::decode("E487CB59D31AC550471E81F00F6928E01DDA08E974A004F49E61F5D105284D20")
-            .unwrap();
+        let a = hex::decode("60975527035CF2AD1989806F0407210BC81EDC04E2762A56AFD529DDDA2D4393").unwrap();
+        let b = hex::decode("E487CB59D31AC550471E81F00F6928E01DDA08E974A004F49E61F5D105284D20").unwrap();
         let client = Client::new(group.clone(), &a);
         let server = Server::new::<sha1::Sha1>(group.clone(), b"alice", b"password123", &salt, &b);
         assert_eq!(client.a_pub, big(v["rfc_A"].as_str().unwrap()));
         assert_eq!(server.b_pub, big(v["rfc_B"].as_str().unwrap()));
         assert_eq!(server.v, big(v["rfc_v"].as_str().unwrap()));
-        let d = derive::<sha1::Sha1>(
-            &group,
-            b"alice",
-            b"password123",
-            &salt,
-            &client.a_pub,
-            &server.b_pub,
-        );
+        let d = derive::<sha1::Sha1>(&group, b"alice", b"password123", &salt, &client.a_pub, &server.b_pub);
         // The values printed in RFC 5054 Appendix B.
         assert_eq!(d.k, big("7556AA045AEF2CDD07ABAF0F665C3E818913186F"));
         assert_eq!(d.x, big("94B7555AABE9127CC58CCF4993DB6CF84D16C124"));
@@ -307,17 +284,12 @@ mod tests {
     fn hap_vector_matches_srptools() {
         let v = vectors();
         let salt = hex::decode("beb25379d1a8581eb5a727673a2441ee").unwrap();
-        let a = hex::decode("60975527035cf2ad1989806f0407210bc81edc04e2762a56afd529ddda2d4393")
-            .unwrap();
-        let b = hex::decode("e487cb59d31ac550471e81f00f6928e01dda08e974a004f49e61f5d105284d20")
-            .unwrap();
+        let a = hex::decode("60975527035cf2ad1989806f0407210bc81edc04e2762a56afd529ddda2d4393").unwrap();
+        let b = hex::decode("e487cb59d31ac550471e81f00f6928e01dda08e974a004f49e61f5d105284d20").unwrap();
         let client = Client::new(group_3072(), &a);
         assert_eq!(hex::encode(client.public()), v["srp_A"].as_str().unwrap());
         let server = Server::new::<Sha512>(group_3072(), b"Pair-Setup", b"1234", &salt, &b);
-        assert_eq!(
-            hex::encode(bytes(&server.b_pub)),
-            v["srp_B"].as_str().unwrap()
-        );
+        assert_eq!(hex::encode(bytes(&server.b_pub)), v["srp_B"].as_str().unwrap());
         let s = client
             .process::<Sha512>(
                 b"Pair-Setup",

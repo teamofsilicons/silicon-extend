@@ -49,7 +49,12 @@ pub struct HostedRegistry {
 
 impl HostedRegistry {
     pub fn new(factory: DriverFactory, state_dir: PathBuf, agent_device: Vec<String>) -> Self {
-        Self { factory, state_dir, agent_device, entries: Mutex::new(BTreeMap::new()) }
+        Self {
+            factory,
+            state_dir,
+            agent_device,
+            entries: Mutex::new(BTreeMap::new()),
+        }
     }
 
     fn list_path(&self) -> PathBuf {
@@ -58,15 +63,25 @@ impl HostedRegistry {
 
     /// Re-creates the drivers saved by a previous run.
     pub fn restore(&self) {
-        let Ok(bytes) = std::fs::read(self.list_path()) else { return };
-        let Ok(records) = serde_json::from_slice::<Vec<AttachRecord>>(&bytes) else { return };
+        let Ok(bytes) = std::fs::read(self.list_path()) else {
+            return;
+        };
+        let Ok(records) = serde_json::from_slice::<Vec<AttachRecord>>(&bytes) else {
+            return;
+        };
         for r in records {
             self.attach(r);
         }
     }
 
     fn save(&self) {
-        let records: Vec<AttachRecord> = self.entries.lock().unwrap().values().map(|e| e.record.clone()).collect();
+        let records: Vec<AttachRecord> = self
+            .entries
+            .lock()
+            .unwrap()
+            .values()
+            .map(|e| e.record.clone())
+            .collect();
         if let Ok(bytes) = serde_json::to_vec_pretty(&records)
             && let Err(e) = write_private_file(&self.list_path(), &bytes)
         {
@@ -91,8 +106,21 @@ impl HostedRegistry {
         }
         {
             let mut entries = self.entries.lock().unwrap();
-            let (in_use, takeover) = entries.get(&record.device_id).map(|e| (e.in_use.clone(), e.takeover.clone())).unwrap_or_default();
-            entries.insert(record.device_id.clone(), Entry { record, driver, last_sent: None, in_use, takeover, setup_error: None });
+            let (in_use, takeover) = entries
+                .get(&record.device_id)
+                .map(|e| (e.in_use.clone(), e.takeover.clone()))
+                .unwrap_or_default();
+            entries.insert(
+                record.device_id.clone(),
+                Entry {
+                    record,
+                    driver,
+                    last_sent: None,
+                    in_use,
+                    takeover,
+                    setup_error: None,
+                },
+            );
         }
         self.save();
     }
@@ -141,8 +169,13 @@ impl HostedRegistry {
     /// they were last sent (all of them when `force`).
     pub async fn probe_changes(&self, force: bool) -> Vec<AttachedStatus> {
         type Row = (DeviceId, Result<Arc<dyn Driver>, String>, Option<String>);
-        let snapshot: Vec<Row> =
-            self.entries.lock().unwrap().iter().map(|(id, e)| (id.clone(), e.driver.clone(), e.setup_error.clone())).collect();
+        let snapshot: Vec<Row> = self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, e)| (id.clone(), e.driver.clone(), e.setup_error.clone()))
+            .collect();
         let mut changed = Vec::new();
         for (id, driver, setup_error) in snapshot {
             let status = match driver {
@@ -150,7 +183,11 @@ impl HostedRegistry {
                     let probe = match tokio::time::timeout(std::time::Duration::from_secs(20), d.probe()).await {
                         Ok(p) => p,
                         Err(_) => {
-                            changed.extend(self.record_sent(&id, unreachable_status(&id, "The device didn't answer its check within 20 seconds."), force));
+                            changed.extend(self.record_sent(
+                                &id,
+                                unreachable_status(&id, "The device didn't answer its check within 20 seconds."),
+                                force,
+                            ));
                             continue;
                         }
                     };
@@ -276,7 +313,11 @@ mod tests {
 
     fn registry(dir: &std::path::Path) -> HostedRegistry {
         let factory: DriverFactory = Arc::new(|d: HostedDevice| {
-            if d.os == DeviceOs::Tvos { Err("Apple TVs need a Mac".into()) } else { Ok(Box::new(Tv) as Box<dyn Driver>) }
+            if d.os == DeviceOs::Tvos {
+                Err("Apple TVs need a Mac".into())
+            } else {
+                Ok(Box::new(Tv) as Box<dyn Driver>)
+            }
         });
         HostedRegistry::new(factory, dir.to_path_buf(), vec!["node".into()])
     }
@@ -287,8 +328,18 @@ mod tests {
         let reg = registry(dir.path());
         let tv: DeviceId = "0000aaaa".parse().unwrap();
         let atv: DeviceId = "0000bbbb".parse().unwrap();
-        reg.attach(AttachRecord { device_id: tv.clone(), os: DeviceOs::SamsungTv, name: "Lounge TV".into(), address: Some("10.0.0.5".into()) });
-        reg.attach(AttachRecord { device_id: atv.clone(), os: DeviceOs::Tvos, name: "Apple TV".into(), address: None });
+        reg.attach(AttachRecord {
+            device_id: tv.clone(),
+            os: DeviceOs::SamsungTv,
+            name: "Lounge TV".into(),
+            address: Some("10.0.0.5".into()),
+        });
+        reg.attach(AttachRecord {
+            device_id: atv.clone(),
+            os: DeviceOs::Tvos,
+            name: "Apple TV".into(),
+            address: None,
+        });
         assert!(reg.driver(&tv).is_ok());
         assert_eq!(reg.driver(&atv).err().unwrap(), "Apple TVs need a Mac");
         assert!(reg.driver(&"0000cccc".parse().unwrap()).is_err());

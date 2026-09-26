@@ -16,7 +16,8 @@ pub fn parse_start_apps(json: &str) -> Result<Vec<StartApp>, String> {
     if trimmed.is_empty() {
         return Ok(vec![]);
     }
-    let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| format!("couldn't read the Start menu app list: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|e| format!("couldn't read the Start menu app list: {e}"))?;
     let items = match value {
         serde_json::Value::Array(items) => items,
         obj @ serde_json::Value::Object(_) => vec![obj],
@@ -66,7 +67,9 @@ pub fn resolve<'a>(apps: &'a [StartApp], query: &str) -> Option<&'a StartApp> {
     if q.is_empty() {
         return None;
     }
-    let exact = apps.iter().find(|a| a.name.to_lowercase() == q || a.app_id.to_lowercase() == q);
+    let exact = apps
+        .iter()
+        .find(|a| a.name.to_lowercase() == q || a.app_id.to_lowercase() == q);
     if exact.is_some() {
         return exact;
     }
@@ -126,11 +129,17 @@ mod tests {
     fn resolves_names() {
         let apps = parse_start_apps(SAMPLE).unwrap();
         assert_eq!(resolve(&apps, "notepad").unwrap().name, "Notepad");
-        assert_eq!(resolve(&apps, "Microsoft.VisualStudioCode").unwrap().name, "Visual Studio Code");
+        assert_eq!(
+            resolve(&apps, "Microsoft.VisualStudioCode").unwrap().name,
+            "Visual Studio Code"
+        );
         assert_eq!(resolve(&apps, "calc").unwrap().name, "Calculator");
         assert_eq!(resolve(&apps, "studio").unwrap().name, "Visual Studio Code");
         assert!(resolve(&apps, "photoshop").is_none());
         assert!(resolve(&apps, " ").is_none());
-        assert_eq!(suggestions(&apps, "note pad", 5), vec!["Notepad".to_string(), "Notepad++".to_string()]);
+        assert_eq!(
+            suggestions(&apps, "note pad", 5),
+            vec!["Notepad".to_string(), "Notepad++".to_string()]
+        );
     }
 }

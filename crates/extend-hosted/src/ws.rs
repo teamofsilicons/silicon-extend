@@ -30,16 +30,13 @@ impl std::fmt::Display for ConnectError {
 
 /// Opens `ws://` or `wss://` (certificate not checked, see `tls`).
 pub(crate) async fn connect(url: &str, timeout: Duration) -> Result<Ws, ConnectError> {
-    let parsed = url::Url::parse(url)
-        .map_err(|e| ConnectError::Refused(format!("bad socket URL {url}: {e}")))?;
+    let parsed = url::Url::parse(url).map_err(|e| ConnectError::Refused(format!("bad socket URL {url}: {e}")))?;
     let host = parsed
         .host_str()
         .ok_or_else(|| ConnectError::Refused(format!("no host in {url}")))?
         .to_owned();
     let secure = parsed.scheme() == "wss";
-    let port = parsed
-        .port_or_known_default()
-        .unwrap_or(if secure { 443 } else { 80 });
+    let port = parsed.port_or_known_default().unwrap_or(if secure { 443 } else { 80 });
     let stream = if secure {
         tls::tls_insecure(&host, port, timeout).await
     } else {
@@ -49,24 +46,15 @@ pub(crate) async fn connect(url: &str, timeout: Duration) -> Result<Ws, ConnectE
     let request = url
         .into_client_request()
         .map_err(|e| ConnectError::Refused(e.to_string()))?;
-    let (ws, _resp) =
-        tokio::time::timeout(timeout, tokio_tungstenite::client_async(request, stream))
-            .await
-            .map_err(|_| {
-                ConnectError::Refused(format!(
-                    "{host}:{port} didn't finish the WebSocket handshake"
-                ))
-            })?
-            .map_err(|e| {
-                ConnectError::Refused(format!("{host}:{port} refused the WebSocket: {e}"))
-            })?;
+    let (ws, _resp) = tokio::time::timeout(timeout, tokio_tungstenite::client_async(request, stream))
+        .await
+        .map_err(|_| ConnectError::Refused(format!("{host}:{port} didn't finish the WebSocket handshake")))?
+        .map_err(|e| ConnectError::Refused(format!("{host}:{port} refused the WebSocket: {e}")))?;
     Ok(ws)
 }
 
 pub(crate) async fn send_text(ws: &mut Ws, text: impl Into<String>) -> io::Result<()> {
-    ws.send(Message::text(text.into()))
-        .await
-        .map_err(io::Error::other)
+    ws.send(Message::text(text.into())).await.map_err(io::Error::other)
 }
 
 /// Next text (or UTF-8 binary) message, answering pings on the way. `Ok(None)` when closed.
@@ -75,9 +63,7 @@ pub(crate) async fn next_text(ws: &mut Ws, timeout: Duration) -> io::Result<Opti
     loop {
         let msg = tokio::time::timeout_at(deadline, ws.next())
             .await
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "no message from the TV in time")
-            })?;
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "no message from the TV in time"))?;
         match msg {
             None => return Ok(None),
             Some(Err(e)) => return Err(io::Error::other(e)),

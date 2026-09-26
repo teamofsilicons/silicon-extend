@@ -33,7 +33,14 @@ try:
     assert (video['width'],video['height']) == (1280,800),video
     subprocess.run(['ffmpeg','-v','error','-i',str(output),'-f','null','-'],check=True)
     assert not output.with_name('public.native.mp4').exists(), 'native recording was not retired after export'
+    assert not list(work.glob('*.status.json')), 'the worker status file was left beside the recording'
     print('PASS public Linux record start/stop, dimensions, full decode and native artifact retirement',flush=True)
+    # --quality only tunes the macOS overlay re-encode; Linux refuses it instead of ignoring it.
+    refused = subprocess.run([*cli,'record','start',str(work/'quality.mp4'),'--scope','device','--quality','high','--json'],env=env,capture_output=True,text=True,timeout=60)
+    error = json.loads(refused.stdout or refused.stderr)['error']
+    assert refused.returncode != 0 and error['code'] == 'INVALID_ARGS' and '--quality' in error['message'], refused
+    assert not (work/'quality.native.mp4').exists(), 'a refused recording started a recorder'
+    print('PASS --quality refused on Linux:', error['message'], flush=True)
     recovered = work/'recovered.mp4'
     command('record','start',str(recovered),'--scope','system','--fps','12')
     time.sleep(1)
@@ -50,8 +57,11 @@ try:
     data = stopped['data']
     assert data['nativePathDisposition'] == 'retired', data
     assert 'overlayWarning' in data and 'restart' in data['overlayWarning'], data
+    # The recorder stops with the daemon that owned it; the warning must not claim it resumed.
+    assert 'nothing after the daemon restart was recorded' in data.get('warning', ''), data
+    assert not list(work.glob('*.status.json')), 'the dead daemon\'s worker status file was left beside the recording'
     subprocess.run(['ffmpeg','-v','error','-i',str(recovered),'-f','null','-'],check=True)
-    print('PASS public stop recovers after daemon SIGKILL and discloses lost touch events',flush=True)
+    print('PASS public stop recovers after daemon SIGKILL, discloses lost touch events and removes the worker status',flush=True)
     if os.environ.get('EXTEND_RECORD_DRIVER'):
         agent = os.environ['EXTEND_RECORD_DRIVER']
         driver_env = dict(os.environ, SILICON_HOME=str(work/'extend-home'), EXTEND_AGENT_DEVICE=str(root/'vendor/agent-device/bin/agent-device.mjs'), EXTEND_TELEMETRY='off')

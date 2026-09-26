@@ -1,4 +1,7 @@
 // Local end-to-end fixture: exposes only its own text fields and their current values.
+// It also writes `<state>.keys.json` with the key events it received, so a test can observe that
+// cancelled text entry left no key held, and it paints a known background colour so captures
+// can be told apart from the pink peer copy.
 import AppKit
 import Foundation
 
@@ -16,6 +19,7 @@ final class RecordingPattern: NSView {
 }
 
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
+let keyOutput = URL(fileURLWithPath: CommandLine.arguments[1] + ".keys.json")
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 560, height: 330),
@@ -40,6 +44,22 @@ for (index, field) in fields.enumerated() {
 if peer {
   window.title = "Extend focus-change verification (other app)"
   window.backgroundColor = .systemPink
+} else {
+  // Target green (sRGB 0, 158, 82): text-e2e.py checks captures for it and for the peer's pink.
+  window.backgroundColor = NSColor(srgbRed: 0, green: 0.62, blue: 0.32, alpha: 1)
+}
+var keyDowns = 0
+var keyUps = 0
+var heldKeys = Set<UInt16>()
+_ = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+  if event.type == .keyDown {
+    keyDowns += 1
+    heldKeys.insert(event.keyCode)
+  } else {
+    keyUps += 1
+    heldKeys.remove(event.keyCode)
+  }
+  return event
 }
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
@@ -63,6 +83,10 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
   }
   if let data = try? JSONSerialization.data(withJSONObject: values) {
     try? data.write(to: output, options: .atomic)
+  }
+  let keys: [String: Any] = ["down": keyDowns, "up": keyUps, "held": heldKeys.sorted().map(Int.init)]
+  if let data = try? JSONSerialization.data(withJSONObject: keys) {
+    try? data.write(to: keyOutput, options: .atomic)
   }
 }
 app.run()

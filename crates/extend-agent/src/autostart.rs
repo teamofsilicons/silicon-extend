@@ -64,7 +64,13 @@ pub fn launch_agent_plist(program: &Path, args: &[String]) -> String {
 
 /// The XDG autostart entry (`~/.config/autostart/silicon-extend.desktop`).
 pub fn xdg_desktop_entry(program: &Path, args: &[String]) -> String {
-    let quote = |s: &str| if s.contains(' ') { format!("\"{}\"", s.replace('"', "\\\"")) } else { s.to_owned() };
+    let quote = |s: &str| {
+        if s.contains(' ') {
+            format!("\"{}\"", s.replace('"', "\\\""))
+        } else {
+            s.to_owned()
+        }
+    };
     let mut exec = quote(&program.display().to_string());
     for a in args {
         exec.push(' ');
@@ -77,7 +83,10 @@ pub fn xdg_desktop_entry(program: &Path, args: &[String]) -> String {
 
 /// A systemd user unit (`~/.config/systemd/user/silicon-extend.service`).
 pub fn systemd_unit(program: &Path, args: &[String]) -> String {
-    let exec = std::iter::once(program.display().to_string()).chain(args.iter().cloned()).collect::<Vec<_>>().join(" ");
+    let exec = std::iter::once(program.display().to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
         "[Unit]\nDescription=Silicon Extend device agent\nAfter=network-online.target\n\n[Service]\nExecStart={exec}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
     )
@@ -99,7 +108,9 @@ pub fn entry_path(opts: &AutostartOptions) -> Result<PathBuf> {
     if cfg!(target_os = "macos") {
         Ok(home()?.join("Library/LaunchAgents").join(format!("{LABEL}.plist")))
     } else if cfg!(windows) {
-        Ok(PathBuf::from(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Silicon Extend"))
+        Ok(PathBuf::from(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Silicon Extend",
+        ))
     } else if opts.systemd {
         Ok(xdg_config()?.join("systemd/user/silicon-extend.service"))
     } else {
@@ -113,12 +124,29 @@ pub fn install(opts: &AutostartOptions) -> Result<String> {
     let args = run_args(opts);
     let path = entry_path(opts)?;
     if cfg!(windows) {
-        let value = std::iter::once(format!("\"{}\"", program.display())).chain(args).collect::<Vec<_>>().join(" ");
+        let value = std::iter::once(format!("\"{}\"", program.display()))
+            .chain(args)
+            .collect::<Vec<_>>()
+            .join(" ");
         let out = std::process::Command::new("reg")
-            .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "Silicon Extend", "/t", "REG_SZ", "/d", &value, "/f"])
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "Silicon Extend",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &value,
+                "/f",
+            ])
             .output()
             .context("couldn't run reg.exe")?;
-        anyhow::ensure!(out.status.success(), "reg.exe failed: {}", String::from_utf8_lossy(&out.stderr));
+        anyhow::ensure!(
+            out.status.success(),
+            "reg.exe failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         return Ok(path.display().to_string());
     }
     let content = if cfg!(target_os = "macos") {
@@ -133,8 +161,12 @@ pub fn install(opts: &AutostartOptions) -> Result<String> {
     }
     std::fs::write(&path, content).with_context(|| format!("couldn't write {}", path.display()))?;
     if !cfg!(target_os = "macos") && opts.systemd {
-        let _ = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).status();
-        let _ = std::process::Command::new("systemctl").args(["--user", "enable", "silicon-extend.service"]).status();
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "enable", "silicon-extend.service"])
+            .status();
     }
     Ok(path.display().to_string())
 }
@@ -144,7 +176,13 @@ pub fn uninstall() -> Result<Vec<String>> {
     let mut removed = Vec::new();
     if cfg!(windows) {
         let out = std::process::Command::new("reg")
-            .args(["delete", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "Silicon Extend", "/f"])
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "Silicon Extend",
+                "/f",
+            ])
             .output()
             .context("couldn't run reg.exe")?;
         if out.status.success() {
@@ -152,11 +190,19 @@ pub fn uninstall() -> Result<Vec<String>> {
         }
         return Ok(removed);
     }
-    for opts in [AutostartOptions::default(), AutostartOptions { systemd: true, ..Default::default() }] {
+    for opts in [
+        AutostartOptions::default(),
+        AutostartOptions {
+            systemd: true,
+            ..Default::default()
+        },
+    ] {
         let path = entry_path(&opts)?;
         if path.exists() {
             if opts.systemd {
-                let _ = std::process::Command::new("systemctl").args(["--user", "disable", "silicon-extend.service"]).status();
+                let _ = std::process::Command::new("systemctl")
+                    .args(["--user", "disable", "silicon-extend.service"])
+                    .status();
             }
             std::fs::remove_file(&path).with_context(|| format!("couldn't remove {}", path.display()))?;
             removed.push(path.display().to_string());
@@ -169,14 +215,25 @@ pub fn uninstall() -> Result<Vec<String>> {
 pub fn is_installed() -> bool {
     if cfg!(windows) {
         return std::process::Command::new("reg")
-            .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "Silicon Extend"])
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "Silicon Extend",
+            ])
             .output()
             .is_ok_and(|o| o.status.success());
     }
-    [AutostartOptions::default(), AutostartOptions { systemd: true, ..Default::default() }]
-        .iter()
-        .filter_map(|o| entry_path(o).ok())
-        .any(|p| p.exists())
+    [
+        AutostartOptions::default(),
+        AutostartOptions {
+            systemd: true,
+            ..Default::default()
+        },
+    ]
+    .iter()
+    .filter_map(|o| entry_path(o).ok())
+    .any(|p| p.exists())
 }
 
 #[cfg(test)]
@@ -185,7 +242,10 @@ mod tests {
 
     #[test]
     fn plist_is_well_formed() {
-        let p = launch_agent_plist(Path::new("/Applications/Silicon Extend.app/Contents/MacOS/extend-agent"), &["run".into()]);
+        let p = launch_agent_plist(
+            Path::new("/Applications/Silicon Extend.app/Contents/MacOS/extend-agent"),
+            &["run".into()],
+        );
         assert!(p.contains("<string>com.teamofsilicons.extend-agent</string>"));
         assert!(p.contains("<string>/Applications/Silicon Extend.app/Contents/MacOS/extend-agent</string>"));
         assert!(p.contains("<string>run</string>"));
@@ -195,7 +255,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let f = dir.path().join("x.plist");
             std::fs::write(&f, &p).unwrap();
-            let out = std::process::Command::new("/usr/bin/plutil").arg("-lint").arg(&f).output().unwrap();
+            let out = std::process::Command::new("/usr/bin/plutil")
+                .arg("-lint")
+                .arg(&f)
+                .output()
+                .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
         }
     }

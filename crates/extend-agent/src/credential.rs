@@ -47,7 +47,9 @@ impl FileStore {
 impl CredentialStore for FileStore {
     fn load(&self) -> Result<Option<StoredCredential>> {
         match std::fs::read(&self.path) {
-            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| format!("{} is damaged", self.path.display()))?)),
+            Ok(bytes) => Ok(Some(
+                serde_json::from_slice(&bytes).with_context(|| format!("{} is damaged", self.path.display()))?,
+            )),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).with_context(|| format!("couldn't read {}", self.path.display())),
         }
@@ -82,14 +84,17 @@ impl KeyringStore {
         Self { account }
     }
     fn entry(&self) -> Result<keyring::Entry> {
-        keyring::Entry::new(KEYRING_SERVICE, &self.account).map_err(|e| anyhow::anyhow!("OS secret store unavailable: {e}"))
+        keyring::Entry::new(KEYRING_SERVICE, &self.account)
+            .map_err(|e| anyhow::anyhow!("OS secret store unavailable: {e}"))
     }
 }
 
 impl CredentialStore for KeyringStore {
     fn load(&self) -> Result<Option<StoredCredential>> {
         match self.entry()?.get_password() {
-            Ok(json) => Ok(Some(serde_json::from_str(&json).context("the stored credential is damaged")?)),
+            Ok(json) => Ok(Some(
+                serde_json::from_str(&json).context("the stored credential is damaged")?,
+            )),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(anyhow::anyhow!("couldn't read the OS secret store: {e}")),
         }
@@ -102,7 +107,9 @@ impl CredentialStore for KeyringStore {
     fn clear(&self) -> Result<()> {
         match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(anyhow::anyhow!("couldn't remove the credential from the OS secret store: {e}")),
+            Err(e) => Err(anyhow::anyhow!(
+                "couldn't remove the credential from the OS secret store: {e}"
+            )),
         }
     }
     fn describe(&self) -> String {
@@ -156,7 +163,10 @@ pub fn store_for(config: &Config) -> Arc<dyn CredentialStore> {
     match config.credential_store {
         CredentialStoreKind::File => Arc::new(file),
         CredentialStoreKind::Keyring => Arc::new(KeyringStore::new(&config.service_url)),
-        CredentialStoreKind::Auto => Arc::new(AutoStore { keyring: KeyringStore::new(&config.service_url), file }),
+        CredentialStoreKind::Auto => Arc::new(AutoStore {
+            keyring: KeyringStore::new(&config.service_url),
+            file,
+        }),
     }
 }
 

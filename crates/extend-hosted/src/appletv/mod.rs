@@ -20,8 +20,8 @@ use serde_json::json;
 
 use crate::HostedDevice;
 use crate::common::{
-    self, Button, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json,
-    sleep_or_cancel, step, step_error, step_help, unsupported, unsupported_command,
+    self, Button, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json, sleep_or_cancel,
+    step, step_error, step_help, unsupported, unsupported_command,
 };
 use crate::script;
 
@@ -44,9 +44,7 @@ const CLIENT_MODEL: &str = "iPhone14,3";
 
 pub(crate) fn driver(device: HostedDevice) -> Result<Box<dyn Driver>, String> {
     if !cfg!(target_os = "macos") {
-        return Err(
-            "An Apple TV is carried by a Mac on the same network; this computer isn't a Mac".into(),
-        );
+        return Err("An Apple TV is carried by a Mac on the same network; this computer isn't a Mac".into());
     }
     Ok(Box::new(AppleTvDriver::new(device, Ports::default())))
 }
@@ -111,10 +109,7 @@ impl AppleTvDriver {
         }
         if saved.device_id.is_empty() {
             let b: [u8; 5] = rand::random();
-            saved.device_id = format!(
-                "02:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                b[0], b[1], b[2], b[3], b[4]
-            );
+            saved.device_id = format!("02:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", b[0], b[1], b[2], b[3], b[4]);
             saved.rp_id = hex::encode(rand::random::<[u8; 6]>());
             changed = true;
         }
@@ -138,9 +133,9 @@ impl AppleTvDriver {
 fn companion_error(e: CompanionError) -> Output {
     match e {
         CompanionError::Io(e) => offline(format!("Can't reach the Apple TV: {e}")),
-        CompanionError::Pairing(PairingError::NotPaired) => not_ready(
-            "The Apple TV no longer recognises this Mac; add it again and enter the code it shows",
-        ),
+        CompanionError::Pairing(PairingError::NotPaired) => {
+            not_ready("The Apple TV no longer recognises this Mac; add it again and enter the code it shows")
+        }
         CompanionError::Refused(m) => common::failed(format!("The Apple TV refused: {m}")),
         other => common::failed(other.to_string()),
     }
@@ -173,14 +168,13 @@ impl Inner {
     /// every ten minutes; defaults stand in when it finds nothing.
     async fn endpoints(&self) -> Result<(String, u16, u16), String> {
         let saved = self.saved();
-        let (mut host, mut companion) =
-            match self.device.address.clone().filter(|a| !a.trim().is_empty()) {
-                Some(a) => {
-                    let (h, p) = common::split_host_port(&a);
-                    (Some(h), p)
-                }
-                None => (saved.address.clone(), None),
-            };
+        let (mut host, mut companion) = match self.device.address.clone().filter(|a| !a.trim().is_empty()) {
+            Some(a) => {
+                let (h, p) = common::split_host_port(&a);
+                (Some(h), p)
+            }
+            None => (saved.address.clone(), None),
+        };
         companion = companion.or(self.ports.companion);
         let fixed = self.ports.companion.is_some() || self.ports.airplay.is_some();
         let stale = self
@@ -191,9 +185,7 @@ impl Inner {
         if !fixed
             && (host.is_none()
                 || (stale
-                    && (saved.companion_port.is_none()
-                        || saved.airplay_port.is_none()
-                        || saved.os_version.is_none())))
+                    && (saved.companion_port.is_none() || saved.airplay_port.is_none() || saved.os_version.is_none())))
         {
             *self.looked_up.lock().unwrap() = Some(Instant::now());
             let (links, airplays) = tokio::join!(
@@ -244,12 +236,8 @@ impl Inner {
             }
         }
         let saved = self.saved();
-        let host = host.ok_or(
-            "No Apple TV found on this network. Check it's on and on the same Wi-Fi as this Mac",
-        )?;
-        let companion = companion
-            .or(saved.companion_port)
-            .unwrap_or(DEFAULT_COMPANION_PORT);
+        let host = host.ok_or("No Apple TV found on this network. Check it's on and on the same Wi-Fi as this Mac")?;
+        let companion = companion.or(saved.companion_port).unwrap_or(DEFAULT_COMPANION_PORT);
         let airplay = self
             .ports
             .airplay
@@ -369,15 +357,11 @@ impl Inner {
                 })
                 .await
             }
-            Some(d) => match self
-                .with(|c| Box::pin(async move { c.hid(code, true).await }))
-                .await
-            {
+            Some(d) => match self.with(|c| Box::pin(async move { c.hid(code, true).await })).await {
                 Ok(()) => {
                     let _ = sleep_or_cancel(inv, d).await;
                     // Always release, even when cancelled mid-hold.
-                    self.with(|c| Box::pin(async move { c.hid(code, false).await }))
-                        .await
+                    self.with(|c| Box::pin(async move { c.hid(code, false).await })).await
                 }
                 Err(e) => Err(e),
             },
@@ -413,9 +397,7 @@ impl Inner {
                 };
                 match find_app(&apps, &name, |a| &a.0, |a| &a.1) {
                     Some((id, n)) => (id.clone(), n.clone()),
-                    None if name.contains('.') && !name.contains(' ') => {
-                        (name.clone(), name.clone())
-                    }
+                    None if name.contains('.') && !name.contains(' ') => (name.clone(), name.clone()),
                     None => {
                         let names: Vec<&str> = apps.iter().map(|a| a.1.as_str()).take(40).collect();
                         return invalid(format!(
@@ -434,10 +416,7 @@ impl Inner {
             })
             .await
         {
-            Ok(()) => Output::ok(
-                json!({"app": launch, "name": label}),
-                format!("Opened {label}"),
-            ),
+            Ok(()) => Output::ok(json!({"app": launch, "name": label}), format!("Opened {label}")),
             Err(e) => companion_error(e),
         }
     }
@@ -456,21 +435,15 @@ impl Inner {
             }
             Some("show") => {}
             _ => {
-                return invalid(
-                    "usage: display show --image <file|url> | --video <file|url>  or  display clear",
-                );
+                return invalid("usage: display show --image <file|url> | --video <file|url>  or  display clear");
             }
         }
         let (kind, value) = match (it.next(), it.next(), it.next()) {
-            (Some(k @ ("--image" | "--video" | "--url" | "--text")), Some(v), None) => {
-                (k, v.to_owned())
-            }
+            (Some(k @ ("--image" | "--video" | "--url" | "--text")), Some(v), None) => (k, v.to_owned()),
             _ => return invalid("usage: display show --image <file|url> | --video <file|url>"),
         };
         if matches!(kind, "--url" | "--text") {
-            return unsupported(
-                "An Apple TV shows pictures and videos only (`--image` or `--video`)",
-            );
+            return unsupported("An Apple TV shows pictures and videos only (`--image` or `--video`)");
         }
         let (host, _, port) = match self.endpoints().await {
             Ok(e) => e,
@@ -500,25 +473,13 @@ impl Inner {
                     Ok(b) => (b, common::content_type_for(&p).to_owned()),
                     Err(e) => return invalid(format!("can't read {value}: {e}")),
                 },
-                None => match crate::http::request(
-                    "GET",
-                    &value,
-                    &[],
-                    b"",
-                    Duration::from_secs(30),
-                    false,
-                )
-                .await
-                {
+                None => match crate::http::request("GET", &value, &[], b"", Duration::from_secs(30), false).await {
                     Ok(r) if r.is_success() => {
                         let ct = r.header("content-type").unwrap_or("image/jpeg").to_owned();
                         (r.body, ct)
                     }
                     Ok(r) => {
-                        return common::failed(format!(
-                            "Downloading {value} failed with HTTP {}",
-                            r.status()
-                        ));
+                        return common::failed(format!("Downloading {value} failed with HTTP {}", r.status()));
                     }
                     Err(e) => return common::failed(format!("Downloading {value} failed: {e}")),
                 },
@@ -553,9 +514,7 @@ impl Driver for AppleTvDriver {
                     "network",
                     network_title,
                     StepStatus::NeedsCarbon,
-                    Some(
-                        "Turn the Apple TV on and connect it to the same Wi-Fi or network as this Mac.",
-                    ),
+                    Some("Turn the Apple TV on and connect it to the same Wi-Fi or network as this Mac."),
                     e,
                 ),
                 step("code", code_title, StepStatus::Todo),
@@ -602,11 +561,7 @@ impl Driver for AppleTvDriver {
                     .as_ref()
                     .is_some_and(|p| p.since.elapsed() > CODE_LIFETIME);
                 let showing = me.pending.lock().await.is_some() && !expired;
-                let started = if showing {
-                    Ok(())
-                } else {
-                    me.start_pairing().await
-                };
+                let started = if showing { Ok(()) } else { me.start_pairing().await };
                 match started {
                     Ok(()) => {
                         online = true;
@@ -620,9 +575,7 @@ impl Driver for AppleTvDriver {
                             "network",
                             network_title,
                             StepStatus::NeedsCarbon,
-                            Some(
-                                "Turn the Apple TV on and connect it to the same network as this Mac.",
-                            ),
+                            Some("Turn the Apple TV on and connect it to the same network as this Mac."),
                             e,
                         ),
                         step("code", code_title, StepStatus::Todo),
@@ -669,9 +622,7 @@ impl Driver for AppleTvDriver {
     async fn run(&self, inv: Invocation<'_>) -> Output {
         let me = &self.inner;
         if me.saved().credentials.is_none() && !matches!(inv.command, "replay" | "test" | "batch") {
-            return not_ready(
-                "This Apple TV isn't paired yet: enter the code it shows on the website",
-            );
+            return not_ready("This Apple TV isn't paired yet: enter the code it shows on the website");
         }
         guarded(&inv, async {
             match inv.command {
@@ -680,7 +631,16 @@ impl Driver for AppleTvDriver {
                     Err(e) => invalid(e),
                 },
                 "back" | "home" if inv.args.iter().all(|a| a == "--json") => {
-                    me.press(if inv.command == "back" { Button::Back } else { Button::Home }, None, &inv).await
+                    me.press(
+                        if inv.command == "back" {
+                            Button::Back
+                        } else {
+                            Button::Home
+                        },
+                        None,
+                        &inv,
+                    )
+                    .await
                 }
                 "back" | "home" => invalid(format!("`{}` takes no arguments on a TV", inv.command)),
                 "app-switcher" => {
@@ -706,7 +666,15 @@ impl Driver for AppleTvDriver {
                 },
                 "close" => match common::parse_close(inv.args) {
                     // Companion can't quit an app; Home puts it in the background.
-                    Ok(_) => match me.with(|c| Box::pin(async move { c.hid(hid::HOME, true).await?; c.hid(hid::HOME, false).await })).await {
+                    Ok(_) => match me
+                        .with(|c| {
+                            Box::pin(async move {
+                                c.hid(hid::HOME, true).await?;
+                                c.hid(hid::HOME, false).await
+                            })
+                        })
+                        .await
+                    {
                         Ok(()) => Output::ok(
                             json!({"closed": false, "home": true}),
                             "The Apple TV can't quit apps remotely; went to the Home screen instead",
@@ -717,7 +685,11 @@ impl Driver for AppleTvDriver {
                 },
                 "apps" => match me.apps().await {
                     Ok(apps) => {
-                        let text = apps.iter().map(|(id, n)| format!("{n}  {id}")).collect::<Vec<_>>().join("\n");
+                        let text = apps
+                            .iter()
+                            .map(|(id, n)| format!("{n}  {id}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         let list: Vec<_> = apps.iter().map(|(id, n)| json!({"id": id, "name": n})).collect();
                         Output::ok(json!({"apps": list}), text)
                     }
@@ -747,16 +719,9 @@ impl Driver for AppleTvDriver {
         let pending = me.pending.lock().await.take();
         let Some(mut p) = pending else {
             me.start_pairing().await?;
-            return Err(
-                "There was no code on the Apple TV's screen. It shows one now; enter that code"
-                    .into(),
-            );
+            return Err("There was no code on the Apple TV's screen. It shows one now; enter that code".into());
         };
-        match p
-            .conn
-            .pair_finish(&mut p.setup, &digits, common::CLIENT_NAME)
-            .await
-        {
+        match p.conn.pair_finish(&mut p.setup, &digits, common::CLIENT_NAME).await {
             Ok((creds, info)) => {
                 let model = info
                     .as_ref()
@@ -776,9 +741,7 @@ impl Driver for AppleTvDriver {
                 let why = companion::describe(&e);
                 // The Apple TV ends a pairing attempt after an error; ask for a fresh code.
                 match me.start_pairing().await {
-                    Ok(()) => Err(format!(
-                        "{why} The Apple TV now shows a new code; enter that one"
-                    )),
+                    Ok(()) => Err(format!("{why} The Apple TV now shows a new code; enter that one")),
                     Err(again) => Err(format!("{why} ({again})")),
                 }
             }
@@ -792,9 +755,7 @@ fn code_step(title: &str, error: Option<String>) -> SetupStep {
             "code",
             title,
             StepStatus::NeedsCarbon,
-            Some(
-                "The code appears on the Apple TV screen. If it isn't there, wait a moment; Extend asks again.",
-            ),
+            Some("The code appears on the Apple TV screen. If it isn't there, wait a moment; Extend asks again."),
             e,
         ),
         None => step_help(
@@ -852,20 +813,13 @@ mod tests {
         let _ = d.probe().await;
         assert_eq!(*tv.pins_shown.lock().unwrap(), 1);
         assert_eq!(
-            d.run(inv("home", &[], dir.path(), &[]))
-                .await
-                .error
-                .unwrap()
-                .code,
+            d.run(inv("home", &[], dir.path(), &[])).await.error.unwrap().code,
             "device_not_ready"
         );
 
         // A wrong code: refused, and a fresh code goes up.
         let err = d.setup_code("1111").await.unwrap_err();
-        assert!(
-            err.contains("didn't match") && err.contains("new code"),
-            "{err}"
-        );
+        assert!(err.contains("didn't match") && err.contains("new code"), "{err}");
         assert_eq!(*tv.pins_shown.lock().unwrap(), 2);
         assert!(d.setup_code("12").await.unwrap_err().contains("4 digits"));
         d.setup_code("4821").await.unwrap();
@@ -873,18 +827,13 @@ mod tests {
         assert!(saved.contains("\"ltpk\""), "{saved}");
 
         let p = d.probe().await;
-        assert_eq!(
-            p.setup.state,
-            extend_protocol::model::SetupState::Complete,
-            "{p:?}"
-        );
+        assert_eq!(p.setup.state, extend_protocol::model::SetupState::Complete, "{p:?}");
         assert_eq!(p.capabilities, DeviceOs::Tvos.full_capabilities().to_vec());
         assert_eq!(p.model.as_deref(), Some("AppleTV14,1"));
 
         let w = dir.path();
         let ok = |o: Output| assert!(o.ok, "{o:?}");
-        ok(d.run(inv("tv-remote", &args(&["press", "select"]), w, &[]))
-            .await);
+        ok(d.run(inv("tv-remote", &args(&["press", "select"]), w, &[])).await);
         ok(d.run(inv(
             "tv-remote",
             &args(&["longpress", "right", "--duration-ms", "40"]),
@@ -893,8 +842,7 @@ mod tests {
         ))
         .await);
         ok(d.run(inv("back", &[], w, &[])).await);
-        ok(d.run(inv("tv-remote", &args(&["press", "power"]), w, &[]))
-            .await);
+        ok(d.run(inv("tv-remote", &args(&["press", "power"]), w, &[])).await);
         assert_eq!(
             d.run(inv("tv-remote", &args(&["press", "mute"]), w, &[]))
                 .await
@@ -906,10 +854,7 @@ mod tests {
         let out = d.run(inv("apps", &[], w, &[])).await;
         assert_eq!(out.output["apps"][0]["name"], "Netflix");
         ok(d.run(inv("open", &args(&["netflix"]), w, &[])).await);
-        ok(
-            d.run(inv("open", &args(&["youtube://watch?v=abc"]), w, &[]))
-                .await,
-        );
+        ok(d.run(inv("open", &args(&["youtube://watch?v=abc"]), w, &[])).await);
         assert_eq!(
             d.run(inv("open", &args(&["https://example.com"]), w, &[]))
                 .await
@@ -932,14 +877,9 @@ mod tests {
         std::fs::write(&clip, vec![1u8; 2048]).unwrap();
         let att = vec![clip.clone()];
         let path = clip.to_string_lossy().to_string();
-        ok(
-            d.run(inv("display", &args(&["show", "--video", &path]), w, &att))
-                .await,
-        );
+        ok(d.run(inv("display", &args(&["show", "--video", &path]), w, &att)).await);
         assert!(rx.played.lock().unwrap()[0].ends_with("/clip.mp4"));
-        let out = d
-            .run(inv("display", &args(&["show", "--text", "hi"]), w, &[]))
-            .await;
+        let out = d.run(inv("display", &args(&["show", "--text", "hi"]), w, &[])).await;
         assert_eq!(out.error.unwrap().code, "unsupported_on_device");
         ok(d.run(inv("display", &args(&["clear"]), w, &[])).await);
 
@@ -952,26 +892,10 @@ mod tests {
         // select click, right hold, back (menu) click, power (sleep, release only), home click (close).
         assert_eq!(
             hids,
-            vec![
-                (6, 1),
-                (6, 2),
-                (4, 1),
-                (4, 2),
-                (5, 1),
-                (5, 2),
-                (12, 2),
-                (7, 1),
-                (7, 2)
-            ]
+            vec![(6, 1), (6, 2), (4, 1), (4, 2), (5, 1), (5, 2), (12, 2), (7, 1), (7, 2)]
         );
-        assert!(log.contains(&(
-            "_launchApp".into(),
-            json!({"_bundleID": "com.netflix.Netflix"})
-        )));
-        assert!(log.contains(&(
-            "_launchApp".into(),
-            json!({"_urlS": "youtube://watch?v=abc"})
-        )));
+        assert!(log.contains(&("_launchApp".into(), json!({"_bundleID": "com.netflix.Netflix"}))));
+        assert!(log.contains(&("_launchApp".into(), json!({"_urlS": "youtube://watch?v=abc"}))));
 
         // The Apple TV forgets us: the next probe drops the credentials and asks for a new code.
         tv.accessory.lock().unwrap().paired.clear();

@@ -43,7 +43,9 @@ pub struct Job {
 /// Starts the worker thread and returns its queue.
 pub fn spawn() -> Sender<Request> {
     let (tx, rx) = channel();
-    let _ = std::thread::Builder::new().name("extend-windows-uia".into()).spawn(move || run(rx));
+    let _ = std::thread::Builder::new()
+        .name("extend-windows-uia".into())
+        .spawn(move || run(rx));
     tx
 }
 
@@ -52,12 +54,19 @@ fn run(rx: Receiver<Request>) {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
-    let mut worker = Worker { uia: Uia::new(), sessions: HashMap::new(), apps: None };
+    let mut worker = Worker {
+        uia: Uia::new(),
+        sessions: HashMap::new(),
+        apps: None,
+    };
     for request in rx {
         match request {
             Request::Run(job) => {
                 let out = catch_unwind(AssertUnwindSafe(|| worker.execute(&job))).unwrap_or_else(|_| {
-                    Output::fail("internal", "The Windows driver hit an unexpected error running this command.")
+                    Output::fail(
+                        "internal",
+                        "The Windows driver hit an unexpected error running this command.",
+                    )
                 });
                 let _ = job.reply.send(out);
             }
@@ -88,7 +97,11 @@ struct Session {
 
 impl Default for Session {
     fn default() -> Self {
-        Self { surface: Surface::FrontmostApp, app: None, last: None }
+        Self {
+            surface: Surface::FrontmostApp,
+            app: None,
+            last: None,
+        }
     }
 }
 
@@ -119,7 +132,11 @@ fn fail_with(code: &str, message: impl Into<String>, details: Value) -> Output {
         ok: false,
         output: Value::Null,
         text: Some(message.clone()),
-        error: Some(CommandError { code: code.into(), message, details }),
+        error: Some(CommandError {
+            code: code.into(),
+            message,
+            details,
+        }),
         files: vec![],
     }
 }
@@ -146,7 +163,9 @@ impl Worker {
     }
 
     fn uia(&self) -> Result<&Uia, Output> {
-        self.uia.as_ref().map_err(|e| Output::fail("unsupported_on_device", e.clone()))
+        self.uia
+            .as_ref()
+            .map_err(|e| Output::fail("unsupported_on_device", e.clone()))
     }
 
     fn execute(&mut self, job: &Job) -> Output {
@@ -160,35 +179,76 @@ impl Worker {
         match &job.action {
             Action::Snapshot(opts) => {
                 let last = self.capture(sid, opts, &job.cancel)?;
-                Ok(Output::ok(last.snapshot.to_json(&last.cap.raw), last.snapshot.to_text(&last.cap.raw)))
+                Ok(Output::ok(
+                    last.snapshot.to_json(&last.cap.raw),
+                    last.snapshot.to_text(&last.cap.raw),
+                ))
             }
             Action::GetText(t) => {
                 let r = self.resolve(sid, t, &job.cancel)?;
-                let node = r.node.clone().ok_or_else(|| Output::fail("invalid_args", "A point has no text; give a ref or a selector."))?;
+                let node = r
+                    .node
+                    .clone()
+                    .ok_or_else(|| Output::fail("invalid_args", "A point has no text; give a ref or a selector."))?;
                 let text = match node.role() {
-                    "text-field" | "text-view" => node.value.clone().filter(|v| !v.is_empty()).unwrap_or(node.name.clone()),
-                    _ => if node.name.is_empty() { node.value.clone().unwrap_or_default() } else { node.name.clone() },
+                    "text-field" | "text-view" => node
+                        .value
+                        .clone()
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or(node.name.clone()),
+                    _ => {
+                        if node.name.is_empty() {
+                            node.value.clone().unwrap_or_default()
+                        } else {
+                            node.name.clone()
+                        }
+                    }
                 };
-                Ok(Output::ok(json!({"ref": r.reference.as_ref().map(|x| format!("@{x}")), "text": text}), text))
+                Ok(Output::ok(
+                    json!({"ref": r.reference.as_ref().map(|x| format!("@{x}")), "text": text}),
+                    text,
+                ))
             }
             Action::GetAttrs(t) => {
                 let r = self.resolve(sid, t, &job.cancel)?;
-                let node = r.node.clone().ok_or_else(|| Output::fail("invalid_args", "A point has no attributes; give a ref or a selector."))?;
+                let node = r.node.clone().ok_or_else(|| {
+                    Output::fail("invalid_args", "A point has no attributes; give a ref or a selector.")
+                })?;
                 let attrs = node_json(&node, r.reference.as_deref().unwrap_or(""), 0, node.depth, None);
                 let text = serde_json::to_string_pretty(&attrs).unwrap_or_default();
                 Ok(Output::ok(attrs, text))
             }
             Action::Find { locator, query, action } => self.find(job, *locator, query, action),
-            Action::Is { predicate, target, value } => self.is(job, *predicate, target, value.as_deref()),
+            Action::Is {
+                predicate,
+                target,
+                value,
+            } => self.is(job, *predicate, target, value.as_deref()),
             Action::Wait(w) => self.wait(job, w),
-            Action::Screenshot { name, scale, fullscreen } => self.screenshot(job, name, *scale, *fullscreen),
-            Action::Click { target, button, count, interval_ms } => {
+            Action::Screenshot {
+                name,
+                scale,
+                fullscreen,
+            } => self.screenshot(job, name, *scale, *fullscreen),
+            Action::Click {
+                target,
+                button,
+                count,
+                interval_ms,
+            } => {
                 let r = self.resolve(sid, target, &job.cancel)?;
                 let (x, y) = self.point_of(&r)?;
                 input::click(x, y, *button, *count, *interval_ms).map_err(|e| Output::fail("command_failed", e))?;
                 let what = r.describe();
-                let verb = if *count > 1 { format!("Clicked {count} times") } else { "Clicked".into() };
-                Ok(Output::ok(json!({"ref": r.reference.map(|x| format!("@{x}")), "x": x, "y": y}), format!("{verb} {what}")))
+                let verb = if *count > 1 {
+                    format!("Clicked {count} times")
+                } else {
+                    "Clicked".into()
+                };
+                Ok(Output::ok(
+                    json!({"ref": r.reference.map(|x| format!("@{x}")), "x": x, "y": y}),
+                    format!("{verb} {what}"),
+                ))
             }
             Action::Hover(target) => {
                 let r = self.resolve(sid, target, &job.cancel)?;
@@ -199,31 +259,50 @@ impl Worker {
             Action::Focus(target) => {
                 let r = self.resolve(sid, target, &job.cancel)?;
                 self.focus(&r)?;
-                Ok(Output::ok(json!({"ref": r.reference.as_ref().map(|x| format!("@{x}"))}), format!("Focused {}", r.describe())))
+                Ok(Output::ok(
+                    json!({"ref": r.reference.as_ref().map(|x| format!("@{x}"))}),
+                    format!("Focused {}", r.describe()),
+                ))
             }
             Action::Fill { target, text } => {
                 let r = self.resolve(sid, target, &job.cancel)?;
                 self.fill(&r, text, &job.cancel)?;
-                Ok(Output::ok(json!({"ref": r.reference.as_ref().map(|x| format!("@{x}")), "length": text.chars().count()}), format!("Filled {}", r.describe())))
+                Ok(Output::ok(
+                    json!({"ref": r.reference.as_ref().map(|x| format!("@{x}")), "length": text.chars().count()}),
+                    format!("Filled {}", r.describe()),
+                ))
             }
             Action::Type(text) => {
                 input::keystrokes(&keys::plan(text), &job.cancel).map_err(|e| Output::fail("command_failed", e))?;
                 let n = text.chars().count();
                 Ok(Output::ok(json!({"length": n}), format!("Typed {n} characters")))
             }
-            Action::Scroll { direction, fraction, pixels } => {
+            Action::Scroll {
+                direction,
+                fraction,
+                pixels,
+            } => {
                 let (x, y) = self.scroll_point(sid);
                 let (v, h) = commands::wheel_delta(*direction, *fraction, *pixels);
                 input::wheel(x, y, v, h).map_err(|e| Output::fail("command_failed", e))?;
-                Ok(Output::ok(json!({"x": x, "y": y, "wheelDelta": v, "wheelDeltaHorizontal": h}), "Scrolled".to_owned()))
+                Ok(Output::ok(
+                    json!({"x": x, "y": y, "wheelDelta": v, "wheelDeltaHorizontal": h}),
+                    "Scrolled".to_owned(),
+                ))
             }
             Action::ClipboardRead => {
                 let text = clipboard::read().map_err(|e| Output::fail("command_failed", e))?;
-                Ok(Output::ok(json!({"platform": "windows", "action": "read", "text": text}), text))
+                Ok(Output::ok(
+                    json!({"platform": "windows", "action": "read", "text": text}),
+                    text,
+                ))
             }
             Action::ClipboardWrite(text) => {
                 clipboard::write(text).map_err(|e| Output::fail("command_failed", e))?;
-                Ok(Output::ok(json!({"platform": "windows", "action": "write"}), "Clipboard updated".to_owned()))
+                Ok(Output::ok(
+                    json!({"platform": "windows", "action": "write"}),
+                    "Clipboard updated".to_owned(),
+                ))
             }
             Action::Open { target, surface } => self.open(job, target.as_deref(), *surface),
             Action::Close { app } => self.close(sid, app.as_deref()),
@@ -234,7 +313,8 @@ impl Worker {
                 Ok(Output::ok(json!({"apps": names}), apps::apps_text(&shown, *all)))
             }
             Action::AppState => {
-                let fg = uia::foreground_window().ok_or_else(|| Output::fail("command_failed", "No window is in front."))?;
+                let fg =
+                    uia::foreground_window().ok_or_else(|| Output::fail("command_failed", "No window is in front."))?;
                 let name = uia::process_stem(fg.pid).unwrap_or_default();
                 let path = uia::process_path(fg.pid).unwrap_or_default();
                 let surface = self.session(sid).surface.as_str();
@@ -262,17 +342,31 @@ impl Worker {
                 if wins.is_empty() {
                     return Err(Output::fail(
                         "app_not_running",
-                        format!("{} has no open windows. Open it again with `extend open {}`.", app.name, app.name),
+                        format!(
+                            "{} has no open windows. Open it again with `extend open {}`.",
+                            app.name, app.name
+                        ),
                     ));
                 }
-                let id = if app.id.is_empty() { wins.first().and_then(|w| uia::process_path(w.pid)).unwrap_or_default() } else { app.id.clone() };
+                let id = if app.id.is_empty() {
+                    wins.first().and_then(|w| uia::process_path(w.pid)).unwrap_or_default()
+                } else {
+                    app.id.clone()
+                };
                 let name = app.name.clone();
                 self.session(sid).app = Some(app);
                 Ok((wins, name, id))
             }
             _ => {
-                let fg = uia::foreground_window().filter(|w| w.pid != own).or_else(|| all.first().cloned());
-                let Some(fg) = fg else { return Err(Output::fail("command_failed", "No app window is open on this computer.")) };
+                let fg = uia::foreground_window()
+                    .filter(|w| w.pid != own)
+                    .or_else(|| all.first().cloned());
+                let Some(fg) = fg else {
+                    return Err(Output::fail(
+                        "command_failed",
+                        "No app window is open on this computer.",
+                    ));
+                };
                 let wins: Vec<TopWindow> = all.into_iter().filter(|w| w.pid == fg.pid).collect();
                 let wins = if wins.is_empty() { vec![fg.clone()] } else { wins };
                 let name = uia::process_stem(fg.pid).unwrap_or_else(|| fg.title.clone());
@@ -289,12 +383,19 @@ impl Worker {
         let mut opts = opts.clone();
         // `-s @e3` scopes by that element's label in the previous snapshot.
         if let Some(scope) = opts.scope.clone().filter(|s| s.starts_with('@')) {
-            let label = self.session(sid).last.as_ref().and_then(|l| {
-                l.snapshot.resolve_ref(&scope).map(|i| l.cap.raw[i].display_label())
-            });
+            let label = self
+                .session(sid)
+                .last
+                .as_ref()
+                .and_then(|l| l.snapshot.resolve_ref(&scope).map(|i| l.cap.raw[i].display_label()));
             match label {
                 Some(l) if !l.is_empty() => opts.scope = Some(l),
-                _ => return Err(Output::fail("invalid_args", format!("{scope} isn't in the latest snapshot. Take a new snapshot."))),
+                _ => {
+                    return Err(Output::fail(
+                        "invalid_args",
+                        format!("{scope} isn't in the latest snapshot. Take a new snapshot."),
+                    ));
+                }
             }
         }
         let snapshot = super::model::build_snapshot(&cap.raw, &opts, &name, &id, cap.truncated);
@@ -305,16 +406,29 @@ impl Worker {
 
     fn resolve(&mut self, sid: &str, target: &Target, cancel: &AtomicBool) -> Result<Resolved, Output> {
         match target {
-            Target::Point(x, y) => Ok(Resolved { el: None, node: None, reference: None, point: Some((*x, *y)) }),
+            Target::Point(x, y) => Ok(Resolved {
+                el: None,
+                node: None,
+                reference: None,
+                point: Some((*x, *y)),
+            }),
             Target::Ref(r) => {
                 let session = self.session(sid);
                 let Some(last) = session.last.as_ref() else {
-                    return Err(Output::fail("invalid_args", format!("{r} needs a snapshot first: refs come from the latest `extend snapshot` in this session.")));
+                    return Err(Output::fail(
+                        "invalid_args",
+                        format!(
+                            "{r} needs a snapshot first: refs come from the latest `extend snapshot` in this session."
+                        ),
+                    ));
                 };
                 let Some(i) = last.snapshot.resolve_ref(r) else {
                     return Err(Output::fail(
                         "invalid_args",
-                        format!("{r} isn't in the latest snapshot (it has refs @e1 to @e{}). Take a new snapshot.", last.snapshot.nodes.len()),
+                        format!(
+                            "{r} isn't in the latest snapshot (it has refs @e1 to @e{}). Take a new snapshot.",
+                            last.snapshot.nodes.len()
+                        ),
                     ));
                 };
                 let el = last.cap.elements[i].clone();
@@ -331,17 +445,32 @@ impl Worker {
                     _ => Some(cached),
                 };
                 if node.is_none() {
-                    return Err(Output::fail("stale_ref", format!("{r} is gone from the screen. Take a new snapshot.")));
+                    return Err(Output::fail(
+                        "stale_ref",
+                        format!("{r} is gone from the screen. Take a new snapshot."),
+                    ));
                 }
-                Ok(Resolved { el, node, reference, point: None })
+                Ok(Resolved {
+                    el,
+                    node,
+                    reference,
+                    point: None,
+                })
             }
             Target::Selector(sel) => {
                 let last = self.capture(sid, &SnapshotOptions::default(), cancel)?;
-                let hits: Vec<usize> = sel.find_all(&last.cap.raw).into_iter().filter(|&i| last.cap.elements[i].is_some()).collect();
+                let hits: Vec<usize> = sel
+                    .find_all(&last.cap.raw)
+                    .into_iter()
+                    .filter(|&i| last.cap.elements[i].is_some())
+                    .collect();
                 let Some(&i) = hits.first() else {
                     return Err(fail_with(
                         "not_found",
-                        format!("Nothing on screen matches {}. Take a snapshot to see what's there.", sel.source),
+                        format!(
+                            "Nothing on screen matches {}. Take a snapshot to see what's there.",
+                            sel.source
+                        ),
                         json!({"selector": sel.source}),
                     ));
                 };
@@ -359,12 +488,18 @@ impl Worker {
         if let Some(p) = r.point {
             return Ok(p);
         }
-        let rect = r.el.as_ref().and_then(uia::current_rect).or_else(|| r.node.as_ref().and_then(|n| n.rect));
+        let rect =
+            r.el.as_ref()
+                .and_then(uia::current_rect)
+                .or_else(|| r.node.as_ref().and_then(|n| n.rect));
         match rect {
             Some(rect) if !r.node.as_ref().is_some_and(|n| n.offscreen) => Ok(rect.center()),
             _ => Err(Output::fail(
                 "not_visible",
-                format!("{} isn't on screen. Scroll it into view and take a new snapshot.", r.describe()),
+                format!(
+                    "{} isn't on screen. Scroll it into view and take a new snapshot.",
+                    r.describe()
+                ),
             )),
         }
     }
@@ -400,7 +535,10 @@ impl Worker {
     }
 
     fn scroll_point(&mut self, sid: &str) -> (i32, i32) {
-        let win = self.session_windows(sid).ok().and_then(|(w, _, _)| w.into_iter().find(|w| !w.minimized));
+        let win = self
+            .session_windows(sid)
+            .ok()
+            .and_then(|(w, _, _)| w.into_iter().find(|w| !w.minimized));
         match win {
             Some(w) => w.rect.center(),
             None => capture::virtual_screen().center(),
@@ -435,7 +573,10 @@ impl Worker {
             Locator::Role => Term::Equals(Key::Role, q),
             Locator::Id => Term::Equals(Key::Id, q),
         };
-        let sel = Selector { alternatives: vec![vec![term]], source: query.to_owned() };
+        let sel = Selector {
+            alternatives: vec![vec![term]],
+            source: query.to_owned(),
+        };
         let sid = job.session.as_str();
         let wait_until = match action {
             FindAction::Wait(ms) => Some(Instant::now() + Self::remaining(job, Duration::from_millis(*ms))),
@@ -452,7 +593,10 @@ impl Worker {
                     Some(format!("@{r} [{}] \"{}\"", n.role(), n.display_label()))
                 })
                 .collect();
-            let refs: Vec<String> = hits.iter().filter_map(|&i| last.snapshot.ref_of(i).map(|r| format!("@{r}"))).collect();
+            let refs: Vec<String> = hits
+                .iter()
+                .filter_map(|&i| last.snapshot.ref_of(i).map(|r| format!("@{r}")))
+                .collect();
             if hits.is_empty() {
                 if let Some(until) = wait_until
                     && Instant::now() < until
@@ -478,7 +622,8 @@ impl Worker {
                 FindAction::List | FindAction::Wait(_) => Ok(Output::ok(base, lines.join("\n"))),
                 FindAction::Click => {
                     let (x, y) = self.point_of(&resolved)?;
-                    input::click(x, y, commands::Button::Primary, 1, 0).map_err(|e| Output::fail("command_failed", e))?;
+                    input::click(x, y, commands::Button::Primary, 1, 0)
+                        .map_err(|e| Output::fail("command_failed", e))?;
                     let mut out = base;
                     out["x"] = json!(x);
                     out["y"] = json!(y);
@@ -507,7 +652,12 @@ impl Worker {
             },
             Target::Selector(sel) => {
                 let last = self.capture(sid, &SnapshotOptions::default(), cancel)?;
-                Ok(sel.find_all(&last.cap.raw).into_iter().filter(|&i| i > 0).map(|i| last.cap.raw[i].clone()).collect())
+                Ok(sel
+                    .find_all(&last.cap.raw)
+                    .into_iter()
+                    .filter(|&i| i > 0)
+                    .map(|i| last.cap.raw[i].clone())
+                    .collect())
             }
         }
     }
@@ -526,9 +676,16 @@ impl Worker {
             Predicate::Text => {
                 let want = value.unwrap_or("").trim();
                 let got = first.map(|n| {
-                    if n.name.trim() == want || n.value.as_deref().map(str::trim) == Some(want) { want.to_owned() } else { n.display_label() }
+                    if n.name.trim() == want || n.value.as_deref().map(str::trim) == Some(want) {
+                        want.to_owned()
+                    } else {
+                        n.display_label()
+                    }
                 });
-                (got.as_deref() == Some(want), format!("text is {:?}", got.unwrap_or_default()))
+                (
+                    got.as_deref() == Some(want),
+                    format!("text is {:?}", got.unwrap_or_default()),
+                )
             }
         };
         let name = format!("{predicate:?}").to_lowercase();
@@ -536,7 +693,11 @@ impl Worker {
         if pass {
             Ok(Output::ok(details, format!("pass: {name} {}", target.describe())))
         } else {
-            Err(fail_with("assertion_failed", format!("fail: {name} {} ({why})", target.describe()), details))
+            Err(fail_with(
+                "assertion_failed",
+                format!("fail: {name} {} ({why})", target.describe()),
+                details,
+            ))
         }
     }
 
@@ -548,9 +709,19 @@ impl Worker {
                 if !Self::nap(job, d) {
                     return Err(Output::fail("cancelled", "The wait was cancelled."));
                 }
-                return Ok(Output::ok(json!({"waitedMs": start.elapsed().as_millis() as u64}), format!("Waited {} ms", d.as_millis())));
+                return Ok(Output::ok(
+                    json!({"waitedMs": start.elapsed().as_millis() as u64}),
+                    format!("Waited {} ms", d.as_millis()),
+                ));
             }
-            Wait::Text(t, ms) => (*ms, true, Some(Target::Selector(Selector { alternatives: vec![vec![Term::Text(t.clone())]], source: t.clone() }))),
+            Wait::Text(t, ms) => (
+                *ms,
+                true,
+                Some(Target::Selector(Selector {
+                    alternatives: vec![vec![Term::Text(t.clone())]],
+                    source: t.clone(),
+                })),
+            ),
             Wait::Present(t, ms) => (*ms, true, Some(self.wait_target(&job.session, t))),
             Wait::Absent(t, ms) => (*ms, false, Some(t.clone())),
         };
@@ -561,13 +732,25 @@ impl Worker {
             if found == present {
                 let waited = start.elapsed().as_millis() as u64;
                 let what = if present { "appeared" } else { "went away" };
-                return Ok(Output::ok(json!({"waitedMs": waited, "target": target.describe()}), format!("{} {what} after {waited} ms", target.describe())));
+                return Ok(Output::ok(
+                    json!({"waitedMs": waited, "target": target.describe()}),
+                    format!("{} {what} after {waited} ms", target.describe()),
+                ));
             }
             if Instant::now() >= until || !Self::nap(job, Duration::from_millis(300)) {
-                let reason = if present { "wait_target_absent" } else { "wait_target_present" };
+                let reason = if present {
+                    "wait_target_absent"
+                } else {
+                    "wait_target_present"
+                };
                 return Err(fail_with(
                     "command_failed",
-                    format!("{} {} after {} ms.", target.describe(), if present { "never appeared" } else { "was still there" }, start.elapsed().as_millis()),
+                    format!(
+                        "{} {} after {} ms.",
+                        target.describe(),
+                        if present { "never appeared" } else { "was still there" },
+                        start.elapsed().as_millis()
+                    ),
                     json!({"reason": reason, "waitedMs": start.elapsed().as_millis() as u64}),
                 ));
             }
@@ -577,10 +760,17 @@ impl Worker {
     /// `wait @e3` waits for that element's label to be on screen (refs are stale once the screen changes).
     fn wait_target(&mut self, sid: &str, t: &Target) -> Target {
         if let Target::Ref(r) = t
-            && let Some(label) = self.session(sid).last.as_ref().and_then(|l| l.snapshot.resolve_ref(r).map(|i| l.cap.raw[i].display_label()))
+            && let Some(label) = self
+                .session(sid)
+                .last
+                .as_ref()
+                .and_then(|l| l.snapshot.resolve_ref(r).map(|i| l.cap.raw[i].display_label()))
             && !label.is_empty()
         {
-            return Target::Selector(Selector { alternatives: vec![vec![Term::Text(label.clone())]], source: format!("{r} \"{label}\"") });
+            return Target::Selector(Selector {
+                alternatives: vec![vec![Term::Text(label.clone())]],
+                source: format!("{r} \"{label}\""),
+            });
         }
         t.clone()
     }
@@ -594,7 +784,11 @@ impl Worker {
             capture::virtual_screen()
         } else {
             match self.session_windows(sid) {
-                Ok((wins, _, _)) => wins.iter().find(|w| !w.minimized).map(|w| w.rect).unwrap_or_else(capture::virtual_screen),
+                Ok((wins, _, _)) => wins
+                    .iter()
+                    .find(|w| !w.minimized)
+                    .map(|w| w.rect)
+                    .unwrap_or_else(capture::virtual_screen),
                 Err(_) => capture::virtual_screen(),
             }
         };
@@ -612,8 +806,16 @@ impl Worker {
         };
         let path = job.workdir.join(name);
         capture::write_png(&path, &rgba, w, h).map_err(|e| Output::fail("command_failed", e))?;
-        let out = Output::ok(json!({"path": path.display().to_string(), "width": w, "height": h}), format!("{} ({w}x{h})", path.display()));
-        Ok(out.with_file(LocalFile { path, name: name.to_owned(), content_type: "image/png".into(), kind: FileKind::Screenshot }))
+        let out = Output::ok(
+            json!({"path": path.display().to_string(), "width": w, "height": h}),
+            format!("{} ({w}x{h})", path.display()),
+        );
+        Ok(out.with_file(LocalFile {
+            path,
+            name: name.to_owned(),
+            content_type: "image/png".into(),
+            kind: FileKind::Screenshot,
+        }))
     }
 
     // ───────────── apps ─────────────
@@ -639,16 +841,24 @@ impl Worker {
             let text = match surface {
                 Surface::Desktop => "Opened: desktop".to_owned(),
                 _ => {
-                    let name = uia::foreground_window().and_then(|w| uia::process_stem(w.pid)).unwrap_or_default();
+                    let name = uia::foreground_window()
+                        .and_then(|w| uia::process_stem(w.pid))
+                        .unwrap_or_default();
                     format!("Opened: {name} (frontmost app)")
                 }
             };
-            return Ok(Output::ok(json!({"platform": "windows", "surface": surface.as_str(), "message": text}), text));
+            return Ok(Output::ok(
+                json!({"platform": "windows", "surface": surface.as_str(), "message": text}),
+                text,
+            ));
         };
         if commands::is_url(target) {
             shell::shell_open(target).map_err(|e| Output::fail("command_failed", e))?;
             let text = format!("Opened: {target}");
-            return Ok(Output::ok(json!({"platform": "windows", "url": target, "message": text}), text));
+            return Ok(Output::ok(
+                json!({"platform": "windows", "url": target, "message": text}),
+                text,
+            ));
         }
         let own = std::process::id();
         let before: HashSet<isize> = uia::top_windows().iter().map(|w| w.hwnd.0 as isize).collect();
@@ -660,7 +870,11 @@ impl Worker {
             let list = self.start_apps()?;
             let Some(app) = apps::resolve(&list, target).cloned() else {
                 let close = apps::suggestions(&list, target, 5);
-                let hint = if close.is_empty() { String::new() } else { format!(" Close matches: {}.", close.join(", ")) };
+                let hint = if close.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Close matches: {}.", close.join(", "))
+                };
                 return Err(fail_with(
                     "app_not_found",
                     format!("No app named {target:?} in the Start menu.{hint} Run `extend apps --all` to list them."),
@@ -670,7 +884,11 @@ impl Worker {
             shell::launch_app(&app).map_err(|e| Output::fail("command_failed", e))?;
             (app.name.clone(), app.app_id.clone())
         };
-        let mut app = AppTarget { name: name.clone(), id: id.clone(), pid: None };
+        let mut app = AppTarget {
+            name: name.clone(),
+            id: id.clone(),
+            pid: None,
+        };
         let until = Instant::now() + Self::remaining(job, Duration::from_secs(10));
         let mut found: Option<TopWindow> = None;
         while Instant::now() < until {
@@ -711,14 +929,21 @@ impl Worker {
         let session_app = self.session(sid).app.clone();
         let (label, wins) = match (app, session_app) {
             (Some(name), _) => {
-                let mut t = AppTarget { name: name.to_owned(), id: String::new(), pid: None };
+                let mut t = AppTarget {
+                    name: name.to_owned(),
+                    id: String::new(),
+                    pid: None,
+                };
                 (name.to_owned(), windows_of_app(&all, &mut t))
             }
             (None, Some(mut a)) => (a.name.clone(), windows_of_app(&all, &mut a)),
             (None, None) => {
                 let s = self.session(sid);
                 s.last = None;
-                return Ok(Output::ok(json!({"session": sid, "message": "Closed: session"}), "Closed: session".to_owned()));
+                return Ok(Output::ok(
+                    json!({"session": sid, "message": "Closed: session"}),
+                    "Closed: session".to_owned(),
+                ));
             }
         };
         let closed = wins.iter().filter(|w| shell::close_window(w.hwnd)).count();
@@ -729,10 +954,16 @@ impl Worker {
         }
         s.last = None;
         if closed == 0 && app.is_some() {
-            return Err(Output::fail("app_not_running", format!("{label} has no open windows to close.")));
+            return Err(Output::fail(
+                "app_not_running",
+                format!("{label} has no open windows to close."),
+            ));
         }
         let text = format!("Closed: {label}");
-        Ok(Output::ok(json!({"session": sid, "appName": label, "windowsClosed": closed, "message": text}), text))
+        Ok(Output::ok(
+            json!({"session": sid, "appName": label, "windowsClosed": closed, "message": text}),
+            text,
+        ))
     }
 }
 
@@ -749,7 +980,8 @@ fn windows_of_app(all: &[TopWindow], app: &mut AppTarget) -> Vec<TopWindow> {
     let name = app.name.clone();
     let hit = all.iter().find(|w| {
         contains_ci(&w.title, &name)
-            || uia::process_stem(w.pid).is_some_and(|p| p.eq_ignore_ascii_case(&name) || (!stem.is_empty() && p.eq_ignore_ascii_case(&stem)))
+            || uia::process_stem(w.pid)
+                .is_some_and(|p| p.eq_ignore_ascii_case(&name) || (!stem.is_empty() && p.eq_ignore_ascii_case(&stem)))
     });
     match hit {
         Some(w) => {

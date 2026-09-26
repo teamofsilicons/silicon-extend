@@ -105,12 +105,7 @@ impl HapConn {
             let mut chunk = [0u8; 16 * 1024];
             let n = tokio::time::timeout_at(deadline, self.stream.read(&mut chunk))
                 .await
-                .map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "the Apple TV didn't answer in time",
-                    )
-                })??;
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the Apple TV didn't answer in time"))??;
             if n == 0 {
                 return self.parser.take(true)?.ok_or_else(|| {
                     io::Error::new(
@@ -221,9 +216,7 @@ impl Control {
             headers.push(("Content-Length", payload.len().to_string()));
         }
         self.conn
-            .send(&http::encode_request(
-                method, &uri, protocol, &headers, &payload,
-            ))
+            .send(&http::encode_request(method, &uri, protocol, &headers, &payload))
             .await?;
         loop {
             let m = self.conn.read_message(TIMEOUT).await?;
@@ -233,21 +226,13 @@ impl Control {
         }
     }
 
-    async fn pairing_post(
-        &mut self,
-        path: &str,
-        hkp: u8,
-        body: Vec<u8>,
-    ) -> Result<Message, String> {
+    async fn pairing_post(&mut self, path: &str, hkp: u8, body: Vec<u8>) -> Result<Message, String> {
         let r = self
             .request(
                 "POST",
                 Some(path),
                 "HTTP/1.1",
-                &[
-                    ("X-Apple-HKP", hkp.to_string()),
-                    ("Connection", "keep-alive".into()),
-                ],
+                &[("X-Apple-HKP", hkp.to_string()), ("Connection", "keep-alive".into())],
                 Some(("application/octet-stream", body)),
             )
             .await
@@ -268,9 +253,7 @@ impl Control {
         let m3 = setup.m3(TRANSIENT_PIN).map_err(|e| e.to_string())?;
         let m4 = self.pairing_post("/pair-setup", 4, m3).await?;
         setup.handle_m4(&m4.body).map_err(|e| e.to_string())?;
-        Ok(Keys::Transient(
-            setup.session_key().expect("after M4").to_vec(),
-        ))
+        Ok(Keys::Transient(setup.session_key().expect("after M4").to_vec()))
     }
 
     async fn pair_verified(&mut self, creds: &Credentials) -> Result<Keys, String> {
@@ -283,11 +266,7 @@ impl Control {
     }
 
     /// Pairs (transient first, then the Companion credentials) and encrypts the connection.
-    pub async fn authenticate(
-        &mut self,
-        creds: Option<&Credentials>,
-        port: u16,
-    ) -> Result<(), String> {
+    pub async fn authenticate(&mut self, creds: Option<&Credentials>, port: u16) -> Result<(), String> {
         let keys = match self.pair_transient().await {
             Ok(k) => k,
             Err(transient) => {
@@ -324,8 +303,7 @@ impl Control {
     ) -> io::Result<Message> {
         let mut buf = Vec::new();
         plist::to_writer_binary(&mut buf, &body).map_err(io::Error::other)?;
-        self.request(method, uri, protocol, &[], Some((BPLIST, buf)))
-            .await
+        self.request(method, uri, protocol, &[], Some((BPLIST, buf))).await
     }
 }
 
@@ -370,10 +348,7 @@ pub(crate) fn play_body(url: &str, uuid: &str) -> plist::Value {
         ("rate", V::Real(1.0)),
         ("SenderMACAddress", V::String("AA:BB:CC:DD:EE:FF".into())),
         ("model", V::String("iPhone14,3".into())),
-        (
-            "clientBundleID",
-            V::String("com.teamofsilicons.extend".into()),
-        ),
+        ("clientBundleID", V::String("com.teamofsilicons.extend".into())),
         ("clientProcName", V::String("SiliconExtend".into())),
     ])
 }
@@ -410,12 +385,7 @@ fn ntp_now() -> u64 {
 
 /// `Range: bytes=a-b` → inclusive (start, end) within `len`.
 pub(crate) fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
-    let spec = header
-        .trim()
-        .strip_prefix("bytes=")?
-        .split(',')
-        .next()?
-        .trim();
+    let spec = header.trim().strip_prefix("bytes=")?.split(',').next()?.trim();
     let (a, b) = spec.split_once('-')?;
     if len == 0 {
         return None;
@@ -461,10 +431,7 @@ pub(crate) async fn serve_file(path: PathBuf, bind: IpAddr) -> io::Result<MediaS
                 .collect()
         })
         .unwrap_or_else(|| "media".into());
-    let url = format!(
-        "http://{}:{port}/{name}",
-        crate::common::url_host(&bind.to_string())
-    );
+    let url = format!("http://{}:{port}/{name}", crate::common::url_host(&bind.to_string()));
     let content_type = crate::common::content_type_for(&path).to_owned();
     let task = tokio::spawn(async move {
         loop {
@@ -584,12 +551,7 @@ pub(crate) async fn play_video(
     let timing_port = timing.local_addr().map_err(|e| e.to_string())?.port();
     let setup_uuid = ctl.session_uuid.clone();
     let setup = ctl
-        .bplist(
-            "SETUP",
-            None,
-            "RTSP/1.0",
-            setup_body(&setup_uuid, timing_port, name),
-        )
+        .bplist("SETUP", None, "RTSP/1.0", setup_body(&setup_uuid, timing_port, name))
         .await
         .map_err(|e| format!("AirPlay SETUP: {e}"))?;
     if !setup.is_success() {
@@ -634,13 +596,7 @@ pub(crate) async fn play_video(
     let mut body = Vec::new();
     plist::to_writer_binary(&mut body, &play_body(&url, &play_uuid)).map_err(|e| e.to_string())?;
     let play = ctl
-        .request(
-            "POST",
-            Some("/play"),
-            "HTTP/1.1",
-            &extra,
-            Some((BPLIST, body)),
-        )
+        .request("POST", Some("/play"), "HTTP/1.1", &extra, Some((BPLIST, body)))
         .await
         .map_err(|e| format!("AirPlay /play: {e}"))?;
     if !play.is_success() {
@@ -690,24 +646,13 @@ pub(crate) async fn show_photo(
         ("X-Apple-Session-ID", ctl.session_uuid.to_lowercase()),
     ];
     let r = ctl
-        .request(
-            "PUT",
-            Some("/photo"),
-            "HTTP/1.1",
-            &extra,
-            Some((content_type, bytes)),
-        )
+        .request("PUT", Some("/photo"), "HTTP/1.1", &extra, Some((content_type, bytes)))
         .await
         .map_err(|e| format!("AirPlay /photo: {e}"))?;
     if !r.is_success() {
-        return Err(format!(
-            "The Apple TV wouldn't show the picture (HTTP {})",
-            r.status()
-        ));
+        return Err(format!("The Apple TV wouldn't show the picture (HTTP {})", r.status()));
     }
-    let timing = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .map_err(|e| e.to_string())?;
+    let timing = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;
     let (tx, rx) = oneshot::channel();
     let task = tokio::spawn(keep_alive(ctl, None, timing, None, rx, false));
     Ok(Showing {
@@ -785,9 +730,7 @@ async fn keep_alive(
             }
         }
     }
-    let _ = ctl
-        .request("POST", Some("/stop"), "HTTP/1.1", &[], None)
-        .await;
+    let _ = ctl.request("POST", Some("/stop"), "HTTP/1.1", &[], None).await;
     let sid = ctl.session_id.to_string();
     let _ = ctl
         .request("TEARDOWN", None, "RTSP/1.0", &[("Session", sid)], None)
@@ -833,13 +776,7 @@ pub(crate) mod mock {
                     hap::hkdf("Events-Salt", "Events-Write-Encryption-Key", &k),
                     hap::hkdf("Events-Salt", "Events-Read-Encryption-Key", &k),
                 );
-                let req = http::encode_request(
-                    "POST",
-                    "/command",
-                    "RTSP/1.0",
-                    &[("CSeq", "1".into())],
-                    b"",
-                );
+                let req = http::encode_request("POST", "/command", "RTSP/1.0", &[("CSeq", "1".into())], b"");
                 conn.send(&req).await.unwrap();
                 let reply = conn.read_message(Duration::from_secs(5)).await.unwrap();
                 assert_eq!(reply.status(), 200);
@@ -848,12 +785,7 @@ pub(crate) mod mock {
         });
         tokio::spawn(async move {
             while let Ok((s, _)) = l.accept().await {
-                let (log, played, photos, sk) = (
-                    log.clone(),
-                    played.clone(),
-                    photos.clone(),
-                    session_key.clone(),
-                );
+                let (log, played, photos, sk) = (log.clone(), played.clone(), photos.clone(), session_key.clone());
                 tokio::spawn(async move {
                     let mut acc = Accessory::new(TRANSIENT_PIN);
                     let mut conn = HapConn::new(s);
@@ -867,18 +799,14 @@ pub(crate) mod mock {
                         let proto = parts.next().unwrap_or("HTTP/1.1").to_owned();
                         log.lock().unwrap().push(format!("{method} {path}"));
                         let cseq = req.header("CSeq").unwrap_or("0").to_owned();
-                        let (status, body): (u16, Vec<u8>) = match (method.as_str(), path.as_str())
-                        {
+                        let (status, body): (u16, Vec<u8>) = match (method.as_str(), path.as_str()) {
                             ("POST", "/pair-pin-start") => (200, vec![]),
                             ("POST", "/pair-setup") => {
                                 let flags = hap::tlv_decode(&req.body)
                                     .unwrap()
                                     .get(hap::tag::FLAGS)
                                     .map(<[u8]>::to_vec);
-                                let seq = hap::tlv_decode(&req.body)
-                                    .unwrap()
-                                    .get(hap::tag::SEQ_NO)
-                                    .unwrap()[0];
+                                let seq = hap::tlv_decode(&req.body).unwrap().get(hap::tag::SEQ_NO).unwrap()[0];
                                 if seq == 1 {
                                     assert_eq!(flags, Some(vec![0x10]), "transient flag");
                                 }
@@ -891,10 +819,7 @@ pub(crate) mod mock {
                                 let mut b = Vec::new();
                                 plist::to_writer_binary(
                                     &mut b,
-                                    &dict(vec![(
-                                        "eventPort",
-                                        plist::Value::Integer((event_port as u64).into()),
-                                    )]),
+                                    &dict(vec![("eventPort", plist::Value::Integer((event_port as u64).into()))]),
                                 )
                                 .unwrap();
                                 (200, b)
@@ -929,13 +854,11 @@ pub(crate) mod mock {
                             }
                             _ => (200, vec![]),
                         };
-                        let resp =
-                            http::encode_response(&proto, status, "OK", &[("CSeq", cseq)], &body);
+                        let resp = http::encode_response(&proto, status, "OK", &[("CSeq", cseq)], &body);
                         conn.send(&resp).await.unwrap();
                         // After M4 of a transient pairing, both sides switch to encryption.
                         if path == "/pair-setup"
-                            && hap::tlv_decode(&req.body).unwrap().get(hap::tag::SEQ_NO)
-                                == Some(&[3][..])
+                            && hap::tlv_decode(&req.body).unwrap().get(hap::tag::SEQ_NO) == Some(&[3][..])
                         {
                             let k = acc.session_key().unwrap().to_vec();
                             *sk.lock().unwrap() = Some(k.clone());
@@ -963,11 +886,8 @@ mod tests {
         let sealed = seal_blocks(&mut c, b"GET / RTSP/1.0");
         // pyatv HAPSession: 2-byte LE length, then the counter-8 ChaCha20 frame (see hap vectors).
         let v: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures/hap-vectors.json"),
-            )
-            .unwrap(),
+            &std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hap-vectors.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -1009,10 +929,7 @@ mod tests {
         assert_eq!(r[1], 0xD3);
         assert_eq!(&r[2..4], &[0, 7]);
         assert_eq!(&r[8..16], &[1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(
-            &r[16..24],
-            &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
-        );
+        assert_eq!(&r[16..24], &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
         assert!(timing_reply(&[0; 4], 0).is_none());
     }
 
@@ -1023,11 +940,7 @@ mod tests {
         assert!(b.starts_with(b"bplist00"));
         let v: plist::Value = plist::from_bytes(&b).unwrap();
         assert_eq!(
-            v.as_dictionary()
-                .unwrap()
-                .get("Content-Location")
-                .unwrap()
-                .as_string(),
+            v.as_dictionary().unwrap().get("Content-Location").unwrap().as_string(),
             Some("http://10.0.0.2:5000/a.mp4")
         );
         let s = setup_body("UUID", 5555, "Silicon Extend");
@@ -1073,15 +986,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("clip.mp4");
         std::fs::write(&file, vec![0u8; 5000]).unwrap();
-        let showing = play_video(
-            "127.0.0.1",
-            rx.port,
-            Media::File(file),
-            None,
-            "Silicon Extend",
-        )
-        .await
-        .unwrap();
+        let showing = play_video("127.0.0.1", rx.port, Media::File(file), None, "Silicon Extend")
+            .await
+            .unwrap();
         let url = rx.played.lock().unwrap()[0].clone();
         assert!(
             url.starts_with("http://127.0.0.1:") && url.ends_with("/clip.mp4"),
@@ -1114,10 +1021,7 @@ mod tests {
             "POST /stop",
             "TEARDOWN",
         ] {
-            assert!(
-                log.iter().any(|l| l.starts_with(want)),
-                "missing {want} in {log:?}"
-            );
+            assert!(log.iter().any(|l| l.starts_with(want)), "missing {want} in {log:?}");
         }
 
         let showing = show_photo(

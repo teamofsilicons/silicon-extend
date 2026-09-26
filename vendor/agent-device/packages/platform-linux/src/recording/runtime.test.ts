@@ -208,3 +208,67 @@ test('app scope forwards the bound identity and keeps it across durable recovery
     activeSessionApp: { bundleId: 'org.example.Target' },
   });
 });
+
+test('refuses --quality, which Linux cannot honor, before preparing output or spawning a recorder', async () => {
+  const { operations, host } = setup();
+  await expect(
+    operations.screenRecordingStart({ ...input, exportQuality: 'high' }),
+  ).rejects.toMatchObject({
+    code: 'INVALID_ARGS',
+    message: expect.stringMatching(/do not support --quality: .*Run record start again without it/),
+  });
+  expect(host.outputs.prepare).not.toHaveBeenCalled();
+  expect(host.linux.start).not.toHaveBeenCalled();
+});
+
+const statusPath = '/session/video.native.mp4.status.json';
+
+test('a stop after a daemon restart removes the worker status file and says the video ended', async () => {
+  const { operations, files, host } = setup();
+  const started = await operations.screenRecordingStart(input);
+  // The worker kept writing its status after the daemon that spawned it died.
+  files.set(statusPath, '{"state":"completed","reason":"owner-exited"}');
+  const restored = await operations.screenRecordingReattach({ envelope: started.envelope });
+  if (restored.status !== 'active') throw new Error('expected recovered handle');
+  const done = await restored.handle.finish();
+  expect(done.status).toBe('completed');
+  expect(files.has(statusPath)).toBe(false);
+  expect(host.outputs.remove).toHaveBeenCalledWith(statusPath);
+  const warnings = JSON.stringify(done);
+  expect(warnings).not.toMatch(/resumed/i);
+  expect(warnings).toMatch(/nothing after the daemon restart was recorded/);
+});
+
+test('session cleanup after a daemon restart removes the worker status file', async () => {
+  const { operations, files } = setup();
+  const started = await operations.screenRecordingStart(input);
+  files.set(statusPath, '{}');
+  expect(await operations.screenRecordingCleanup({ envelope: started.envelope })).toEqual({
+    status: 'cleaned',
+  });
+  expect(files.has(statusPath)).toBe(false);
+});
+
+test('a recorder that failed says why and that only closing the session clears it', async () => {
+  const { operations, host } = setup();
+  host.linux.start.mockImplementationOnce(async () => ({
+    markers,
+    terminate: vi.fn(async () => {}),
+    wait: Promise.resolve({
+      stdout: '',
+      stderr: 'the encoder did not finalize within five seconds\n',
+      exitCode: 1,
+    }),
+  }));
+  const started = await operations.screenRecordingStart(input);
+  const handle = started.pendingHandle.transfer();
+  await expect(handle.finish()).rejects.toMatchObject({
+    code: 'COMMAND_FAILED',
+    message:
+      'Linux recording did not finalize successfully: the encoder did not finalize within five seconds',
+    details: expect.objectContaining({
+      retriable: false,
+      hint: expect.stringContaining('Close this session'),
+    }),
+  });
+});

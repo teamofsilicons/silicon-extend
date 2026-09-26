@@ -363,27 +363,114 @@ export async function resolveFrontmostMacOsApp(): Promise<{
   return await runMacOsHelper(['app', 'frontmost']);
 }
 
+/** Activation, the focus waits and the replace check the helper runs around the typing itself. */
+const MACOS_TEXT_FIXED_MS = 5_000;
+/**
+ * Without `--delay-ms` the helper posts up to 20 UTF-16 units per key event, verifies focus once
+ * per event and pauses 2 ms after it; 2 ms per unit is 40 ms per event, well above that cost.
+ */
+const MACOS_TEXT_BURST_MS_PER_UNIT = 2;
+/**
+ * One focus verification: the frontmost app, the system-wide focused element and a walk up its
+ * parents, several Accessibility calls that take 5-10 ms in Electron and Chromium apps. With
+ * `--delay-ms` the helper verifies before every character, and it verifies before every
+ * Return or Tab key.
+ */
+const MACOS_TEXT_CHECK_MS = 15;
+/** The helper's own per-character delay limit. */
+const MACOS_TEXT_MAX_DELAY_MS = 1_000;
+/** The longest one native text command may run; longer text is sent in parts. */
+const MACOS_TEXT_MAX_RUN_MS = 10 * 60_000;
+/** The helper reads at most this much JSON from stdin. */
+const MACOS_TEXT_MAX_INPUT_BYTES = 1_048_576;
+
+function macOsTextPerUnitMs(delayMs: number): number {
+  return delayMs > 0 ? delayMs + MACOS_TEXT_CHECK_MS : MACOS_TEXT_BURST_MS_PER_UNIT;
+}
+
+/**
+ * How long the helper may take to enter `text`: the typing pace plus the focus verification it
+ * runs before every key event it posts. The process timeout is derived from this, so a long fill
+ * is not stopped partway through the field.
+ */
+export function macOsTextEntryBudgetMs(text: string, delayMs = 0): number {
+  const controlKeys = text.match(/[\n\t]/g)?.length ?? 0;
+  return (
+    MACOS_TEXT_FIXED_MS +
+    text.length * macOsTextPerUnitMs(delayMs) +
+    controlKeys * MACOS_TEXT_CHECK_MS
+  );
+}
+
+/** Refuses, before any key is posted, text one helper run cannot enter completely. */
+function assertMacOsTextDeliverable(payload: string, text: string, delayMs: number): number {
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > MACOS_TEXT_MAX_DELAY_MS) {
+    throw new AppError(
+      'INVALID_ARGS',
+      `--delay-ms ${delayMs} is outside the 0-${MACOS_TEXT_MAX_DELAY_MS} ms range native macOS text entry supports. Use --delay-ms ${MACOS_TEXT_MAX_DELAY_MS} or less.`,
+      { reason: 'text_entry_delay_out_of_range', delayMs, maxDelayMs: MACOS_TEXT_MAX_DELAY_MS },
+    );
+  }
+  const bytes = Buffer.byteLength(payload, 'utf8');
+  if (bytes > MACOS_TEXT_MAX_INPUT_BYTES) {
+    throw new AppError(
+      'INVALID_ARGS',
+      `The text is too long for one native macOS text command: it encodes to ${bytes} bytes and the limit is ${MACOS_TEXT_MAX_INPUT_BYTES} bytes. Nothing was typed. Send the text in parts: fill the field with the first part, then type the rest in further commands.`,
+      { reason: 'text_entry_too_long', bytes, maxBytes: MACOS_TEXT_MAX_INPUT_BYTES },
+    );
+  }
+  const budgetMs = macOsTextEntryBudgetMs(text, delayMs);
+  if (budgetMs > MACOS_TEXT_MAX_RUN_MS) {
+    const maxCharacters = Math.floor(
+      (MACOS_TEXT_MAX_RUN_MS - MACOS_TEXT_FIXED_MS) / macOsTextPerUnitMs(delayMs),
+    );
+    throw new AppError(
+      'INVALID_ARGS',
+      `Entering ${text.length} characters at --delay-ms ${delayMs} would take about ${Math.ceil(budgetMs / 60_000)} minutes, longer than the ${MACOS_TEXT_MAX_RUN_MS / 60_000}-minute limit for one native macOS text command. Nothing was typed. Send at most ${maxCharacters} characters per command at this delay (fill the first part, then type the rest), or lower --delay-ms.`,
+      {
+        reason: 'text_entry_budget_exceeded',
+        characters: text.length,
+        delayMs,
+        maxCharacters,
+        maxRunMs: MACOS_TEXT_MAX_RUN_MS,
+      },
+    );
+  }
+  return budgetMs;
+}
+
 export async function runMacOsTextAction(
   text: string,
   options: {
     replace: boolean;
     focusOnly?: boolean;
     bundleId?: string;
+    /**
+     * The session surface. `frontmost-app` binds the action to the app that is frontmost when
+     * it runs, so the bundle the session recorded at open is not sent at all; `app` keeps the
+     * explicit bundle. Other surfaces keep the bundle-or-frontmost behaviour.
+     */
+    surface?: SessionSurface;
     x?: number;
     y?: number;
     delayMs?: number;
     signal?: AbortSignal;
   },
 ): Promise<Record<string, unknown>> {
-  const { signal, ...input } = options;
-  if (input.bundleId) input.bundleId = assertMacOsBundleId(input.bundleId);
+  const { signal, surface, bundleId, ...rest } = options;
+  const target =
+    surface === 'frontmost-app'
+      ? { surface }
+      : {
+          ...(bundleId ? { bundleId: assertMacOsBundleId(bundleId) } : {}),
+          ...(surface === 'app' ? { surface } : {}),
+        };
+  const stdin = JSON.stringify({ text, ...rest, ...target });
+  const budgetMs = assertMacOsTextDeliverable(stdin, text, options.delayMs ?? 0);
   return await runMacOsHelper(['text'], {
     signal,
-    stdin: JSON.stringify({ text, ...input }),
-    timeoutMs: Math.max(
-      MACOS_HELPER_TIMEOUT_MS,
-      text.length * Math.max(options.delayMs ?? 0, 2) + 5000,
-    ),
+    stdin,
+    timeoutMs: Math.max(MACOS_HELPER_TIMEOUT_MS, budgetMs),
   });
 }
 

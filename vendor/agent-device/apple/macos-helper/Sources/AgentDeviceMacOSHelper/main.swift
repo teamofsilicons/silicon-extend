@@ -570,9 +570,17 @@ private func pressAtPosition(_ request: MouseClickRequest) throws {
 
 private func captureSurfaceScreenshot(surface: String?, outPath: String) throws {
   guard #available(macOS 15.2, *) else {
-    throw HelperError.commandFailed(
-      "screenshot on macOS desktop and menubar surfaces requires macOS 15.2 or newer"
-    )
+    // Older systems have no rectangle capture; the main display through a display filter is
+    // the same image.
+    do {
+      try writeScreenshotPNG(try captureMainDisplayImage(), outPath: outPath)
+    } catch let error as NSError where error.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain" && error.code == -3801 {
+      throw HelperError.commandFailed(
+        "screenshot requires Screen Recording permission on macOS desktop and menubar surfaces",
+        details: ["surface": surface ?? "", "permission": "screen-recording"]
+      )
+    }
+    return
   }
   guard let screenFrame = NSScreen.main?.frame, screenFrame.width > 0, screenFrame.height > 0 else {
     throw HelperError.commandFailed("screenshot could not resolve main screen bounds")

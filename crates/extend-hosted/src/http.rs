@@ -30,9 +30,7 @@ impl Message {
     pub fn status(&self) -> u16 {
         let mut parts = self.start_line.split_whitespace();
         match (parts.next(), parts.next()) {
-            (Some(p), Some(code)) if p.contains('/') && !p.starts_with('/') => {
-                code.parse().unwrap_or(0)
-            }
+            (Some(p), Some(code)) if p.contains('/') && !p.starts_with('/') => code.parse().unwrap_or(0),
             _ => 0,
         }
     }
@@ -62,9 +60,7 @@ pub(crate) fn encode_request(
     for (k, v) in headers {
         out.push_str(&format!("{k}: {v}\r\n"));
     }
-    let has_len = headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("content-length"));
+    let has_len = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length"));
     if !has_len && (!body.is_empty() || matches!(method, "POST" | "PUT")) {
         out.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
@@ -154,10 +150,7 @@ impl Parser {
             if self.buf.len() < body_start + len {
                 return Ok(None);
             }
-            (
-                self.buf[body_start..body_start + len].to_vec(),
-                body_start + len,
-            )
+            (self.buf[body_start..body_start + len].to_vec(), body_start + len)
         } else if is_request {
             (vec![], body_start)
         } else if eof {
@@ -213,10 +206,7 @@ fn dechunk(data: &[u8]) -> io::Result<Option<(Vec<u8>, usize)>> {
 }
 
 /// Reads one message from a stream.
-pub(crate) async fn read_message<S: AsyncRead + Unpin>(
-    stream: &mut S,
-    parser: &mut Parser,
-) -> io::Result<Message> {
+pub(crate) async fn read_message<S: AsyncRead + Unpin>(stream: &mut S, parser: &mut Parser) -> io::Result<Message> {
     let mut chunk = vec![0u8; 16 * 1024];
     loop {
         if let Some(m) = parser.take(false)? {
@@ -224,12 +214,9 @@ pub(crate) async fn read_message<S: AsyncRead + Unpin>(
         }
         let n = stream.read(&mut chunk).await?;
         if n == 0 {
-            return parser.take(true)?.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "connection closed before a reply",
-                )
-            });
+            return parser
+                .take(true)?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed before a reply"));
         }
         parser.push(&chunk[..n]);
     }
@@ -245,8 +232,7 @@ pub(crate) async fn request(
     timeout: Duration,
     insecure: bool,
 ) -> io::Result<Message> {
-    let parsed =
-        url::Url::parse(url).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let parsed = url::Url::parse(url).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let host = parsed
         .host_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no host"))?
@@ -328,14 +314,8 @@ mod tests {
     #[test]
     fn encodes() {
         let r = encode_request("POST", "/x", "HTTP/1.1", &[("Host", "a".into())], b"");
-        assert_eq!(
-            r,
-            b"POST /x HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n"
-        );
+        assert_eq!(r, b"POST /x HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n");
         let r = encode_response("RTSP/1.0", 200, "OK", &[("CSeq", "2".into())], b"");
-        assert_eq!(
-            r,
-            b"RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Length: 0\r\n\r\n"
-        );
+        assert_eq!(r, b"RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Length: 0\r\n\r\n");
     }
 }

@@ -95,10 +95,18 @@ impl ParsedArgs {
         self.flags.iter().any(|(n, _)| n == name)
     }
     pub fn value(&self, name: &str) -> Option<&str> {
-        self.flags.iter().rev().find(|(n, _)| n == name).and_then(|(_, v)| v.as_deref())
+        self.flags
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .and_then(|(_, v)| v.as_deref())
     }
     pub fn values(&self, name: &str) -> Vec<&str> {
-        self.flags.iter().filter(|(n, _)| n == name).filter_map(|(_, v)| v.as_deref()).collect()
+        self.flags
+            .iter()
+            .filter(|(n, _)| n == name)
+            .filter_map(|(_, v)| v.as_deref())
+            .collect()
     }
     pub fn positional(&self, i: usize) -> Option<&str> {
         self.positionals.get(i).map(String::as_str)
@@ -150,7 +158,11 @@ pub fn safe_file_name(raw: &str, fallback: &str) -> String {
         .filter(|c| !c.is_control() && !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
         .collect();
     let cleaned = cleaned.trim().trim_start_matches('.').to_owned();
-    if cleaned.is_empty() { fallback.to_owned() } else { cleaned.chars().take(200).collect() }
+    if cleaned.is_empty() {
+        fallback.to_owned()
+    } else {
+        cleaned.chars().take(200).collect()
+    }
 }
 
 /// Ensures `name` ends with one of `extensions` (lowercase, with the dot), adding the first if not.
@@ -198,7 +210,10 @@ mod tests {
         assert_eq!(find_refused_flag(&s(&["--session=abc"])), Some("--session"));
         assert_eq!(find_refused_flag(&s(&["--udid", "x"])), Some("--udid"));
         assert_eq!(find_refused_flag(&s(&["--state-dir", "/tmp"])), Some("--state-dir"));
-        assert_eq!(find_refused_flag(&s(&["--daemon-base-url=http://x"])), Some("--daemon-base-url"));
+        assert_eq!(
+            find_refused_flag(&s(&["--daemon-base-url=http://x"])),
+            Some("--daemon-base-url")
+        );
         assert_eq!(find_refused_flag(&s(&["--config", "a.json"])), Some("--config"));
         assert_eq!(find_refused_flag(&s(&["--reporter", "./x.mjs"])), Some("--reporter"));
         assert_eq!(find_refused_flag(&s(&["-i", "-d", "3"])), None);
@@ -226,7 +241,10 @@ mod tests {
 
     #[test]
     fn parse_splits_flags_and_values() {
-        let p = parse(&s(&["page.png", "--scale", "0.5", "--overlay-refs", "--crop-on=label=\"x\""]), &["--scale", "--crop-on"]);
+        let p = parse(
+            &s(&["page.png", "--scale", "0.5", "--overlay-refs", "--crop-on=label=\"x\""]),
+            &["--scale", "--crop-on"],
+        );
         assert_eq!(p.positionals, s(&["page.png"]));
         assert_eq!(p.value("--scale"), Some("0.5"));
         assert!(p.has("--overlay-refs"));

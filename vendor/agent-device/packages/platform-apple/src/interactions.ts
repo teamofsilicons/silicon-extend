@@ -11,7 +11,11 @@ import {
   type TextEntryRoute,
   type TypeTextBackendResult,
 } from '@agent-device/contracts/interactor-types';
-import { macOsHelperSurface, type MacOsHelperSurface } from '@agent-device/contracts/session';
+import {
+  macOsHelperSurface,
+  type MacOsHelperSurface,
+  type SessionSurface,
+} from '@agent-device/contracts/session';
 import {
   SCROLL_DURATION_MAX_MS,
   normalizeScrollDurationMs,
@@ -66,6 +70,19 @@ type IosRunnerOverrides = Pick<
   | 'performGesture'
   | 'gestureViewport'
 >;
+
+/**
+ * The app a native macOS text action is bound to. Snapshot, press and read all send the session
+ * surface, and text entry sends it too: a `frontmost-app` session types into whatever app is
+ * frontmost when the action runs, never into the app that was frontmost when the session opened
+ * (the bundle id the session recorded then).
+ */
+function macOsTextTarget(ctx: RunnerContext): { bundleId?: string; surface?: SessionSurface } {
+  return {
+    ...(ctx.appBundleId === undefined ? {} : { bundleId: ctx.appBundleId }),
+    ...(ctx.surface === undefined ? {} : { surface: ctx.surface }),
+  };
+}
 
 export function resolveAppleBackRunnerCommand(mode?: BackMode): AppleBackRunnerCommand {
   if (mode === 'system') return 'backSystem';
@@ -148,7 +165,7 @@ export function iosRunnerOverrides(
             focusOnly: true,
             x,
             y,
-            bundleId: ctx.appBundleId,
+            ...macOsTextTarget(ctx),
             signal: ctx.signal,
           });
         }
@@ -158,7 +175,7 @@ export function iosRunnerOverrides(
         if (isMacOs(device)) {
           await runMacOsTextAction(text, {
             replace: false,
-            bundleId: ctx.appBundleId,
+            ...macOsTextTarget(ctx),
             delayMs,
             signal: ctx.signal,
           });
@@ -182,7 +199,7 @@ export function iosRunnerOverrides(
         if (isMacOs(device)) {
           return await runMacOsTextAction(text, {
             replace: true,
-            bundleId: ctx.appBundleId,
+            ...macOsTextTarget(ctx),
             x,
             y,
             delayMs,

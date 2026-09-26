@@ -5,7 +5,7 @@
 # The repository is mounted at /src at run time (see run.sh); nothing is baked in, so one image
 # serves every run and cargo's caches live in named volumes.
 #
-#   docker build -t silicon-extend-linux-e2e apps/desktop/linux-e2e
+#   apps/desktop/linux-e2e/build-image.sh     # builds silicon-extend-linux-e2e when missing or stale
 #   apps/desktop/linux-e2e/run.sh
 FROM debian:trixie
 
@@ -36,5 +36,6 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-to
 
 # A Carbon's desktop session runs as a normal user.
 RUN useradd -m -s /bin/bash carbon
-ENV DISPLAY=:99 NO_AT_EXTEND=0 GTK_A11Y=atspi
+# NO_AT_BRIDGE is GTK's own switch for its AT-SPI bridge (0 keeps it on); it is not a product name.
+ENV DISPLAY=:99 NO_AT_BRIDGE=0 GTK_A11Y=atspi
 WORKDIR /home/carbon

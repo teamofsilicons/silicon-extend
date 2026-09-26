@@ -1,9 +1,9 @@
 //! What a Windows computer reports it can do, given what the probe found.
 
 use extend_driver::Probe;
+use extend_protocol::Capability as C;
 use extend_protocol::DeviceOs;
 use extend_protocol::model::{MissingCapability, Setup, SetupStep, StepStatus};
-use extend_protocol::Capability as C;
 
 pub const LOCKED_REASON: &str = "This computer is locked. Unlock it to let a Silicon use it.";
 
@@ -22,10 +22,22 @@ pub const WORKING: &[C] = &[
 
 /// Windows capabilities this build doesn't have yet, with why.
 pub const NOT_BUILT: &[(C, &str)] = &[
-    (C::ScreenRecord, "Screen recording isn't available in Silicon Extend for Windows yet."),
-    (C::Logs, "Device logs aren't available in Silicon Extend for Windows yet."),
-    (C::Alerts, "Handling system pop-ups isn't available in Silicon Extend for Windows yet; the Silicon reads and clicks dialogs instead."),
-    (C::Replay, "Replaying saved steps isn't available in Silicon Extend for Windows yet."),
+    (
+        C::ScreenRecord,
+        "Screen recording isn't available in Silicon Extend for Windows yet.",
+    ),
+    (
+        C::Logs,
+        "Device logs aren't available in Silicon Extend for Windows yet.",
+    ),
+    (
+        C::Alerts,
+        "Handling system pop-ups isn't available in Silicon Extend for Windows yet; the Silicon reads and clicks dialogs instead.",
+    ),
+    (
+        C::Replay,
+        "Replaying saved steps isn't available in Silicon Extend for Windows yet.",
+    ),
 ];
 
 /// Capabilities a locked computer still offers (they don't touch the screen).
@@ -38,18 +50,27 @@ pub fn probe_from(locked: bool, os_version: Option<String>) -> Probe {
         if !locked || WHILE_LOCKED.contains(&cap) {
             capabilities.push(cap);
         } else {
-            missing.push(MissingCapability { capability: cap, reason: LOCKED_REASON.into() });
+            missing.push(MissingCapability {
+                capability: cap,
+                reason: LOCKED_REASON.into(),
+            });
         }
     }
     for (cap, reason) in NOT_BUILT {
-        missing.push(MissingCapability { capability: *cap, reason: (*reason).into() });
+        missing.push(MissingCapability {
+            capability: *cap,
+            reason: (*reason).into(),
+        });
     }
     let setup = if locked {
         Setup::from_steps(vec![SetupStep {
             key: "unlocked".into(),
             title: "Unlock this computer".into(),
             status: StepStatus::NeedsCarbon,
-            help: Some("Sign in to Windows. A Silicon can't see or use a locked computer, and admin prompts always need you.".into()),
+            help: Some(
+                "Sign in to Windows. A Silicon can't see or use a locked computer, and admin prompts always need you."
+                    .into(),
+            ),
             error: None,
             input: None,
         }])
@@ -96,7 +117,11 @@ mod tests {
             assert!(DeviceOs::Windows.full_capabilities().contains(c), "{c:?}");
         }
         for m in &p.missing {
-            assert!(DeviceOs::Windows.full_capabilities().contains(&m.capability), "{:?}", m.capability);
+            assert!(
+                DeviceOs::Windows.full_capabilities().contains(&m.capability),
+                "{:?}",
+                m.capability
+            );
         }
     }
 
@@ -112,7 +137,10 @@ mod tests {
 
     #[test]
     fn parses_ver() {
-        assert_eq!(parse_ver("\r\nMicrosoft Windows [Version 10.0.22631.4602]\r\n"), Some("10.0.22631.4602".into()));
+        assert_eq!(
+            parse_ver("\r\nMicrosoft Windows [Version 10.0.22631.4602]\r\n"),
+            Some("10.0.22631.4602".into())
+        );
         assert_eq!(parse_ver("garbage"), None);
     }
 }

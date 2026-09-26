@@ -30,6 +30,12 @@ export type RunnerContext = {
   requestId?: string;
   signal?: AbortSignal;
   appBundleId?: string;
+  /**
+   * The surface of the session this request acts on. A macOS `frontmost-app` session means
+   * whatever app is frontmost when the action runs, so an owner must not bind text entry to
+   * `appBundleId`, which records the app that was frontmost when the session opened.
+   */
+  surface?: SessionSurface;
   verbose?: boolean;
   logPath?: string;
   traceLogPath?: string;

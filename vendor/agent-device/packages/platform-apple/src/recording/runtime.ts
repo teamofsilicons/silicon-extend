@@ -155,29 +155,32 @@ async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
   let recorderExit: string | undefined;
   let recorderResult: HostCommandResult | undefined;
   const stopSimulatorRecorder = async (): Promise<RecorderStop> => {
-    // An exited recorder is an observation about the recorder, not about the export: simctl wrote
-    // whatever it wrote, and the playability rule is what answers whether that is a video
+    // An exited recorder is an observation about the recorder, not about the export: the recorder
+    // wrote whatever it wrote, and the playability rule is what answers whether that is a video
     // (ADR 0024 2.2). Refusing by exit code alone threw away a finished recording and left a retry
-    // that could only re-read the same settled exit, so the exit is disclosed and collection proceeds.
+    // that could only re-read the same settled exit, so the exit is disclosed and collection
+    // proceeds — for simctl and for the native macOS recorder alike.
     await nativeProcess.terminate();
     const result = await nativeProcess.wait;
     recorderResult = result;
-    recorderExit = describeSimctlRecorderExit(result, backendLabel);
+    const report = isMac ? readMacOsRecorderReport(result.stdout) : undefined;
+    recorderExit = isMac
+      ? describeMacOsRecorderExit(result, report)
+      : describeSimctlRecorderExit(result, backendLabel);
     host.screenRecording.ownedProcesses.clear({ kind: 'session', sessionId: input.sessionId });
-    if (isMac && result.exitCode !== 0) {
-      throw new AppError(
-        'COMMAND_FAILED',
-        'Native macOS recording did not finalize successfully',
-        execFailureDetails(result),
-      );
-    }
+    const warnings = [
+      ...(recorderExit === undefined
+        ? []
+        : [
+            isMac
+              ? `${recorderExit}; the video covers only what the recorder wrote before it stopped.`
+              : `${recorderExit} before record stop; the video covers only what the recorder wrote before it stopped.`,
+          ]),
+      ...(report === undefined ? [] : macOsRecorderStopWarnings(report)),
+    ];
     return {
       observation: { recorder: 'confirmed' },
-      ...(recorderExit === undefined
-        ? {}
-        : {
-            warning: `${recorderExit} before record stop; the video covers only what the recorder wrote before it stopped.`,
-          }),
+      ...(warnings.length === 0 ? {} : { warning: warnings.join(' ') }),
     };
   };
   const startedSnapshot = snapshot(input, backendLabel, {}, clockAnchor);
@@ -402,6 +405,101 @@ async function runAppleRecordingOperation<T>(operation: () => Promise<T>): Promi
   }
 }
 
+/** What the native macOS recorder said about its own stop, from the JSON line it prints on exit. */
+type MacOsRecorderReport = Readonly<{
+  ok: boolean;
+  reason?: string;
+  interruption?: string;
+  appNotVisibleMs?: number;
+  message?: string;
+}>;
+
+function readMacOsRecorderReport(stdout: string): MacOsRecorderReport | undefined {
+  const line = stdout.trim().split('\n').at(-1);
+  if (!line) return undefined;
+  try {
+    const parsed = JSON.parse(line) as {
+      ok?: unknown;
+      data?: Record<string, unknown>;
+      error?: { message?: unknown };
+    };
+    if (parsed.ok === true && parsed.data) {
+      const hidden = Number(parsed.data.appNotVisibleMs);
+      return {
+        ok: true,
+        ...(typeof parsed.data.reason === 'string' ? { reason: parsed.data.reason } : {}),
+        ...(typeof parsed.data.interruption === 'string'
+          ? { interruption: parsed.data.interruption }
+          : {}),
+        ...(Number.isFinite(hidden) && hidden > 0 ? { appNotVisibleMs: hidden } : {}),
+      };
+    }
+    if (parsed.ok === false) {
+      return {
+        ok: false,
+        ...(typeof parsed.error?.message === 'string' ? { message: parsed.error.message } : {}),
+      };
+    }
+  } catch {
+    // Not the helper's JSON line: nothing to report beyond the exit itself.
+  }
+  return undefined;
+}
+
+function describeMacOsRecorderExit(
+  result: HostCommandResult,
+  report: MacOsRecorderReport | undefined,
+): string | undefined {
+  if (result.exitCode === 0) return undefined;
+  const cause = report?.ok === false && report.message ? `: ${report.message}` : '';
+  return `The native macOS recorder (ScreenCaptureKit) failed with exit code ${result.exitCode}${cause}`;
+}
+
+/**
+ * The recorder stops on its own for reasons the caller has to hear about: the video then ends
+ * before `record stop`, or parts of it show nothing of the app. `stopped` is the stop that
+ * `record stop` asked for and needs no warning.
+ */
+function macOsRecorderStopWarnings(report: MacOsRecorderReport): string[] {
+  const warnings: string[] = [];
+  switch (report.reason) {
+    case 'duration-limit':
+      warnings.push(
+        'The native macOS recorder reached its 30-minute duration limit before record stop; the video ends there.',
+      );
+      break;
+    case 'size-limit':
+      warnings.push(
+        'The native macOS recorder reached its 1 GiB file size limit before record stop; the video ends there.',
+      );
+      break;
+    case 'owner-exited':
+      warnings.push(
+        'The process that started the native macOS recorder exited before record stop; the video ends there.',
+      );
+      break;
+    case 'app-exited':
+      warnings.push('The recorded app quit before record stop; the video ends when it quit.');
+      break;
+    case 'interrupted':
+      warnings.push(
+        `macOS stopped the screen capture before record stop${report.interruption ? ` (${report.interruption})` : ''}, ` +
+          'for example from the screen-recording indicator in the menu bar or because the recorded display was ' +
+          'disconnected; the video covers everything up to that point. Start a new recording to continue.',
+      );
+      break;
+    default:
+      break;
+  }
+  if (report.appNotVisibleMs !== undefined) {
+    warnings.push(
+      `The recorded app had no window on screen for about ${Math.max(1, Math.round(report.appNotVisibleMs / 1000))} seconds ` +
+        '(hidden, minimized or on another Space); those parts of the video do not show the app.',
+    );
+  }
+  return warnings;
+}
+
 function describeSimctlRecorderExit(
   result: HostCommandResult,
   backendLabel: string,
@@ -424,8 +522,14 @@ function recorderExitEndedTheRecording(
   exit: string | undefined,
   result: HostCommandResult | undefined,
 ): unknown {
-  const original = asAppError(exportError, 'COMMAND_FAILED');
   if (exit === undefined || result === undefined) return exportError;
+  // A recorder that failed can leave no file at all (the native macOS recorder deletes one that
+  // outgrew its size limit); every later stop would fail the same copy, so it is just as final.
+  const original = isMissingFileError(exportError)
+    ? new AppError('COMMAND_FAILED', 'the recorder left no video file to export', {
+        reason: RECORDING_OUTPUT_UNPLAYABLE_REASON,
+      })
+    : asAppError(exportError, 'COMMAND_FAILED');
   if (original.details?.reason !== RECORDING_OUTPUT_UNPLAYABLE_REASON) return exportError;
   return new AppError(
     original.code,
@@ -435,9 +539,18 @@ function recorderExitEndedTheRecording(
       ...(result.signal === undefined ? {} : { signal: result.signal }),
       retriable: false,
       hint:
-        'The recorder exited before record stop, so the next record stop reads the same file. ' +
+        'The recorder has already exited, so the next record stop reads the same file. ' +
         'Close this session to release the device, then record again.',
     }),
+  );
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'ENOENT'
   );
 }
 

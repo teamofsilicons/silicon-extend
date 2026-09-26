@@ -207,25 +207,17 @@ pub(crate) fn decode(data: &[u8]) -> Result<Value, DecodeError> {
 
 fn take(data: &[u8], n: usize) -> Result<(&[u8], &[u8]), DecodeError> {
     if data.len() < n {
-        return Err(DecodeError(format!(
-            "needed {n} bytes, have {}",
-            data.len()
-        )));
+        return Err(DecodeError(format!("needed {n} bytes, have {}", data.len())));
     }
     Ok(data.split_at(n))
 }
 
 fn le(bytes: &[u8]) -> u64 {
-    bytes
-        .iter()
-        .rev()
-        .fold(0u64, |acc, b| (acc << 8) | *b as u64)
+    bytes.iter().rev().fold(0u64, |acc, b| (acc << 8) | *b as u64)
 }
 
 fn unpack<'a>(data: &'a [u8], seen: &mut Vec<Value>) -> Result<(Value, &'a [u8]), DecodeError> {
-    let (&tag, rest) = data
-        .split_first()
-        .ok_or_else(|| DecodeError("unexpected end".into()))?;
+    let (&tag, rest) = data.split_first().ok_or_else(|| DecodeError("unexpected end".into()))?;
     let mut remember = true;
     let (value, rest) = match tag {
         0x01 => {
@@ -261,10 +253,7 @@ fn unpack<'a>(data: &'a [u8], seen: &mut Vec<Value>) -> Result<(Value, &'a [u8])
         }
         0x36 => {
             let (f, rest) = take(rest, 8)?;
-            (
-                Value::Float(f64::from_le_bytes(f.try_into().expect("8 bytes"))),
-                rest,
-            )
+            (Value::Float(f64::from_le_bytes(f.try_into().expect("8 bytes"))), rest)
         }
         0x30..=0x33 => {
             let n = 1usize << (tag & 0x0F);
@@ -382,22 +371,14 @@ mod tests {
     use super::*;
 
     fn vectors() -> serde_json::Value {
-        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/hap-vectors.json");
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hap-vectors.json");
         serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
     }
 
     fn check(name: &str, v: Value) {
-        let want = vectors()[format!("opack_{name}")]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        let want = vectors()[format!("opack_{name}")].as_str().unwrap().to_owned();
         assert_eq!(hex::encode(encode(&v)), want, "encoding {name}");
-        assert_eq!(
-            decode(&hex::decode(&want).unwrap()).unwrap(),
-            v,
-            "decoding {name}"
-        );
+        assert_eq!(decode(&hex::decode(&want).unwrap()).unwrap(), v, "decoding {name}");
     }
 
     #[test]
@@ -446,11 +427,7 @@ mod tests {
         );
         check(
             "big_dict",
-            Value::Dict(
-                (0..16)
-                    .map(|i| (Value::Str(format!("k{i}")), Value::Int(i)))
-                    .collect(),
-            ),
+            Value::Dict((0..16).map(|i| (Value::Str(format!("k{i}")), Value::Int(i))).collect()),
         );
         check("big_list", Value::Array((0..16).map(Value::Int).collect()));
         // pyatv writes references for repeats; we decode them (and write repeats literally).
@@ -472,10 +449,7 @@ mod tests {
         assert_eq!(decode(&encode(&refs)).unwrap(), refs);
         // A `_hidC` request as pyatv sends it: the repeated "_hidC" is a reference (`a2`).
         let hid = Value::dict([
-            (
-                "_c",
-                Value::dict([("_hBtS", Value::Int(1)), ("_hidC", Value::Int(6))]),
-            ),
+            ("_c", Value::dict([("_hBtS", Value::Int(1)), ("_hidC", Value::Int(6))])),
             ("_i", Value::str("_hidC")),
             ("_t", Value::Int(2)),
             ("_x", Value::Int(7)),
@@ -506,11 +480,7 @@ mod tests {
         )])))
         .unwrap();
         assert_eq!(
-            v.get("_c")
-                .unwrap()
-                .get("com.netflix.Netflix")
-                .unwrap()
-                .as_str(),
+            v.get("_c").unwrap().get("com.netflix.Netflix").unwrap().as_str(),
             Some("Netflix")
         );
         assert_eq!(v.to_json()["_c"]["com.netflix.Netflix"], "Netflix");

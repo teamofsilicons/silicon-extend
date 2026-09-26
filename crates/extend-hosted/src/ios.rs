@@ -26,10 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::common::{
-    content_type_for, invalid, load_json, resolve_attachment, save_json, step, step_error,
-    step_help,
-};
+use crate::common::{content_type_for, invalid, load_json, resolve_attachment, save_json, step, step_error, step_help};
 use crate::{Found, HostedDevice};
 
 const STATE_FILE: &str = "ios.json";
@@ -89,8 +86,7 @@ pub(crate) fn parse_devicectl_list(v: &Value) -> Vec<CoreDevice> {
                 device_type: s("/hardwareProperties/deviceType")
                     .or_else(|| s("/properties/hardware/deviceType"))
                     .unwrap_or_default(),
-                product_type: s("/hardwareProperties/productType")
-                    .or_else(|| s("/properties/hardware/productType")),
+                product_type: s("/hardwareProperties/productType").or_else(|| s("/properties/hardware/productType")),
                 os_version: s("/deviceProperties/osVersionNumber"),
                 paired: s("/connectionProperties/pairingState")
                     .or_else(|| s("/properties/connection/pairingState"))
@@ -122,18 +118,16 @@ pub(crate) fn parse_developer_mode(v: &Value) -> Option<bool> {
 
 /// Whether `device info apps` lists agent-device's runner.
 pub(crate) fn runner_installed(v: &Value, bundle_prefix: &str) -> bool {
-    v.pointer("/result/apps")
-        .and_then(Value::as_array)
-        .is_some_and(|apps| {
-            apps.iter().any(|a| {
-                a.get("bundleIdentifier")
-                    .and_then(Value::as_str)
-                    .is_some_and(|b| b.starts_with(bundle_prefix))
-            })
+    v.pointer("/result/apps").and_then(Value::as_array).is_some_and(|apps| {
+        apps.iter().any(|a| {
+            a.get("bundleIdentifier")
+                .and_then(Value::as_str)
+                .is_some_and(|b| b.starts_with(bundle_prefix))
         })
+    })
 }
 
-/// The most specific human message in a devicectl error (it nests underlying errors), with the
+/// The most specific readable message in a devicectl error (it nests underlying errors), with the
 /// recovery suggestion when there is one ("Unlock the device and try again.").
 pub(crate) fn devicectl_error(v: &Value) -> Option<String> {
     let mut cur = v.get("error")?;
@@ -167,33 +161,20 @@ pub(crate) fn devicectl_error(v: &Value) -> Option<String> {
 /// Runs `xcrun devicectl <args> --json-output <tmp>` and returns the JSON (also on failure, when
 /// devicectl wrote its error there).
 async fn devicectl(args: &[&str]) -> Result<Value, String> {
-    let out = std::env::temp_dir().join(format!(
-        "extend-devicectl-{}.json",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let out = std::env::temp_dir().join(format!("extend-devicectl-{}.json", uuid::Uuid::new_v4().simple()));
     let mut cmd = Command::new("xcrun");
-    cmd.arg("devicectl")
-        .args(args)
-        .arg("--json-output")
-        .arg(&out);
-    cmd.stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let result =
-        tokio::time::timeout(DEVICECTL_TIMEOUT + Duration::from_secs(5), cmd.output()).await;
+    cmd.arg("devicectl").args(args).arg("--json-output").arg(&out);
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+    let result = tokio::time::timeout(DEVICECTL_TIMEOUT + Duration::from_secs(5), cmd.output()).await;
     let json = std::fs::read(&out)
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let _ = std::fs::remove_file(&out);
     match (result, json) {
         (Err(_), _) => Err("devicectl didn't answer in time".into()),
-        (Ok(Err(e)), _) => Err(format!(
-            "couldn't run xcrun devicectl: {e} (is Xcode installed?)"
-        )),
+        (Ok(Err(e)), _) => Err(format!("couldn't run xcrun devicectl: {e} (is Xcode installed?)")),
         (Ok(Ok(o)), Some(v)) if o.status.success() => Ok(v),
-        (Ok(Ok(_)), Some(v)) => {
-            Err(devicectl_error(&v).unwrap_or_else(|| "devicectl failed".into()))
-        }
+        (Ok(Ok(_)), Some(v)) => Err(devicectl_error(&v).unwrap_or_else(|| "devicectl failed".into())),
         (Ok(Ok(o)), None) => Err(String::from_utf8_lossy(&o.stderr)
             .lines()
             .last()
@@ -322,11 +303,7 @@ fn flag_name(a: &str) -> &str {
 /// A file name the Silicon chose, reduced to a safe basename with the given extension.
 pub(crate) fn safe_name(requested: Option<&str>, default: &str, ext: &str) -> String {
     let base = requested
-        .and_then(|r| {
-            Path::new(r)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-        })
+        .and_then(|r| Path::new(r).file_name().map(|n| n.to_string_lossy().into_owned()))
         .map(|n| {
             n.chars()
                 .map(|c| {
@@ -380,9 +357,7 @@ pub(crate) fn plan(
     for a in args {
         let f = flag_name(a);
         if RESERVED_FLAGS.contains(&f) {
-            return Err(format!(
-                "{f} is chosen by Extend for this device; leave it out"
-            ));
+            return Err(format!("{f} is chosen by Extend for this device; leave it out"));
         }
     }
     if let Some(replacement) = not_exposed(command) {
@@ -505,12 +480,7 @@ pub(crate) fn plan(
             // Suite artifacts land in the workdir and come back with the result.
             if !args.iter().any(|a| a == "--artifacts-dir") {
                 args.push("--artifacts-dir".into());
-                args.push(
-                    workdir
-                        .join("test-artifacts")
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                args.push(workdir.join("test-artifacts").to_string_lossy().into_owned());
             }
         }
         "batch" => {
@@ -551,14 +521,8 @@ pub(crate) fn stale_owner(out: &Output, ours: &str) -> Option<StaleOwner> {
     }
     Some(StaleOwner {
         session: session.to_owned(),
-        state_dir: owner
-            .get("stateDir")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        workspace: owner
-            .get("workspace")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        state_dir: owner.get("stateDir").and_then(Value::as_str).map(str::to_owned),
+        workspace: owner.get("workspace").and_then(Value::as_str).map(str::to_owned),
     })
 }
 
@@ -576,12 +540,8 @@ fn session_name(session_id: &str) -> String {
 pub(crate) fn map_error_code(code: &str) -> String {
     match code {
         "INVALID_ARGS" | "INVALID_ARGUMENT" | "USAGE" => crate::common::INVALID_ARGS.to_owned(),
-        "UNSUPPORTED_OPERATION" | "UNSUPPORTED_PLATFORM" | "NOT_SUPPORTED" => {
-            ErrorCode::UnsupportedOnDevice.as_str()
-        }
-        "DEVICE_NOT_FOUND" | "DEVICE_OFFLINE" | "DEVICE_UNAVAILABLE" => {
-            ErrorCode::DeviceOffline.as_str()
-        }
+        "UNSUPPORTED_OPERATION" | "UNSUPPORTED_PLATFORM" | "NOT_SUPPORTED" => ErrorCode::UnsupportedOnDevice.as_str(),
+        "DEVICE_NOT_FOUND" | "DEVICE_OFFLINE" | "DEVICE_UNAVAILABLE" => ErrorCode::DeviceOffline.as_str(),
         "TIMEOUT" | "COMMAND_TIMEOUT" => ErrorCode::CommandTimeout.as_str(),
         "UNKNOWN_COMMAND" => ErrorCode::UnknownCommand.as_str(),
         _ => ErrorCode::CommandFailed.as_str(),
@@ -613,10 +573,7 @@ fn role_name(t: &str) -> String {
         "Other" => return "other".into(),
         _ => {}
     }
-    let t = t
-        .strip_suffix("View")
-        .filter(|s| !s.is_empty())
-        .unwrap_or(t);
+    let t = t.strip_suffix("View").filter(|s| !s.is_empty()).unwrap_or(t);
     let mut out = String::new();
     for (i, c) in t.chars().enumerate() {
         if c.is_uppercase() && i > 0 {
@@ -630,11 +587,7 @@ fn role_name(t: &str) -> String {
 /// A readable rendering of a snapshot, close to agent-device's own CLI text
 /// (`@e2 [button] "Continue"`).
 pub(crate) fn render_snapshot(data: &Value) -> String {
-    let nodes = data
-        .get("nodes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let nodes = data.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut lines = Vec::new();
     if let Some(app) = data
         .get("appBundleId")
@@ -673,9 +626,7 @@ pub(crate) fn render_snapshot(data: &Value) -> String {
         }
         lines.push(line);
     }
-    if let Some(reasons) = data
-        .pointer("/visibility/reasons")
-        .and_then(Value::as_array)
+    if let Some(reasons) = data.pointer("/visibility/reasons").and_then(Value::as_array)
         && reasons.iter().any(|r| r == "scroll-hidden-below")
     {
         lines.push("[more content below; scroll down]".into());
@@ -743,10 +694,7 @@ pub(crate) fn to_output(command: &str, stdout: &str, stderr: &str, exit_ok: bool
         }
         Some(v) if v.get("success").and_then(Value::as_bool) == Some(false) => {
             let err = v.get("error").cloned().unwrap_or(Value::Null);
-            let ad_code = err
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("COMMAND_FAILED");
+            let ad_code = err.get("code").and_then(Value::as_str).unwrap_or("COMMAND_FAILED");
             let mut message = err
                 .get("message")
                 .and_then(Value::as_str)
@@ -851,10 +799,7 @@ impl Inner {
     }
 
     fn record_dir(&self, session_id: &str) -> PathBuf {
-        self.device
-            .state_dir
-            .join("recordings")
-            .join(session_name(session_id))
+        self.device.state_dir.join("recordings").join(session_name(session_id))
     }
 
     fn base_command(&self) -> Command {
@@ -899,21 +844,12 @@ impl Inner {
         inv: Option<&Invocation<'_>>,
     ) -> Result<(String, String, bool), String> {
         let mut cmd = self.base_command();
-        cmd.arg(command).args(args).args([
-            "--platform",
-            "ios",
-            "--udid",
-            udid,
-            "--json",
-            "--session",
-            session,
-        ]);
-        let child = cmd.spawn().map_err(|e| {
-            format!(
-                "couldn't start agent-device ({}): {e}",
-                self.device.agent_device[0]
-            )
-        })?;
+        cmd.arg(command)
+            .args(args)
+            .args(["--platform", "ios", "--udid", udid, "--json", "--session", session]);
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("couldn't start agent-device ({}): {e}", self.device.agent_device[0]))?;
         let wait = child.wait_with_output();
         let out = match inv {
             Some(inv) => {
@@ -971,9 +907,7 @@ impl Inner {
                 "--timeout".to_owned(),
                 PREPARE_TIMEOUT_MS.to_string(),
             ];
-            let result = me
-                .agent_device(&udid, "extend-setup", "prepare", &args, None)
-                .await;
+            let result = me.agent_device(&udid, "extend-setup", "prepare", &args, None).await;
             let next = match result {
                 Ok((stdout, stderr, ok)) => {
                     let out = to_output("prepare", &stdout, &stderr, ok);
@@ -981,11 +915,7 @@ impl Inner {
                         *me.runner_seen.lock().unwrap() = Some(Instant::now());
                         Prepare::Done
                     } else {
-                        Prepare::Failed(
-                            out.error
-                                .map(|e| e.message)
-                                .unwrap_or_else(|| "prepare failed".into()),
-                        )
+                        Prepare::Failed(out.error.map(|e| e.message).unwrap_or_else(|| "prepare failed".into()))
                     }
                 }
                 Err(e) => Prepare::Failed(e),
@@ -1033,10 +963,7 @@ impl Inner {
             .filter(|d| !d.simulated && is_kind(self.device.os, &d.device_type))
             .collect();
         let found = match self.udid() {
-            Some(u) => mine
-                .iter()
-                .find(|d| d.udid == u || d.identifier == u)
-                .copied(),
+            Some(u) => mine.iter().find(|d| d.udid == u || d.identifier == u).copied(),
             None => {
                 // Adopt the device the Carbon just plugged in: the one with this name, or the only one.
                 let pick = mine
@@ -1062,9 +989,7 @@ impl Inner {
                         "connect",
                         &connect_title,
                         StepStatus::NeedsCarbon,
-                        &format!(
-                            "Use a cable. Unlock the {kind}, tap Trust when it asks, and enter its passcode."
-                        ),
+                        &format!("Use a cable. Unlock the {kind}, tap Trust when it asks, and enter its passcode."),
                     ),
                     step("developer_mode", devmode_title, StepStatus::Todo),
                     step("helper", helper_title, StepStatus::Todo),
@@ -1072,16 +997,7 @@ impl Inner {
             );
         };
         let udid = dev.udid.clone();
-        let details = devicectl(&[
-            "device",
-            "info",
-            "details",
-            "--device",
-            &udid,
-            "--timeout",
-            "15",
-        ])
-        .await;
+        let details = devicectl(&["device", "info", "details", "--device", &udid, "--timeout", "15"]).await;
         let (online, devmode) = match &details {
             Ok(v) => (true, parse_developer_mode(v)),
             Err(_) => (false, None),
@@ -1127,18 +1043,9 @@ impl Inner {
                 .unwrap()
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(600));
             let installed = recently_seen || {
-                let prefix = std::env::var("AGENT_DEVICE_IOS_BUNDLE_ID")
-                    .unwrap_or_else(|_| DEFAULT_RUNNER_BUNDLE.into());
-                let apps = devicectl(&[
-                    "device",
-                    "info",
-                    "apps",
-                    "--device",
-                    &udid,
-                    "--timeout",
-                    "15",
-                ])
-                .await;
+                let prefix =
+                    std::env::var("AGENT_DEVICE_IOS_BUNDLE_ID").unwrap_or_else(|_| DEFAULT_RUNNER_BUNDLE.into());
+                let apps = devicectl(&["device", "info", "apps", "--device", &udid, "--timeout", "15"]).await;
                 let yes = apps.as_ref().is_ok_and(|v| runner_installed(v, &prefix));
                 if yes {
                     *self.runner_seen.lock().unwrap() = Some(Instant::now());
@@ -1174,12 +1081,7 @@ impl Inner {
                 }
             }
         };
-        (
-            online,
-            os_version,
-            model,
-            vec![connect, devmode_step, helper],
-        )
+        (online, os_version, model, vec![connect, devmode_step, helper])
     }
 }
 
@@ -1195,21 +1097,14 @@ impl Driver for IosDriver {
         } else {
             vec![]
         };
-        let sim = udid
-            .as_ref()
-            .and_then(|u| sims.iter().find(|s| &s.udid == u))
-            .cloned();
+        let sim = udid.as_ref().and_then(|u| sims.iter().find(|s| &s.udid == u)).cloned();
         let (online, os_version, model, mut steps) = match sim {
             Some(s) => (
                 true,
                 Some(s.runtime.clone()),
                 Some(format!("{} (Simulator)", s.name)),
                 vec![
-                    step(
-                        "connect",
-                        "Simulator selected (development only)",
-                        StepStatus::Done,
-                    ),
+                    step("connect", "Simulator selected (development only)", StepStatus::Done),
                     step(
                         "developer_mode",
                         "Developer Mode (not needed on a Simulator)",
@@ -1230,10 +1125,7 @@ impl Driver for IosDriver {
                 "agent-device available on this Mac",
                 StepStatus::Failed,
                 Some("Reinstall the Extend app for Mac; it carries agent-device."),
-                format!(
-                    "`{} --version` didn't run",
-                    me.device.agent_device.join(" ")
-                ),
+                format!("`{} --version` didn't run", me.device.agent_device.join(" ")),
             ));
         }
         let setup = Setup::from_steps(steps);
@@ -1243,12 +1135,7 @@ impl Driver for IosDriver {
             .iter()
             .find(|s| s.status != StepStatus::Done)
             .map(|s| s.title.clone())
-            .unwrap_or_else(|| {
-                format!(
-                    "The {} isn't reachable; keep it unlocked and near this Mac",
-                    me.kind()
-                )
-            });
+            .unwrap_or_else(|| format!("The {} isn't reachable; keep it unlocked and near this Mac", me.kind()));
         Probe {
             os: me.device.os,
             os_version,
@@ -1279,13 +1166,7 @@ impl Driver for IosDriver {
             ));
         };
         let record_dir = me.record_dir(inv.session_id);
-        let plan = match plan(
-            inv.command,
-            inv.args,
-            inv.attachments,
-            inv.workdir,
-            &record_dir,
-        ) {
+        let plan = match plan(inv.command, inv.args, inv.attachments, inv.workdir, &record_dir) {
             Ok(p) => p,
             Err(e) if e.contains("isn't available through Extend") => {
                 return Output::fail(ErrorCode::UnknownCommand.as_str().as_str(), e);
@@ -1399,9 +1280,7 @@ fn move_recording(src: &Path, workdir: &Path) {
     let Some(dir) = src.parent() else { return };
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let p = entry.path();
-        if p.file_name()
-            .is_some_and(|n| n.to_string_lossy().starts_with(&stem))
-        {
+        if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&stem)) {
             let dest = workdir.join(p.file_name().unwrap());
             if std::fs::rename(&p, &dest).is_err() {
                 let _ = std::fs::copy(&p, &dest).map(|_| std::fs::remove_file(&p));
@@ -1427,9 +1306,7 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> Value {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(name);
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
         serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
     }
 
@@ -1450,17 +1327,11 @@ mod tests {
         assert_eq!(phone.transport.as_deref(), Some("localNetwork"));
         assert!(list[1].simulated);
 
-        assert_eq!(
-            parse_developer_mode(&fixture("devicectl-details.json")),
-            Some(true)
-        );
+        assert_eq!(parse_developer_mode(&fixture("devicectl-details.json")), Some(true));
         let locked = fixture("devicectl-apps-locked.json");
         assert!(!runner_installed(&locked, DEFAULT_RUNNER_BUNDLE));
         let msg = devicectl_error(&locked).unwrap();
-        assert!(
-            msg.contains("locked") && msg.contains("Unlock the device"),
-            "{msg}"
-        );
+        assert!(msg.contains("locked") && msg.contains("Unlock the device"), "{msg}");
         let apps = json!({"result": {"apps": [{"bundleIdentifier": "com.apple.mobilesafari"}, {"bundleIdentifier": "com.callstack.agentdevice.runner.uitests.xctrunner"}]}});
         assert!(runner_installed(&apps, DEFAULT_RUNNER_BUNDLE));
     }
@@ -1492,65 +1363,25 @@ mod tests {
             p.expect,
             vec![(PathBuf::from("/w/screenshot.png"), FileKind::Screenshot)]
         );
-        let p = plan(
-            "screenshot",
-            &s(&["../../etc/home", "--overlay-refs"]),
-            &[],
-            w,
-            r,
-        )
-        .unwrap();
+        let p = plan("screenshot", &s(&["../../etc/home", "--overlay-refs"]), &[], w, r).unwrap();
         assert_eq!(p.args, s(&["/w/home.png", "--overlay-refs"]));
 
         let base = vec![PathBuf::from("/att/base.png")];
-        let p = plan(
-            "diff",
-            &s(&["screenshot", "--baseline", "base.png"]),
-            &base,
-            w,
-            r,
-        )
-        .unwrap();
+        let p = plan("diff", &s(&["screenshot", "--baseline", "base.png"]), &base, w, r).unwrap();
         assert_eq!(
             p.args,
-            s(&[
-                "screenshot",
-                "--baseline",
-                "/att/base.png",
-                "--out",
-                "/w/diff.png"
-            ])
+            s(&["screenshot", "--baseline", "/att/base.png", "--out", "/w/diff.png"])
         );
-        assert!(
-            plan(
-                "diff",
-                &s(&["screenshot", "--baseline", "nope.png"]),
-                &[],
-                w,
-                r
-            )
-            .is_err()
-        );
+        assert!(plan("diff", &s(&["screenshot", "--baseline", "nope.png"]), &[], w, r).is_err());
 
         let p = plan("record", &s(&["start", "--fps", "30"]), &[], w, r).unwrap();
         assert_eq!(p.args, s(&["start", "/r/recording.mp4", "--fps", "30"]));
         assert_eq!(p.record_to, Some(PathBuf::from("/r/recording.mp4")));
-        assert!(
-            plan("record", &s(&["stop"]), &[], w, r)
-                .unwrap()
-                .record_stop
-        );
+        assert!(plan("record", &s(&["stop"]), &[], w, r).unwrap().record_stop);
 
         let p = plan("close", &s(&["--save-script"]), &[], w, r).unwrap();
         assert_eq!(p.args, s(&["--save-script", "/w/session.ad"]));
-        let p = plan(
-            "open",
-            &s(&["Settings", "--save-script", "flow.ad"]),
-            &[],
-            w,
-            r,
-        )
-        .unwrap();
+        let p = plan("open", &s(&["Settings", "--save-script", "flow.ad"]), &[], w, r).unwrap();
         assert_eq!(p.args, s(&["Settings", "--save-script", "/r/flow.ad"]));
 
         let scripts = vec![PathBuf::from("/att/flow.ad")];
@@ -1632,10 +1463,7 @@ mod tests {
     #[test]
     fn screenshot_text() {
         let data = json!({"path": "/w/general.png", "width": 390, "height": 844});
-        assert_eq!(
-            render_text("screenshot", &data),
-            "Screenshot general.png (390x844)"
-        );
+        assert_eq!(render_text("screenshot", &data), "Screenshot general.png (390x844)");
     }
 
     #[test]
@@ -1723,12 +1551,7 @@ mod tests {
             }
         };
         let work = state.path().join("work");
-        let out = run(
-            "open",
-            s(&["com.apple.Preferences", "--relaunch"]),
-            work.join("1"),
-        )
-        .await;
+        let out = run("open", s(&["com.apple.Preferences", "--relaunch"]), work.join("1")).await;
         assert!(out.ok, "{out:?}");
         let out = run("snapshot", s(&["-i"]), work.join("2")).await;
         assert!(out.ok, "{out:?}");
@@ -1761,12 +1584,7 @@ mod tests {
             out.ok && out.text.unwrap_or_default().contains("About"),
             "General page should list About"
         );
-        let out = run(
-            "record",
-            s(&["start", "clip", "--scope", "device"]),
-            work.join("7"),
-        )
-        .await;
+        let out = run("record", s(&["start", "clip", "--scope", "device"]), work.join("7")).await;
         assert!(out.ok, "{out:?}");
         tokio::time::sleep(Duration::from_secs(2)).await;
         let out = run("record", s(&["stop"]), work.join("8")).await;

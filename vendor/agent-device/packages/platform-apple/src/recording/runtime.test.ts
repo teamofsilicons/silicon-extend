@@ -52,16 +52,28 @@ test.each(['app', 'device', 'system'] as const)(
   },
 );
 
-test('a native recorder finalization failure never publishes an otherwise readable partial movie', async () => {
+function macOsRecorder(result: { exitCode: number; stdout: string; stderr?: string }) {
+  return async () => ({
+    markers: [processIdentity],
+    wait: Promise.resolve({ stderr: '', ...result }),
+    terminate: async () => {},
+  });
+}
+
+function helperLine(value: unknown): string {
+  return `${JSON.stringify(value)}\n`;
+}
+
+test('a native macOS recorder that exits non-zero is collected, and the file decides', async () => {
+  // Before, every record stop refused on the settled exit code and the playable movie was lost.
   const complete = vi.fn(async () => ({}));
   const operations = createAppleScreenRecordingOperations({
     host: appleHost({
       complete,
       apple: {
-        startMacOs: async () => ({
-          markers: [processIdentity],
-          wait: Promise.resolve({ exitCode: 1, stdout: 'writer failure', stderr: '' }),
-          terminate: async () => {},
+        startMacOs: macOsRecorder({
+          exitCode: 1,
+          stdout: helperLine({ ok: false, error: { message: 'could not stop the stream' } }),
         }),
       },
     }),
@@ -70,8 +82,140 @@ test('a native recorder finalization failure never publishes an otherwise readab
     signal: new AbortController().signal,
   });
   const handle = (await operations.screenRecordingStart(input())).pendingHandle.transfer();
-  await expect(handle.finish()).rejects.toThrow('did not finalize successfully');
-  expect(complete).not.toHaveBeenCalled();
+  await expect(handle.finish()).resolves.toMatchObject({
+    status: 'completed',
+    result: {
+      warning:
+        'The native macOS recorder (ScreenCaptureKit) failed with exit code 1: could not stop the ' +
+        'stream; the video covers only what the recorder wrote before it stopped.',
+    },
+  });
+  expect(complete).toHaveBeenCalledTimes(1);
+});
+
+test('an unplayable native macOS recording names the recorder failure and the way out', async () => {
+  const operations = createAppleScreenRecordingOperations({
+    host: appleHost({
+      complete: async () => {
+        throw new AppError('COMMAND_FAILED', 'recording was not finalized into a playable video', {
+          reason: RECORDING_OUTPUT_UNPLAYABLE_REASON,
+          retriable: true,
+        });
+      },
+      apple: {
+        startMacOs: macOsRecorder({
+          exitCode: 1,
+          stdout: helperLine({ ok: false, error: { message: 'recording did not finish' } }),
+        }),
+      },
+    }),
+    device: mac,
+    owner: localRuntimeOwner('apple'),
+    signal: new AbortController().signal,
+  });
+  const handle = (await operations.screenRecordingStart(input())).pendingHandle.transfer();
+  await expect(handle.finish()).rejects.toMatchObject({
+    message: expect.stringContaining('failed with exit code 1: recording did not finish'),
+    details: { retriable: false, hint: expect.stringContaining('Close this session') },
+  });
+});
+
+test('a native macOS recorder that left no file is a final failure, not a retry loop', async () => {
+  const operations = createAppleScreenRecordingOperations({
+    host: appleHost({
+      outputs: {
+        copy: async ({ from }) => {
+          throw Object.assign(new Error(`ENOENT: no such file or directory, copyfile '${from}'`), {
+            code: 'ENOENT',
+          });
+        },
+      },
+      apple: {
+        startMacOs: macOsRecorder({
+          exitCode: 1,
+          stdout: helperLine({
+            ok: false,
+            error: { message: 'recording exceeded its file size limit' },
+          }),
+        }),
+      },
+    }),
+    device: mac,
+    owner: localRuntimeOwner('apple'),
+    signal: new AbortController().signal,
+  });
+  const handle = (await operations.screenRecordingStart(input())).pendingHandle.transfer();
+  await expect(handle.finish()).rejects.toMatchObject({
+    message:
+      'the recorder left no video file to export; The native macOS recorder (ScreenCaptureKit) ' +
+      'failed with exit code 1: recording exceeded its file size limit',
+    details: { retriable: false, hint: expect.stringContaining('Close this session') },
+  });
+});
+
+test.each([
+  [
+    {
+      reason: 'interrupted',
+      interruption: 'The user stopped the stream (SCStreamErrorDomain -3817)',
+    },
+    'macOS stopped the screen capture before record stop (The user stopped the stream (SCStreamErrorDomain -3817))',
+  ],
+  [{ reason: 'app-exited' }, 'The recorded app quit before record stop'],
+  [{ reason: 'duration-limit' }, 'reached its 30-minute duration limit before record stop'],
+  [
+    { reason: 'stopped', appNotVisibleMs: '4200' },
+    'The recorded app had no window on screen for about 4 seconds',
+  ],
+])('a native macOS recording that ended early says why: %o', async (data, warning) => {
+  const operations = createAppleScreenRecordingOperations({
+    host: appleHost({
+      apple: {
+        startMacOs: macOsRecorder({
+          exitCode: 0,
+          stdout: helperLine({ ok: true, data: { path: '/tmp/capture.native.mp4', ...data } }),
+        }),
+      },
+    }),
+    device: mac,
+    owner: localRuntimeOwner('apple'),
+    signal: new AbortController().signal,
+  });
+  const outcome = await (
+    await operations.screenRecordingStart(input({ scope: 'app' }))
+  ).pendingHandle
+    .transfer()
+    .finish();
+  expect(outcome).toMatchObject({
+    status: 'completed',
+    result: { warning: expect.stringContaining(warning) },
+  });
+});
+
+test('a native macOS recording stopped by record stop carries no warning', async () => {
+  const operations = createAppleScreenRecordingOperations({
+    host: appleHost({
+      apple: {
+        startMacOs: macOsRecorder({
+          exitCode: 0,
+          stdout: helperLine({
+            ok: true,
+            data: { path: '/tmp/capture.native.mp4', reason: 'stopped' },
+          }),
+        }),
+      },
+    }),
+    device: mac,
+    owner: localRuntimeOwner('apple'),
+    signal: new AbortController().signal,
+  });
+  const outcome = await (
+    await operations.screenRecordingStart(input())
+  ).pendingHandle
+    .transfer()
+    .finish();
+  assert.equal(outcome.status, 'completed');
+  if (outcome.status === 'completed') assert.equal(outcome.result.warning, undefined);
 });
 
 test('native recording cancellation after acquisition stops the unpublished capture', async () => {

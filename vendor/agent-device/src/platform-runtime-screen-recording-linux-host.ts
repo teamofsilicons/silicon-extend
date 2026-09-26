@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { hostEnvironment, hostPlatform } from '@agent-device/host-kit/process';
 import { runCmdBackground, whichCmd } from '@agent-device/host-kit/command';
@@ -62,6 +61,20 @@ async function workerPath(): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * Silicon Extend fork: where the worker publishes its state. It is derived from the native path,
+ * which the durable recording descriptor keeps, so a stop or cleanup after a daemon restart can
+ * remove it too (platform-linux's recording runtime derives the same path).
+ */
+function linuxRecordingStatusPath(nativePath: string): string {
+  return `${nativePath}.status.json`;
+}
+
+/** The worker's last stderr line: its own account of why it stopped. */
+function workerReason(stderr: string | undefined): string | undefined {
+  return stderr?.trim().split('\n').at(-1)?.trim() || undefined;
+}
+
 async function startRecording(
   input: Parameters<LinuxScreenRecordingHost['start']>[0],
   signal?: AbortSignal,
@@ -71,8 +84,13 @@ async function startRecording(
   if (!support.available) throw new AppError('UNSUPPORTED_OPERATION', support.hint);
   const worker = await workerPath();
   if (!worker) throw new AppError('TOOL_MISSING', 'Linux recording worker is missing');
-  const statusPath = `${input.outputPath}.${randomUUID()}.status.json`;
+  const statusPath = linuxRecordingStatusPath(input.outputPath);
+  // Left by a recording at this path whose daemon died; that recording's native file is already
+  // gone (the runtime prepares the path before starting), so its status is stale too.
+  await fs.rm(statusPath, { force: true });
+  // The worker refuses to start, and stops recording, once this daemon is no longer its parent.
   const args = [worker, '--out', input.outputPath, '--status', statusPath];
+  args.push('--owner-pid', String(process.pid));
   if (input.fps !== undefined) args.push('--fps', String(input.fps));
   if (input.appId !== undefined) args.push('--app-id', input.appId);
   const background = runCmdBackground('python3', args, { allowFailure: true, captureOutput: true });
@@ -92,10 +110,14 @@ async function startRecording(
     while (Date.now() < deadline) {
       signal?.throwIfAborted();
       if (failure) throw failure;
-      if (result)
-        throw new AppError('COMMAND_FAILED', 'Linux recorder exited before its first frame', {
-          stderr: result.stderr,
-        });
+      if (result) {
+        const reason = workerReason(result.stderr);
+        throw new AppError(
+          'COMMAND_FAILED',
+          `Linux recorder exited before its first frame${reason ? `: ${reason}` : ''}`,
+          { stderr: result.stderr },
+        );
+      }
       const status = await fs
         .readFile(statusPath, 'utf8')
         .then((text) => JSON.parse(text))
@@ -113,7 +135,11 @@ async function startRecording(
         }
       }
       if (status?.state === 'failed')
-        throw new AppError('COMMAND_FAILED', 'Linux recording failed', { stderr: status.error });
+        throw new AppError(
+          'COMMAND_FAILED',
+          `Linux recording failed${typeof status.error === 'string' && status.error ? `: ${status.error}` : ''}`,
+          { stderr: status.error },
+        );
       await delay(50, undefined, { signal });
     }
     if (markers.length !== 2)

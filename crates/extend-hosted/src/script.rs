@@ -134,14 +134,9 @@ pub(crate) fn tokenize(line: &str) -> Result<Vec<String>, String> {
 
 /// Turns one `batch` step (`{"command", "input"}`) into command-line tokens.
 pub(crate) fn batch_step_args(step: &Value) -> Result<(String, Vec<String>), String> {
-    let obj = step
-        .as_object()
-        .ok_or("each batch step must be an object")?;
+    let obj = step.as_object().ok_or("each batch step must be an object")?;
     for k in obj.keys() {
-        if !matches!(
-            k.as_str(),
-            "command" | "input" | "runtime" | "args" | "positionals"
-        ) {
+        if !matches!(k.as_str(), "command" | "input" | "runtime" | "args" | "positionals") {
             return Err(format!("unknown batch step field \"{k}\""));
         }
     }
@@ -151,10 +146,7 @@ pub(crate) fn batch_step_args(step: &Value) -> Result<(String, Vec<String>), Str
         .ok_or("batch step without \"command\"")?
         .to_owned();
     for key in ["args", "positionals"] {
-        if let Some(list) = obj
-            .get(key)
-            .or_else(|| obj.get("input").and_then(|i| i.get(key)))
-        {
+        if let Some(list) = obj.get(key).or_else(|| obj.get("input").and_then(|i| i.get(key))) {
             let list = list.as_array().ok_or(format!("\"{key}\" must be a list"))?;
             return Ok((command, list.iter().map(value_token).collect()));
         }
@@ -181,11 +173,7 @@ pub(crate) fn batch_step_args(step: &Value) -> Result<(String, Vec<String>), Str
                 args.push(ms);
             }
         }
-        "wait" => args.push(
-            s("ms")
-                .or_else(|| s("durationMs"))
-                .ok_or("wait step needs \"ms\"")?,
-        ),
+        "wait" => args.push(s("ms").or_else(|| s("durationMs")).ok_or("wait step needs \"ms\"")?),
         "apps" => {
             if input.get("all").and_then(Value::as_bool) == Some(true) {
                 args.push("--all".into());
@@ -327,15 +315,11 @@ async fn test(driver: &dyn Driver, inv: &Invocation<'_>) -> Output {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let output =
-        json!({ "results": results, "passed": paths.len() - failures, "failed": failures });
+    let output = json!({ "results": results, "passed": paths.len() - failures, "failed": failures });
     if failures == 0 {
         Output::ok(output, text)
     } else {
-        let mut o = failed(format!(
-            "{failures} of {} scripts failed\n{text}",
-            paths.len()
-        ));
+        let mut o = failed(format!("{failures} of {} scripts failed\n{text}", paths.len()));
         o.output = output;
         o
     }
@@ -388,10 +372,7 @@ async fn batch(driver: &dyn Driver, inv: &Invocation<'_>) -> Output {
         },
     };
     if list.len() > max_steps {
-        return invalid(format!(
-            "{} steps is more than --max-steps {max_steps}",
-            list.len()
-        ));
+        return invalid(format!("{} steps is more than --max-steps {max_steps}", list.len()));
     }
     let mut steps = Vec::new();
     for (i, s) in list.iter().enumerate() {
@@ -409,12 +390,9 @@ async fn batch(driver: &dyn Driver, inv: &Invocation<'_>) -> Output {
 
 fn load_script(path: &str, inv: &Invocation<'_>) -> Result<Vec<Step>, Box<Output>> {
     let Some(file) = resolve_attachment(path, inv.attachments) else {
-        return Err(Box::new(invalid(format!(
-            "script {path} wasn't sent with the command"
-        ))));
+        return Err(Box::new(invalid(format!("script {path} wasn't sent with the command"))));
     };
-    let text = std::fs::read_to_string(&file)
-        .map_err(|e| Box::new(invalid(format!("can't read {path}: {e}"))))?;
+    let text = std::fs::read_to_string(&file).map_err(|e| Box::new(invalid(format!("can't read {path}: {e}"))))?;
     if path.ends_with(".yaml") || path.ends_with(".yml") {
         return Err(Box::new(invalid(
             "Maestro flows need a device with a screen; TVs run .ad scripts only",
@@ -430,10 +408,7 @@ pub(crate) async fn run_steps(driver: &dyn Driver, inv: &Invocation<'_>, steps: 
         if inv.cancel.is_cancelled() {
             return failed("cancelled");
         }
-        let out = if step.command == "wait"
-            && step.args.len() == 1
-            && step.args[0].parse::<u64>().is_ok()
-        {
+        let out = if step.command == "wait" && step.args.len() == 1 && step.args[0].parse::<u64>().is_ok() {
             let ms: u64 = step.args[0].parse().unwrap_or(0);
             if sleep_or_cancel(inv, Duration::from_millis(ms.min(600_000))).await {
                 Output::ok(json!({"waited_ms": ms}), format!("Waited {ms} ms"))
@@ -456,11 +431,7 @@ pub(crate) async fn run_steps(driver: &dyn Driver, inv: &Invocation<'_>, steps: 
             driver.run(sub).await
         };
         if !out.ok {
-            let message = out
-                .error
-                .as_ref()
-                .map(|e| e.message.clone())
-                .unwrap_or_default();
+            let message = out.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
             let code = out
                 .error
                 .as_ref()
@@ -510,10 +481,7 @@ mod tests {
             tokenize(r#"fill id="field name" 'a b'"#).unwrap(),
             vec!["fill", "id=field name", "a b"]
         );
-        assert_eq!(
-            tokenize(r#"env APP_URL="""#).unwrap(),
-            vec!["env", "APP_URL="]
-        );
+        assert_eq!(tokenize(r#"env APP_URL="""#).unwrap(), vec!["env", "APP_URL="]);
         assert!(tokenize("open \"x").is_err());
     }
 
@@ -536,13 +504,14 @@ mod tests {
 
     #[test]
     fn batch_steps_to_args() {
-        let (c, a) =
-            batch_step_args(&json!({"command": "open", "input": {"app": "YouTube"}})).unwrap();
+        let (c, a) = batch_step_args(&json!({"command": "open", "input": {"app": "YouTube"}})).unwrap();
         assert_eq!((c.as_str(), a), ("open", vec!["YouTube".to_string()]));
-        let (_, a) = batch_step_args(&json!({"command": "tv-remote", "input": {"button": "up", "action": "longpress", "durationMs": 900}})).unwrap();
+        let (_, a) = batch_step_args(
+            &json!({"command": "tv-remote", "input": {"button": "up", "action": "longpress", "durationMs": 900}}),
+        )
+        .unwrap();
         assert_eq!(a, vec!["longpress", "up", "--duration-ms", "900"]);
-        let (_, a) =
-            batch_step_args(&json!({"command": "tv-remote", "args": ["press", "home"]})).unwrap();
+        let (_, a) = batch_step_args(&json!({"command": "tv-remote", "args": ["press", "home"]})).unwrap();
         assert_eq!(a, vec!["press", "home"]);
         assert!(batch_step_args(&json!({"command": "open", "bogus": 1})).is_err());
     }

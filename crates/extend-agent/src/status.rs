@@ -157,7 +157,9 @@ pub struct StatusHandle {
 
 impl StatusHandle {
     pub fn new(initial: AgentStatus) -> Self {
-        Self { tx: Arc::new(watch::channel(initial).0) }
+        Self {
+            tx: Arc::new(watch::channel(initial).0),
+        }
     }
     pub fn get(&self) -> AgentStatus {
         self.tx.borrow().clone()
@@ -231,7 +233,7 @@ pub fn process_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// Human-readable status for `extend-agent status`.
+/// The readable text of `extend-agent status`.
 pub fn render_text(s: &AgentStatus) -> String {
     let mut out = Vec::new();
     out.push(format!("Silicon Extend {}: {}", s.app_version, s.headline()));
@@ -242,17 +244,26 @@ pub fn render_text(s: &AgentStatus) -> String {
         out.push(format!("Test environment: {} ({})", env.name, env.state));
     }
     if let Some(p) = &s.pairing {
-        out.push(format!("Enter {} at extend.teamofsilicons.com to pair. It changes at {}.", p.code, p.expires_at));
+        out.push(format!(
+            "Enter {} at extend.teamofsilicons.com to pair. It changes at {}.",
+            p.code, p.expires_at
+        ));
     }
     if let Some(d) = &s.device {
         let name = d.name.as_deref().unwrap_or("(unnamed)");
         out.push(format!("Device: {name} ({})", d.device_id));
         if let Some(o) = &d.owner {
-            out.push(format!("Paired to: {o}{}", d.team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default()));
+            out.push(format!(
+                "Paired to: {o}{}",
+                d.team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default()
+            ));
         }
     }
     if let Some(u) = &s.in_use {
-        out.push(format!("In use by {} in session {} since {}", u.silicon_id, u.session_id, u.since));
+        out.push(format!(
+            "In use by {} in session {} since {}",
+            u.silicon_id, u.session_id, u.since
+        ));
     }
     if let Some(t) = &s.takeover {
         out.push(format!("Waiting for you: {} (until {})", t.reason, t.expires_at));
@@ -267,7 +278,14 @@ pub fn render_text(s: &AgentStatus) -> String {
     if let Some(setup) = &s.setup {
         for step in &setup.steps {
             let help = step.help.as_deref().map(|h| format!(" — {h}")).unwrap_or_default();
-            out.push(format!("Setup [{}] {}{help}", serde_json::to_value(step.status).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default(), step.title));
+            out.push(format!(
+                "Setup [{}] {}{help}",
+                serde_json::to_value(step.status)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default(),
+                step.title
+            ));
         }
     }
     for a in &s.attached {
@@ -280,7 +298,12 @@ pub fn render_text(s: &AgentStatus) -> String {
         } else {
             "offline".into()
         };
-        out.push(format!("Carrying {} ({}, {}): {state}", a.name, a.os.as_str(), a.device_id));
+        out.push(format!(
+            "Carrying {} ({}, {}): {state}",
+            a.name,
+            a.os.as_str(),
+            a.device_id
+        ));
     }
     if let Some(e) = &s.last_error {
         out.push(format!("Last problem: {e}"));
@@ -298,14 +321,28 @@ mod tests {
 
     #[test]
     fn headlines() {
-        let mut s = AgentStatus { phase: Phase::Enrolling, ..Default::default() };
+        let mut s = AgentStatus {
+            phase: Phase::Enrolling,
+            ..Default::default()
+        };
         assert_eq!(s.headline(), "Getting a pairing code…");
-        s.pairing = Some(PairingInfo { code: "4F9C2A".into(), expires_at: "x".into() });
+        s.pairing = Some(PairingInfo {
+            code: "4F9C2A".into(),
+            expires_at: "x".into(),
+        });
         assert_eq!(s.headline(), "Pairing code: 4F9C2A");
         s.phase = Phase::Online;
-        s.device = Some(DeviceInfo { device_id: "7c1e09ab".into(), owner: Some("c:alice".into()), ..Default::default() });
+        s.device = Some(DeviceInfo {
+            device_id: "7c1e09ab".into(),
+            owner: Some("c:alice".into()),
+            ..Default::default()
+        });
         assert_eq!(s.headline(), "Paired to c:alice");
-        s.in_use = Some(InUseInfo { silicon_id: "si:chef".into(), session_id: "a3f".into(), since: "t".into() });
+        s.in_use = Some(InUseInfo {
+            silicon_id: "si:chef".into(),
+            session_id: "a3f".into(),
+            since: "t".into(),
+        });
         assert!(s.headline().starts_with("si:chef is using this "));
         assert!(render_text(&s).contains("In use by si:chef in session a3f"));
     }
@@ -325,8 +362,15 @@ mod tests {
     #[test]
     fn missing_status_file_means_not_running() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_status_file(&dir.path().join("status.json")).phase, Phase::NotRunning);
-        let s = AgentStatus { pid: std::process::id(), phase: Phase::Online, ..Default::default() };
+        assert_eq!(
+            read_status_file(&dir.path().join("status.json")).phase,
+            Phase::NotRunning
+        );
+        let s = AgentStatus {
+            pid: std::process::id(),
+            phase: Phase::Online,
+            ..Default::default()
+        };
         let p = dir.path().join("status.json");
         std::fs::write(&p, serde_json::to_vec(&s).unwrap()).unwrap();
         assert_eq!(read_status_file(&p).phase, Phase::Online);

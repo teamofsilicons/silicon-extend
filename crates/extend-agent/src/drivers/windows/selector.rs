@@ -48,7 +48,13 @@ impl Key {
     fn is_boolean(self) -> bool {
         matches!(
             self,
-            Self::Visible | Self::Hidden | Self::Editable | Self::Selected | Self::Focused | Self::Enabled | Self::Hittable
+            Self::Visible
+                | Self::Hidden
+                | Self::Editable
+                | Self::Selected
+                | Self::Focused
+                | Self::Enabled
+                | Self::Hittable
         )
     }
 }
@@ -106,7 +112,11 @@ fn tokens(s: &str) -> Result<Vec<String>, String> {
 
 fn unquote(v: &str) -> String {
     let v = v.trim();
-    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') { v[1..v.len() - 1].to_owned() } else { v.to_owned() }
+    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
+        v[1..v.len() - 1].to_owned()
+    } else {
+        v.to_owned()
+    }
 }
 
 fn parse_term(token: &str) -> Result<Option<Term>, String> {
@@ -128,8 +138,11 @@ fn parse_term(token: &str) -> Result<Option<Term>, String> {
         },
         ("=", Some(v)) => Ok(Some(Term::Equals(key, unquote(v)))),
         ("~=", Some(v)) => {
-            let parts: Vec<String> =
-                unquote(v).split('|').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()).collect();
+            let parts: Vec<String> = unquote(v)
+                .split('|')
+                .map(|p| p.trim().to_lowercase())
+                .filter(|p| !p.is_empty())
+                .collect();
             if parts.is_empty() {
                 return Err(format!("{token}: empty pattern"));
             }
@@ -160,7 +173,10 @@ pub fn parse(s: &str) -> Result<Selector, String> {
         return Err(format!("unterminated quote in selector {s:?}"));
     }
     if !looks_like_selector(trimmed) {
-        return Ok(Selector { alternatives: vec![vec![Term::Text(unquote(trimmed))]], source: s.to_owned() });
+        return Ok(Selector {
+            alternatives: vec![vec![Term::Text(unquote(trimmed))]],
+            source: s.to_owned(),
+        });
     }
     let mut alternatives = vec![vec![]];
     for tok in tokens(trimmed)? {
@@ -170,13 +186,20 @@ pub fn parse(s: &str) -> Result<Selector, String> {
         }
         match parse_term(&tok)? {
             Some(term) => alternatives.last_mut().expect("one").push(term),
-            None => return Err(format!("unknown selector term {tok:?}; keys are id, role, text, label, value, appname, windowtitle, visible, hidden, editable, selected, focused, enabled, hittable")),
+            None => {
+                return Err(format!(
+                    "unknown selector term {tok:?}; keys are id, role, text, label, value, appname, windowtitle, visible, hidden, editable, selected, focused, enabled, hittable"
+                ));
+            }
         }
     }
     if alternatives.iter().any(Vec::is_empty) {
         return Err(format!("empty alternative in selector {s:?}"));
     }
-    Ok(Selector { alternatives, source: s.to_owned() })
+    Ok(Selector {
+        alternatives,
+        source: s.to_owned(),
+    })
 }
 
 fn field(node: &RawNode, key: Key) -> Vec<&str> {
@@ -211,12 +234,10 @@ fn term_matches(term: &Term, node: &RawNode) -> bool {
             let want = v.trim().to_lowercase();
             field(node, *key).iter().any(|f| f.trim().to_lowercase() == want)
         }
-        Term::Contains(key, parts) => field(node, *key)
-            .iter()
-            .any(|f| {
-                let f = f.to_lowercase();
-                parts.iter().any(|p| f.contains(p.as_str()))
-            }),
+        Term::Contains(key, parts) => field(node, *key).iter().any(|f| {
+            let f = f.to_lowercase();
+            parts.iter().any(|p| f.contains(p.as_str()))
+        }),
         Term::Flag(key, want) => flag(node, *key) == *want,
         Term::Text(t) => {
             let t = t.to_lowercase();
@@ -229,7 +250,9 @@ fn term_matches(term: &Term, node: &RawNode) -> bool {
 
 impl Selector {
     pub fn matches(&self, node: &RawNode) -> bool {
-        self.alternatives.iter().any(|terms| terms.iter().all(|t| term_matches(t, node)))
+        self.alternatives
+            .iter()
+            .any(|terms| terms.iter().all(|t| term_matches(t, node)))
     }
 
     /// Indexes of matching nodes, best first: visible and hittable before hidden, then document order.
@@ -250,12 +273,18 @@ mod tests {
         let s = parse(r#"role="button" label="Save As""#).unwrap();
         assert_eq!(
             s.alternatives,
-            vec![vec![Term::Equals(Key::Role, "button".into()), Term::Equals(Key::Label, "Save As".into())]]
+            vec![vec![
+                Term::Equals(Key::Role, "button".into()),
+                Term::Equals(Key::Label, "Save As".into())
+            ]]
         );
         let s = parse(r#"label~="Wi-Fi|Battery" visible"#).unwrap();
         assert_eq!(
             s.alternatives[0],
-            vec![Term::Contains(Key::Label, vec!["wi-fi".into(), "battery".into()]), Term::Flag(Key::Visible, true)]
+            vec![
+                Term::Contains(Key::Label, vec!["wi-fi".into(), "battery".into()]),
+                Term::Flag(Key::Visible, true)
+            ]
         );
         let s = parse("editable=false").unwrap();
         assert_eq!(s.alternatives[0], vec![Term::Flag(Key::Editable, false)]);

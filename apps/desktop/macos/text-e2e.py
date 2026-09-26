@@ -80,6 +80,47 @@ with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as
     def values():
         return json.loads(state.read_text())
 
+    def key_events():
+        return json.loads(pathlib.Path(str(state) + ".keys.json").read_text())
+
+    def colour_fractions(image, seek=None):
+        """Share of pixels in the fixture's green, the peer's pink, and near-black."""
+        command = ["ffmpeg", "-v", "error", *(["-ss", str(seek)] if seek is not None else []), "-i", str(image), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        pixels = subprocess.run(command, capture_output=True, check=True).stdout
+        assert pixels, f"{image} decoded to no pixels"
+        total = len(pixels) // 3
+        green = pink = black = 0
+        for index in range(0, total * 3, 3):
+            r, g, b = pixels[index], pixels[index + 1], pixels[index + 2]
+            if g > r + 60 and g > b + 30:
+                green += 1
+            elif r > 180 and r > g + 100 and r > b + 60:
+                pink += 1
+            elif r < 16 and g < 16 and b < 16:
+                black += 1
+        return {"green": green / total, "pink": pink / total, "black": black / total}
+
+    def start_peer():
+        """Start a second, pink copy of the fixture under its own bundle; it comes to the front."""
+        global peer, peer_app
+        peer_bundle = BUNDLE + ".peer"
+        peer_state = work / "peer.json"
+        if peer is not None:
+            # Already running from an earlier step: bring the same copy to the front again.
+            subprocess.run(["open", "-b", peer_bundle], check=True)
+            return peer_bundle, peer_state
+        peer_app = work / "Extend Focus Peer.app"
+        shutil.copytree(app.parent, peer_app)
+        peer_plist = peer_app / "Contents/Info.plist"
+        metadata = plistlib.loads(peer_plist.read_bytes())
+        metadata["CFBundleIdentifier"] = peer_bundle
+        metadata["CFBundleName"] = "Extend Focus Peer"
+        peer_plist.write_bytes(plistlib.dumps(metadata))
+        subprocess.run([register, "-f", str(peer_app)], check=True)
+        peer = subprocess.Popen([str(peer_app / "Contents/MacOS/fixture"), str(peer_state), "--peer"], stdout=subprocess.DEVNULL)
+        until(peer_state.exists)
+        return peer_bundle, peer_state
+
     def request(text, replace=True, field=0, **extra):
         item = values()[field]
         return {"text": text, "replace": replace, "bundleId": BUNDLE, "x": item["x"], "y": item["y"], **extra}
@@ -146,8 +187,11 @@ with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as
                 stopped = values()[0]["value"]
                 time.sleep(.2)
                 assert values()[0]["value"] == stopped and len(stopped) < 500
+                # Every key the helper pressed was released: the fixture saw as many key-ups as
+                # key-downs and holds no key, so nothing stays pressed for the Carbon's next input.
+                until(lambda: key_events()["down"] > 0 and key_events()["down"] == key_events()["up"] and key_events()["held"] == [], timeout=2)
                 send(request("after cancellation"))
-                print("PASS cancellation stops input and releases keys")
+                print("PASS cancellation stops input and releases keys", key_events())
             finally:
                 if slow.poll() is None:
                     slow.kill()
@@ -240,18 +284,7 @@ raise RuntimeError('recorder never became ready')
                 print("Service fixture open:", opened.get("output"), "snapshot header:", (observed.get("text") or "").splitlines()[:2], flush=True)
                 assert opened["output"].get("appBundleId") == BUNDLE, opened
                 # Bring another owned app over the target, then capture without reopening it.
-                peer_app = work / "Extend Focus Peer.app"
-                shutil.copytree(app.parent, peer_app)
-                peer_bundle = BUNDLE + ".peer"
-                peer_plist = peer_app / "Contents/Info.plist"
-                metadata = plistlib.loads(peer_plist.read_bytes())
-                metadata["CFBundleIdentifier"] = peer_bundle
-                metadata["CFBundleName"] = "Extend Focus Peer"
-                peer_plist.write_bytes(plistlib.dumps(metadata))
-                subprocess.run([register, "-f", str(peer_app)], check=True)
-                peer_state = work / "peer.json"
-                peer = subprocess.Popen([str(peer_app / "Contents/MacOS/fixture"), str(peer_state), "--peer"], stdout=subprocess.DEVNULL)
-                until(peer_state.exists)
+                peer_bundle, peer_state = start_peer()
                 def frontmost_bundle():
                     status = remote("terminal", "run", shlex.join([str(args.helper), "app", "frontmost"]))
                     return peer_bundle in json.dumps(status)
@@ -263,9 +296,14 @@ raise RuntimeError('recorder never became ready')
                 screenshot = work / "bound-app.png"
                 remote("screenshot", "--out", str(screenshot))
                 assert screenshot.is_file(), "bound app screenshot did not download"
-                # A backing window can yield a valid, entirely black PNG. Verify actual content.
-                pixels = subprocess.run(["ffmpeg", "-v", "error", "-i", str(screenshot), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
-                assert pixels and sum(value > 24 for value in pixels) > len(pixels) * .05, "bound screenshot is blank"
+                # The image must be the target fixture's window: mostly its green, none of the pink
+                # peer that is frontmost and covers it. A blank backing window, the peer window or
+                # the whole display all fail here.
+                shot = colour_fractions(screenshot)
+                print("Bound screenshot colours:", shot, flush=True)
+                assert shot["pink"] < .005, f"bound screenshot shows the frontmost peer app: {shot}"
+                if not args.record_stress:
+                    assert shot["green"] > .25, f"bound screenshot does not show the target app: {shot}"
 
                 if args.artifacts:
                     args.artifacts.mkdir(parents=True, exist_ok=True)
@@ -281,6 +319,14 @@ raise RuntimeError('recorder never became ready')
                 response = remote("record", "stop", "--out", str(output))
                 assert len(response["files"]) == 1, response
                 video_info(output)
+                # An app-scoped recording shows the target's window and nothing else: the rest of
+                # the display is black, and the pink peer never appears.
+                frame = colour_fractions(output, seek=.5)
+                print("App recording frame colours:", frame, flush=True)
+                assert frame["pink"] < .002, f"app recording shows the peer app: {frame}"
+                assert frame["black"] > .3, f"app recording shows more than the app (whole display?): {frame}"
+                if not args.record_stress:
+                    assert frame["green"] > .01, f"app recording does not show the target app: {frame}"
                 if args.record_only:
                     hashes = subprocess.run(["ffmpeg", "-v", "error", "-i", str(output), "-f", "framemd5", "-"], capture_output=True, text=True, check=True).stdout
                     unique_frames = {line.split(",")[-1].strip() for line in hashes.splitlines() if line and not line.startswith("#")}
@@ -349,6 +395,25 @@ raise RuntimeError('recorder never became ready')
                     assert len(videos) == 1, recorded
                     video_info(videos[0]["path"])
                     print("PASS packaged Extend recording start/stop and playable artifact")
+                # A frontmost-app session follows the app that is frontmost now. Switch to another
+                # app after `open --surface frontmost-app`; `type` must reach it, never the app
+                # that was frontmost when the session opened.
+                target_before = values()[0]["value"]
+                peer_bundle, peer_state = start_peer()
+                until(lambda: peer_bundle in subprocess.run([str(args.helper), "app", "frontmost"], capture_output=True, text=True).stdout)
+                until(lambda: json.loads(peer_state.read_text())[0]["value"] == "first value")
+                extend("snapshot", "-i")
+                extend("type", "+switched")
+                until(lambda: json.loads(peer_state.read_text())[0]["value"] == "first value+switched")
+                assert values()[0]["value"] == target_before, ("text reached the app frontmost at open", values())
+                print("PASS frontmost-app session types into the app that is frontmost now")
+                # `find … type` focuses and types through its own path, not the `type` command's;
+                # it must follow the frontmost app as well.
+                target_fields = [field["value"] for field in values()]
+                extend("find", "id", "peer-field-1", "type", "+found")
+                until(lambda: json.loads(peer_state.read_text())[1]["value"].endswith("+found"))
+                assert [field["value"] for field in values()] == target_fields, ("find type reached the app frontmost at open", values())
+                print("PASS frontmost-app find type reaches the app that is frontmost now")
             finally:
                 try:
                     if opened:

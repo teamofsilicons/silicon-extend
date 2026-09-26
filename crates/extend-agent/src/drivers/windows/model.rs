@@ -72,7 +72,10 @@ impl Rect {
         self.width <= 0.0 || self.height <= 0.0
     }
     pub fn center(&self) -> (i32, i32) {
-        ((self.x + self.width / 2.0).round() as i32, (self.y + self.height / 2.0).round() as i32)
+        (
+            (self.x + self.width / 2.0).round() as i32,
+            (self.y + self.height / 2.0).round() as i32,
+        )
     }
 }
 
@@ -138,9 +141,22 @@ impl RawNode {
     pub fn is_interactive(&self) -> bool {
         match self.control_type {
             ct::APPLICATION | ct::WINDOW => true,
-            ct::BUTTON | ct::CHECK_BOX | ct::COMBO_BOX | ct::EDIT | ct::HYPERLINK | ct::LIST_ITEM | ct::MENU_ITEM
-            | ct::RADIO_BUTTON | ct::SLIDER | ct::SPINNER | ct::TAB_ITEM | ct::TREE_ITEM | ct::SPLIT_BUTTON
-            | ct::DATA_ITEM | ct::HEADER_ITEM | ct::DOCUMENT => self.visible() || self.control_type == ct::MENU_ITEM,
+            ct::BUTTON
+            | ct::CHECK_BOX
+            | ct::COMBO_BOX
+            | ct::EDIT
+            | ct::HYPERLINK
+            | ct::LIST_ITEM
+            | ct::MENU_ITEM
+            | ct::RADIO_BUTTON
+            | ct::SLIDER
+            | ct::SPINNER
+            | ct::TAB_ITEM
+            | ct::TREE_ITEM
+            | ct::SPLIT_BUTTON
+            | ct::DATA_ITEM
+            | ct::HEADER_ITEM
+            | ct::DOCUMENT => self.visible() || self.control_type == ct::MENU_ITEM,
             _ => self.visible() && (self.invokable || self.editable || self.scrollable),
         }
     }
@@ -340,7 +356,10 @@ fn subtree(raw: &[RawNode], root: usize) -> std::ops::Range<usize> {
 fn scope_matches(node: &RawNode, needle: &str) -> bool {
     let needle = needle.to_lowercase();
     node.name.to_lowercase().contains(&needle)
-        || node.value.as_deref().is_some_and(|v| v.to_lowercase().contains(&needle))
+        || node
+            .value
+            .as_deref()
+            .is_some_and(|v| v.to_lowercase().contains(&needle))
         || node.automation_id.to_lowercase().contains(&needle)
 }
 
@@ -367,7 +386,9 @@ pub fn build_snapshot(
                 .find(|kept| !kept.is_empty());
             match found {
                 Some(kept) => {
-                    let base = raw[kept[0]].depth.min(kept.iter().map(|&i| raw[i].depth).min().unwrap_or(0));
+                    let base = raw[kept[0]]
+                        .depth
+                        .min(kept.iter().map(|&i| raw[i].depth).min().unwrap_or(0));
                     (kept, base)
                 }
                 None => (vec![], 0),
@@ -391,7 +412,11 @@ pub fn build_snapshot(
         nodes.push(SnapNode {
             raw_index: i,
             reference: format!("e{}", n + 1),
-            depth: if options.interactive { 0 } else { raw[i].depth.saturating_sub(base) },
+            depth: if options.interactive {
+                0
+            } else {
+                raw[i].depth.saturating_sub(base)
+            },
             parent: snap_parent,
         });
     }
@@ -415,7 +440,10 @@ impl Snapshot {
 
     /// The ref of a raw node, if it's in this snapshot.
     pub fn ref_of(&self, raw_index: usize) -> Option<&str> {
-        self.nodes.iter().find(|n| n.raw_index == raw_index).map(|n| n.reference.as_str())
+        self.nodes
+            .iter()
+            .find(|n| n.raw_index == raw_index)
+            .map(|n| n.reference.as_str())
     }
 
     /// The text agent-device prints for a snapshot.
@@ -471,8 +499,12 @@ impl Snapshot {
 
     /// The JSON agent-device returns for `snapshot --json`.
     pub fn to_json(&self, raw: &[RawNode]) -> Value {
-        let nodes: Vec<Value> =
-            self.nodes.iter().enumerate().map(|(i, n)| self.node_json(raw, i, n)).collect();
+        let nodes: Vec<Value> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| self.node_json(raw, i, n))
+            .collect();
         json!({
             "nodes": nodes,
             "truncated": self.truncated,
@@ -510,7 +542,10 @@ pub fn node_json(r: &RawNode, reference: &str, index: usize, depth: usize, paren
         m.insert("identifier".into(), json!(r.automation_id));
     }
     if let Some(rect) = r.rect {
-        m.insert("rect".into(), json!({"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}));
+        m.insert(
+            "rect".into(),
+            json!({"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}),
+        );
     }
     if r.focused {
         m.insert("focused".into(), json!(true));
@@ -546,7 +581,12 @@ pub(crate) mod tests {
             parent,
             control_type,
             name: name.into(),
-            rect: Some(Rect { x: 10.0, y: 20.0, width: 100.0, height: 30.0 }),
+            rect: Some(Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 30.0,
+            }),
             enabled: true,
             pid: 42,
             app_name: "Notepad".into(),
@@ -606,7 +646,10 @@ pub(crate) mod tests {
     #[test]
     fn interactive_snapshot_is_flat_and_renumbered() {
         let raw = notepad();
-        let opts = SnapshotOptions { interactive: true, ..Default::default() };
+        let opts = SnapshotOptions {
+            interactive: true,
+            ..Default::default()
+        };
         let snap = build_snapshot(&raw, &opts, "Notepad", "notepad.exe", false);
         let text = snap.to_text(&raw);
         assert!(text.contains("Snapshot: 7 nodes"), "{text}");
@@ -624,16 +667,49 @@ pub(crate) mod tests {
     #[test]
     fn depth_limits_and_scope_reroot() {
         let raw = notepad();
-        let snap = build_snapshot(&raw, &SnapshotOptions { depth: Some(1), ..Default::default() }, "", "", false);
+        let snap = build_snapshot(
+            &raw,
+            &SnapshotOptions {
+                depth: Some(1),
+                ..Default::default()
+            },
+            "",
+            "",
+            false,
+        );
         assert_eq!(snap.nodes.len(), 2);
         let text = snap.to_text(&raw);
-        assert_eq!(text, "Snapshot: 2 nodes\n@e1 [application] \"Notepad\"\n  @e2 [window] \"Untitled - Notepad\"\n");
+        assert_eq!(
+            text,
+            "Snapshot: 2 nodes\n@e1 [application] \"Notepad\"\n  @e2 [window] \"Untitled - Notepad\"\n"
+        );
 
-        let snap = build_snapshot(&raw, &SnapshotOptions { scope: Some("application".into()), ..Default::default() }, "", "", false);
+        let snap = build_snapshot(
+            &raw,
+            &SnapshotOptions {
+                scope: Some("application".into()),
+                ..Default::default()
+            },
+            "",
+            "",
+            false,
+        );
         let text = snap.to_text(&raw);
-        assert_eq!(text, "Snapshot: 3 nodes\n@e1 [menu-bar] \"Application\"\n  @e2 [menu-item] \"File\"\n  @e3 [menu-item] \"Edit\"\n");
+        assert_eq!(
+            text,
+            "Snapshot: 3 nodes\n@e1 [menu-bar] \"Application\"\n  @e2 [menu-item] \"File\"\n  @e3 [menu-item] \"Edit\"\n"
+        );
 
-        let snap = build_snapshot(&raw, &SnapshotOptions { scope: Some("nothing here".into()), ..Default::default() }, "", "", false);
+        let snap = build_snapshot(
+            &raw,
+            &SnapshotOptions {
+                scope: Some("nothing here".into()),
+                ..Default::default()
+            },
+            "",
+            "",
+            false,
+        );
         assert!(snap.nodes.is_empty());
         assert_eq!(snap.to_text(&raw), "Snapshot: 0 nodes\n");
     }
@@ -642,7 +718,11 @@ pub(crate) mod tests {
     fn scope_skips_matches_with_empty_projection() {
         let raw = notepad();
         // Only the disabled "Word wrap" checkbox matches, and it is interactive, so it is the whole snapshot.
-        let opts = SnapshotOptions { scope: Some("word".into()), interactive: true, ..Default::default() };
+        let opts = SnapshotOptions {
+            scope: Some("word".into()),
+            interactive: true,
+            ..Default::default()
+        };
         let snap = build_snapshot(&raw, &opts, "", "", false);
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.nodes[0].raw_index, 8);
@@ -651,7 +731,17 @@ pub(crate) mod tests {
     #[test]
     fn truncated_and_raw_output() {
         let raw = notepad();
-        let snap = build_snapshot(&raw, &SnapshotOptions { raw: true, depth: Some(1), ..Default::default() }, "Notepad", "", true);
+        let snap = build_snapshot(
+            &raw,
+            &SnapshotOptions {
+                raw: true,
+                depth: Some(1),
+                ..Default::default()
+            },
+            "Notepad",
+            "",
+            true,
+        );
         let text = snap.to_text(&raw);
         let mut lines = text.lines();
         assert_eq!(lines.next(), Some("Page: Notepad"));
@@ -709,6 +799,15 @@ pub(crate) mod tests {
 
     #[test]
     fn rect_center() {
-        assert_eq!(Rect { x: 10.0, y: 20.0, width: 100.0, height: 30.0 }.center(), (60, 35));
+        assert_eq!(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 30.0
+            }
+            .center(),
+            (60, 35)
+        );
     }
 }

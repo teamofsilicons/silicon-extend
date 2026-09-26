@@ -29,7 +29,12 @@ pub struct TopWindow {
 }
 
 fn rect_of(r: RECT) -> Rect {
-    Rect { x: r.left as f64, y: r.top as f64, width: (r.right - r.left) as f64, height: (r.bottom - r.top) as f64 }
+    Rect {
+        x: r.left as f64,
+        y: r.top as f64,
+        width: (r.right - r.left) as f64,
+        height: (r.bottom - r.top) as f64,
+    }
 }
 
 unsafe extern "system" fn collect_hwnd(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -108,7 +113,12 @@ pub fn process_path(pid: u32) -> Option<String> {
 pub fn process_stem(pid: u32) -> Option<String> {
     let path = process_path(pid)?;
     let file = path.rsplit(['\\', '/']).next()?.to_owned();
-    Some(file.strip_suffix(".exe").or_else(|| file.strip_suffix(".EXE")).unwrap_or(&file).to_owned())
+    Some(
+        file.strip_suffix(".exe")
+            .or_else(|| file.strip_suffix(".EXE"))
+            .unwrap_or(&file)
+            .to_owned(),
+    )
 }
 
 /// A capture: raw nodes plus the live elements behind them (None for Extend's synthetic root).
@@ -159,21 +169,33 @@ impl Uia {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| format!("UI Automation isn't available on this computer: {e}"))?;
-            let walker = automation.ControlViewWalker().map_err(|e| format!("UI Automation walker: {e}"))?;
-            let cache = automation.CreateCacheRequest().map_err(|e| format!("UI Automation cache: {e}"))?;
+            let walker = automation
+                .ControlViewWalker()
+                .map_err(|e| format!("UI Automation walker: {e}"))?;
+            let cache = automation
+                .CreateCacheRequest()
+                .map_err(|e| format!("UI Automation cache: {e}"))?;
             for p in PROPERTIES {
                 let _ = cache.AddProperty(*p);
             }
             for p in PATTERNS {
                 let _ = cache.AddPattern(*p);
             }
-            Ok(Self { automation, walker, cache })
+            Ok(Self {
+                automation,
+                walker,
+                cache,
+            })
         }
     }
 
     /// Reads the element trees of `windows` under one synthetic application node.
     pub fn capture(&self, windows: &[TopWindow], app_name: &str, app_id: &str, cancel: &AtomicBool) -> Capture {
-        let mut cap = Capture { raw: Vec::new(), elements: Vec::new(), truncated: false };
+        let mut cap = Capture {
+            raw: Vec::new(),
+            elements: Vec::new(),
+            truncated: false,
+        };
         let root_pid = windows.first().map_or(0, |w| w.pid);
         cap.raw.push(RawNode {
             depth: 0,
@@ -192,14 +214,28 @@ impl Uia {
                 cap.truncated = true;
                 break;
             }
-            let Ok(el) = (unsafe { self.automation.ElementFromHandleBuildCache(w.hwnd, &self.cache) }) else { continue };
-            let ctx = Ctx { app_name, app_id, window_title: &w.title };
+            let Ok(el) = (unsafe { self.automation.ElementFromHandleBuildCache(w.hwnd, &self.cache) }) else {
+                continue;
+            };
+            let ctx = Ctx {
+                app_name,
+                app_id,
+                window_title: &w.title,
+            };
             self.walk(&mut cap, el, 1, Some(0), &ctx, cancel);
         }
         cap
     }
 
-    fn walk(&self, cap: &mut Capture, el: IUIAutomationElement, depth: usize, parent: Option<usize>, ctx: &Ctx, cancel: &AtomicBool) {
+    fn walk(
+        &self,
+        cap: &mut Capture,
+        el: IUIAutomationElement,
+        depth: usize,
+        parent: Option<usize>,
+        ctx: &Ctx,
+        cancel: &AtomicBool,
+    ) {
         if cap.raw.len() >= MAX_NODES {
             cap.truncated = true;
             return;
@@ -253,7 +289,9 @@ fn flag(r: windows::core::Result<BOOL>) -> bool {
 fn read_cached(el: &IUIAutomationElement) -> RawNode {
     unsafe {
         let rect = el.CachedBoundingRectangle().ok().map(rect_of).filter(|r| !r.is_empty());
-        let value_pattern = el.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId).ok();
+        let value_pattern = el
+            .GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .ok();
         let (value, editable) = match &value_pattern {
             Some(p) => (p.CachedValue().ok().map(|b| b.to_string()), !flag(p.CachedIsReadOnly())),
             None => (None, false),
@@ -271,8 +309,12 @@ fn read_cached(el: &IUIAutomationElement) -> RawNode {
             .GetCachedPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
             .ok()
             .is_some_and(|p| flag(p.CachedVerticallyScrollable()) || flag(p.CachedHorizontallyScrollable()));
-        let invokable = el.GetCachedPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId).is_ok()
-            || el.GetCachedPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId).is_ok()
+        let invokable = el
+            .GetCachedPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+            .is_ok()
+            || el
+                .GetCachedPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
+                .is_ok()
             || checked.is_some()
             || selected.is_some();
         RawNode {
@@ -299,7 +341,10 @@ fn read_cached(el: &IUIAutomationElement) -> RawNode {
 
 /// The on-screen rectangle of an element right now.
 pub fn current_rect(el: &IUIAutomationElement) -> Option<Rect> {
-    unsafe { el.CurrentBoundingRectangle() }.ok().map(rect_of).filter(|r| !r.is_empty())
+    unsafe { el.CurrentBoundingRectangle() }
+        .ok()
+        .map(rect_of)
+        .filter(|r| !r.is_empty())
 }
 
 pub fn set_focus(el: &IUIAutomationElement) -> Result<(), String> {
@@ -312,6 +357,7 @@ pub fn set_value(el: &IUIAutomationElement, text: &str) -> Result<(), String> {
         let p = el
             .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
             .map_err(|_| "the element doesn't take text".to_owned())?;
-        p.SetValue(&windows::core::BSTR::from(text)).map_err(|e| format!("couldn't set the text: {e}"))
+        p.SetValue(&windows::core::BSTR::from(text))
+            .map_err(|e| format!("couldn't set the text: {e}"))
     }
 }

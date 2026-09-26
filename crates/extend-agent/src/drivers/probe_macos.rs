@@ -15,8 +15,7 @@ pub const ACCESSIBILITY_HELP: &str = "System Settings › Privacy & Security ›
 pub const SCREEN_RECORDING_HELP: &str = "System Settings › Privacy & Security › Screen & System Audio Recording";
 pub const ACCESSIBILITY_REASON: &str =
     "Allow Accessibility for Silicon Extend in System Settings › Privacy & Security › Accessibility.";
-pub const SCREEN_RECORDING_REASON: &str =
-    "Allow Screen Recording for Silicon Extend in System Settings › Privacy & Security › Screen & System Audio Recording.";
+pub const SCREEN_RECORDING_REASON: &str = "Allow Screen Recording for Silicon Extend in System Settings › Privacy & Security › Screen & System Audio Recording.";
 
 /// macOS's UI Automation mode, which agent-device's UI testing runner turns on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +60,20 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
     let mut steps = Vec::new();
 
     if let Some(problem) = input.problem {
-        for c in [ScreenRead, ScreenCapture, ScreenRecord, InputPointer, InputText, AppsLaunch, AppsList, Alerts, Clipboard, Logs, Replay, Links] {
+        for c in [
+            ScreenRead,
+            ScreenCapture,
+            ScreenRecord,
+            InputPointer,
+            InputText,
+            AppsLaunch,
+            AppsList,
+            Alerts,
+            Clipboard,
+            Logs,
+            Replay,
+            Links,
+        ] {
             miss(c, problem, &mut missing);
         }
         // Not a setup step: the terminal still works, and the reason is in `missing`.
@@ -73,17 +85,30 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
     if input.supports("apps") {
         caps.push(AppsList);
     } else {
-        miss(AppsList, "agent-device doesn't support `apps` on this Mac.", &mut missing);
+        miss(
+            AppsList,
+            "agent-device doesn't support `apps` on this Mac.",
+            &mut missing,
+        );
     }
     for (cap, cmd) in [(Clipboard, "clipboard"), (Logs, "logs")] {
         if input.supports(cmd) {
             caps.push(cap);
         } else {
-            miss(cap, &format!("agent-device doesn't support `{cmd}` on this Mac."), &mut missing);
+            miss(
+                cap,
+                &format!("agent-device doesn't support `{cmd}` on this Mac."),
+                &mut missing,
+            );
         }
     }
 
-    steps.push(step("accessibility", "Allow Accessibility for Silicon Extend", facts.accessibility, ACCESSIBILITY_HELP));
+    steps.push(step(
+        "accessibility",
+        "Allow Accessibility for Silicon Extend",
+        facts.accessibility,
+        ACCESSIBILITY_HELP,
+    ));
     if facts.accessibility {
         caps.extend([ScreenRead, InputPointer, InputText, Alerts]);
     } else {
@@ -92,11 +117,20 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         }
     }
 
-    steps.push(step("screen_recording", "Allow Screen Recording for Silicon Extend", facts.screen_recording, SCREEN_RECORDING_HELP));
+    steps.push(step(
+        "screen_recording",
+        "Allow Screen Recording for Silicon Extend",
+        facts.screen_recording,
+        SCREEN_RECORDING_HELP,
+    ));
     if facts.screen_recording {
         caps.push(ScreenCapture);
         match input.supports("record") {
-            false => miss(ScreenRecord, "agent-device doesn't support `record` on this Mac.", &mut missing),
+            false => miss(
+                ScreenRecord,
+                "agent-device doesn't support `record` on this Mac.",
+                &mut missing,
+            ),
             true => caps.push(ScreenRecord),
         }
     } else {
@@ -111,7 +145,10 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
 /// Records a missing capability once, with the first reason given.
 pub fn miss(c: Capability, reason: &str, missing: &mut Vec<MissingCapability>) {
     if !missing.iter().any(|m| m.capability == c) {
-        missing.push(MissingCapability { capability: c, reason: reason.to_owned() });
+        missing.push(MissingCapability {
+            capability: c,
+            reason: reason.to_owned(),
+        });
     }
 }
 
@@ -119,7 +156,11 @@ fn step(key: &str, title: &str, done: bool, help: &str) -> SetupStep {
     SetupStep {
         key: key.into(),
         title: title.into(),
-        status: if done { StepStatus::Done } else { StepStatus::NeedsCarbon },
+        status: if done {
+            StepStatus::Done
+        } else {
+            StepStatus::NeedsCarbon
+        },
         help: (!done).then(|| help.to_owned()),
         error: None,
         input: None,
@@ -163,16 +204,31 @@ pub fn gather() -> MacFacts {
     let screen_recording = unsafe { ffi::CGPreflightScreenCaptureAccess() };
     let automation = std::process::Command::new("/usr/bin/automationmodetool")
         .output()
-        .map(|o| parse_automation_mode(&format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))))
+        .map(|o| {
+            parse_automation_mode(&format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ))
+        })
         .unwrap_or(AutomationMode::Unknown);
-    MacFacts { accessibility, screen_recording, automation, xcode: full_xcode_installed() }
+    MacFacts {
+        accessibility,
+        screen_recording,
+        automation,
+        xcode: full_xcode_installed(),
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn full_xcode_installed() -> bool {
-    let Ok(out) = std::process::Command::new("/usr/bin/xcode-select").arg("-p").output() else { return false };
+    let Ok(out) = std::process::Command::new("/usr/bin/xcode-select").arg("-p").output() else {
+        return false;
+    };
     let dir = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    !dir.is_empty() && !dir.contains("CommandLineTools") && std::path::Path::new(&dir).join("usr/bin/xcodebuild").exists()
+    !dir.is_empty()
+        && !dir.contains("CommandLineTools")
+        && std::path::Path::new(&dir).join("usr/bin/xcodebuild").exists()
 }
 
 /// Asks macOS to add Silicon Extend to the Screen Recording list (shows the system prompt once).
@@ -200,18 +256,30 @@ mod tests {
     use extend_protocol::model::SetupState;
 
     fn all_good() -> MacFacts {
-        MacFacts { accessibility: true, screen_recording: true, automation: AutomationMode::NoAuthentication, xcode: true }
+        MacFacts {
+            accessibility: true,
+            screen_recording: true,
+            automation: AutomationMode::NoAuthentication,
+            xcode: true,
+        }
     }
 
     fn input() -> ProbeInput<'static> {
-        ProbeInput { problem: None, commands: None }
+        ProbeInput {
+            problem: None,
+            commands: None,
+        }
     }
 
     #[test]
     fn fully_set_up_mac_has_everything_but_terminal() {
         let p = build_probe(&all_good(), &input());
-        let mut want: Vec<Capability> =
-            DeviceOs::Macos.full_capabilities().iter().copied().filter(|c| *c != Capability::Terminal).collect();
+        let mut want: Vec<Capability> = DeviceOs::Macos
+            .full_capabilities()
+            .iter()
+            .copied()
+            .filter(|c| *c != Capability::Terminal)
+            .collect();
         want.sort();
         assert_eq!(p.capabilities, want);
         assert!(p.missing.is_empty(), "{:?}", p.missing);
@@ -220,12 +288,25 @@ mod tests {
 
     #[test]
     fn missing_accessibility_is_reported_precisely() {
-        let p = build_probe(&MacFacts { accessibility: false, ..all_good() }, &input());
+        let p = build_probe(
+            &MacFacts {
+                accessibility: false,
+                ..all_good()
+            },
+            &input(),
+        );
         assert!(!p.capabilities.contains(&Capability::ScreenRead));
         assert!(!p.capabilities.contains(&Capability::InputText));
-        let m = p.missing.iter().find(|m| m.capability == Capability::ScreenRead).unwrap();
+        let m = p
+            .missing
+            .iter()
+            .find(|m| m.capability == Capability::ScreenRead)
+            .unwrap();
         assert_eq!(m.reason, ACCESSIBILITY_REASON);
-        assert!(m.reason.contains("System Settings › Privacy & Security › Accessibility"));
+        assert!(
+            m.reason
+                .contains("System Settings › Privacy & Security › Accessibility")
+        );
         assert_eq!(p.setup.state, SetupState::NeedsCarbon);
         let s = p.setup.steps.iter().find(|s| s.key == "accessibility").unwrap();
         assert_eq!(s.status, StepStatus::NeedsCarbon);
@@ -234,30 +315,61 @@ mod tests {
 
     #[test]
     fn missing_screen_recording_drops_capture() {
-        let p = build_probe(&MacFacts { screen_recording: false, ..all_good() }, &input());
+        let p = build_probe(
+            &MacFacts {
+                screen_recording: false,
+                ..all_good()
+            },
+            &input(),
+        );
         assert!(!p.capabilities.contains(&Capability::ScreenCapture));
         assert!(p.capabilities.contains(&Capability::ScreenRead));
-        assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRecord && m.reason == SCREEN_RECORDING_REASON));
+        assert!(
+            p.missing
+                .iter()
+                .any(|m| m.capability == Capability::ScreenRecord && m.reason == SCREEN_RECORDING_REASON)
+        );
     }
 
     #[test]
     fn native_input_and_recording_do_not_need_xctest() {
-        let p = build_probe(&MacFacts { automation: AutomationMode::NeedsAuthentication, ..all_good() }, &input());
+        let p = build_probe(
+            &MacFacts {
+                automation: AutomationMode::NeedsAuthentication,
+                ..all_good()
+            },
+            &input(),
+        );
         assert!(p.capabilities.contains(&Capability::InputText));
         // Only Accessibility and Screen Recording are setup steps; this doesn't block sessions.
         assert_eq!(p.setup.state, SetupState::Complete);
-        assert_eq!(p.setup.steps.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["accessibility", "screen_recording"]);
+        assert_eq!(
+            p.setup.steps.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(),
+            ["accessibility", "screen_recording"]
+        );
         assert!(p.capabilities.contains(&Capability::InputPointer));
         assert!(p.capabilities.contains(&Capability::ScreenRecord));
         assert!(p.capabilities.contains(&Capability::ScreenCapture));
-        let p = build_probe(&MacFacts { xcode: false, ..all_good() }, &input());
+        let p = build_probe(
+            &MacFacts {
+                xcode: false,
+                ..all_good()
+            },
+            &input(),
+        );
         assert!(p.capabilities.contains(&Capability::InputText));
         assert!(p.capabilities.contains(&Capability::ScreenRecord));
     }
 
     #[test]
     fn no_helper_means_only_takeover() {
-        let p = build_probe(&all_good(), &ProbeInput { problem: Some("helper gone"), commands: None });
+        let p = build_probe(
+            &all_good(),
+            &ProbeInput {
+                problem: Some("helper gone"),
+                commands: None,
+            },
+        );
         assert_eq!(p.capabilities, vec![Capability::Takeover]);
         assert!(p.missing.iter().all(|m| m.reason == "helper gone"));
         // The terminal still works, so a missing helper doesn't block sessions.
@@ -267,7 +379,13 @@ mod tests {
     #[test]
     fn unsupported_commands_become_missing() {
         let cmds: Vec<String> = ["snapshot", "click", "clipboard"].map(String::from).to_vec();
-        let p = build_probe(&all_good(), &ProbeInput { problem: None, commands: Some(&cmds) });
+        let p = build_probe(
+            &all_good(),
+            &ProbeInput {
+                problem: None,
+                commands: Some(&cmds),
+            },
+        );
         assert!(p.capabilities.contains(&Capability::Clipboard));
         assert!(!p.capabilities.contains(&Capability::Logs));
         assert!(!p.capabilities.contains(&Capability::ScreenRecord));
@@ -276,14 +394,21 @@ mod tests {
     #[test]
     fn automation_mode_output() {
         assert_eq!(
-            parse_automation_mode("Automation Mode is disabled.\nThis device requires user authentication to enable Automation Mode.\n"),
+            parse_automation_mode(
+                "Automation Mode is disabled.\nThis device requires user authentication to enable Automation Mode.\n"
+            ),
             AutomationMode::NeedsAuthentication
         );
         assert_eq!(
-            parse_automation_mode("Automation Mode is disabled.\nThis device does not require user authentication to enable Automation Mode.\n"),
+            parse_automation_mode(
+                "Automation Mode is disabled.\nThis device does not require user authentication to enable Automation Mode.\n"
+            ),
             AutomationMode::NoAuthentication
         );
-        assert_eq!(parse_automation_mode("Automation Mode is enabled."), AutomationMode::Enabled);
+        assert_eq!(
+            parse_automation_mode("Automation Mode is enabled."),
+            AutomationMode::Enabled
+        );
         assert_eq!(parse_automation_mode(""), AutomationMode::Unknown);
     }
 }

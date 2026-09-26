@@ -117,7 +117,14 @@ impl Config {
             Err(why) => (None, Some(why)),
         };
 
-        Ok(Self { home, state_dir, service_url, credential_store, agent_device, agent_device_problem })
+        Ok(Self {
+            home,
+            state_dir,
+            service_url,
+            credential_store,
+            agent_device,
+            agent_device_problem,
+        })
     }
 
     /// A config for tests: everything under `dir`, the given service, a file credential store.
@@ -194,7 +201,11 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write as _;
     let dir = path.parent().context("file has no parent directory")?;
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{}.{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("file"), std::process::id()));
+    let tmp = dir.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
+        std::process::id()
+    ));
     {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);
@@ -203,7 +214,9 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
             use std::os::unix::fs::OpenOptionsExt as _;
             opts.mode(0o600);
         }
-        let mut f = opts.open(&tmp).with_context(|| format!("couldn't write {}", tmp.display()))?;
+        let mut f = opts
+            .open(&tmp)
+            .with_context(|| format!("couldn't write {}", tmp.display()))?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }
@@ -230,7 +243,9 @@ pub fn locate_agent_device(from_file: Option<&[String]>) -> std::result::Result<
     if let Some(argv) = from_file.filter(|a| !a.is_empty()) {
         return Ok(argv.to_vec());
     }
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf));
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
     if let Some(dir) = &exe_dir {
         for root in bundle_roots(dir) {
             let entry = root.join("agent-device").join("bin").join("agent-device.mjs");
@@ -245,7 +260,9 @@ pub fn locate_agent_device(from_file: Option<&[String]>) -> std::result::Result<
         if !dist.exists() {
             return Err(format!(
                 "agent-device isn't built. Run `pnpm install && pnpm build` in {}",
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/agent-device").display()
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../vendor/agent-device")
+                    .display()
             ));
         }
         return Ok(command_for_entry(&dev, None));
@@ -256,15 +273,18 @@ pub fn locate_agent_device(from_file: Option<&[String]>) -> std::result::Result<
 /// Directories a packaged agent-device and node may sit in, relative to the executable's directory.
 fn bundle_roots(exe_dir: &Path) -> Vec<PathBuf> {
     vec![
-        exe_dir.join("../Resources"),            // macOS: Silicon Extend.app/Contents/MacOS/extend-agent
-        exe_dir.to_path_buf(),                   // Windows zip, Linux tarball
-        exe_dir.join("../lib/silicon-extend"),   // Linux: /usr/bin/extend-agent + /usr/lib/silicon-extend
+        exe_dir.join("../Resources"), // macOS: Silicon Extend.app/Contents/MacOS/extend-agent
+        exe_dir.to_path_buf(),        // Windows zip, Linux tarball
+        exe_dir.join("../lib/silicon-extend"), // Linux: /usr/bin/extend-agent + /usr/lib/silicon-extend
     ]
 }
 
 /// `[node, entry]` for a JavaScript entry point, or `[entry]` for an executable.
 fn command_for_entry(entry: &Path, bundle_root: Option<&Path>) -> Vec<String> {
-    let is_js = entry.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e, "js" | "mjs" | "cjs"));
+    let is_js = entry
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e, "js" | "mjs" | "cjs"));
     if !is_js {
         return vec![entry.display().to_string()];
     }
@@ -326,15 +346,24 @@ mod tests {
     fn service_urls_get_a_trailing_slash() {
         let u = parse_service_url("http://127.0.0.1:8480").unwrap();
         assert_eq!(u.as_str(), "http://127.0.0.1:8480/");
-        assert_eq!(u.join("api/v1/enrollments").unwrap().as_str(), "http://127.0.0.1:8480/api/v1/enrollments");
+        assert_eq!(
+            u.join("api/v1/enrollments").unwrap().as_str(),
+            "http://127.0.0.1:8480/api/v1/enrollments"
+        );
         assert!(parse_service_url("ftp://x").is_err());
         assert!(parse_service_url("nope").is_err());
     }
 
     #[test]
     fn credential_store_names() {
-        assert_eq!("file".parse::<CredentialStoreKind>().unwrap(), CredentialStoreKind::File);
-        assert_eq!("Keychain".parse::<CredentialStoreKind>().unwrap(), CredentialStoreKind::Keyring);
+        assert_eq!(
+            "file".parse::<CredentialStoreKind>().unwrap(),
+            CredentialStoreKind::File
+        );
+        assert_eq!(
+            "Keychain".parse::<CredentialStoreKind>().unwrap(),
+            CredentialStoreKind::Keyring
+        );
         assert!("x".parse::<CredentialStoreKind>().is_err());
     }
 

@@ -92,6 +92,65 @@ child.terminate();child.wait();raise RuntimeError('startup timeout')
             if child.poll() is None:
                 child.terminate()
                 child.wait(timeout=10)
+    # The daemon can die in the moment between spawning the worker and the worker's first look at
+    # its parent. The worker is told its owner, so it never adopts the reaper as its owner.
+    owner = """import os,subprocess,sys
+child=subprocess.Popen([*sys.argv[1:],'--owner-pid',str(os.getpid())]);print(child.pid,flush=True);os._exit(0)
+"""
+    output, status = out / 'owner-gone.mp4', out / 'owner-gone.status.json'
+    spawned = subprocess.run(['python3', '-c', owner, 'python3', str(worker), '--out', str(output), '--status', str(status),
+                              '--window-id', xid, '--fps', '12', '--max-duration-ms', '15000'], capture_output=True, text=True, check=True)
+    orphan = Path(f'/proc/{int(spawned.stdout)}/stat')
+    wait(lambda: not orphan.exists() or orphan.read_text().split(') ')[1].startswith('Z'), timeout=5)
+    time.sleep(.5)
+    assert not output.exists() and not status.exists(), 'an orphaned worker recorded or published'
+    print('PASS a worker whose owner died before it started exits without recording or publishing', flush=True)
+
+    # Capture that cannot keep up with --fps must not speed the video up (frames used to be stamped
+    # by count, so a 6 s recording at half speed played back in 3 s).
+    large = subprocess.Popen(['python3', str(root/'apps/desktop/linux-e2e/record-fixture.py'), '--size', '3000x2000', '--static'])
+    try:
+        def find_large():
+            result = subprocess.run(['xdotool', 'search', '--name', '^Extend Recording Fixture$'], capture_output=True, text=True)
+            ids = [value for value in result.stdout.split() if value != xid]
+            return ids[0] if ids else None
+        large_id = wait(find_large)
+        output, status = out / 'slow-capture.mp4', out / 'slow-capture.status.json'
+        child = subprocess.Popen(['python3', str(worker), '--out', str(output), '--status', str(status), '--window-id', large_id,
+                                  '--fps', '60', '--max-duration-ms', '15000'])
+        wait(lambda: status.exists() and json.loads(status.read_text()).get('state') == 'recording')
+        began = time.monotonic()
+        time.sleep(5)
+        child.send_signal(signal.SIGTERM)
+        ended = time.monotonic()
+        assert child.wait(timeout=20) == 0
+        complete = json.loads(status.read_text())
+        info = json.loads(subprocess.check_output(['ffprobe','-v','error','-count_frames','-show_streams','-show_format','-of','json',str(output)]))
+        video = next(s for s in info['streams'] if s.get('codec_type') == 'video')
+        duration, wall = float(info['format']['duration']), ended - began
+        assert (video['width'], video['height']) == (3000, 2000), video
+        assert video['r_frame_rate'] == '60/1', video
+        assert wall * .9 <= duration <= wall + 1, ('video time does not follow wall time', duration, wall, complete)
+        print(f'PASS slow capture keeps real time: {wall:.2f} s recorded, {duration:.2f} s of video, '
+              f'{video["nb_read_frames"]} frames at a constant 60 fps', flush=True)
+    finally:
+        large.terminate()
+        large.wait(timeout=5)
+
+    # `open` returns before the app's window is mapped; a recording started right away waits for it.
+    output, status = out / 'app-just-opened.mp4', out / 'app-just-opened.status.json'
+    opened = subprocess.Popen(['python3', str(root/'apps/desktop/linux-e2e/record-fixture.py'), '--peer'])
+    try:
+        recorder = subprocess.run(['python3', str(worker), '--out', str(output), '--status', str(status), '--app-id',
+                                   'extend-recording-peer', '--fps', '12', '--max-duration-ms', '1500'],
+                                  capture_output=True, text=True, timeout=30)
+        assert recorder.returncode == 0, recorder.stderr
+        assert json.loads(status.read_text())['reason'] == 'duration-limit', status.read_text()
+        print('PASS app recording started before the app mapped its window waits for the window', flush=True)
+    finally:
+        opened.terminate()
+        opened.wait(timeout=5)
+
     # Invalid input must not truncate an existing artifact or leave a recorder behind.
     kept = out / 'manual.mp4'
     original = kept.read_bytes()

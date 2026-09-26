@@ -74,7 +74,10 @@ mod tests {
 
     #[test]
     fn converts_bgra() {
-        assert_eq!(bgra_to_rgba(&[1, 2, 3, 0, 10, 20, 30, 7]), vec![3, 2, 1, 255, 30, 20, 10, 255]);
+        assert_eq!(
+            bgra_to_rgba(&[1, 2, 3, 0, 10, 20, 30, 7]),
+            vec![3, 2, 1, 255, 30, 20, 10, 255]
+        );
     }
 
     #[test]

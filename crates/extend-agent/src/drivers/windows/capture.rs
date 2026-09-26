@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS,
-    DeleteDC, DeleteObject, GetDC, GetDIBits, HGDIOBJ, ReleaseDC, SRCCOPY, SelectObject,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap, CreateCompatibleDC,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, HGDIOBJ, ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -54,7 +54,15 @@ pub fn grab(rect: Rect) -> Result<(Vec<u8>, u32, u32), String> {
         };
         let mut bgra = vec![0u8; (w * h * 4) as usize];
         SelectObject(mem, old);
-        let lines = GetDIBits(mem, bitmap, 0, h as u32, Some(bgra.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS);
+        let lines = GetDIBits(
+            mem,
+            bitmap,
+            0,
+            h as u32,
+            Some(bgra.as_mut_ptr().cast()),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
         let _ = DeleteObject(HGDIOBJ(bitmap.0));
         let _ = DeleteDC(mem);
         ReleaseDC(None, screen);
@@ -71,7 +79,11 @@ pub fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|e| format!("couldn't write the PNG: {e}"))?;
-    writer.write_image_data(rgba).map_err(|e| format!("couldn't write the PNG: {e}"))?;
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| format!("couldn't write the PNG: {e}"))?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|e| format!("couldn't write the PNG: {e}"))?;
     writer.finish().map_err(|e| format!("couldn't finish the PNG: {e}"))
 }

@@ -71,6 +71,7 @@ export function runtimeExecutionFromContext(
     iosXctestDerivedDataPath?: string;
     iosXctestEnvDir?: string;
     runnerLeaseContext?: SnapshotRuntimeExecution['runnerLeaseContext'];
+    surface?: SnapshotRuntimeExecution['surface'];
   }>,
 ): SnapshotRuntimeExecution {
   return {
@@ -82,5 +83,8 @@ export function runtimeExecutionFromContext(
     iosXctestDerivedDataPath: context.iosXctestDerivedDataPath,
     iosXctestEnvDir: context.iosXctestEnvDir,
     runnerLeaseContext: context.runnerLeaseContext,
+    // The session surface decides which app a macOS helper action binds to: a frontmost-app
+    // session follows the frontmost app instead of the bundle recorded when it opened.
+    ...(context.surface === undefined ? {} : { surface: context.surface }),
   };
 }

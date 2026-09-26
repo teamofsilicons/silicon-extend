@@ -7,10 +7,33 @@ struct TextEntryRequest: Decodable {
   let text: String
   let replace: Bool
   let bundleId: String?
+  /// The session surface. `frontmost-app` means the app that is frontmost now; the bundle a
+  /// session recorded when it opened must never redirect keys to an app the Carbon has left.
+  let surface: String?
   let x: Double?
   let y: Double?
   let delayMs: Int?
   let focusOnly: Bool?
+}
+
+/// The app a text request is bound to: the explicit bundle for an `app` surface (or a request
+/// with no surface), the current frontmost app for `frontmost-app`.
+func resolveTextEntryApplication(_ request: TextEntryRequest) throws -> NSRunningApplication {
+  let surface = request.surface?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+  switch surface {
+  case "app" where (request.bundleId ?? "").isEmpty:
+    throw HelperError.invalidArgs(
+      "text entry on an app session needs the session's app, and none was given. Open the app again with open <app>, then retry."
+    )
+  case nil, "app":
+    return try resolveTargetApplication(bundleId: request.bundleId, surface: surface)
+  case "frontmost-app":
+    return try resolveTargetApplication(bundleId: nil, surface: surface)
+  default:
+    throw HelperError.invalidArgs(
+      "text entry works on app and frontmost-app surfaces, not on \(surface ?? "")"
+    )
+  }
 }
 
 struct TextEntryResponse: Encodable {
@@ -104,7 +127,7 @@ extension AgentDeviceMacOSHelper {
     guard AXIsProcessTrusted() else {
       throw HelperError.commandFailed("allow Accessibility for Silicon Extend", details: ["permission": "accessibility"])
     }
-    let app = try resolveTargetApplication(bundleId: request.bundleId, surface: nil)
+    let app = try resolveTextEntryApplication(request)
     try activateTargetApplication(app)
     let element: AXUIElement
     if let x = request.x, let y = request.y {
@@ -143,6 +166,8 @@ extension AgentDeviceMacOSHelper {
     } else if request.text != "\n" {
       _ = try selectText(element, replace: false)
     }
+    // Focus is verified once before every key event posted, not once per character: each
+    // verification is several Accessibility calls, and the host's timeout budgets one per event.
     var pending = ""
     func flushText() throws {
       guard !pending.isEmpty else { return }
@@ -151,15 +176,17 @@ extension AgentDeviceMacOSHelper {
       pending = ""
       Thread.sleep(forTimeInterval: Double(max(request.delayMs ?? 0, 2)) / 1000)
     }
-    for character in request.text {
+    func postControlKey(_ code: CGKeyCode) throws {
+      try flushText()
       try requireTextFocus(element, app: app)
+      try postTextKey(pid: pid, code: code)
+    }
+    for character in request.text {
       switch character {
       case "\n", "\r\n":
-        try flushText()
-        try postTextKey(pid: pid, code: 36)
+        try postControlKey(36)
       case "\t":
-        try flushText()
-        try postTextKey(pid: pid, code: 48)
+        try postControlKey(48)
       default:
         if pending.utf16.count + String(character).utf16.count > 20 { try flushText() }
         pending.append(character)

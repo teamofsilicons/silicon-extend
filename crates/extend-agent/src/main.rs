@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use clap::{Parser, Subcommand};
 use extend_agent::agent::{Agent, AgentDeps, AgentHandle};
 use extend_agent::config::{Config, CredentialStoreKind, Overrides};
 use extend_agent::credential::{self, load_for};
@@ -13,10 +14,13 @@ use extend_agent::drivers::local::LocalDriver;
 use extend_agent::hosted::DriverFactory;
 use extend_agent::status::{self, AgentStatus, Phase};
 use extend_driver::{Driver, Invocation};
-use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "extend-agent", version, about = "Silicon Extend for Mac, Windows and Linux: lets the Silicons a Carbon chooses use this computer.")]
+#[command(
+    name = "extend-agent",
+    version,
+    about = "Silicon Extend for Mac, Windows and Linux: lets the Silicons a Carbon chooses use this computer."
+)]
 struct Cli {
     /// Extend service URL (default https://backend.extend.teamofsilicons.com; env EXTEND_API_URL).
     #[arg(long, global = true)]
@@ -105,7 +109,11 @@ fn main() {
 }
 
 fn real_main(cli: Cli) -> Result<i32> {
-    let overrides = Overrides { service_url: cli.service_url.clone(), credential_store: cli.credential_store, home: cli.home.clone() };
+    let overrides = Overrides {
+        service_url: cli.service_url.clone(),
+        credential_store: cli.credential_store,
+        home: cli.home.clone(),
+    };
     let config = Config::load(&overrides)?;
     match cli.command.unwrap_or(Command::Run { headless: false }) {
         Command::Run { headless } => run(config, headless, cli.verbose),
@@ -150,7 +158,8 @@ fn real_main(cli: Cli) -> Result<i32> {
             let store = credential::store_for(&config);
             let c = load_for(store.as_ref(), &config.service_url)?.context("this computer isn't paired")?;
             let service = extend_agent::service::ServiceClient::new(config.service_url.clone());
-            rt.block_on(service.stop(&c.device_credential)).map_err(|e| anyhow::anyhow!(e.message))?;
+            rt.block_on(service.stop(&c.device_credential))
+                .map_err(|e| anyhow::anyhow!(e.message))?;
             println!("Stopped.");
             Ok(0)
         }
@@ -186,7 +195,8 @@ fn real_main(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::InstallAutostart { headless, systemd } => {
-            let at = extend_agent::autostart::install(&extend_agent::autostart::AutostartOptions { headless, systemd })?;
+            let at =
+                extend_agent::autostart::install(&extend_agent::autostart::AutostartOptions { headless, systemd })?;
             println!("Silicon Extend will start at login ({at}).");
             Ok(0)
         }
@@ -199,12 +209,21 @@ fn real_main(cli: Cli) -> Result<i32> {
             }
             Ok(0)
         }
-        Command::Exec { session, timeout_ms, out, end_session, command } => exec(config, cli.verbose, session, timeout_ms, out, end_session, command),
+        Command::Exec {
+            session,
+            timeout_ms,
+            out,
+            end_session,
+            command,
+        } => exec(config, cli.verbose, session, timeout_ms, out, end_session, command),
     }
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_multi_thread().enable_all().build().context("couldn't start the async runtime")
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("couldn't start the async runtime")
 }
 
 /// Logs to stderr (when it's a terminal or headless) and to `{state}/logs/extend-agent.log`.
@@ -212,9 +231,15 @@ fn init_logging(config: &Config, verbose: bool, to_file: bool) {
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        if verbose { "info,extend_agent=debug,extend_hosted=debug".into() } else { "warn,extend_agent=info,extend_hosted=info".into() }
+        if verbose {
+            "info,extend_agent=debug,extend_hosted=debug".into()
+        } else {
+            "warn,extend_agent=info,extend_hosted=info".into()
+        }
     });
-    let stderr = tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_target(false);
+    let stderr = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_target(false);
     let file_layer = to_file.then(|| {
         let dir = config.log_dir();
         let _ = extend_agent::config::ensure_private_dir(&dir);
@@ -222,9 +247,17 @@ fn init_logging(config: &Config, verbose: bool, to_file: bool) {
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > 10 * 1024 * 1024) {
             let _ = std::fs::rename(&path, dir.join("extend-agent.log.1"));
         }
-        std::fs::OpenOptions::new().create(true).append(true).open(&path).ok().map(|f| {
-            tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(f)).with_ansi(false).with_target(false)
-        })
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok()
+            .map(|f| {
+                tracing_subscriber::fmt::layer()
+                    .with_writer(std::sync::Mutex::new(f))
+                    .with_ansi(false)
+                    .with_target(false)
+            })
     });
     let _ = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(filter))
@@ -240,7 +273,11 @@ fn hosted_factory() -> DriverFactory {
 /// Holds `{state}/agent.lock` so two copies never fight over one credential.
 fn single_instance(config: &Config) -> Result<Option<std::fs::File>> {
     let path = config.state_dir.join("agent.lock");
-    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)?;
     match f.try_lock() {
         Ok(()) => Ok(Some(f)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -255,7 +292,7 @@ fn run(config: Config, headless: bool, verbose: bool) -> Result<i32> {
         eprintln!("Silicon Extend is already running (pid {}): {}", s.pid, s.headline());
         return Ok(0);
     };
-    let local: Arc<dyn Driver> = Arc::new(LocalDriver::for_this_computer(&config));
+    let local: Arc<dyn Driver> = Arc::new(LocalDriver::for_the_agent(&config));
     let deps = AgentDeps {
         config: config.clone(),
         local,
@@ -264,7 +301,11 @@ fn run(config: Config, headless: bool, verbose: bool) -> Result<i32> {
         probe_interval: Duration::from_secs(30),
     };
     let (agent, handle) = Agent::new(deps);
-    tracing::info!("Silicon Extend {} starting; service {}", extend_agent::config::APP_VERSION, config.service_url);
+    tracing::info!(
+        "Silicon Extend {} starting; service {}",
+        extend_agent::config::APP_VERSION,
+        config.service_url
+    );
 
     let want_ui = !headless && ui_possible();
     if !want_ui {
@@ -385,7 +426,15 @@ async fn print_status(handle: AgentHandle) {
     }
 }
 
-fn exec(config: Config, verbose: bool, session: String, timeout_ms: u64, out: Option<PathBuf>, end_session: bool, command: Vec<String>) -> Result<i32> {
+fn exec(
+    config: Config,
+    verbose: bool,
+    session: String,
+    timeout_ms: u64,
+    out: Option<PathBuf>,
+    end_session: bool,
+    command: Vec<String>,
+) -> Result<i32> {
     init_logging(&config, verbose, false);
     let (name, args) = command.split_first().context("no command given")?;
     let frame = extend_protocol::frames::CommandFrame {
@@ -399,7 +448,10 @@ fn exec(config: Config, verbose: bool, session: String, timeout_ms: u64, out: Op
         upload_ids: vec![],
     };
     if let Err(e) = extend_agent::dispatch::validate(&frame) {
-        println!("{}", serde_json::json!({"ok": false, "output": null, "text": e.message, "error": e, "files": []}));
+        println!(
+            "{}",
+            serde_json::json!({"ok": false, "output": null, "text": e.message, "error": e, "files": []})
+        );
         return Ok(2);
     }
     let workdir = out.unwrap_or_else(|| config.work_dir().join(format!("exec-{}", frame.id)));

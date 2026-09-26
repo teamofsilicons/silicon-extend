@@ -8,7 +8,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use extend_driver::{Driver, Invocation, Output, Probe};
-use windows::Win32::System::StationsAndDesktops::{CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP, OpenInputDesktop, SwitchDesktop};
+use windows::Win32::System::StationsAndDesktops::{
+    CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP, OpenInputDesktop, SwitchDesktop,
+};
 
 use super::commands;
 use super::probe_logic::probe_from;
@@ -22,7 +24,10 @@ pub struct WindowsDriver {
 
 impl WindowsDriver {
     pub fn new(state_dir: PathBuf) -> Self {
-        Self { worker: Mutex::new(worker::spawn()), state_dir }
+        Self {
+            worker: Mutex::new(worker::spawn()),
+            state_dir,
+        }
     }
 
     fn send(&self, request: Request) -> bool {

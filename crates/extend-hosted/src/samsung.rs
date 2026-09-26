@@ -23,9 +23,8 @@ use serde_json::{Value, json};
 
 use crate::HostedDevice;
 use crate::common::{
-    self, Button, CLIENT_NAME, OpenTarget, find_app, guarded, invalid, load_json, not_ready,
-    offline, save_json, sleep_or_cancel, step, step_error, step_help, unsupported,
-    unsupported_command, url_host,
+    self, Button, CLIENT_NAME, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json,
+    sleep_or_cancel, step, step_error, step_help, unsupported, unsupported_command, url_host,
 };
 use crate::ws::{self, Ws};
 use crate::{http, script};
@@ -45,13 +44,7 @@ pub(crate) fn encode_name(name: &str) -> String {
 }
 
 /// The remote-control socket URL.
-pub(crate) fn remote_url(
-    host: &str,
-    port: u16,
-    tls: bool,
-    name: &str,
-    token: Option<&str>,
-) -> String {
+pub(crate) fn remote_url(host: &str, port: u16, tls: bool, name: &str, token: Option<&str>) -> String {
     let scheme = if tls { "wss" } else { "ws" };
     let mut q = url::form_urlencoded::Serializer::new(String::new());
     q.append_pair("name", &encode_name(name));
@@ -94,8 +87,7 @@ pub(crate) fn key_message(cmd: &str, key: &str) -> String {
 }
 
 pub(crate) fn installed_apps_message() -> String {
-    json!({"method": "ms.channel.emit", "params": {"event": "ed.installedApp.get", "to": "host"}})
-        .to_string()
+    json!({"method": "ms.channel.emit", "params": {"event": "ed.installedApp.get", "to": "host"}}).to_string()
 }
 
 /// `action_type` is `DEEP_LINK` (apps with `app_type` 2, and links into apps) or `NATIVE_LAUNCH`.
@@ -133,11 +125,7 @@ pub(crate) fn parse_event(text: &str) -> Event {
     let Ok(v) = serde_json::from_str::<Value>(text) else {
         return Event::Other("unparsable".into());
     };
-    let event = v
-        .get("event")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
+    let event = v.get("event").and_then(Value::as_str).unwrap_or("").to_owned();
     match event.as_str() {
         "ms.channel.connect" => Event::Connect {
             token: v.pointer("/data/token").and_then(|t| match t {
@@ -166,11 +154,7 @@ pub(crate) fn parse_event(text: &str) -> Event {
                     .filter_map(|a| {
                         Some(App {
                             id: a.get("appId")?.as_str()?.to_owned(),
-                            name: a
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_owned(),
+                            name: a.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
                             app_type: a.get("app_type").and_then(Value::as_i64).unwrap_or(0),
                         })
                     })
@@ -358,11 +342,7 @@ impl Inner {
             .host()
             .await
             .ok_or_else(|| std::io::Error::other("no address for this TV"))?;
-        let url = format!(
-            "http://{}:{}/api/v2/{path}",
-            url_host(&host),
-            self.ports.rest
-        );
+        let url = format!("http://{}:{}/api/v2/{path}", url_host(&host), self.ports.rest);
         http::request(method, &url, &[], b"", REST_TIMEOUT, true).await
     }
 
@@ -443,9 +423,7 @@ impl Inner {
             if matches!(*p, Pairing::Waiting { .. }) {
                 return;
             }
-            *p = Pairing::Waiting {
-                since: Instant::now(),
-            };
+            *p = Pairing::Waiting { since: Instant::now() };
         }
         let me = Arc::clone(self);
         tokio::spawn(async move {
@@ -472,11 +450,7 @@ impl Inner {
 
     /// Sends messages over the socket, reconnecting once if the old socket died. Each message is
     /// followed by its pause (for holds).
-    async fn send(
-        &self,
-        messages: &[(String, Duration)],
-        inv: &Invocation<'_>,
-    ) -> Result<(), SocketError> {
+    async fn send(&self, messages: &[(String, Duration)], inv: &Invocation<'_>) -> Result<(), SocketError> {
         if !self.approved() && self.waiting_for_approval() {
             return Err(SocketError::AwaitingApproval);
         }
@@ -511,8 +485,7 @@ impl Inner {
     }
 
     async fn installed_apps(&self, inv: &Invocation<'_>) -> Result<Vec<App>, SocketError> {
-        self.send(&[(installed_apps_message(), Duration::ZERO)], inv)
-            .await?;
+        self.send(&[(installed_apps_message(), Duration::ZERO)], inv).await?;
         let mut slot = self.socket.lock().await;
         let ws = slot
             .as_mut()
@@ -572,9 +545,7 @@ impl Inner {
         match target {
             OpenTarget::Url(url) => {
                 if !common::is_web_url(&url) {
-                    return invalid(
-                        "Samsung TVs open web links (http or https); to open an app, name it",
-                    );
+                    return invalid("Samsung TVs open web links (http or https); to open an app, name it");
                 }
                 let apps = self.installed_apps(inv).await.unwrap_or_default();
                 let browser = apps
@@ -584,10 +555,7 @@ impl Inner {
                     .unwrap_or_else(|| DEFAULT_BROWSER.into());
                 match self
                     .send(
-                        &[(
-                            launch_message(&browser, "NATIVE_LAUNCH", &url),
-                            Duration::ZERO,
-                        )],
+                        &[(launch_message(&browser, "NATIVE_LAUNCH", &url), Duration::ZERO)],
                         inv,
                     )
                     .await
@@ -611,8 +579,7 @@ impl Inner {
                 let (id, label) = match (&app, &apps) {
                     (Some(a), _) => (a.id.clone(), a.name.clone()),
                     (None, Some(list)) if !looks_like_app_id(&name) => {
-                        let names: Vec<&str> =
-                            list.iter().map(|a| a.name.as_str()).take(40).collect();
+                        let names: Vec<&str> = list.iter().map(|a| a.name.as_str()).take(40).collect();
                         return invalid(format!(
                             "No app called \"{name}\" on this TV. Installed: {}",
                             names.join(", ")
@@ -647,18 +614,12 @@ impl Inner {
                     .map(|a| a.id.clone())
                     .unwrap_or(name.clone());
                 match self
-                    .send(
-                        &[(launch_message(&id, "DEEP_LINK", &url), Duration::ZERO)],
-                        inv,
-                    )
+                    .send(&[(launch_message(&id, "DEEP_LINK", &url), Duration::ZERO)], inv)
                     .await
                 {
                     Ok(()) => {
                         *self.last_app.lock().unwrap() = Some(id.clone());
-                        Output::ok(
-                            json!({"app": id, "url": url}),
-                            format!("Opened {url} in {name}"),
-                        )
+                        Output::ok(json!({"app": id, "url": url}), format!("Opened {url} in {name}"))
                     }
                     Err(e) => e.into_output(),
                 }
@@ -680,9 +641,7 @@ impl Inner {
             },
         };
         match self.rest("DELETE", &format!("applications/{id}")).await {
-            Ok(r) if r.is_success() => {
-                Output::ok(json!({"app": id, "closed": true}), format!("Closed {id}"))
-            }
+            Ok(r) if r.is_success() => Output::ok(json!({"app": id, "closed": true}), format!("Closed {id}")),
             Ok(r) => common::failed(format!(
                 "The TV wouldn't close {id} (HTTP {}): {}",
                 r.status(),
@@ -698,10 +657,7 @@ impl Inner {
             Err(e) => return e.into_output(),
         };
         let checks = apps.iter().map(|a| async move {
-            let r = self
-                .rest("GET", &format!("applications/{}", a.id))
-                .await
-                .ok()?;
+            let r = self.rest("GET", &format!("applications/{}", a.id)).await.ok()?;
             let v = r.json()?;
             (v.get("visible").and_then(Value::as_bool) == Some(true)).then(|| a.clone())
         });
@@ -711,10 +667,7 @@ impl Inner {
             .flatten()
             .collect();
         match visible.first() {
-            Some(a) => Output::ok(
-                json!({"app": a.id, "name": a.name}),
-                format!("{} ({})", a.name, a.id),
-            ),
+            Some(a) => Output::ok(json!({"app": a.id, "name": a.name}), format!("{} ({})", a.name, a.id)),
             None => Output::ok(json!({"app": null}), "No app in front (TV home or live TV)"),
         }
     }
@@ -750,9 +703,7 @@ impl Driver for SamsungDriver {
                 "network",
                 reach_title,
                 StepStatus::NeedsCarbon,
-                Some(
-                    "Turn the TV on and connect it to the same Wi-Fi or network as this computer.",
-                ),
+                Some("Turn the TV on and connect it to the same Wi-Fi or network as this computer."),
                 e.clone(),
             ),
         };
@@ -922,12 +873,8 @@ pub(crate) mod tests {
             m,
             json!({"method":"ms.remote.control","params":{"Cmd":"Click","DataOfCmd":"KEY_HOME","Option":"false","TypeOfRemote":"SendRemoteKey"}})
         );
-        let m: Value = serde_json::from_str(&launch_message(
-            "org.tizen.browser",
-            "NATIVE_LAUNCH",
-            "https://x.y",
-        ))
-        .unwrap();
+        let m: Value =
+            serde_json::from_str(&launch_message("org.tizen.browser", "NATIVE_LAUNCH", "https://x.y")).unwrap();
         assert_eq!(m["params"]["event"], "ed.apps.launch");
         assert_eq!(m["params"]["data"]["metaTag"], "https://x.y");
     }
@@ -935,9 +882,7 @@ pub(crate) mod tests {
     #[test]
     fn events() {
         assert_eq!(
-            parse_event(
-                r#"{"event":"ms.channel.connect","data":{"clients":[],"id":"a","token":"19287654"}}"#
-            ),
+            parse_event(r#"{"event":"ms.channel.connect","data":{"clients":[],"id":"a","token":"19287654"}}"#),
             Event::Connect {
                 token: Some("19287654".into())
             }
@@ -1073,9 +1018,7 @@ pub(crate) mod tests {
                             ))
                             .await;
                     } else if mode == Mode::Deny {
-                        let _ = ws
-                            .send(Message::text(r#"{"event":"ms.channel.unauthorized"}"#))
-                            .await;
+                        let _ = ws.send(Message::text(r#"{"event":"ms.channel.unauthorized"}"#)).await;
                         return;
                     } else {
                         // The prompt is on screen; the Carbon takes a moment to choose Allow.
@@ -1173,21 +1116,13 @@ pub(crate) mod tests {
         );
 
         // The Carbon chooses Allow; the token lands on disk.
-        wait_until(|| {
-            std::fs::read_to_string(dir.path().join(STATE_FILE)).is_ok_and(|s| s.contains(TOKEN))
-        })
-        .await;
+        wait_until(|| std::fs::read_to_string(dir.path().join(STATE_FILE)).is_ok_and(|s| s.contains(TOKEN))).await;
         let p = d.probe().await;
         assert_eq!(p.setup.state, extend_protocol::model::SetupState::Complete);
-        assert_eq!(
-            p.capabilities,
-            DeviceOs::SamsungTv.full_capabilities().to_vec()
-        );
+        assert_eq!(p.capabilities, DeviceOs::SamsungTv.full_capabilities().to_vec());
 
         let w = dir.path();
-        let out = d
-            .run(inv("tv-remote", &args(&["press", "up"]), w, &[]))
-            .await;
+        let out = d.run(inv("tv-remote", &args(&["press", "up"]), w, &[])).await;
         assert!(out.ok, "{out:?}");
         let out = d
             .run(inv(
@@ -1217,9 +1152,7 @@ pub(crate) mod tests {
         let out = d.run(inv("open", &args(&["youtube"]), w, &[])).await;
         assert!(out.ok, "{out:?}");
         assert_eq!(out.output["via"], "rest");
-        let out = d
-            .run(inv("open", &args(&["https://example.com/a?b=1"]), w, &[]))
-            .await;
+        let out = d.run(inv("open", &args(&["https://example.com/a?b=1"]), w, &[])).await;
         assert!(out.ok, "{out:?}");
         let out = d.run(inv("open", &args(&["Disney+"]), w, &[])).await;
         assert_eq!(out.error.unwrap().code, "invalid_args");
@@ -1293,26 +1226,21 @@ pub(crate) mod tests {
     async fn runs_scripts_and_batches() {
         let tv = mock_tv(Mode::Allow).await;
         let dir = tempfile::tempdir().unwrap();
-        common::save_json(
-            dir.path(),
-            STATE_FILE,
-            &json!({"token": TOKEN, "approved": true}),
-        )
-        .unwrap();
+        common::save_json(dir.path(), STATE_FILE, &json!({"token": TOKEN, "approved": true})).unwrap();
         let d = driver(&tv, dir.path());
         let script = dir.path().join("zap.ad");
-        std::fs::write(&script, "context platform=tv\nenv APP=\"YouTube\"\nopen \"${APP}\"\nwait 20\ntv-remote press down\nhome\n").unwrap();
+        std::fs::write(
+            &script,
+            "context platform=tv\nenv APP=\"YouTube\"\nopen \"${APP}\"\nwait 20\ntv-remote press down\nhome\n",
+        )
+        .unwrap();
         let att = vec![script];
-        let out = d
-            .run(inv("replay", &args(&["zap.ad"]), dir.path(), &att))
-            .await;
+        let out = d.run(inv("replay", &args(&["zap.ad"]), dir.path(), &att)).await;
         assert!(out.ok, "{out:?}");
         assert_eq!(out.output["steps"].as_array().unwrap().len(), 4);
 
         let steps = r#"[{"command":"tv-remote","input":{"button":"left"}},{"command":"snapshot","input":{}}]"#;
-        let out = d
-            .run(inv("batch", &args(&["--steps", steps]), dir.path(), &[]))
-            .await;
+        let out = d.run(inv("batch", &args(&["--steps", steps]), dir.path(), &[])).await;
         assert!(!out.ok);
         assert_eq!(out.error.as_ref().unwrap().code, "unsupported_on_device");
         assert_eq!(out.output["failed_step"], 2);
@@ -1354,9 +1282,7 @@ pub(crate) mod tests {
         let p = d.probe().await;
         assert!(!p.online);
         assert_eq!(p.setup.steps[0].status, StepStatus::NeedsCarbon);
-        let out = d
-            .run(inv("tv-remote", &args(&["press", "up"]), dir.path(), &[]))
-            .await;
+        let out = d.run(inv("tv-remote", &args(&["press", "up"]), dir.path(), &[])).await;
         assert_eq!(out.error.unwrap().code, "device_offline");
     }
 }

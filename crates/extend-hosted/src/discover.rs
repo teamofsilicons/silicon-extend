@@ -40,11 +40,7 @@ pub(crate) fn pick<'a>(found: &'a [Found], name: &str) -> Option<&'a Found> {
     found
         .iter()
         .find(|f| f.name.to_lowercase() == n)
-        .or(if found.len() == 1 {
-            found.first()
-        } else {
-            None
-        })
+        .or(if found.len() == 1 { found.first() } else { None })
 }
 
 // ───────────── mDNS ─────────────
@@ -98,10 +94,7 @@ fn browse_blocking(service_type: &str, timeout: Duration) -> Vec<MdnsService> {
             Ok(ServiceEvent::ServiceResolved(info)) => {
                 let suffix = format!(".{service_type}");
                 let full = info.get_fullname();
-                let instance = full
-                    .strip_suffix(&suffix)
-                    .unwrap_or(full)
-                    .replace("\\032", " ");
+                let instance = full.strip_suffix(&suffix).unwrap_or(full).replace("\\032", " ");
                 let txt = info
                     .get_properties()
                     .iter()
@@ -149,9 +142,7 @@ const SAMSUNG_ST: &str = "urn:samsung.com:device:RemoteControlReceiver:1";
 const LG_ST: &str = "urn:lge-com:service:webos-second-screen:1";
 
 pub(crate) fn m_search(st: &str) -> String {
-    format!(
-        "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {st}\r\n\r\n"
-    )
+    format!("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {st}\r\n\r\n")
 }
 
 /// One SSDP answer: who answered and their headers (lower-cased names).
@@ -163,11 +154,7 @@ pub(crate) struct SsdpReply {
 
 pub(crate) fn parse_ssdp(from: IpAddr, text: &str) -> Option<SsdpReply> {
     let mut lines = text.split("\r\n");
-    if !lines
-        .next()?
-        .to_ascii_uppercase()
-        .starts_with("HTTP/1.1 200")
-    {
+    if !lines.next()?.to_ascii_uppercase().starts_with("HTTP/1.1 200") {
         return None;
     }
     let headers = lines
@@ -178,8 +165,7 @@ pub(crate) fn parse_ssdp(from: IpAddr, text: &str) -> Option<SsdpReply> {
 }
 
 async fn ssdp(st: &str, timeout: Duration) -> Vec<SsdpReply> {
-    let Ok(sock) = tokio::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).await
-    else {
+    let Ok(sock) = tokio::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).await else {
         return vec![];
     };
     let _ = sock.set_multicast_ttl_v4(2);
@@ -191,13 +177,9 @@ async fn ssdp(st: &str, timeout: Duration) -> Vec<SsdpReply> {
     let deadline = tokio::time::Instant::now() + timeout;
     let mut out: Vec<SsdpReply> = Vec::new();
     let mut buf = vec![0u8; 4096];
-    while let Ok(Ok((n, from))) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await
-    {
+    while let Ok(Ok((n, from))) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await {
         if let Some(r) = parse_ssdp(from.ip(), &String::from_utf8_lossy(&buf[..n])) {
-            let matches_st = r
-                .headers
-                .get("st")
-                .is_some_and(|s| s.eq_ignore_ascii_case(st));
+            let matches_st = r.headers.get("st").is_some_and(|s| s.eq_ignore_ascii_case(st));
             if matches_st && !out.iter().any(|o| o.from == r.from) {
                 out.push(r);
             }
@@ -212,11 +194,7 @@ pub(crate) fn xml_tag(xml: &str, tag: &str) -> Option<String> {
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&format!("</{tag}>"))? + start;
     let v = xml[start..end].trim();
-    (!v.is_empty()).then(|| {
-        v.replace("&amp;", "&")
-            .replace("&apos;", "'")
-            .replace("&quot;", "\"")
-    })
+    (!v.is_empty()).then(|| v.replace("&amp;", "&").replace("&apos;", "'").replace("&quot;", "\""))
 }
 
 async fn samsung_tvs(timeout: Duration) -> Vec<Found> {
@@ -292,10 +270,7 @@ mod tests {
     #[test]
     fn xml_tags() {
         let d = "<root><device><friendlyName>[LG] webOS TV OLED55C1</friendlyName><modelName>OLED55C1PUB</modelName></device></root>";
-        assert_eq!(
-            xml_tag(d, "friendlyName").as_deref(),
-            Some("[LG] webOS TV OLED55C1")
-        );
+        assert_eq!(xml_tag(d, "friendlyName").as_deref(), Some("[LG] webOS TV OLED55C1"));
         assert_eq!(xml_tag(d, "modelName").as_deref(), Some("OLED55C1PUB"));
         assert_eq!(xml_tag(d, "serialNumber"), None);
     }

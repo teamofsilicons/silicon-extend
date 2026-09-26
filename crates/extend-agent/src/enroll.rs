@@ -3,9 +3,9 @@
 
 use std::time::Duration;
 
+use extend_protocol::DeviceId;
 use extend_protocol::frames::{DeviceFrame, EnrollmentFrame};
 use extend_protocol::model::{EnrollmentCreate, EnrollmentCreated, EnrollmentState, TestingEnvironment, Timestamp};
-use extend_protocol::DeviceId;
 use futures::{SinkExt as _, StreamExt as _};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
@@ -72,7 +72,11 @@ pub async fn enroll(
         };
         backoff.reset();
         show_code(status, &created.pairing_code, created.code_expires_at);
-        tracing::info!("pairing code {} (enrollment {})", created.pairing_code, created.enrollment_id);
+        tracing::info!(
+            "pairing code {} (enrollment {})",
+            created.pairing_code,
+            created.enrollment_id
+        );
 
         let mut socket_backoff = Backoff::default();
         let mut expires_at = created.code_expires_at;
@@ -94,7 +98,15 @@ pub async fn enroll(
                         return EnrollOutcome::Shutdown;
                     }
                     // Polling catches a pairing that happened while the socket was down.
-                    match poll(service, status, created.enrollment_id, &created.enrollment_secret, &mut expires_at).await {
+                    match poll(
+                        service,
+                        status,
+                        created.enrollment_id,
+                        &created.enrollment_secret,
+                        &mut expires_at,
+                    )
+                    .await
+                    {
                         Poll::Paired(p) => return EnrollOutcome::Paired(p),
                         Poll::Gone => continue 'enrollment,
                         Poll::Waiting | Poll::Failed => continue,
@@ -112,16 +124,31 @@ enum Poll {
     Failed,
 }
 
-async fn poll(service: &ServiceClient, status: &StatusHandle, id: Uuid, secret: &str, expires_at: &mut Timestamp) -> Poll {
+async fn poll(
+    service: &ServiceClient,
+    status: &StatusHandle,
+    id: Uuid,
+    secret: &str,
+    expires_at: &mut Timestamp,
+) -> Poll {
     match service.get_enrollment(id, secret).await {
-        Ok(EnrollmentState::Waiting { pairing_code, code_expires_at }) => {
+        Ok(EnrollmentState::Waiting {
+            pairing_code,
+            code_expires_at,
+        }) => {
             *expires_at = code_expires_at;
             show_code(status, &pairing_code, code_expires_at);
             Poll::Waiting
         }
-        Ok(EnrollmentState::Paired { device_id, device_credential, environment }) => {
-            Poll::Paired(Paired { device_id, device_credential, environment })
-        }
+        Ok(EnrollmentState::Paired {
+            device_id,
+            device_credential,
+            environment,
+        }) => Poll::Paired(Paired {
+            device_id,
+            device_credential,
+            environment,
+        }),
         Err(e) if e.is_auth() || e.is_gone() => Poll::Gone,
         Err(e) => {
             tracing::info!("couldn't check the enrollment: {e}");
@@ -176,16 +203,30 @@ async fn enrollment_socket(
         };
         match msg {
             Message::Text(text) => match serde_json::from_str::<EnrollmentFrame>(&text) {
-                Ok(EnrollmentFrame::Code { pairing_code, code_expires_at }) => {
+                Ok(EnrollmentFrame::Code {
+                    pairing_code,
+                    code_expires_at,
+                }) => {
                     *expires_at = code_expires_at;
-                    let changed = status.get().pairing.is_none_or(|p| !p.code.eq_ignore_ascii_case(&pairing_code));
+                    let changed = status
+                        .get()
+                        .pairing
+                        .is_none_or(|p| !p.code.eq_ignore_ascii_case(&pairing_code));
                     show_code(status, &pairing_code, code_expires_at);
                     if changed {
                         tracing::info!("pairing code rotated to {}", pairing_code.to_ascii_uppercase());
                     }
                 }
-                Ok(EnrollmentFrame::Paired { device_id, device_credential, environment }) => {
-                    return SocketEnd::Paired(Paired { device_id, device_credential, environment });
+                Ok(EnrollmentFrame::Paired {
+                    device_id,
+                    device_credential,
+                    environment,
+                }) => {
+                    return SocketEnd::Paired(Paired {
+                        device_id,
+                        device_credential,
+                        environment,
+                    });
                 }
                 Ok(EnrollmentFrame::Ping { nonce }) => {
                     let pong = serde_json::to_string(&DeviceFrame::Pong { nonce }).expect("pong");
@@ -208,10 +249,15 @@ async fn enrollment_socket(
 }
 
 fn show_code(status: &StatusHandle, code: &str, expires_at: Timestamp) {
-    let expires = expires_at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
+    let expires = expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
     status.update(|s| {
         s.phase = Phase::Enrolling;
-        s.pairing = Some(PairingInfo { code: code.to_ascii_uppercase(), expires_at: expires });
+        s.pairing = Some(PairingInfo {
+            code: code.to_ascii_uppercase(),
+            expires_at: expires,
+        });
     });
 }
 

@@ -13,9 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::hap::{
-    self, Credentials, NonceStyle, PairSetup, PairVerify, PairingError, SessionCipher,
-};
+use super::hap::{self, Credentials, NonceStyle, PairSetup, PairVerify, PairingError, SessionCipher};
 use super::opack::{self, Value};
 
 pub(crate) mod frame {
@@ -137,9 +135,9 @@ impl Companion {
                     let payload: Vec<u8> = self.buf[4..4 + len].to_vec();
                     self.buf.drain(..4 + len);
                     let payload = match self.cipher.as_mut() {
-                        Some(c) if !payload.is_empty() => c.decrypt(&payload, &h).map_err(|e| {
-                            io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-                        })?,
+                        Some(c) if !payload.is_empty() => c
+                            .decrypt(&payload, &h)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?,
                         _ => payload,
                     };
                     return Ok((h[0], payload));
@@ -148,12 +146,7 @@ impl Companion {
             let mut chunk = [0u8; 8192];
             let n = tokio::time::timeout_at(deadline, self.stream.read(&mut chunk))
                 .await
-                .map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "the Apple TV didn't answer in time",
-                    )
-                })??;
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the Apple TV didn't answer in time"))??;
             if n == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -182,12 +175,7 @@ impl Companion {
         };
         let xid = self.next_xid();
         fields.push(("_x", Value::Int(xid)));
-        let dict = Value::Dict(
-            fields
-                .into_iter()
-                .map(|(k, v)| (Value::str(k), v))
-                .collect(),
-        );
+        let dict = Value::Dict(fields.into_iter().map(|(k, v)| (Value::str(k), v)).collect());
         self.send_frame(frame_type, &opack::encode(&dict)).await?;
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
@@ -257,11 +245,7 @@ impl Companion {
             .await?;
         let m3 = pv.handle_m2(creds, &pd)?;
         let pd = self
-            .auth(
-                frame::PV_NEXT,
-                vec![("_pd", Value::Bytes(m3))],
-                REQUEST_TIMEOUT,
-            )
+            .auth(frame::PV_NEXT, vec![("_pd", Value::Bytes(m3))], REQUEST_TIMEOUT)
             .await?;
         pv.handle_m4(&pd)?;
         let (out, inp) = pv
@@ -272,11 +256,7 @@ impl Companion {
     }
 
     /// Sends a request and returns the reply's `_c` (an empty dictionary when absent).
-    pub async fn request(
-        &mut self,
-        identifier: &str,
-        content: Value,
-    ) -> Result<Value, CompanionError> {
+    pub async fn request(&mut self, identifier: &str, content: Value) -> Result<Value, CompanionError> {
         let xid = self.next_xid();
         let msg = Value::dict([
             ("_i", Value::str(identifier)),
@@ -284,8 +264,7 @@ impl Companion {
             ("_c", content),
             ("_x", Value::Int(xid)),
         ]);
-        self.send_frame(frame::E_OPACK, &opack::encode(&msg))
-            .await?;
+        self.send_frame(frame::E_OPACK, &opack::encode(&msg)).await?;
         let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
         loop {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -294,16 +273,12 @@ impl Companion {
                 continue;
             }
             let v = opack::decode(&payload).map_err(|e| CompanionError::Protocol(e.to_string()))?;
-            if v.get("_t").and_then(Value::as_u64) != Some(3)
-                || v.get("_x").and_then(Value::as_u64) != Some(xid)
-            {
+            if v.get("_t").and_then(Value::as_u64) != Some(3) || v.get("_x").and_then(Value::as_u64) != Some(xid) {
                 continue; // an event, or a reply to something else
             }
             if let Some(em) = v.get("_em") {
                 return Err(CompanionError::Refused(
-                    em.as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("{em:?}")),
+                    em.as_str().map(str::to_owned).unwrap_or_else(|| format!("{em:?}")),
                 ));
             }
             return Ok(v.get("_c").cloned().unwrap_or(Value::Dict(vec![])));
@@ -311,11 +286,7 @@ impl Companion {
     }
 
     /// Introduces us and opens a remote-control session (what the Remote app does on connect).
-    pub async fn start_session(
-        &mut self,
-        me: &Identity,
-        client_id: &[u8],
-    ) -> Result<(), CompanionError> {
+    pub async fn start_session(&mut self, me: &Identity, client_id: &[u8]) -> Result<(), CompanionError> {
         self.request(
             "_systemInfo",
             Value::dict([
@@ -381,11 +352,8 @@ impl Companion {
         } else {
             "_bundleID"
         };
-        self.request(
-            "_launchApp",
-            Value::dict([(key, Value::str(bundle_or_url))]),
-        )
-        .await?;
+        self.request("_launchApp", Value::dict([(key, Value::str(bundle_or_url))]))
+            .await?;
         Ok(())
     }
 
@@ -399,12 +367,7 @@ impl Companion {
         };
         let mut apps: Vec<(String, String)> = pairs
             .into_iter()
-            .filter_map(|(k, v)| {
-                Some((
-                    k.as_str()?.to_owned(),
-                    v.as_str().unwrap_or_default().to_owned(),
-                ))
-            })
+            .filter_map(|(k, v)| Some((k.as_str()?.to_owned(), v.as_str().unwrap_or_default().to_owned())))
             .collect();
         apps.sort_by_key(|a| a.1.to_lowercase());
         Ok(apps)
@@ -412,9 +375,7 @@ impl Companion {
 
     /// 1 asleep, 2 screensaver, 3 awake, 4 idle.
     pub async fn attention_state(&mut self) -> Result<u64, CompanionError> {
-        let c = self
-            .request("FetchAttentionState", Value::Dict(vec![]))
-            .await?;
+        let c = self.request("FetchAttentionState", Value::Dict(vec![])).await?;
         c.get("state")
             .and_then(Value::as_u64)
             .ok_or_else(|| CompanionError::Protocol("no state in reply".into()))
@@ -479,41 +440,25 @@ pub(crate) mod mock {
                                 if t == frame::PS_START {
                                     *pins.lock().unwrap() += 1;
                                 }
-                                let reply = acc
-                                    .lock()
-                                    .unwrap()
-                                    .setup(v.get("_pd").unwrap().as_bytes().unwrap());
+                                let reply = acc.lock().unwrap().setup(v.get("_pd").unwrap().as_bytes().unwrap());
                                 let d = Value::dict([("_pd", Value::Bytes(reply)), ("_x", xid)]);
-                                c.send_frame(frame::PS_NEXT, &opack::encode(&d))
-                                    .await
-                                    .unwrap();
+                                c.send_frame(frame::PS_NEXT, &opack::encode(&d)).await.unwrap();
                             }
                             frame::PV_START | frame::PV_NEXT => {
                                 let body = v.get("_pd").unwrap().as_bytes().unwrap().to_vec();
-                                let is_m3 = hap::tlv_decode(&body).unwrap().get(hap::tag::SEQ_NO)
-                                    == Some(&[3][..]);
+                                let is_m3 = hap::tlv_decode(&body).unwrap().get(hap::tag::SEQ_NO) == Some(&[3][..]);
                                 let reply = acc.lock().unwrap().verify(&body);
-                                let ok = hap::tlv_decode(&reply)
-                                    .unwrap()
-                                    .get(hap::tag::ERROR)
-                                    .is_none();
+                                let ok = hap::tlv_decode(&reply).unwrap().get(hap::tag::ERROR).is_none();
                                 let d = Value::dict([("_pd", Value::Bytes(reply)), ("_x", xid)]);
-                                c.send_frame(frame::PV_NEXT, &opack::encode(&d))
-                                    .await
-                                    .unwrap();
+                                c.send_frame(frame::PV_NEXT, &opack::encode(&d)).await.unwrap();
                                 if is_m3 && ok {
-                                    let (out, inp) = acc.lock().unwrap().keys(
-                                        "",
-                                        "ServerEncrypt-main",
-                                        "ClientEncrypt-main",
-                                    );
-                                    c.cipher =
-                                        Some(SessionCipher::new(out, inp, NonceStyle::Counter12));
+                                    let (out, inp) =
+                                        acc.lock().unwrap().keys("", "ServerEncrypt-main", "ClientEncrypt-main");
+                                    c.cipher = Some(SessionCipher::new(out, inp, NonceStyle::Counter12));
                                 }
                             }
                             frame::E_OPACK => {
-                                let name =
-                                    v.get("_i").and_then(Value::as_str).unwrap_or("").to_owned();
+                                let name = v.get("_i").and_then(Value::as_str).unwrap_or("").to_owned();
                                 let content = v.get("_c").cloned().unwrap_or(Value::Null);
                                 log.lock().unwrap().push((name.clone(), content.to_json()));
                                 if v.get("_t").and_then(Value::as_u64) != Some(2) {
@@ -525,13 +470,9 @@ pub(crate) mod mock {
                                     ("_t", Value::Int(1)),
                                     ("_c", Value::Dict(vec![])),
                                 ]);
-                                c.send_frame(frame::E_OPACK, &opack::encode(&ev))
-                                    .await
-                                    .unwrap();
+                                c.send_frame(frame::E_OPACK, &opack::encode(&ev)).await.unwrap();
                                 let (key, body) = match name.as_str() {
-                                    "_sessionStart" => {
-                                        ("_c", Value::dict([("_sid", Value::Int(0x2a))]))
-                                    }
+                                    "_sessionStart" => ("_c", Value::dict([("_sid", Value::Int(0x2a))])),
                                     "FetchLaunchableApplicationsEvent" => (
                                         "_c",
                                         Value::dict([
@@ -540,9 +481,7 @@ pub(crate) mod mock {
                                             ("com.google.ios.youtube", Value::str("YouTube")),
                                         ]),
                                     ),
-                                    "FetchAttentionState" => {
-                                        ("_c", Value::dict([("state", Value::Int(3))]))
-                                    }
+                                    "FetchAttentionState" => ("_c", Value::dict([("state", Value::Int(3))])),
                                     "_launchApp"
                                         if content.get("_bundleID").and_then(Value::as_str)
                                             == Some("com.example.missing") =>
@@ -556,9 +495,7 @@ pub(crate) mod mock {
                                     (Value::str("_t"), Value::Int(3)),
                                     (Value::str("_x"), xid),
                                 ]);
-                                c.send_frame(frame::E_OPACK, &opack::encode(&reply))
-                                    .await
-                                    .unwrap();
+                                c.send_frame(frame::E_OPACK, &opack::encode(&reply)).await.unwrap();
                             }
                             _ => {}
                         }
@@ -589,14 +526,8 @@ mod tests {
         let mut setup = PairSetup::new("4D797FD3-0000-4000-8000-00000000BEEF");
         c.pair_start(&mut setup).await.unwrap();
         assert_eq!(*tv.pins_shown.lock().unwrap(), 1);
-        let (creds, info) = c
-            .pair_finish(&mut setup, "2468", "Silicon Extend")
-            .await
-            .unwrap();
-        assert_eq!(
-            info.unwrap().get("name").unwrap().as_str(),
-            Some("Living Room")
-        );
+        let (creds, info) = c.pair_finish(&mut setup, "2468", "Silicon Extend").await.unwrap();
+        assert_eq!(info.unwrap().get("name").unwrap().as_str(), Some("Living Room"));
 
         let mut c = Companion::connect("127.0.0.1", tv.port, Duration::from_secs(2))
             .await
@@ -615,10 +546,7 @@ mod tests {
         c.launch("com.netflix.Netflix").await.unwrap();
         c.launch("youtube://watch?v=1").await.unwrap();
         let apps = c.apps().await.unwrap();
-        assert_eq!(
-            apps[0],
-            ("com.netflix.Netflix".to_string(), "Netflix".to_string())
-        );
+        assert_eq!(apps[0], ("com.netflix.Netflix".to_string(), "Netflix".to_string()));
         assert_eq!(c.attention_state().await.unwrap(), 3);
         let err = c.launch("com.example.missing").await.unwrap_err();
         assert!(
@@ -630,22 +558,14 @@ mod tests {
         let names: Vec<&str> = log.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
             &names[..4],
-            &[
-                "_systemInfo",
-                "_touchStart",
-                "_sessionStart",
-                "TVRCSessionStart"
-            ]
+            &["_systemInfo", "_touchStart", "_sessionStart", "TVRCSessionStart"]
         );
         assert!(log.contains(&("_hidC".into(), serde_json::json!({"_hBtS": 1, "_hidC": 6}))));
         assert!(log.contains(&(
             "_launchApp".into(),
             serde_json::json!({"_bundleID": "com.netflix.Netflix"})
         )));
-        assert!(log.contains(&(
-            "_launchApp".into(),
-            serde_json::json!({"_urlS": "youtube://watch?v=1"})
-        )));
+        assert!(log.contains(&("_launchApp".into(), serde_json::json!({"_urlS": "youtube://watch?v=1"}))));
     }
 
     /// Pairs, verifies and sends requests to a server made of pyatv's own server-side code
@@ -655,10 +575,8 @@ mod tests {
     #[ignore = "needs EXTEND_HOSTED_PYATV_PYTHON pointing at a Python with pyatv installed"]
     async fn interop_with_pyatv_server() {
         use tokio::io::AsyncBufReadExt;
-        let python =
-            std::env::var("EXTEND_HOSTED_PYATV_PYTHON").expect("set EXTEND_HOSTED_PYATV_PYTHON");
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/pyatv_companion_server.py");
+        let python = std::env::var("EXTEND_HOSTED_PYATV_PYTHON").expect("set EXTEND_HOSTED_PYATV_PYTHON");
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pyatv_companion_server.py");
         let mut child = tokio::process::Command::new(python)
             .arg(script)
             .stdout(std::process::Stdio::piped())
@@ -678,15 +596,9 @@ mod tests {
             .unwrap();
         let mut setup = PairSetup::new("4D797FD3-3538-427E-A47B-A32FC6CF3A6A");
         c.pair_start(&mut setup).await.unwrap();
-        let (creds, info) = c
-            .pair_finish(&mut setup, "1111", "Silicon Extend")
-            .await
-            .unwrap();
+        let (creds, info) = c.pair_finish(&mut setup, "1111", "Silicon Extend").await.unwrap();
         assert_eq!(creds.atv_id, b"5D797FD3-3538-427E-A47B-A32FC6CF3A6A");
-        assert_eq!(
-            info.unwrap().get("model").unwrap().as_str(),
-            Some("AppleTV6,2")
-        );
+        assert_eq!(info.unwrap().get("model").unwrap().as_str(), Some("AppleTV6,2"));
 
         let mut c = Companion::connect("127.0.0.1", port, Duration::from_secs(2))
             .await
@@ -730,10 +642,7 @@ mod tests {
             ]
         );
         assert_eq!(seen[4]["_c"], serde_json::json!({"_hBtS": 1, "_hidC": 5}));
-        assert_eq!(
-            seen[5]["_c"],
-            serde_json::json!({"_bundleID": "com.netflix.Netflix"})
-        );
+        assert_eq!(seen[5]["_c"], serde_json::json!({"_bundleID": "com.netflix.Netflix"}));
         assert_eq!(seen[0]["_c"]["_idsID"], hex::encode(&creds.client_id));
     }
 

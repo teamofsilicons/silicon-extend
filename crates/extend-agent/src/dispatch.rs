@@ -1,7 +1,11 @@
 //! Runs commands and session lifecycle hooks in order per device. Commands honor their deadlines
 //! and cancellation, with produced files uploaded before the `result` goes back.
+//!
+//! Lifecycle hooks (a driver's session setup and cleanup) have their own time limits, so a stuck
+//! cleanup can hold up the next session's commands for a bounded time only. Once a session has
+//! ended, a command that still arrives for it is answered `session_ended` without running.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -14,7 +18,7 @@ use extend_protocol::capability::{command as command_spec, not_exposed};
 use extend_protocol::frames::{CommandFrame, CommandOutcome, DeviceFrame, ProducedFile};
 use extend_protocol::model::CommandError;
 use extend_protocol::{COMMAND_TIMEOUT_MAX_MS, COMMAND_TIMEOUT_MIN_MS, DeviceId};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::drivers::args::{find_refused_flag, refused_flag_message, safe_file_name};
@@ -56,8 +60,25 @@ type QueueKey = Option<DeviceId>;
 
 enum Work {
     Command(Job),
-    Session { driver: Arc<dyn Driver>, session_id: String, starting: bool },
+    Session {
+        driver: Arc<dyn Driver>,
+        session_id: String,
+        starting: bool,
+        done: Option<oneshot::Sender<()>>,
+    },
 }
+
+/// A lifecycle hook a device's queue ran recently, so a command whose deadline passed while it
+/// waited can say what it waited for.
+struct RecentHook {
+    session_id: String,
+    starting: bool,
+    started: Instant,
+    finished: Instant,
+}
+
+/// Recent hooks kept per device queue.
+const RECENT_HOOKS: usize = 4;
 
 struct Pending {
     target: Option<DeviceId>,
@@ -78,6 +99,10 @@ struct Inner {
     work_root: PathBuf,
     queues: Mutex<HashMap<QueueKey, mpsc::UnboundedSender<Work>>>,
     pending: Mutex<HashMap<Uuid, Pending>>,
+    /// Sessions that have ended, newest last (at most [`ENDED_REMEMBERED`]).
+    ended: Mutex<VecDeque<(QueueKey, String)>>,
+    setup_limit: Duration,
+    cleanup_limit: Duration,
 }
 
 #[derive(Clone)]
@@ -88,8 +113,30 @@ pub struct Dispatcher {
 /// Seconds a cancelled or timed-out driver gets to wind down before its result is written off.
 const WIND_DOWN: Duration = Duration::from_secs(3);
 
+/// How long a driver's session setup may take before the device moves on. The local agent-device
+/// driver needs up to about two minutes when it first has to release an earlier session.
+pub const SETUP_LIMIT: Duration = Duration::from_secs(150);
+/// How long a driver's session cleanup may take before the device moves on. Stopping a recording
+/// and closing the session can take 90 s each on a carried iPhone.
+pub const CLEANUP_LIMIT: Duration = Duration::from_secs(180);
+
+/// Ended sessions remembered to refuse late commands. Session ids are never reused.
+const ENDED_REMEMBERED: usize = 256;
+
 impl Dispatcher {
     pub fn new(lookup: Arc<dyn DriverLookup>, uploader: Arc<dyn Uploader>, outbox: Outbox, work_root: PathBuf) -> Self {
+        Self::with_lifecycle_limits(lookup, uploader, outbox, work_root, SETUP_LIMIT, CLEANUP_LIMIT)
+    }
+
+    /// A dispatcher whose session setup and cleanup hooks get other time limits (tests).
+    pub fn with_lifecycle_limits(
+        lookup: Arc<dyn DriverLookup>,
+        uploader: Arc<dyn Uploader>,
+        outbox: Outbox,
+        work_root: PathBuf,
+        setup_limit: Duration,
+        cleanup_limit: Duration,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 lookup,
@@ -98,18 +145,57 @@ impl Dispatcher {
                 work_root,
                 queues: Mutex::new(HashMap::new()),
                 pending: Mutex::new(HashMap::new()),
+                ended: Mutex::new(VecDeque::new()),
+                setup_limit,
+                cleanup_limit,
             }),
         }
     }
 
+    fn has_ended(&self, target: Option<&DeviceId>, session_id: &str) -> bool {
+        self.inner
+            .ended
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(t, s)| t.as_ref() == target && s == session_id)
+    }
+
     /// Queues a command after setup, earlier commands and previous-session cleanup on its device.
+    /// A command for a session that has already ended is answered at once and never runs.
     pub fn submit(&self, frame: CommandFrame) {
+        let session_id = frame.session_id.to_string();
+        if self.has_ended(frame.target.as_ref(), &session_id) {
+            let message = format!(
+                "Session {session_id} had already ended when this command reached the device, so it didn't run. Start a new session to keep going."
+            );
+            if !self
+                .inner
+                .outbox
+                .send(DeviceFrame::Result(failed(frame.id, error("session_ended", message))))
+            {
+                tracing::warn!(
+                    "command {} arrived for ended session {session_id} while Extend was unreachable; its refusal was dropped",
+                    frame.id
+                );
+            }
+            return;
+        }
         let cancel = CancelToken::new();
-        self.inner.pending.lock().unwrap().insert(frame.id, Pending {
-            target: frame.target.clone(), session_id: frame.session_id.to_string(), cancel: cancel.clone(),
-        });
+        self.inner.pending.lock().unwrap().insert(
+            frame.id,
+            Pending {
+                target: frame.target.clone(),
+                session_id: frame.session_id.to_string(),
+                cancel: cancel.clone(),
+            },
+        );
         let key = frame.target.clone();
-        let job = Job { frame, cancel, received: Instant::now() };
+        let job = Job {
+            frame,
+            cancel,
+            received: Instant::now(),
+        };
         self.enqueue(key, Work::Command(job));
     }
 
@@ -131,21 +217,57 @@ impl Dispatcher {
         tx.send(first).ok();
         let inner = self.inner.clone();
         tokio::spawn(async move {
+            let mut recent: VecDeque<RecentHook> = VecDeque::new();
             while let Some(work) = rx.recv().await {
                 match work {
                     Work::Command(job) => {
                         let id = job.frame.id;
-                        let outcome = execute(&inner, job).await;
+                        let outcome = execute(&inner, job, &recent).await;
                         inner.pending.lock().unwrap().remove(&id);
                         if !inner.outbox.send(DeviceFrame::Result(outcome)) {
-                            tracing::warn!("command {id} finished while Extend was unreachable; its result was dropped");
+                            tracing::warn!(
+                                "command {id} finished while Extend was unreachable; its result was dropped"
+                            );
                         }
                     }
-                    Work::Session { driver, session_id, starting } => {
-                        if starting {
-                            driver.session_started(&session_id).await;
+                    Work::Session {
+                        driver,
+                        session_id,
+                        starting,
+                        done,
+                    } => {
+                        let (what, limit) = if starting {
+                            ("setup", inner.setup_limit)
                         } else {
-                            driver.session_ended(&session_id).await;
+                            ("cleanup", inner.cleanup_limit)
+                        };
+                        let started = Instant::now();
+                        let hook = async {
+                            if starting {
+                                driver.session_started(&session_id).await;
+                            } else {
+                                driver.session_ended(&session_id).await;
+                            }
+                        };
+                        if tokio::time::timeout(limit, hook).await.is_err() {
+                            tracing::warn!(
+                                "session {session_id} {what} didn't finish within {} s; it was stopped so the device can run its next work",
+                                limit.as_secs()
+                            );
+                        }
+                        recent.push_back(RecentHook {
+                            session_id,
+                            starting,
+                            started,
+                            finished: Instant::now(),
+                        });
+                        while recent.len() > RECENT_HOOKS {
+                            recent.pop_front();
+                        }
+                        if let Some(done) = done {
+                            let _ = done.send(());
+                        }
+                        if !starting {
                             // An idle device can drop its worker only while enqueue is excluded.
                             let mut queues = inner.queues.lock().unwrap();
                             if rx.is_empty() {
@@ -167,27 +289,85 @@ impl Dispatcher {
         }
     }
 
-    /// Prepares the driver before this device's first session command can run.
-    pub fn session_started(&self, target: Option<&DeviceId>, session_id: &str) {
-        self.queue_lifecycle(target, session_id, true);
+    /// Prepares the driver before this device's first session command can run. The receiver
+    /// resolves once that setup has run.
+    pub fn session_started(&self, target: Option<&DeviceId>, session_id: &str) -> Option<oneshot::Receiver<()>> {
+        self.inner
+            .ended
+            .lock()
+            .unwrap()
+            .retain(|(t, s)| !(t.as_ref() == target && s == session_id));
+        self.queue_lifecycle(target, session_id, true)
     }
 
-    /// Cancels remaining commands, then cleans up before the next session uses this device.
-    pub fn session_closed(&self, target: Option<&DeviceId>, session_id: &str) {
+    /// Cancels the session's queued and running commands, refuses any that arrive later, then
+    /// cleans up before the next session uses this device. Cleanup is queued once per session;
+    /// the receiver (when it was queued now) resolves once it has run.
+    pub fn session_closed(&self, target: Option<&DeviceId>, session_id: &str) -> Option<oneshot::Receiver<()>> {
         for pending in self.inner.pending.lock().unwrap().values() {
             if pending.target.as_ref() == target && pending.session_id == session_id {
                 pending.cancel.cancel();
             }
         }
-        self.queue_lifecycle(target, session_id, false);
+        {
+            let mut ended = self.inner.ended.lock().unwrap();
+            if ended.iter().any(|(t, s)| t.as_ref() == target && s == session_id) {
+                return None;
+            }
+            ended.push_back((target.cloned(), session_id.to_owned()));
+            while ended.len() > ENDED_REMEMBERED {
+                ended.pop_front();
+            }
+        }
+        self.queue_lifecycle(target, session_id, false)
     }
 
-    fn queue_lifecycle(&self, target: Option<&DeviceId>, session_id: &str, starting: bool) {
+    /// Ends every session this dispatcher has work for, plus `known` ones (the pair is gone, or
+    /// the app is quitting): their commands are cancelled and their cleanup runs in order on each
+    /// device's queue. Returns a receiver per cleanup queued.
+    pub fn close_all(&self, known: &[(Option<DeviceId>, String)]) -> Vec<oneshot::Receiver<()>> {
+        let mut sessions: Vec<(Option<DeviceId>, String)> = known.to_vec();
+        for p in self.inner.pending.lock().unwrap().values() {
+            sessions.push((p.target.clone(), p.session_id.clone()));
+        }
+        let mut seen = Vec::new();
+        let mut done = Vec::new();
+        for (target, session_id) in sessions {
+            if seen.contains(&(target.clone(), session_id.clone())) {
+                continue;
+            }
+            if let Some(rx) = self.session_closed(target.as_ref(), &session_id) {
+                done.push(rx);
+            }
+            seen.push((target, session_id));
+        }
+        done
+    }
+
+    fn queue_lifecycle(
+        &self,
+        target: Option<&DeviceId>,
+        session_id: &str,
+        starting: bool,
+    ) -> Option<oneshot::Receiver<()>> {
         match self.inner.lookup.driver_for(target) {
-            Ok(driver) => self.enqueue(target.cloned(), Work::Session {
-                driver, session_id: session_id.to_owned(), starting,
-            }),
-            Err(error) => tracing::warn!("couldn't handle lifecycle for session {session_id}: {error}"),
+            Ok(driver) => {
+                let (tx, rx) = oneshot::channel();
+                self.enqueue(
+                    target.cloned(),
+                    Work::Session {
+                        driver,
+                        session_id: session_id.to_owned(),
+                        starting,
+                        done: Some(tx),
+                    },
+                );
+                Some(rx)
+            }
+            Err(error) => {
+                tracing::warn!("couldn't handle lifecycle for session {session_id}: {error}");
+                None
+            }
         }
     }
 
@@ -207,7 +387,13 @@ pub fn validate(frame: &CommandFrame) -> Result<(), CommandError> {
         return Err(error("unknown_command", message));
     }
     if command_spec(&frame.command).is_none() {
-        return Err(error("unknown_command", format!("`{}` isn't an Extend command. Run `extend --help` for the list.", frame.command)));
+        return Err(error(
+            "unknown_command",
+            format!(
+                "`{}` isn't an Extend command. Run `extend --help` for the list.",
+                frame.command
+            ),
+        ));
     }
     if let Some(flag) = find_refused_flag(&frame.args) {
         return Err(error("invalid_args", refused_flag_message(flag)));
@@ -216,7 +402,11 @@ pub fn validate(frame: &CommandFrame) -> Result<(), CommandError> {
 }
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
-    CommandError { code: code.to_owned(), message: message.into(), details: serde_json::Value::Null }
+    CommandError {
+        code: code.to_owned(),
+        message: message.into(),
+        details: serde_json::Value::Null,
+    }
 }
 
 fn failed(id: Uuid, err: CommandError) -> CommandOutcome {
@@ -240,11 +430,37 @@ pub fn upload_reserve(total: Duration) -> Duration {
     (total / 5).min(Duration::from_secs(5))
 }
 
-async fn execute(inner: &Inner, job: Job) -> CommandOutcome {
-    let Job { frame, cancel, received } = job;
+/// Why a command's deadline passed before it could start: the lifecycle hook that held it up
+/// longest, or the commands before it.
+fn queued_too_long(recent: &VecDeque<RecentHook>, received: Instant, cleanup_limit: Duration) -> String {
+    let held_up = |h: &&RecentHook| h.finished.saturating_duration_since(h.started.max(received));
+    let hook = recent.iter().filter(|h| h.finished > received).max_by_key(held_up);
+    match hook {
+        Some(h) if h.finished > received && !h.starting => format!(
+            "The command's deadline passed while this device was still cleaning up after session {} (stopping a recording, closing that session), so it didn't run. That cleanup can take up to {} minutes; run the command again.",
+            h.session_id,
+            cleanup_limit.as_secs().div_ceil(60)
+        ),
+        Some(h) if h.finished > received => format!(
+            "The command's deadline passed while session {} was still being prepared on this device, so it didn't run. Run it again.",
+            h.session_id
+        ),
+        _ => "The command's deadline passed while it waited for the command before it, so it didn't run. Run it again, or give it a longer timeout.".into(),
+    }
+}
+
+async fn execute(inner: &Inner, job: Job, recent: &VecDeque<RecentHook>) -> CommandOutcome {
+    let Job {
+        frame,
+        cancel,
+        received,
+    } = job;
     let id = frame.id;
     if cancel.is_cancelled() {
-        return failed(id, error("cancelled", "Extend cancelled this command before it started."));
+        return failed(
+            id,
+            error("cancelled", "Extend cancelled this command before it started."),
+        );
     }
     if let Err(e) = validate(&frame) {
         return failed(id, e);
@@ -257,13 +473,23 @@ async fn execute(inner: &Inner, job: Job) -> CommandOutcome {
     // Time spent queued behind earlier commands counts against the deadline.
     let remaining = total.saturating_sub(received.elapsed());
     if remaining.is_zero() {
-        return failed(id, error("command_timeout", "The command's deadline passed while it waited for the command before it."));
+        return failed(
+            id,
+            error(
+                "command_timeout",
+                queued_too_long(recent, received, inner.cleanup_limit),
+            ),
+        );
     }
-    let run_budget = remaining.saturating_sub(upload_reserve(total)).max(Duration::from_millis(500));
+    let run_budget = remaining
+        .saturating_sub(upload_reserve(total))
+        .max(Duration::from_millis(500));
 
     let workdir = inner.work_root.join(id.to_string());
     let outcome = async {
-        let saved = write_attachments(&workdir, &frame).await.map_err(|e| error("invalid_args", e))?;
+        let saved = write_attachments(&workdir, &frame)
+            .await
+            .map_err(|e| error("invalid_args", e))?;
         let args = substitute_attachments(&frame.args, &saved).map_err(|e| error("invalid_args", e))?;
         let attachments: Vec<PathBuf> = saved.into_iter().map(|(_, p)| p).collect();
         let session_id = frame.session_id.to_string();
@@ -289,7 +515,12 @@ async fn execute(inner: &Inner, job: Job) -> CommandOutcome {
 }
 
 /// Runs the driver, stopping it at the deadline or on cancel.
-pub async fn run_with_deadline(driver: &dyn Driver, inv: Invocation<'_>, budget: Duration, cancel: &CancelToken) -> Output {
+pub async fn run_with_deadline(
+    driver: &dyn Driver,
+    inv: Invocation<'_>,
+    budget: Duration,
+    cancel: &CancelToken,
+) -> Output {
     let mut fut = std::pin::pin!(driver.run(inv));
     enum Stop {
         Deadline,
@@ -309,7 +540,10 @@ pub async fn run_with_deadline(driver: &dyn Driver, inv: Invocation<'_>, budget:
     match stop {
         Stop::Deadline => Output::fail(
             "command_timeout",
-            format!("The command didn't finish within {} ms and was stopped.", budget.as_millis()),
+            format!(
+                "The command didn't finish within {} ms and was stopped.",
+                budget.as_millis()
+            ),
         ),
         Stop::Cancel => Output::fail("cancelled", "Extend cancelled this command."),
     }
@@ -347,23 +581,32 @@ pub fn substitute_attachments(args: &[String], saved: &[(String, PathBuf)]) -> R
 
 /// Writes each attachment into `{workdir}/attachments/`; returns (name as sent, local path).
 async fn write_attachments(workdir: &Path, frame: &CommandFrame) -> Result<Vec<(String, PathBuf)>, String> {
-    tokio::fs::create_dir_all(workdir).await.map_err(|e| format!("couldn't create a work directory: {e}"))?;
+    tokio::fs::create_dir_all(workdir)
+        .await
+        .map_err(|e| format!("couldn't create a work directory: {e}"))?;
     if frame.attachments.is_empty() {
         return Ok(vec![]);
     }
     let dir = workdir.join("attachments");
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("couldn't create a work directory: {e}"))?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("couldn't create a work directory: {e}"))?;
     let mut saved: Vec<(String, PathBuf)> = Vec::with_capacity(frame.attachments.len());
     for (i, a) in frame.attachments.iter().enumerate() {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(a.content_base64.trim())
             .map_err(|e| format!("attachment {:?} isn't valid base64: {e}", a.name))?;
         let mut name = safe_file_name(&a.name, &format!("attachment-{}", i + 1));
-        if saved.iter().any(|(_, p)| p.file_name().and_then(|n| n.to_str()) == Some(name.as_str())) {
+        if saved
+            .iter()
+            .any(|(_, p)| p.file_name().and_then(|n| n.to_str()) == Some(name.as_str()))
+        {
             name = format!("{}-{name}", i + 1);
         }
         let path = dir.join(name);
-        tokio::fs::write(&path, bytes).await.map_err(|e| format!("couldn't save attachment {:?}: {e}", a.name))?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(|e| format!("couldn't save attachment {:?}: {e}", a.name))?;
         saved.push((a.name.clone(), path));
     }
     Ok(saved)
@@ -371,7 +614,13 @@ async fn write_attachments(workdir: &Path, frame: &CommandFrame) -> Result<Vec<(
 
 /// Uploads the driver's files with the command's upload ids, in order, then builds the result.
 async fn finish(inner: &Inner, frame: &CommandFrame, output: Output) -> CommandOutcome {
-    let Output { mut ok, output, mut text, mut error, files } = output;
+    let Output {
+        mut ok,
+        output,
+        mut text,
+        mut error,
+        files,
+    } = output;
     let mut produced = Vec::new();
     let mut ids = frame.upload_ids.iter();
     let mut skipped = Vec::new();
@@ -380,7 +629,11 @@ async fn finish(inner: &Inner, frame: &CommandFrame, output: Output) -> CommandO
             skipped.push(file.name.clone());
             continue;
         };
-        match inner.uploader.upload(*upload_id, &file.path, &file.name, &file.content_type).await {
+        match inner
+            .uploader
+            .upload(*upload_id, &file.path, &file.name, &file.content_type)
+            .await
+        {
             Ok(size) => produced.push(ProducedFile {
                 upload_id: *upload_id,
                 name: file.name,
@@ -402,14 +655,25 @@ async fn finish(inner: &Inner, frame: &CommandFrame, output: Output) -> CommandO
         }
     }
     if !skipped.is_empty() {
-        tracing::warn!("command {} produced {} more files than it had upload ids", frame.id, skipped.len());
+        tracing::warn!(
+            "command {} produced {} more files than it had upload ids",
+            frame.id,
+            skipped.len()
+        );
         let note = format!("Not uploaded (no upload id left): {}", skipped.join(", "));
         text = Some(match text {
             Some(t) if !t.is_empty() => format!("{t}\n{note}"),
             _ => note,
         });
     }
-    CommandOutcome { id: frame.id, ok, output, text, error, files: produced }
+    CommandOutcome {
+        id: frame.id,
+        ok,
+        output,
+        text,
+        error,
+        files: produced,
+    }
 }
 
 #[cfg(test)]
@@ -424,6 +688,8 @@ mod tests {
         log: Mutex<Vec<String>>,
         running: AtomicUsize,
         max_running: AtomicUsize,
+        /// Cleanup never finishes (a stuck recording export, say).
+        hang_cleanup: std::sync::atomic::AtomicBool,
     }
 
     #[async_trait]
@@ -443,7 +709,10 @@ mod tests {
         async fn run(&self, inv: Invocation<'_>) -> Output {
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_running.fetch_max(now, Ordering::SeqCst);
-            self.log.lock().unwrap().push(format!("start {} {}", inv.session_id, inv.args.join(" ")));
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("start {} {}", inv.session_id, inv.args.join(" ")));
             let out = match inv.args.first().map(String::as_str) {
                 Some("sleep") => {
                     let ms: u64 = inv.args[1].parse().unwrap();
@@ -479,18 +748,30 @@ mod tests {
                     let names: Vec<String> = inv
                         .attachments
                         .iter()
-                        .map(|p| format!("{}={}", p.file_name().unwrap().to_str().unwrap(), std::fs::read_to_string(p).unwrap()))
+                        .map(|p| {
+                            format!(
+                                "{}={}",
+                                p.file_name().unwrap().to_str().unwrap(),
+                                std::fs::read_to_string(p).unwrap()
+                            )
+                        })
                         .collect();
                     Output::ok(serde_json::json!(names), names.join(","))
                 }
                 _ => Output::ok(serde_json::json!({"ran": inv.command}), "ok"),
             };
-            self.log.lock().unwrap().push(format!("end {} {}", inv.session_id, inv.args.join(" ")));
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("end {} {}", inv.session_id, inv.args.join(" ")));
             self.running.fetch_sub(1, Ordering::SeqCst);
             out
         }
         async fn session_ended(&self, session_id: &str) {
             self.log.lock().unwrap().push(format!("cleanup {session_id}"));
+            if self.hang_cleanup.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             tokio::task::yield_now().await;
             self.log.lock().unwrap().push(format!("cleaned {session_id}"));
         }
@@ -539,15 +820,46 @@ mod tests {
     }
 
     fn harness(fail_uploads: bool) -> Harness {
+        harness_with_limits(fail_uploads, SETUP_LIMIT, CLEANUP_LIMIT)
+    }
+
+    fn harness_with_limits(fail_uploads: bool, setup: Duration, cleanup: Duration) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let driver = Arc::new(FakeDriver::default());
-        let uploader = Arc::new(FakeUploader { fail: fail_uploads, ..Default::default() });
+        let uploader = Arc::new(FakeUploader {
+            fail: fail_uploads,
+            ..Default::default()
+        });
         let outbox = Outbox::default();
         let (tx, rx) = mpsc::unbounded_channel();
         outbox.set(tx);
         let work = dir.path().join("work");
-        let dispatcher = Dispatcher::new(Arc::new(Lookup(driver.clone())), uploader.clone(), outbox, work.clone());
-        Harness { dispatcher, driver, uploader, rx, _dir: dir, work }
+        let dispatcher = Dispatcher::with_lifecycle_limits(
+            Arc::new(Lookup(driver.clone())),
+            uploader.clone(),
+            outbox,
+            work.clone(),
+            setup,
+            cleanup,
+        );
+        Harness {
+            dispatcher,
+            driver,
+            uploader,
+            rx,
+            _dir: dir,
+            work,
+        }
+    }
+
+    async fn until_logged(driver: &FakeDriver, line: &str) {
+        for _ in 0..500 {
+            if driver.log.lock().unwrap().iter().any(|l| l == line) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{line:?} never logged: {:?}", driver.log.lock().unwrap());
     }
 
     fn cmd(session: &str, command: &str, args: &[&str], timeout_ms: u64, uploads: usize) -> CommandFrame {
@@ -564,7 +876,11 @@ mod tests {
     }
 
     async fn next_result(rx: &mut mpsc::UnboundedReceiver<DeviceFrame>) -> CommandOutcome {
-        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("result in time").unwrap() {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("result in time")
+            .unwrap()
+        {
             DeviceFrame::Result(r) => r,
             other => panic!("expected result, got {other:?}"),
         }
@@ -610,9 +926,19 @@ mod tests {
         h.dispatcher.session_started(None, "b40");
         h.dispatcher.submit(cmd("b40", "snapshot", &[], 30_000, 0));
         assert!(next_result(&mut h.rx).await.ok);
-        assert_eq!(*h.driver.log.lock().unwrap(), [
-            "start a3f ", "end a3f ", "cleanup a3f", "cleaned a3f", "setup b40", "ready b40", "start b40 ", "end b40 "
-        ]);
+        assert_eq!(
+            *h.driver.log.lock().unwrap(),
+            [
+                "start a3f ",
+                "end a3f ",
+                "cleanup a3f",
+                "cleaned a3f",
+                "setup b40",
+                "ready b40",
+                "start b40 ",
+                "end b40 "
+            ]
+        );
     }
 
     #[tokio::test]
@@ -635,7 +961,10 @@ mod tests {
         h.dispatcher.submit(cmd("b40", "snapshot", &[], 30_000, 0));
         assert_eq!(next_result(&mut h.rx).await.error.unwrap().code, "cancelled");
         assert!(next_result(&mut h.rx).await.ok);
-        assert_eq!(*h.driver.log.lock().unwrap(), ["cleanup a3f", "cleaned a3f", "start b40 ", "end b40 "]);
+        assert_eq!(
+            *h.driver.log.lock().unwrap(),
+            ["cleanup a3f", "cleaned a3f", "start b40 ", "end b40 "]
+        );
     }
 
     #[tokio::test]
@@ -681,7 +1010,8 @@ mod tests {
     #[tokio::test]
     async fn refused_flags_never_reach_the_driver() {
         let mut h = harness(false);
-        h.dispatcher.submit(cmd("a3f", "snapshot", &["-i", "--platform", "ios"], 30_000, 0));
+        h.dispatcher
+            .submit(cmd("a3f", "snapshot", &["-i", "--platform", "ios"], 30_000, 0));
         let r = next_result(&mut h.rx).await;
         let e = r.error.unwrap();
         assert_eq!(e.code, "invalid_args");
@@ -735,7 +1065,8 @@ mod tests {
     #[tokio::test]
     async fn more_files_than_upload_ids() {
         let mut h = harness(false);
-        h.dispatcher.submit(cmd("a3f", "screenshot", &["files", "3"], 30_000, 1));
+        h.dispatcher
+            .submit(cmd("a3f", "screenshot", &["files", "3"], 30_000, 1));
         let r = next_result(&mut h.rx).await;
         assert!(r.ok);
         assert_eq!(r.files.len(), 1);
@@ -745,7 +1076,8 @@ mod tests {
     #[tokio::test]
     async fn failed_upload_fails_the_command() {
         let mut h = harness(true);
-        h.dispatcher.submit(cmd("a3f", "screenshot", &["files", "1"], 30_000, 1));
+        h.dispatcher
+            .submit(cmd("a3f", "screenshot", &["files", "1"], 30_000, 1));
         let r = next_result(&mut h.rx).await;
         assert!(!r.ok);
         assert!(r.files.is_empty());
@@ -757,8 +1089,16 @@ mod tests {
         let mut h = harness(false);
         let mut c = cmd("a3f", "replay", &["attachments"], 30_000, 0);
         c.attachments = vec![
-            Attachment { name: "../../evil/flow.ad".into(), content_type: "text/plain".into(), content_base64: base64::engine::general_purpose::STANDARD.encode("open Notes") },
-            Attachment { name: "flow.ad".into(), content_type: "text/plain".into(), content_base64: base64::engine::general_purpose::STANDARD.encode("close") },
+            Attachment {
+                name: "../../evil/flow.ad".into(),
+                content_type: "text/plain".into(),
+                content_base64: base64::engine::general_purpose::STANDARD.encode("open Notes"),
+            },
+            Attachment {
+                name: "flow.ad".into(),
+                content_type: "text/plain".into(),
+                content_base64: base64::engine::general_purpose::STANDARD.encode("close"),
+            },
         ];
         h.dispatcher.submit(c);
         let r = next_result(&mut h.rx).await;
@@ -770,7 +1110,11 @@ mod tests {
     async fn bad_base64_is_invalid_args() {
         let mut h = harness(false);
         let mut c = cmd("a3f", "replay", &["x.ad"], 30_000, 0);
-        c.attachments = vec![Attachment { name: "x.ad".into(), content_type: "text/plain".into(), content_base64: "!!!".into() }];
+        c.attachments = vec![Attachment {
+            name: "x.ad".into(),
+            content_type: "text/plain".into(),
+            content_base64: "!!!".into(),
+        }];
         h.dispatcher.submit(c);
         assert_eq!(next_result(&mut h.rx).await.error.unwrap().code, "invalid_args");
     }
@@ -778,22 +1122,198 @@ mod tests {
     #[tokio::test]
     async fn attachment_arguments_become_local_paths() {
         let mut h = harness(false);
-        let mut c = cmd("a3f", "replay", &["attachments-args", "attachment:flow.ad", "--steps-file=attachment:steps.json", "plain"], 30_000, 0);
+        let mut c = cmd(
+            "a3f",
+            "replay",
+            &[
+                "attachments-args",
+                "attachment:flow.ad",
+                "--steps-file=attachment:steps.json",
+                "plain",
+            ],
+            30_000,
+            0,
+        );
         c.attachments = vec![
-            Attachment { name: "flow.ad".into(), content_type: "text/plain".into(), content_base64: base64::engine::general_purpose::STANDARD.encode("x") },
-            Attachment { name: "steps.json".into(), content_type: "application/json".into(), content_base64: base64::engine::general_purpose::STANDARD.encode("[]") },
+            Attachment {
+                name: "flow.ad".into(),
+                content_type: "text/plain".into(),
+                content_base64: base64::engine::general_purpose::STANDARD.encode("x"),
+            },
+            Attachment {
+                name: "steps.json".into(),
+                content_type: "application/json".into(),
+                content_base64: base64::engine::general_purpose::STANDARD.encode("[]"),
+            },
         ];
         h.dispatcher.submit(c);
         let r = next_result(&mut h.rx).await;
         let args: Vec<String> = serde_json::from_value(r.output).unwrap();
         assert!(args[1].ends_with("/attachments/flow.ad"), "{args:?}");
-        assert!(args[2].starts_with("--steps-file=") && args[2].ends_with("/attachments/steps.json"), "{args:?}");
+        assert!(
+            args[2].starts_with("--steps-file=") && args[2].ends_with("/attachments/steps.json"),
+            "{args:?}"
+        );
         assert_eq!(args[3], "plain");
         // Naming an attachment that wasn't sent is refused before anything runs.
-        h.dispatcher.submit(cmd("a3f", "replay", &["attachment:missing.ad"], 30_000, 0));
+        h.dispatcher
+            .submit(cmd("a3f", "replay", &["attachment:missing.ad"], 30_000, 0));
         let e = next_result(&mut h.rx).await.error.unwrap();
         assert_eq!(e.code, "invalid_args");
         assert!(e.message.contains("missing.ad"));
+    }
+
+    #[tokio::test]
+    async fn session_end_interrupts_a_running_command_before_cleanup() {
+        let mut h = harness(false);
+        h.dispatcher.submit(cmd("a3f", "click", &["polite"], 60_000, 0));
+        // The command is running (not merely queued) when the session ends: the Stop path.
+        until_logged(&h.driver, "start a3f polite").await;
+        let stopped = Instant::now();
+        let cleaned = h.dispatcher.session_closed(None, "a3f").expect("cleanup queued");
+        let r = next_result(&mut h.rx).await;
+        assert_eq!(r.error.unwrap().code, "cancelled");
+        assert!(stopped.elapsed() < WIND_DOWN, "{:?}", stopped.elapsed());
+        tokio::time::timeout(Duration::from_secs(5), cleaned)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            *h.driver.log.lock().unwrap(),
+            ["start a3f polite", "end a3f polite", "cleanup a3f", "cleaned a3f"]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_idle_device_drops_its_worker_and_the_next_work_starts_a_new_one() {
+        let mut h = harness(false);
+        h.dispatcher.submit(cmd("a3f", "snapshot", &[], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        let cleaned = h.dispatcher.session_closed(None, "a3f").expect("cleanup queued");
+        tokio::time::timeout(Duration::from_secs(5), cleaned)
+            .await
+            .unwrap()
+            .unwrap();
+        for _ in 0..500 {
+            if h.dispatcher.inner.queues.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            h.dispatcher.inner.queues.lock().unwrap().is_empty(),
+            "the idle worker is gone"
+        );
+        h.dispatcher.session_started(None, "b40");
+        h.dispatcher.submit(cmd("b40", "snapshot", &[], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        assert_eq!(
+            *h.driver.log.lock().unwrap(),
+            [
+                "start a3f ",
+                "end a3f ",
+                "cleanup a3f",
+                "cleaned a3f",
+                "setup b40",
+                "ready b40",
+                "start b40 ",
+                "end b40 "
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn commands_for_an_ended_session_are_refused_and_cleanup_runs_once() {
+        let mut h = harness(false);
+        h.dispatcher.session_started(None, "a3f");
+        h.dispatcher.submit(cmd("a3f", "snapshot", &[], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        let cleaned = h.dispatcher.session_closed(None, "a3f").expect("cleanup queued");
+        // The service sent this before it saw the session end (it was waiting on its session lock).
+        let late = cmd("a3f", "open", &["Notes"], 30_000, 0);
+        let late_id = late.id;
+        h.dispatcher.submit(late);
+        let r = next_result(&mut h.rx).await;
+        assert_eq!(r.id, late_id);
+        let e = r.error.unwrap();
+        assert_eq!(e.code, "session_ended");
+        assert!(
+            e.message.contains("a3f") && e.message.contains("didn't run"),
+            "{}",
+            e.message
+        );
+        // A repeated end (revoke after Stop) doesn't clean up twice.
+        assert!(h.dispatcher.session_closed(None, "a3f").is_none());
+        tokio::time::timeout(Duration::from_secs(5), cleaned)
+            .await
+            .unwrap()
+            .unwrap();
+        let log = h.driver.log.lock().unwrap().clone();
+        assert!(!log.iter().any(|l| l.contains("Notes")), "{log:?}");
+        assert_eq!(log.iter().filter(|l| *l == "cleanup a3f").count(), 1, "{log:?}");
+        // The same session id on another device is a different session.
+        let mut other = cmd("a3f", "snapshot", &[], 30_000, 0);
+        other.target = Some("00000001".parse().unwrap());
+        h.dispatcher.submit(other);
+        assert!(next_result(&mut h.rx).await.ok);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_cleanup_is_cut_off_and_the_waiting_command_says_why() {
+        let mut h = harness_with_limits(false, Duration::from_millis(500), Duration::from_millis(1_500));
+        h.driver.hang_cleanup.store(true, Ordering::SeqCst);
+        h.dispatcher.submit(cmd("a3f", "snapshot", &[], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        let cleaned = h.dispatcher.session_closed(None, "a3f").expect("cleanup queued");
+        h.dispatcher.session_started(None, "b40");
+        // 1 s deadline, stuck behind 1.5 s of cleanup.
+        h.dispatcher.submit(cmd("b40", "snapshot", &[], 1_000, 0));
+        h.dispatcher.submit(cmd("b40", "snapshot", &["second"], 30_000, 0));
+        let r = next_result(&mut h.rx).await;
+        let e = r.error.unwrap();
+        assert_eq!(e.code, "command_timeout");
+        assert!(e.message.contains("cleaning up after session a3f"), "{}", e.message);
+        // The device moved on: cleanup was cut off and the next command runs.
+        tokio::time::timeout(Duration::from_secs(5), cleaned)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(next_result(&mut h.rx).await.ok);
+        let log = h.driver.log.lock().unwrap().clone();
+        assert!(!log.contains(&"cleaned a3f".to_string()), "{log:?}");
+        assert!(log.contains(&"start b40 second".to_string()), "{log:?}");
+    }
+
+    #[tokio::test]
+    async fn close_all_cancels_every_session_and_cleans_up_after_its_commands() {
+        let mut h = harness(false);
+        h.dispatcher.submit(cmd("a3f", "click", &["polite"], 60_000, 0));
+        let mut carried = cmd("b40", "click", &["polite"], 60_000, 0);
+        carried.target = Some("00000001".parse().unwrap());
+        h.dispatcher.submit(carried);
+        until_logged(&h.driver, "start a3f polite").await;
+        until_logged(&h.driver, "start b40 polite").await;
+        // The local session is known to the app; the carried one only through its command.
+        let cleaned = h.dispatcher.close_all(&[(None, "a3f".into())]);
+        assert_eq!(cleaned.len(), 2);
+        for _ in 0..2 {
+            assert_eq!(next_result(&mut h.rx).await.error.unwrap().code, "cancelled");
+        }
+        for done in cleaned {
+            tokio::time::timeout(Duration::from_secs(5), done)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let log = h.driver.log.lock().unwrap().clone();
+        let at = |l: &str| {
+            log.iter()
+                .position(|x| x == l)
+                .unwrap_or_else(|| panic!("{l:?} missing from {log:?}"))
+        };
+        assert!(at("end a3f polite") < at("cleanup a3f"));
+        assert!(at("end b40 polite") < at("cleanup b40"));
+        assert_eq!(h.dispatcher.in_flight(), 0);
     }
 
     #[test]

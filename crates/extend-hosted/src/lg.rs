@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use crate::HostedDevice;
 use crate::common::{
-    self, Button, CLIENT_NAME, OpenTarget, find_app, guarded, invalid, load_json, not_ready,
-    offline, save_json, step, step_error, step_help, unsupported, unsupported_command, url_host,
+    self, Button, CLIENT_NAME, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json, step,
+    step_error, step_help, unsupported, unsupported_command, url_host,
 };
 use crate::script;
 use crate::ws::{self, Ws};
@@ -96,8 +96,7 @@ pub(crate) fn register_message(client_key: Option<&str>) -> String {
 }
 
 pub(crate) fn request_message(id: &str, uri: &str, payload: Value) -> String {
-    json!({"id": id, "type": "request", "uri": format!("ssap://{uri}"), "payload": payload})
-        .to_string()
+    json!({"id": id, "type": "request", "uri": format!("ssap://{uri}"), "payload": payload}).to_string()
 }
 
 pub(crate) fn button_name(button: Button) -> Option<&'static str> {
@@ -158,24 +157,13 @@ pub(crate) fn parse_reply(text: &str) -> Reply {
     let payload = v.get("payload").cloned().unwrap_or(Value::Null);
     match v.get("type").and_then(Value::as_str) {
         Some("registered") => Reply::Registered {
-            client_key: payload
-                .get("client-key")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            client_key: payload.get("client-key").and_then(Value::as_str).map(str::to_owned),
         },
-        Some("response")
-            if payload.get("pairingType").and_then(Value::as_str) == Some("PROMPT") =>
-        {
-            Reply::Prompt
-        }
+        Some("response") if payload.get("pairingType").and_then(Value::as_str) == Some("PROMPT") => Reply::Prompt,
         Some("response") => Reply::Response { id, payload },
         Some("error") => Reply::Error {
             id,
-            error: v
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("error")
-                .to_owned(),
+            error: v.get("error").and_then(Value::as_str).unwrap_or("error").to_owned(),
         },
         _ => Reply::Other,
     }
@@ -196,11 +184,7 @@ pub(crate) fn parse_launch_points(payload: &Value) -> Vec<App> {
                 .filter_map(|a| {
                     Some(App {
                         id: a.get("id")?.as_str()?.to_owned(),
-                        name: a
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
+                        name: a.get("title").and_then(Value::as_str).unwrap_or("").to_owned(),
                     })
                 })
                 .collect()
@@ -333,8 +317,7 @@ impl Inner {
             return Some(a);
         }
         let found = crate::discover::discover(DeviceOs::LgTv, Duration::from_secs(3)).await;
-        let host =
-            common::split_host_port(&crate::discover::pick(&found, &self.device.name)?.address).0;
+        let host = common::split_host_port(&crate::discover::pick(&found, &self.device.name)?.address).0;
         self.update_saved(|s| s.address = Some(host.clone()));
         Some(host)
     }
@@ -350,12 +333,7 @@ impl Inner {
         let mut main = None;
         for (port, scheme) in [(self.ports.plain, "ws"), (self.ports.tls, "wss")] {
             let Some(port) = port else { continue };
-            match ws::connect(
-                &format!("{scheme}://{}:{port}", url_host(&host)),
-                CONNECT_TIMEOUT,
-            )
-            .await
-            {
+            match ws::connect(&format!("{scheme}://{}:{port}", url_host(&host)), CONNECT_TIMEOUT).await {
                 Ok(w) => {
                     main = Some(w);
                     break;
@@ -383,9 +361,7 @@ impl Inner {
                     Reply::Prompt => {
                         let mut p = self.pairing.lock().unwrap();
                         if !matches!(*p, Pairing::Waiting { .. }) {
-                            *p = Pairing::Waiting {
-                                since: Instant::now(),
-                            };
+                            *p = Pairing::Waiting { since: Instant::now() };
                         }
                     }
                     Reply::Registered { client_key } => {
@@ -395,10 +371,7 @@ impl Inner {
                             self.update_saved(|s| s.client_key = Some(k));
                         }
                         *self.pairing.lock().unwrap() = Pairing::Idle;
-                        return Ok(Session {
-                            main,
-                            pointer: None,
-                        });
+                        return Ok(Session { main, pointer: None });
                     }
                     Reply::Error { id, error } if id == "register_0" => {
                         return Err(LgError::Denied(error));
@@ -415,9 +388,7 @@ impl Inner {
             if matches!(*p, Pairing::Waiting { .. }) {
                 return;
             }
-            *p = Pairing::Waiting {
-                since: Instant::now(),
-            };
+            *p = Pairing::Waiting { since: Instant::now() };
         }
         let me = Arc::clone(self);
         tokio::spawn(async move {
@@ -451,19 +422,11 @@ impl Inner {
         Ok(slot.as_mut().expect("session just opened"))
     }
 
-    async fn exchange(
-        &self,
-        session: &mut Session,
-        uri: &str,
-        payload: &Value,
-    ) -> Result<Value, LgError> {
+    async fn exchange(&self, session: &mut Session, uri: &str, payload: &Value) -> Result<Value, LgError> {
         let id = format!("req_{}", self.next_id.fetch_add(1, Ordering::SeqCst));
-        ws::send_text(
-            &mut session.main,
-            request_message(&id, uri, payload.clone()),
-        )
-        .await
-        .map_err(|e| LgError::Offline(e.to_string()))?;
+        ws::send_text(&mut session.main, request_message(&id, uri, payload.clone()))
+            .await
+            .map_err(|e| LgError::Offline(e.to_string()))?;
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -500,9 +463,7 @@ impl Inner {
                 other => return other,
             }
         }
-        Err(LgError::Offline(
-            "the TV keeps dropping the connection".into(),
-        ))
+        Err(LgError::Offline("the TV keeps dropping the connection".into()))
     }
 
     async fn button(&self, name: &str) -> Result<(), LgError> {
@@ -527,19 +488,14 @@ impl Inner {
                         .map_err(|e| LgError::Offline(e.to_string()))?,
                 );
             }
-            let pointer = session
-                .pointer
-                .as_mut()
-                .expect("pointer socket just opened");
+            let pointer = session.pointer.as_mut().expect("pointer socket just opened");
             match ws::send_text(pointer, pointer_button(name)).await {
                 Ok(()) => return Ok(()),
                 Err(_) if attempt == 0 => *slot = None,
                 Err(e) => return Err(LgError::Offline(e.to_string())),
             }
         }
-        Err(LgError::Offline(
-            "the TV keeps dropping the connection".into(),
-        ))
+        Err(LgError::Offline("the TV keeps dropping the connection".into()))
     }
 
     async fn apps(&self) -> Result<Vec<App>, LgError> {
@@ -552,9 +508,7 @@ impl Inner {
 
     async fn press(&self, button: Button, hold: Option<Duration>) -> Output {
         if hold.is_some() {
-            return unsupported(
-                "LG TVs can't hold a remote button over the network; use `tv-remote press`",
-            );
+            return unsupported("LG TVs can't hold a remote button over the network; use `tv-remote press`");
         }
         let result = match button {
             Button::Power => self
@@ -587,19 +541,11 @@ impl Inner {
         match target {
             OpenTarget::Url(url) => {
                 if !common::is_web_url(&url) {
-                    return invalid(
-                        "LG TVs open web links (http or https); to open an app, name it",
-                    );
+                    return invalid("LG TVs open web links (http or https); to open an app, name it");
                 }
-                let launched = match self
-                    .request("system.launcher/launch", browser_launch(&url))
-                    .await
-                {
+                let launched = match self.request("system.launcher/launch", browser_launch(&url)).await {
                     Ok(p) => Ok(p),
-                    Err(LgError::Failed(_)) => {
-                        self.request("system.launcher/open", json!({"target": url}))
-                            .await
-                    }
+                    Err(LgError::Failed(_)) => self.request("system.launcher/open", json!({"target": url})).await,
                     Err(e) => Err(e),
                 };
                 match launched {
@@ -622,14 +568,8 @@ impl Inner {
                         names.join(", ")
                     ));
                 };
-                match self
-                    .request("system.launcher/launch", json!({"id": app.id}))
-                    .await
-                {
-                    Ok(_) => Output::ok(
-                        json!({"app": app.id, "name": app.name}),
-                        format!("Opened {}", app.name),
-                    ),
+                match self.request("system.launcher/launch", json!({"id": app.id})).await {
+                    Ok(_) => Output::ok(json!({"app": app.id, "name": app.name}), format!("Opened {}", app.name)),
                     Err(e) => e.into_output(),
                 }
             }
@@ -640,10 +580,7 @@ impl Inner {
                     .unwrap_or(name.clone());
                 let payload = json!({"id": id, "contentId": url, "params": {"contentTarget": url}});
                 match self.request("system.launcher/launch", payload).await {
-                    Ok(_) => Output::ok(
-                        json!({"app": id, "url": url}),
-                        format!("Opened {url} in {name}"),
-                    ),
+                    Ok(_) => Output::ok(json!({"app": id, "url": url}), format!("Opened {url} in {name}")),
                     Err(e) => e.into_output(),
                 }
             }
@@ -652,10 +589,7 @@ impl Inner {
 
     async fn foreground(&self) -> Result<Option<String>, LgError> {
         let p = self
-            .request(
-                "com.webos.applicationManager/getForegroundAppInfo",
-                json!({}),
-            )
+            .request("com.webos.applicationManager/getForegroundAppInfo", json!({}))
             .await?;
         Ok(p.get("appId")
             .and_then(Value::as_str)
@@ -677,10 +611,7 @@ impl Inner {
                 Err(e) => return e.into_output(),
             },
         };
-        match self
-            .request("system.launcher/close", json!({"id": id}))
-            .await
-        {
+        match self.request("system.launcher/close", json!({"id": id})).await {
             Ok(_) => Output::ok(json!({"app": id, "closed": true}), format!("Closed {id}")),
             Err(e) => e.into_output(),
         }
@@ -693,10 +624,7 @@ impl Inner {
         }
         let sys = self.request("system/getSystemInfo", json!({})).await?;
         let sw = self
-            .request(
-                "com.webos.service.update/getCurrentSWInformation",
-                json!({}),
-            )
+            .request("com.webos.service.update/getCurrentSWInformation", json!({}))
             .await
             .unwrap_or(Value::Null);
         let s = |v: &Value, k: &str| {
@@ -705,11 +633,7 @@ impl Inner {
                 .map(str::to_owned)
                 .filter(|x| !x.is_empty())
         };
-        let os_version = match (
-            s(&sw, "product_name"),
-            s(&sw, "major_ver"),
-            s(&sw, "minor_ver"),
-        ) {
+        let os_version = match (s(&sw, "product_name"), s(&sw, "major_ver"), s(&sw, "minor_ver")) {
             (Some(p), Some(maj), Some(min)) => Some(format!("{p} ({maj}.{min})")),
             (Some(p), _, _) => Some(p),
             _ => Some("webOS".into()),
@@ -768,9 +692,7 @@ impl Driver for LgDriver {
                             "network",
                             reach_title,
                             StepStatus::NeedsCarbon,
-                            Some(
-                                "Turn the TV on and connect it to the same network as this computer.",
-                            ),
+                            Some("Turn the TV on and connect it to the same network as this computer."),
                             m,
                         ),
                         step("approve", approve_title, StepStatus::Done),
@@ -799,9 +721,7 @@ impl Driver for LgDriver {
                                 "approve",
                                 approve_title,
                                 StepStatus::Failed,
-                                Some(
-                                    "Accept \"Silicon Extend\" when the TV asks; Extend asks again shortly.",
-                                ),
+                                Some("Accept \"Silicon Extend\" when the TV asks; Extend asks again shortly."),
                                 m,
                             )
                         }
@@ -820,11 +740,7 @@ impl Driver for LgDriver {
                             )
                         }
                     };
-                    (
-                        true,
-                        step("network", reach_title, StepStatus::Done),
-                        approve,
-                    )
+                    (true, step("network", reach_title, StepStatus::Done), approve)
                 }
             }
         };
@@ -988,9 +904,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_reply(
-                r#"{"type":"error","id":"register_0","error":"403 User denied access","payload":{}}"#
-            ),
+            parse_reply(r#"{"type":"error","id":"register_0","error":"403 User denied access","payload":{}}"#),
             Reply::Error {
                 id: "register_0".into(),
                 error: "403 User denied access".into()
@@ -1028,11 +942,7 @@ mod tests {
             pointer: Arc::default(),
             registers: Arc::default(),
         };
-        let (reqs, ptr, regs) = (
-            tv.requests.clone(),
-            tv.pointer.clone(),
-            tv.registers.clone(),
-        );
+        let (reqs, ptr, regs) = (tv.requests.clone(), tv.pointer.clone(), tv.registers.clone());
         tokio::spawn(async move {
             loop {
                 let Ok((s, _)) = l.accept().await else { return };
@@ -1060,7 +970,12 @@ mod tests {
                         if v["type"] == "register" {
                             regs.lock().unwrap().push(v.clone());
                             if v["payload"]["client-key"] == KEY {
-                                let _ = ws.send(Message::text(json!({"type":"registered","id":"register_0","payload":{"client-key":KEY}}).to_string())).await;
+                                let _ = ws
+                                    .send(Message::text(
+                                        json!({"type":"registered","id":"register_0","payload":{"client-key":KEY}})
+                                            .to_string(),
+                                    ))
+                                    .await;
                                 continue;
                             }
                             let _ = ws
@@ -1077,36 +992,25 @@ mod tests {
                         }
                         reqs.lock().unwrap().push(v.clone());
                         let id = v["id"].clone();
-                        let uri = v["uri"]
-                            .as_str()
-                            .unwrap_or("")
-                            .trim_start_matches("ssap://")
-                            .to_owned();
+                        let uri = v["uri"].as_str().unwrap_or("").trim_start_matches("ssap://").to_owned();
                         let ok = |p: Value| json!({"type":"response","id":id,"payload":p});
                         let reply = match uri.as_str() {
-                            "system/getSystemInfo" => {
-                                ok(json!({"modelName":"OLED55C1PUB","returnValue":true}))
-                            }
+                            "system/getSystemInfo" => ok(json!({"modelName":"OLED55C1PUB","returnValue":true})),
                             "com.webos.service.update/getCurrentSWInformation" => ok(
                                 json!({"product_name":"webOSTV 6.0","major_ver":"03","minor_ver":"21.20","returnValue":true}),
                             ),
                             "com.webos.service.networkinput/getPointerInputSocket" => ok(json!({
                                 "socketPath": format!("ws://127.0.0.1:{port}/resources/9f1c/netinput.pointer.sock"), "returnValue": true
                             })),
-                            "com.webos.applicationManager/listLaunchPoints" => {
-                                ok(json!({"launchPoints":[
+                            "com.webos.applicationManager/listLaunchPoints" => ok(json!({"launchPoints":[
                                 {"id":"youtube.leanback.v4","title":"YouTube"},{"id":"netflix","title":"Netflix"},
-                                {"id":"com.webos.app.browser","title":"Web Browser"}],"returnValue":true}))
-                            }
+                                {"id":"com.webos.app.browser","title":"Web Browser"}],"returnValue":true})),
                             "system.launcher/launch" | "system.launcher/close" => {
-                                let known =
-                                    ["youtube.leanback.v4", "netflix", "com.webos.app.browser"];
+                                let known = ["youtube.leanback.v4", "netflix", "com.webos.app.browser"];
                                 if known.contains(&v["payload"]["id"].as_str().unwrap_or("")) {
                                     ok(json!({"id": v["payload"]["id"], "returnValue": true}))
                                 } else {
-                                    ok(
-                                        json!({"returnValue": false, "errorCode": -101, "errorText": "app not found"}),
-                                    )
+                                    ok(json!({"returnValue": false, "errorCode": -101, "errorText": "app not found"}))
                                 }
                             }
                             "com.webos.applicationManager/getForegroundAppInfo" => {
@@ -1163,16 +1067,9 @@ mod tests {
         assert!(p.online);
         assert!(p.capabilities.is_empty());
         assert_eq!(p.setup.steps[1].status, StepStatus::NeedsCarbon);
-        wait_until(|| {
-            std::fs::read_to_string(dir.path().join(STATE_FILE)).is_ok_and(|s| s.contains(KEY))
-        })
-        .await;
+        wait_until(|| std::fs::read_to_string(dir.path().join(STATE_FILE)).is_ok_and(|s| s.contains(KEY))).await;
         let p = d.probe().await;
-        assert_eq!(
-            p.setup.state,
-            extend_protocol::model::SetupState::Complete,
-            "{p:?}"
-        );
+        assert_eq!(p.setup.state, extend_protocol::model::SetupState::Complete, "{p:?}");
         assert_eq!(p.model.as_deref(), Some("OLED55C1PUB"));
         assert_eq!(p.os_version.as_deref(), Some("webOSTV 6.0 (03.21.20)"));
         assert_eq!(p.capabilities, DeviceOs::LgTv.full_capabilities().to_vec());
@@ -1198,9 +1095,7 @@ mod tests {
             let out = d.run(inv(cmd, &args(&a), w, &[])).await;
             assert!(out.ok, "{cmd} {a:?}: {out:?}");
         }
-        let out = d
-            .run(inv("tv-remote", &args(&["longpress", "up"]), w, &[]))
-            .await;
+        let out = d.run(inv("tv-remote", &args(&["longpress", "up"]), w, &[])).await;
         assert_eq!(out.error.unwrap().code, "unsupported_on_device");
         wait_until(|| tv.pointer.lock().unwrap().len() == 4).await;
         assert_eq!(
@@ -1217,9 +1112,7 @@ mod tests {
         assert_eq!(out.output["apps"][1]["id"], "netflix");
         let out = d.run(inv("open", &args(&["youtube"]), w, &[])).await;
         assert!(out.ok, "{out:?}");
-        let out = d
-            .run(inv("open", &args(&["https://example.com"]), w, &[]))
-            .await;
+        let out = d.run(inv("open", &args(&["https://example.com"]), w, &[])).await;
         assert!(out.ok, "{out:?}");
         let out = d.run(inv("open", &args(&["Hulu"]), w, &[])).await;
         assert_eq!(out.error.unwrap().code, "invalid_args");
@@ -1227,9 +1120,7 @@ mod tests {
         assert_eq!(out.output["app"], "netflix");
         let out = d.run(inv("close", &[], w, &[])).await;
         assert!(out.ok, "{out:?}");
-        let out = d
-            .run(inv("tv-remote", &args(&["press", "power"]), w, &[]))
-            .await;
+        let out = d.run(inv("tv-remote", &args(&["press", "power"]), w, &[])).await;
         assert!(out.ok, "{out:?}");
 
         let reqs = tv.requests.lock().unwrap().clone();
@@ -1245,10 +1136,7 @@ mod tests {
             launches[1]["payload"],
             json!({"id":"com.webos.app.browser","target":"https://example.com"})
         );
-        assert_eq!(
-            find("system.launcher/close")[0]["payload"],
-            json!({"id":"netflix"})
-        );
+        assert_eq!(find("system.launcher/close")[0]["payload"], json!({"id":"netflix"}));
         assert_eq!(find("system/turnOff").len(), 1);
     }
 
@@ -1261,12 +1149,6 @@ mod tests {
         wait_until(|| matches!(*d.inner.pairing.lock().unwrap(), Pairing::Denied(_))).await;
         let p = d.probe().await;
         assert_eq!(p.setup.steps[1].status, StepStatus::Failed);
-        assert!(
-            p.setup.steps[1]
-                .error
-                .as_deref()
-                .unwrap()
-                .contains("denied")
-        );
+        assert!(p.setup.steps[1].error.as_deref().unwrap().contains("denied"));
     }
 }

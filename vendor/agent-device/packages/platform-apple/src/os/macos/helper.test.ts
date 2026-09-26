@@ -4,6 +4,7 @@ import { macOsHelperSurface } from '@agent-device/contracts/session';
 import { createLocalAppleToolProvider, withAppleToolProvider } from '../../core/tool-provider.ts';
 import {
   macOsClickScheduleMs,
+  macOsTextEntryBudgetMs,
   runMacOsPressAction,
   runMacOsReadTextAction,
   runMacOsScreenshotAction,
@@ -35,6 +36,104 @@ test('text stays out of argv and cancellation reaches the native helper', async 
   await withAppleToolProvider(provider, () =>
     runMacOsTextAction('private 👋', { replace: true, x: 12, y: 34, signal: controller.signal }),
   );
+});
+
+async function captureTextRequest(
+  run: () => Promise<unknown>,
+): Promise<{ stdin: Record<string, unknown>; timeoutMs?: number }> {
+  let captured: { stdin: Record<string, unknown>; timeoutMs?: number } | undefined;
+  const provider = createLocalAppleToolProvider({
+    macosHelper: {
+      run: async (_args, options) => {
+        captured = { stdin: JSON.parse(String(options?.stdin)), timeoutMs: options?.timeoutMs };
+        return helperReturn({ backend: 'macos-helper' });
+      },
+    },
+  });
+  await withAppleToolProvider(provider, run);
+  assert.ok(captured, 'the helper was not run');
+  return captured;
+}
+
+test('a frontmost-app text action follows the frontmost app, not the bundle recorded at open', async () => {
+  // The session opened while Slack was frontmost; the Silicon has since moved to another app.
+  for (const options of [
+    { replace: false },
+    { replace: true, x: 10, y: 20 },
+    { replace: false, focusOnly: true, x: 10, y: 20 },
+  ]) {
+    const { stdin } = await captureTextRequest(
+      async () =>
+        await runMacOsTextAction('https://example.com\n', {
+          ...options,
+          bundleId: 'com.tinyspeck.slackmacgap',
+          surface: 'frontmost-app',
+        }),
+    );
+    assert.equal(stdin.surface, 'frontmost-app');
+    assert.equal(Object.hasOwn(stdin, 'bundleId'), false);
+  }
+});
+
+test('an app-surface text action stays bound to its explicit bundle', async () => {
+  const { stdin } = await captureTextRequest(
+    async () =>
+      await runMacOsTextAction('hello', {
+        replace: false,
+        bundleId: 'com.example.Editor',
+        surface: 'app',
+      }),
+  );
+  assert.equal(stdin.bundleId, 'com.example.Editor');
+  assert.equal(stdin.surface, 'app');
+});
+
+test('the text-entry timeout covers a focus check per character, not only the pauses', async () => {
+  const text = 'x'.repeat(3000);
+  const { timeoutMs } = await captureTextRequest(
+    async () => await runMacOsTextAction(text, { replace: true, x: 1, y: 2, delayMs: 50 }),
+  );
+  // The old budget, 3000 * 50 + 5000 = 155 s, ended the helper before its last characters.
+  assert.ok(timeoutMs !== undefined && timeoutMs >= 3000 * (50 + 15) + 5000, String(timeoutMs));
+  assert.equal(macOsTextEntryBudgetMs(text, 50), 3000 * 65 + 5000);
+  // Without a delay the helper verifies once per 20-unit event, and Return/Tab each add one check.
+  assert.equal(macOsTextEntryBudgetMs('a\nb\tc', 0), 5000 + 5 * 2 + 2 * 15);
+});
+
+test('text one helper run cannot enter completely is refused before any key is posted', async () => {
+  let runs = 0;
+  const provider = createLocalAppleToolProvider({
+    macosHelper: {
+      run: async () => {
+        runs += 1;
+        return helperReturn({ backend: 'macos-helper' });
+      },
+    },
+  });
+  const cases: Array<[string, { delayMs?: number }, string]> = [
+    ['x'.repeat(20_000), { delayMs: 50 }, 'text_entry_budget_exceeded'],
+    ['x', { delayMs: 1001 }, 'text_entry_delay_out_of_range'],
+    ['\u0001'.repeat(200_000), {}, 'text_entry_too_long'],
+  ];
+  for (const [text, options, reason] of cases) {
+    await withAppleToolProvider(provider, async () => {
+      await assert.rejects(
+        runMacOsTextAction(text, { replace: true, x: 1, y: 2, ...options }),
+        (error: unknown) => {
+          const appError = error as {
+            code?: string;
+            message?: string;
+            details?: { reason?: string };
+          };
+          assert.equal(appError.code, 'INVALID_ARGS');
+          assert.equal(appError.details?.reason, reason);
+          assert.match(appError.message ?? '', /Nothing was typed|Use --delay-ms/);
+          return true;
+        },
+      );
+    });
+  }
+  assert.equal(runs, 0);
 });
 
 test('macOS helper snapshot passes cancellation to the helper process', async () => {

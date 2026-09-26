@@ -50,7 +50,7 @@ export DBUS_SESSION_BUS_ADDRESS
 sleep 1
 openbox >/tmp/openbox.log 2>&1 &
 sleep 1
-export GTK_A11Y=atspi NO_AT_EXTEND=0
+export GTK_A11Y=atspi NO_AT_BRIDGE=0  # GTK's AT-SPI bridge switch, not a product name
 gnome-calculator >/tmp/calculator.log 2>&1 &
 for _ in $(seq 100); do wmctrl -l 2>/dev/null | grep -qi calculator && break; sleep 0.2; done
 wmctrl -l

@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use extend_driver::{Driver, Probe};
+use extend_protocol::DeviceId;
 use extend_protocol::frames::{DeviceFrame, Hello, ServiceFrame, close};
 use extend_protocol::model::{EnrollmentCreate, TestingEnvironment};
-use extend_protocol::DeviceId;
 use futures::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -70,6 +70,8 @@ pub struct Agent {
     actions: mpsc::UnboundedReceiver<UiAction>,
     shutdown: CancellationToken,
     probe_interval: Duration,
+    /// Set when this computer should be checked again now (a session's setup or cleanup ran).
+    reprobe: Arc<tokio::sync::Notify>,
 }
 
 /// How a paired stretch ended.
@@ -109,7 +111,12 @@ struct ServiceUploader {
 #[async_trait]
 impl Uploader for ServiceUploader {
     async fn upload(&self, upload_id: Uuid, path: &Path, name: &str, content_type: &str) -> Result<u64, String> {
-        let cred = self.credential.read().unwrap().clone().ok_or("this computer isn't paired")?;
+        let cred = self
+            .credential
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or("this computer isn't paired")?;
         self.service
             .upload_artifact(&cred, upload_id, path, name, content_type)
             .await
@@ -120,7 +127,13 @@ impl Uploader for ServiceUploader {
 
 impl Agent {
     pub fn new(deps: AgentDeps) -> (Self, AgentHandle) {
-        let AgentDeps { config, local, hosted_factory, credentials, probe_interval } = deps;
+        let AgentDeps {
+            config,
+            local,
+            hosted_factory,
+            credentials,
+            probe_interval,
+        } = deps;
         let service = ServiceClient::new(config.service_url.clone());
         let status = StatusHandle::new(AgentStatus {
             pid: std::process::id(),
@@ -137,14 +150,24 @@ impl Agent {
         let credential = Arc::new(RwLock::new(None));
         let outbox = Outbox::default();
         let dispatcher = Dispatcher::new(
-            Arc::new(Lookup { local: local.clone(), hosted: hosted.clone() }),
-            Arc::new(ServiceUploader { service: service.clone(), credential: credential.clone() }),
+            Arc::new(Lookup {
+                local: local.clone(),
+                hosted: hosted.clone(),
+            }),
+            Arc::new(ServiceUploader {
+                service: service.clone(),
+                credential: credential.clone(),
+            }),
             outbox.clone(),
             config.work_dir(),
         );
         let (tx, rx) = mpsc::unbounded_channel();
         let shutdown = CancellationToken::new();
-        let handle = AgentHandle { status: status.clone(), actions: tx, shutdown: shutdown.clone() };
+        let handle = AgentHandle {
+            status: status.clone(),
+            actions: tx,
+            shutdown: shutdown.clone(),
+        };
         let agent = Self {
             config,
             service,
@@ -158,6 +181,7 @@ impl Agent {
             actions: rx,
             shutdown,
             probe_interval,
+            reprobe: Arc::new(tokio::sync::Notify::new()),
         };
         (agent, handle)
     }
@@ -179,7 +203,8 @@ impl Agent {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("couldn't read the device credential: {e:#}");
-                    self.status.update(|s| s.last_error = Some(format!("Couldn't read the device credential: {e:#}")));
+                    self.status
+                        .update(|s| s.last_error = Some(format!("Couldn't read the device credential: {e:#}")));
                     None
                 }
             };
@@ -223,10 +248,17 @@ impl Agent {
                 }
             }
         }
-        // Leave the computer tidy: close agent-device sessions that were open.
-        if let Some(u) = self.status.get().in_use {
-            let _ = tokio::time::timeout(Duration::from_secs(10), self.local.session_ended(&u.session_id)).await;
-        }
+        // Leave the computer tidy: stop what is still running, then close agent-device sessions
+        // that were open, each after its device's running command has wound down.
+        let known: Vec<(Option<DeviceId>, String)> = self
+            .status
+            .get()
+            .in_use
+            .map(|u| (None, u.session_id))
+            .into_iter()
+            .collect();
+        let cleanups = self.dispatcher.close_all(&known);
+        let _ = tokio::time::timeout(Duration::from_secs(10), futures::future::join_all(cleanups)).await;
     }
 
     /// Waits for `Reconnect`, `d`, or shutdown. True on shutdown.
@@ -285,7 +317,8 @@ impl Agent {
                 };
                 if let Err(e) = self.credentials.save(&stored) {
                     tracing::error!("couldn't store the device credential: {e:#}");
-                    self.status.update(|s| s.last_error = Some(format!("Couldn't store the device credential: {e:#}")));
+                    self.status
+                        .update(|s| s.last_error = Some(format!("Couldn't store the device credential: {e:#}")));
                     // Keep going in memory; the pair works until the app restarts.
                 }
                 tracing::info!("paired as device {}", p.device_id);
@@ -294,7 +327,10 @@ impl Agent {
                     s.phase = Phase::Reconnecting;
                     s.pairing = None;
                     s.environment = env;
-                    s.device = Some(DeviceInfo { device_id: p.device_id.to_string(), ..Default::default() });
+                    s.device = Some(DeviceInfo {
+                        device_id: p.device_id.to_string(),
+                        ..Default::default()
+                    });
                 });
                 if self.credentials.load().ok().flatten().is_none() {
                     // The store failed; run this pair from memory.
@@ -315,9 +351,22 @@ impl Agent {
             tracing::error!("couldn't remove the device credential: {e:#}");
         }
         *self.credential.write().unwrap() = None;
-        if let Some(u) = self.status.get().in_use {
-            self.local.session_ended(&u.session_id).await;
+        // Every Silicon's access ends now: running and queued commands are cancelled, and each
+        // session is cleaned up on its device's queue after its command has wound down (the
+        // service's own `session_ended` frames may never be read on this path).
+        let mut known: Vec<(Option<DeviceId>, String)> = self
+            .status
+            .get()
+            .in_use
+            .map(|u| (None, u.session_id))
+            .into_iter()
+            .collect();
+        for a in self.hosted.infos() {
+            if let (Some(u), Ok(id)) = (a.in_use, a.device_id.parse::<DeviceId>()) {
+                known.push((Some(id), u.session_id));
+            }
         }
+        let _ = self.dispatcher.close_all(&known);
         for id in self.hosted.ids() {
             self.hosted.remove(&id);
         }
@@ -338,7 +387,11 @@ impl Agent {
         let auth = crate::service::device_auth(&stored.device_credential);
         let mut backoff = Backoff::default();
         loop {
-            self.status.update(|s| if s.phase != Phase::Online { s.phase = Phase::Reconnecting });
+            self.status.update(|s| {
+                if s.phase != Phase::Online {
+                    s.phase = Phase::Reconnecting
+                }
+            });
             let connect = ws::connect(&url, &auth);
             tokio::pin!(connect);
             let socket = loop {
@@ -361,7 +414,9 @@ impl Agent {
                     }
                     end
                 }
-                Err(ConnectError::Http(401 | 403 | 404)) => ConnEnd::Paired(PairedEnd::Unpaired("credential refused".into())),
+                Err(ConnectError::Http(401 | 403 | 404)) => {
+                    ConnEnd::Paired(PairedEnd::Unpaired("credential refused".into()))
+                }
                 Err(ConnectError::Http(426)) => ConnEnd::Paired(PairedEnd::UpgradeRequired),
                 Err(e) => ConnEnd::Dropped(e.to_string()),
             };
@@ -397,7 +452,8 @@ impl Agent {
         match a {
             UiAction::Stop { target: None } => {
                 if let Err(e) = self.service.stop(credential).await {
-                    self.status.update(|s| s.last_error = Some(format!("Couldn't stop: {}", e.message)));
+                    self.status
+                        .update(|s| s.last_error = Some(format!("Couldn't stop: {}", e.message)));
                 }
                 None
             }
@@ -419,7 +475,8 @@ impl Agent {
             Ok(()) => Some(PairedEnd::Unpaired("revoked on this computer".into())),
             Err(e) if e.is_auth() => Some(PairedEnd::Unpaired("already unpaired".into())),
             Err(e) => {
-                self.status.update(|s| s.last_error = Some(format!("Couldn't revoke the pair: {}", e.message)));
+                self.status
+                    .update(|s| s.last_error = Some(format!("Couldn't revoke the pair: {}", e.message)));
                 None
             }
         }
@@ -435,7 +492,10 @@ impl Agent {
         let probe = self.probe_local().await;
         let mut last_hello = hello_from(&probe);
         self.apply_probe_to_status(&probe);
-        if send_frame(&mut sink, &DeviceFrame::Hello(last_hello.clone())).await.is_err() {
+        if send_frame(&mut sink, &DeviceFrame::Hello(last_hello.clone()))
+            .await
+            .is_err()
+        {
             return ConnEnd::Dropped("couldn't send hello".into());
         }
         self.status.update(|s| {
@@ -452,6 +512,7 @@ impl Agent {
         let (probe_tx, mut probe_rx) = mpsc::unbounded_channel::<Probe>();
         let mut last_probe = Instant::now();
         let mut probing = false;
+        let reprobe = self.reprobe.clone();
         let mut ticker = tokio::time::interval(Duration::from_secs(5).min(self.probe_interval));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let idle = Duration::from_secs(extend_protocol::OFFLINE_AFTER_S + 15);
@@ -507,14 +568,18 @@ impl Agent {
                     if due && !probing {
                         probing = true;
                         last_probe = Instant::now();
-                        let local = self.local.clone();
-                        let ptx = probe_tx.clone();
-                        tokio::spawn(async move {
-                            if let Ok(p) = tokio::time::timeout(Duration::from_secs(90), local.probe()).await {
-                                let _ = ptx.send(p);
-                            }
-                        });
+                        self.spawn_local_probe(&probe_tx);
                         self.spawn_hosted_probe(false);
+                    }
+                }
+                _ = reprobe.notified() => {
+                    if probing {
+                        // The running check may have started before the change; check again after it.
+                        last_probe = Instant::now().checked_sub(self.probe_interval).unwrap_or_else(Instant::now);
+                    } else {
+                        probing = true;
+                        last_probe = Instant::now();
+                        self.spawn_local_probe(&probe_tx);
                     }
                 }
                 probe = probe_rx.recv() => {
@@ -561,17 +626,34 @@ impl Agent {
     }
 
     /// Handles one frame from the service. Returns how the pair ended, when it did.
-    async fn handle_frame(&mut self, frame: ServiceFrame, tx: &mpsc::UnboundedSender<DeviceFrame>, stored: &StoredCredential) -> Option<PairedEnd> {
+    async fn handle_frame(
+        &mut self,
+        frame: ServiceFrame,
+        tx: &mpsc::UnboundedSender<DeviceFrame>,
+        stored: &StoredCredential,
+    ) -> Option<PairedEnd> {
         match frame {
             ServiceFrame::Command(c) => {
                 tracing::info!("command {} `{}` in session {}", c.id, c.command, c.session_id);
                 self.dispatcher.submit(c);
             }
             ServiceFrame::Cancel { id } => self.dispatcher.cancel(id),
-            ServiceFrame::SessionStarted { target, session_id, silicon_id, since } => {
-                let info = InUseInfo { silicon_id: silicon_id.clone(), session_id: session_id.to_string(), since: fmt_time(since) };
+            ServiceFrame::SessionStarted {
+                target,
+                session_id,
+                silicon_id,
+                since,
+            } => {
+                let info = InUseInfo {
+                    silicon_id: silicon_id.clone(),
+                    session_id: session_id.to_string(),
+                    since: fmt_time(since),
+                };
                 tracing::info!("{silicon_id} started session {session_id}");
-                self.dispatcher.session_started(target.as_ref(), session_id.as_str());
+                let setup = self.dispatcher.session_started(target.as_ref(), session_id.as_str());
+                if target.is_none() {
+                    self.reprobe_after(setup);
+                }
                 match target {
                     None => {
                         self.status.update(|s| {
@@ -585,9 +667,16 @@ impl Agent {
                     }
                 }
             }
-            ServiceFrame::SessionEnded { target, session_id, reason } => {
+            ServiceFrame::SessionEnded {
+                target,
+                session_id,
+                reason,
+            } => {
                 tracing::info!("session {session_id} ended: {}", reason.as_str());
-                self.dispatcher.session_closed(target.as_ref(), session_id.as_str());
+                let cleanup = self.dispatcher.session_closed(target.as_ref(), session_id.as_str());
+                if target.is_none() {
+                    self.reprobe_after(cleanup);
+                }
                 let sid = session_id.to_string();
                 match target {
                     None => {
@@ -604,8 +693,17 @@ impl Agent {
                     }
                 }
             }
-            ServiceFrame::Takeover { target, session_id, reason, expires_at } => {
-                let info = TakeoverInfo { session_id: session_id.to_string(), reason, expires_at: fmt_time(expires_at) };
+            ServiceFrame::Takeover {
+                target,
+                session_id,
+                reason,
+                expires_at,
+            } => {
+                let info = TakeoverInfo {
+                    session_id: session_id.to_string(),
+                    reason,
+                    expires_at: fmt_time(expires_at),
+                };
                 match target {
                     None => self.status.update(|s| s.takeover = Some(info)),
                     Some(id) => {
@@ -626,7 +724,13 @@ impl Agent {
                     return Some(end);
                 }
             }
-            ServiceFrame::Attach { device_id, os, name, address, removed } => {
+            ServiceFrame::Attach {
+                device_id,
+                os,
+                name,
+                address,
+                removed,
+            } => {
                 if removed {
                     tracing::info!("no longer carrying {name} ({device_id})");
                     if let Some(d) = self.hosted.remove(&device_id) {
@@ -635,7 +739,12 @@ impl Agent {
                     self.sync_attached_status();
                 } else {
                     tracing::info!("carrying {name} ({}, {device_id})", os.as_str());
-                    self.hosted.attach(AttachRecord { device_id: device_id.clone(), os, name, address });
+                    self.hosted.attach(AttachRecord {
+                        device_id: device_id.clone(),
+                        os,
+                        name,
+                        address,
+                    });
                     self.sync_attached_status();
                     self.spawn_hosted_probe(false);
                 }
@@ -667,6 +776,29 @@ impl Agent {
             }
         }
         None
+    }
+
+    /// Checks this computer again once a session's setup or cleanup has run. Releasing this
+    /// computer from an ended session (or failing to) changes what it can do, and the service
+    /// should know before the Silicon's next command, not at the next periodic check.
+    fn reprobe_after(&self, done: Option<tokio::sync::oneshot::Receiver<()>>) {
+        let Some(done) = done else { return };
+        let reprobe = self.reprobe.clone();
+        tokio::spawn(async move {
+            if done.await.is_ok() {
+                reprobe.notify_one();
+            }
+        });
+    }
+
+    fn spawn_local_probe(&self, probe_tx: &mpsc::UnboundedSender<Probe>) {
+        let local = self.local.clone();
+        let ptx = probe_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(p) = tokio::time::timeout(Duration::from_secs(90), local.probe()).await {
+                let _ = ptx.send(p);
+            }
+        });
     }
 
     fn sync_attached_status(&self) {
@@ -762,11 +894,16 @@ pub fn hello_from(p: &Probe) -> Hello {
 /// What to send when a re-probe differs from the last `hello`: a new `hello` when capabilities
 /// changed, `setup_progress` when only the setup did, nothing otherwise.
 pub fn hello_update(last: &Hello, now: &Hello) -> Option<DeviceFrame> {
-    let setup_only = Hello { setup: last.setup.clone(), ..now.clone() } == *last;
+    let setup_only = Hello {
+        setup: last.setup.clone(),
+        ..now.clone()
+    } == *last;
     if now == last {
         None
     } else if setup_only {
-        Some(DeviceFrame::SetupProgress { setup: now.setup.clone() })
+        Some(DeviceFrame::SetupProgress {
+            setup: now.setup.clone(),
+        })
     } else {
         Some(DeviceFrame::Hello(now.clone()))
     }
@@ -782,11 +919,16 @@ where
 }
 
 fn environment_info(e: &TestingEnvironment) -> EnvironmentInfo {
-    EnvironmentInfo { environment_id: e.environment_id.to_string(), name: e.name.clone(), state: e.state.clone() }
+    EnvironmentInfo {
+        environment_id: e.environment_id.to_string(),
+        name: e.name.clone(),
+        state: e.state.clone(),
+    }
 }
 
 fn fmt_time(t: time::OffsetDateTime) -> String {
-    t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
+    t.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 fn truncate(s: &str, n: usize) -> String {

@@ -59,10 +59,7 @@ pub(crate) struct Tlv(pub Vec<(u8, Vec<u8>)>);
 
 impl Tlv {
     pub fn get(&self, t: u8) -> Option<&[u8]> {
-        self.0
-            .iter()
-            .find(|(k, _)| *k == t)
-            .map(|(_, v)| v.as_slice())
+        self.0.iter().find(|(k, _)| *k == t).map(|(_, v)| v.as_slice())
     }
 
     pub fn require(&self, t: u8, what: &str) -> Result<&[u8], PairingError> {
@@ -78,17 +75,10 @@ impl Tlv {
             .map(|b| b.iter().rev().fold(0u64, |a, x| (a << 8) | *x as u64));
         Some(match code {
             0x02 => PairingError::WrongCode,
-            0x03 => PairingError::Busy(format!(
-                "too many attempts; try again in {} s",
-                backoff.unwrap_or(30)
-            )),
+            0x03 => PairingError::Busy(format!("too many attempts; try again in {} s", backoff.unwrap_or(30))),
             0x04 => PairingError::Busy("the Apple TV has too many paired controllers".into()),
-            0x05 => {
-                PairingError::Busy("too many wrong codes; restart pairing on the Apple TV".into())
-            }
-            0x06 => {
-                PairingError::Busy("the Apple TV is already pairing with something else".into())
-            }
+            0x05 => PairingError::Busy("too many wrong codes; restart pairing on the Apple TV".into()),
+            0x06 => PairingError::Busy("the Apple TV is already pairing with something else".into()),
             0x07 => PairingError::Busy("the Apple TV is busy; try again".into()),
             other => PairingError::Protocol(format!("pairing error {other:#04x}")),
         })
@@ -135,9 +125,7 @@ impl std::fmt::Display for PairingError {
         match self {
             Self::WrongCode => f.write_str("the code didn't match"),
             Self::Busy(m) | Self::Protocol(m) => f.write_str(m),
-            Self::NotPaired => {
-                f.write_str("the Apple TV no longer recognises this Mac; pair it again")
-            }
+            Self::NotPaired => f.write_str("the Apple TV no longer recognises this Mac; pair it again"),
         }
     }
 }
@@ -162,30 +150,13 @@ fn label_nonce(label: &[u8; 8]) -> [u8; 12] {
 
 pub(crate) fn seal(key: &[u8; 32], nonce: [u8; 12], plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
     ChaCha20Poly1305::new(Key::from_slice(key))
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad,
-            },
-        )
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: plaintext, aad })
         .expect("ChaCha20-Poly1305 encryption can't fail for in-memory data")
 }
 
-pub(crate) fn open(
-    key: &[u8; 32],
-    nonce: [u8; 12],
-    ciphertext: &[u8],
-    aad: &[u8],
-) -> Result<Vec<u8>, PairingError> {
+pub(crate) fn open(key: &[u8; 32], nonce: [u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, PairingError> {
     ChaCha20Poly1305::new(Key::from_slice(key))
-        .decrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: ciphertext,
-                aad,
-            },
-        )
+        .decrypt(Nonce::from_slice(&nonce), Payload { msg: ciphertext, aad })
         .map_err(|_| PairingError::Protocol("couldn't decrypt the Apple TV's message".into()))
 }
 
@@ -322,11 +293,7 @@ impl PairSetup {
 
     pub fn m1(&self) -> Vec<u8> {
         if self.transient {
-            tlv_encode(&[
-                (tag::METHOD, &[0]),
-                (tag::SEQ_NO, &[1]),
-                (tag::FLAGS, &[0x10]),
-            ])
+            tlv_encode(&[(tag::METHOD, &[0]), (tag::SEQ_NO, &[1]), (tag::FLAGS, &[0x10])])
         } else {
             tlv_encode(&[(tag::METHOD, &[0]), (tag::SEQ_NO, &[1])])
         }
@@ -350,12 +317,7 @@ impl PairSetup {
         }
         let client = srp::Client::random(srp::group_3072());
         let session = client
-            .process::<Sha512>(
-                b"Pair-Setup",
-                pin.trim().as_bytes(),
-                &self.salt,
-                &self.server_public,
-            )
+            .process::<Sha512>(b"Pair-Setup", pin.trim().as_bytes(), &self.salt, &self.server_public)
             .map_err(PairingError::Protocol)?;
         let msg = tlv_encode(&[
             (tag::SEQ_NO, &[3]),
@@ -394,23 +356,15 @@ impl PairSetup {
         let k = self
             .session_key()
             .ok_or_else(|| PairingError::Protocol("no SRP session".into()))?;
-        let controller_x = hkdf(
-            "Pair-Setup-Controller-Sign-Salt",
-            "Pair-Setup-Controller-Sign-Info",
-            k,
-        );
+        let controller_x = hkdf("Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info", k);
         let enc_key = hkdf("Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info", k);
         let public = self.signing.verifying_key().to_bytes();
         let signature = self
             .signing
             .sign(&[&controller_x[..], &self.pairing_id, &public].concat())
             .to_bytes();
-        let info = name.map(|n| {
-            super::opack::encode(&super::opack::Value::dict([(
-                "name",
-                super::opack::Value::str(n),
-            )]))
-        });
+        let info =
+            name.map(|n| super::opack::encode(&super::opack::Value::dict([("name", super::opack::Value::str(n))])));
         let mut items: Vec<(u8, &[u8])> = vec![
             (tag::IDENTIFIER, &self.pairing_id),
             (tag::PUBLIC_KEY, &public),
@@ -420,18 +374,12 @@ impl PairSetup {
             items.push((tag::INFO, i));
         }
         let sealed = seal(&enc_key, label_nonce(b"PS-Msg05"), &tlv_encode(&items), &[]);
-        Ok(tlv_encode(&[
-            (tag::SEQ_NO, &[5]),
-            (tag::ENCRYPTED_DATA, &sealed),
-        ]))
+        Ok(tlv_encode(&[(tag::SEQ_NO, &[5]), (tag::ENCRYPTED_DATA, &sealed)]))
     }
 
     /// M6: the Apple TV's long-term key and identifier, whose signature we check. Returns the
     /// credentials and the Apple TV's OPACK info (name, model) when it sent one.
-    pub fn handle_m6(
-        &self,
-        body: &[u8],
-    ) -> Result<(Credentials, Option<super::opack::Value>), PairingError> {
+    pub fn handle_m6(&self, body: &[u8]) -> Result<(Credentials, Option<super::opack::Value>), PairingError> {
         let t = tlv_decode(body)?;
         if let Some(e) = t.error() {
             return Err(e);
@@ -449,19 +397,9 @@ impl PairSetup {
         let atv_id = inner.require(tag::IDENTIFIER, "identifier")?.to_vec();
         let ltpk = inner.require(tag::PUBLIC_KEY, "public key")?.to_vec();
         let signature = inner.require(tag::SIGNATURE, "signature")?;
-        let accessory_x = hkdf(
-            "Pair-Setup-Accessory-Sign-Salt",
-            "Pair-Setup-Accessory-Sign-Info",
-            k,
-        );
-        verify(
-            &ltpk,
-            &[&accessory_x[..], &atv_id, &ltpk].concat(),
-            signature,
-        )?;
-        let info = inner
-            .get(tag::INFO)
-            .and_then(|i| super::opack::decode(i).ok());
+        let accessory_x = hkdf("Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info", k);
+        verify(&ltpk, &[&accessory_x[..], &atv_id, &ltpk].concat(), signature)?;
+        let info = inner.get(tag::INFO).and_then(|i| super::opack::decode(i).ok());
         Ok((
             Credentials {
                 ltpk,
@@ -510,10 +448,7 @@ impl Default for PairVerify {
 
 impl PairVerify {
     pub fn m1(&self) -> Vec<u8> {
-        tlv_encode(&[
-            (tag::SEQ_NO, &[1]),
-            (tag::PUBLIC_KEY, self.public.as_bytes()),
-        ])
+        tlv_encode(&[(tag::SEQ_NO, &[1]), (tag::PUBLIC_KEY, self.public.as_bytes())])
     }
 
     /// Checks the Apple TV's M2 against the stored credentials and returns M3.
@@ -530,15 +465,8 @@ impl PairVerify {
             .require(tag::PUBLIC_KEY, "public key")?
             .try_into()
             .map_err(|_| PairingError::Protocol("bad key length".into()))?;
-        let shared = self
-            .secret
-            .diffie_hellman(&PublicKey::from(server_public))
-            .to_bytes();
-        let key = hkdf(
-            "Pair-Verify-Encrypt-Salt",
-            "Pair-Verify-Encrypt-Info",
-            &shared,
-        );
+        let shared = self.secret.diffie_hellman(&PublicKey::from(server_public)).to_bytes();
+        let key = hkdf("Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info", &shared);
         let inner = tlv_decode(&open(
             &key,
             label_nonce(b"PV-Msg02"),
@@ -558,14 +486,7 @@ impl PairVerify {
         .map_err(|_| PairingError::NotPaired)?;
         let ours = creds
             .signing_key()?
-            .sign(
-                &[
-                    self.public.as_bytes(),
-                    &creds.client_id[..],
-                    &server_public[..],
-                ]
-                .concat(),
-            )
+            .sign(&[self.public.as_bytes(), &creds.client_id[..], &server_public[..]].concat())
             .to_bytes();
         let sealed = seal(
             &key,
@@ -574,10 +495,7 @@ impl PairVerify {
             &[],
         );
         self.shared = Some(shared);
-        Ok(tlv_encode(&[
-            (tag::SEQ_NO, &[3]),
-            (tag::ENCRYPTED_DATA, &sealed),
-        ]))
+        Ok(tlv_encode(&[(tag::SEQ_NO, &[3]), (tag::ENCRYPTED_DATA, &sealed)]))
     }
 
     /// Checks M4 (an error there means the Apple TV rejected our signature).
@@ -623,12 +541,10 @@ pub(crate) mod accessory {
                 id: b"AA:BB:CC:DD:EE:FF".to_vec(),
                 signing: SigningKey::from_bytes(&[7u8; 32]),
                 pin: pin.into(),
-                info: Some(super::super::opack::encode(
-                    &super::super::opack::Value::dict([
-                        ("name", super::super::opack::Value::str("Living Room")),
-                        ("model", super::super::opack::Value::str("AppleTV14,1")),
-                    ]),
-                )),
+                info: Some(super::super::opack::encode(&super::super::opack::Value::dict([
+                    ("name", super::super::opack::Value::str("Living Room")),
+                    ("model", super::super::opack::Value::str("AppleTV14,1")),
+                ]))),
                 srp: None,
                 key: None,
                 paired: vec![],
@@ -653,11 +569,7 @@ pub(crate) mod accessory {
                     );
                     let b = srp::bytes(&server.b_pub);
                     self.srp = Some(server);
-                    tlv_encode(&[
-                        (tag::SEQ_NO, &[2]),
-                        (tag::SALT, &salt),
-                        (tag::PUBLIC_KEY, &b),
-                    ])
+                    tlv_encode(&[(tag::SEQ_NO, &[2]), (tag::SALT, &salt), (tag::PUBLIC_KEY, &b)])
                 }
                 Some(3) => {
                     let server = self.srp.as_ref().unwrap();
@@ -672,13 +584,7 @@ pub(crate) mod accessory {
                     let k = self.key.clone().unwrap();
                     let enc = hkdf("Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info", &k);
                     let inner = tlv_decode(
-                        &open(
-                            &enc,
-                            label_nonce(b"PS-Msg05"),
-                            t.get(tag::ENCRYPTED_DATA).unwrap(),
-                            &[],
-                        )
-                        .unwrap(),
+                        &open(&enc, label_nonce(b"PS-Msg05"), t.get(tag::ENCRYPTED_DATA).unwrap(), &[]).unwrap(),
                     )
                     .unwrap();
                     let (cid, cpk, sig) = (
@@ -686,23 +592,12 @@ pub(crate) mod accessory {
                         inner.get(tag::PUBLIC_KEY).unwrap(),
                         inner.get(tag::SIGNATURE).unwrap(),
                     );
-                    let x = hkdf(
-                        "Pair-Setup-Controller-Sign-Salt",
-                        "Pair-Setup-Controller-Sign-Info",
-                        &k,
-                    );
+                    let x = hkdf("Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info", &k);
                     verify(cpk, &[&x[..], cid, cpk].concat(), sig).expect("controller signature");
                     self.paired.push((cid.to_vec(), cpk.to_vec()));
-                    let ax = hkdf(
-                        "Pair-Setup-Accessory-Sign-Salt",
-                        "Pair-Setup-Accessory-Sign-Info",
-                        &k,
-                    );
+                    let ax = hkdf("Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info", &k);
                     let pk = self.signing.verifying_key().to_bytes();
-                    let s = self
-                        .signing
-                        .sign(&[&ax[..], &self.id, &pk].concat())
-                        .to_bytes();
+                    let s = self.signing.sign(&[&ax[..], &self.id, &pk].concat()).to_bytes();
                     let mut items: Vec<(u8, &[u8])> = vec![
                         (tag::IDENTIFIER, &self.id),
                         (tag::PUBLIC_KEY, &pk),
@@ -727,11 +622,7 @@ pub(crate) mod accessory {
                     let secret = StaticSecret::from(rand::random::<[u8; 32]>());
                     let public = PublicKey::from(&secret);
                     let shared = secret.diffie_hellman(&PublicKey::from(client)).to_bytes();
-                    let key = hkdf(
-                        "Pair-Verify-Encrypt-Salt",
-                        "Pair-Verify-Encrypt-Info",
-                        &shared,
-                    );
+                    let key = hkdf("Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info", &shared);
                     let s = self
                         .signing
                         .sign(&[public.as_bytes(), &self.id[..], &client[..]].concat())
@@ -753,19 +644,9 @@ pub(crate) mod accessory {
                 }
                 Some(3) => {
                     let shared = self.verify_shared.unwrap();
-                    let key = hkdf(
-                        "Pair-Verify-Encrypt-Salt",
-                        "Pair-Verify-Encrypt-Info",
-                        &shared,
-                    );
+                    let key = hkdf("Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info", &shared);
                     let inner = tlv_decode(
-                        &open(
-                            &key,
-                            label_nonce(b"PV-Msg03"),
-                            t.get(tag::ENCRYPTED_DATA).unwrap(),
-                            &[],
-                        )
-                        .unwrap(),
+                        &open(&key, label_nonce(b"PV-Msg03"), t.get(tag::ENCRYPTED_DATA).unwrap(), &[]).unwrap(),
                     )
                     .unwrap();
                     let cid = inner.get(tag::IDENTIFIER).unwrap();
@@ -773,12 +654,7 @@ pub(crate) mod accessory {
                         return tlv_encode(&[(tag::SEQ_NO, &[4]), (tag::ERROR, &[2])]);
                     };
                     let public = PublicKey::from(self.verify_secret.as_ref().unwrap());
-                    let msg = [
-                        &self.verify_client_public.unwrap()[..],
-                        cid,
-                        public.as_bytes(),
-                    ]
-                    .concat();
+                    let msg = [&self.verify_client_public.unwrap()[..], cid, public.as_bytes()].concat();
                     if verify(cpk, &msg, inner.get(tag::SIGNATURE).unwrap()).is_err() {
                         return tlv_encode(&[(tag::SEQ_NO, &[4]), (tag::ERROR, &[2])]);
                     }
@@ -807,8 +683,7 @@ mod tests {
     use super::*;
 
     fn vectors() -> serde_json::Value {
-        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/hap-vectors.json");
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hap-vectors.json");
         serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
     }
 
@@ -888,18 +763,13 @@ mod tests {
             .handle_m6(&atv.setup(&setup.m5(Some("Silicon Extend")).unwrap()))
             .unwrap();
         assert_eq!(creds.atv_id, b"AA:BB:CC:DD:EE:FF");
-        assert_eq!(
-            info.unwrap().get("model").unwrap().as_str(),
-            Some("AppleTV14,1")
-        );
+        assert_eq!(info.unwrap().get("model").unwrap().as_str(), Some("AppleTV14,1"));
         assert_eq!(creds.to_string().split(':').count(), 4);
 
         let mut pv = PairVerify::default();
         let m3 = pv.handle_m2(&creds, &atv.verify(&pv.m1())).unwrap();
         pv.handle_m4(&atv.verify(&m3)).unwrap();
-        let (out, inp) = pv
-            .keys("", "ClientEncrypt-main", "ServerEncrypt-main")
-            .unwrap();
+        let (out, inp) = pv.keys("", "ClientEncrypt-main", "ServerEncrypt-main").unwrap();
         let (a_out, a_in) = atv.keys("", "ServerEncrypt-main", "ClientEncrypt-main");
         assert_eq!((out, inp), (a_in, a_out));
 
@@ -914,10 +784,7 @@ mod tests {
         let mut setup = PairSetup::new("id-1");
         setup.handle_m2(&atv.setup(&setup.m1())).unwrap();
         let m3 = setup.m3("1111").unwrap();
-        assert_eq!(
-            setup.handle_m4(&atv.setup(&m3)),
-            Err(PairingError::WrongCode)
-        );
+        assert_eq!(setup.handle_m4(&atv.setup(&m3)), Err(PairingError::WrongCode));
 
         // Credentials the accessory never saw fail verification.
         let creds = Credentials {

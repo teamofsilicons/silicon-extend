@@ -24,7 +24,11 @@ pub struct ServiceError {
 
 impl ServiceError {
     fn network(e: impl std::fmt::Display) -> Self {
-        Self { status: None, code: None, message: format!("couldn't reach Extend: {e}") }
+        Self {
+            status: None,
+            code: None,
+            message: format!("couldn't reach Extend: {e}"),
+        }
     }
     /// The credential or enrollment is no longer valid.
     pub fn is_auth(&self) -> bool {
@@ -214,7 +218,10 @@ pub fn device_auth(credential: &str) -> String {
 
 /// `X-File-Name` must be a header-safe value: printable ASCII only.
 pub fn header_safe_name(name: &str) -> String {
-    let s: String = name.chars().map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '_' }).collect();
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '_' })
+        .collect();
     s.chars().take(255).collect()
 }
 
@@ -261,13 +268,20 @@ async fn read_empty(resp: reqwest::Response) -> ServiceResult<()> {
 fn error_from(status: u16, body: &[u8]) -> ServiceError {
     let parsed: Option<serde_json::Value> = serde_json::from_slice(body).ok();
     let data = parsed.as_ref().and_then(|v| v.get("data"));
-    let code = data.and_then(|d| d.get("code")).and_then(|c| c.as_str()).map(str::to_owned);
+    let code = data
+        .and_then(|d| d.get("code"))
+        .and_then(|c| c.as_str())
+        .map(str::to_owned);
     let message = data
         .and_then(|d| d.get("message"))
         .and_then(|m| m.as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Extend answered HTTP {status}"));
-    ServiceError { status: Some(status), code, message }
+    ServiceError {
+        status: Some(status),
+        code,
+        message,
+    }
 }
 
 #[cfg(test)]
@@ -277,14 +291,23 @@ mod tests {
     #[test]
     fn ws_urls_follow_the_scheme() {
         let c = ServiceClient::new(Url::parse("https://backend.extend.teamofsilicons.com/").unwrap());
-        assert_eq!(c.ws_url("/api/v1/device/connect").as_str(), "wss://backend.extend.teamofsilicons.com/api/v1/device/connect");
+        assert_eq!(
+            c.ws_url("/api/v1/device/connect").as_str(),
+            "wss://backend.extend.teamofsilicons.com/api/v1/device/connect"
+        );
         let c = ServiceClient::new(Url::parse("http://127.0.0.1:8480/").unwrap());
-        assert_eq!(c.ws_url("api/v1/device/connect").as_str(), "ws://127.0.0.1:8480/api/v1/device/connect");
+        assert_eq!(
+            c.ws_url("api/v1/device/connect").as_str(),
+            "ws://127.0.0.1:8480/api/v1/device/connect"
+        );
     }
 
     #[test]
     fn errors_read_the_envelope() {
-        let e = error_from(401, br#"{"type":"error","data":{"code":"unauthorized","message":"no"}}"#);
+        let e = error_from(
+            401,
+            br#"{"type":"error","data":{"code":"unauthorized","message":"no"}}"#,
+        );
         assert!(e.is_auth());
         assert_eq!(e.code.as_deref(), Some("unauthorized"));
         assert_eq!(e.message, "no");

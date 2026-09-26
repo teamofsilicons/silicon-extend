@@ -17,6 +17,7 @@ import {
   type ScreenRecordingStartInput,
 } from '@agent-device/contracts/screen-recording-runtime';
 import {
+  assertScreenRecordingOptionsSupported,
   createDurableResourceEnvelope,
   createScreenRecordingLiveHandle,
 } from '@agent-device/capture-kit';
@@ -34,6 +35,15 @@ type Descriptor = {
   recording: Coordinates;
 };
 const BACKEND = 'X11 ffmpeg';
+
+/**
+ * Silicon Extend fork: the worker's status file, derived from the native path exactly as the
+ * Linux recording host derives it. The descriptor keeps the native path, so a stop or cleanup
+ * after a daemon restart removes the status file too instead of leaving it beside the video.
+ */
+function linuxRecordingStatusPath(nativePath: string): string {
+  return `${nativePath}.status.json`;
+}
 
 export function createLinuxRecordingOperations(params: {
   host: Host;
@@ -175,12 +185,20 @@ export function createLinuxRecordingOperations(params: {
           reason: 'manual-recovery-required',
           message: 'Invalid Linux recording descriptor; no processes were signaled.',
         };
-      return cleanup(host, input.envelope.sessionId, descriptor.processes);
+      return cleanup(host, input.envelope.sessionId, descriptor);
     },
   };
 }
 
 function validate(input: ScreenRecordingStartInput): void {
+  // Linux exports the recorder's own H.264 encode unchanged; --quality only picks the re-encode
+  // quality of the macOS touch overlay, so on Linux it would silently do nothing.
+  assertScreenRecordingOptionsSupported(
+    input,
+    { scopes: ['app', 'device', 'system'], fps: true, exportQuality: false, hideTouches: true },
+    (unsupported) =>
+      `Linux recordings do not support ${unsupported.join(', ')}: Linux exports the recorder's own H.264 video unchanged. Run record start again without it.`,
+  );
   if (input.scope === 'app' && !input.activeSessionApp?.bundleId) {
     throw new AppError(
       'INVALID_ARGS',
@@ -209,9 +227,10 @@ function validMarker(value: unknown): value is ManagedProcessIdentity {
 async function cleanup(
   host: Host,
   sessionId: string,
-  processes: readonly ManagedProcessIdentity[],
+  descriptor: Pick<Descriptor, 'nativePath' | 'processes'>,
   process?: ScreenRecordingBackgroundProcess,
 ): Promise<CleanupOutcome> {
+  const { nativePath, processes } = descriptor;
   try {
     if (process) {
       await process.terminate();
@@ -224,6 +243,8 @@ async function cleanup(
       };
     }
     host.ownedProcesses.clear({ kind: 'session', sessionId });
+    // Only a recorder that has stopped can no longer rewrite it. Best effort: it is metadata.
+    await host.outputs.remove(linuxRecordingStatusPath(nativePath));
     return { status: 'cleaned' };
   } catch (error) {
     return {
@@ -240,18 +261,18 @@ function liveHandle(
   descriptor: Descriptor,
   process?: ScreenRecordingBackgroundProcess,
 ) {
-  const { nativePath, recording, processes } = descriptor;
+  const { nativePath, recording } = descriptor;
   return createScreenRecordingLiveHandle(
     { ...recording, gestureEvents: [] },
     {
-      forceCleanup: async () => cleanup(host, sessionId, processes, process),
+      forceCleanup: async () => cleanup(host, sessionId, descriptor, process),
       finish: async (snapshot, progress) =>
         stopAndExportScreenRecording({
           snapshot,
           progress,
           steps: {
             stop: async () => {
-              const outcome = await cleanup(host, sessionId, processes, process);
+              const outcome = await cleanup(host, sessionId, descriptor, process);
               if (outcome.status === 'cleanup-pending')
                 throw new AppError(
                   'COMMAND_FAILED',
@@ -260,12 +281,18 @@ function liveHandle(
                 );
               if (process) {
                 const result = await process.wait;
-                if (result.exitCode !== 0)
+                if (result.exitCode !== 0) {
+                  const reason = result.stderr.trim().split('\n').at(-1)?.trim();
                   throw new AppError(
                     'COMMAND_FAILED',
-                    'Linux recording did not finalize successfully',
-                    { stderr: result.stderr },
+                    `Linux recording did not finalize successfully${reason ? `: ${reason}` : ''}`,
+                    {
+                      stderr: result.stderr,
+                      retriable: false,
+                      hint: 'The recorder stopped with an error before it finished a playable video, so a retry cannot export one. Close this session to discard the recording, then open the app and record again.',
+                    },
                   );
+                }
               }
               return {
                 observation: { recorder: 'confirmed' },
@@ -273,7 +300,7 @@ function liveHandle(
                   ? {}
                   : {
                       warning:
-                        'Recording resumed after daemon restart; the video covers only frames captured before the recorder stopped.',
+                        'The daemon that started this recording exited before record stop, and the recorder stops with it, so the video ends by the time that daemon exited; nothing after the daemon restart was recorded.',
                     }),
               };
             },

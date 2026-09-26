@@ -8,6 +8,7 @@ import {
   resolveAppleBackRunnerCommand,
 } from '../../interactions.ts';
 import { runAppleRunnerCommand } from '../runner-client.ts';
+import { runMacOsPressAction } from '../../os/macos/helper.ts';
 import { AppError } from '@agent-device/kernel/errors';
 import {
   gestureRefusalMessage,
@@ -27,6 +28,13 @@ import {
 vi.mock('../runner-client.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../runner-client.ts')>();
   return { ...actual, runAppleRunnerCommand: vi.fn(actual.runAppleRunnerCommand) };
+});
+
+// macOS presses and text entry go to the native helper. A unit test must never spawn it: the
+// helper posts real mouse and keyboard events to whatever is on this Mac's screen.
+vi.mock('../../os/macos/helper.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../os/macos/helper.ts')>();
+  return { ...actual, runMacOsPressAction: vi.fn(), runMacOsTextAction: vi.fn() };
 });
 
 const runnerActual =
@@ -243,13 +251,13 @@ test('iosRunnerOverrides owns fused repeated presses with deterministic jitter',
   ]);
 });
 
-test('iosRunnerOverrides owns alternate-button presses', async () => {
-  mockRunAppleRunnerCommand.mockResolvedValue({ clicked: true });
+test('iosRunnerOverrides sends macOS alternate-button presses to the native helper for the session app', async () => {
+  vi.mocked(runMacOsPressAction).mockResolvedValue({ x: 100, y: 200, holdMs: 45 });
   const { overrides } = iosRunnerOverrides(MACOS_TEST_DEVICE, {
     appBundleId: 'com.example.App',
   });
 
-  await overrides.pressPoint!(
+  const result = await overrides.pressPoint!(
     { x: 100, y: 200 },
     {
       button: 'secondary',
@@ -261,13 +269,16 @@ test('iosRunnerOverrides owns alternate-button presses', async () => {
     },
   );
 
-  assert.deepEqual(mockRunAppleRunnerCommand.mock.calls[0]?.[1], {
-    command: 'mouseClick',
-    x: 100,
-    y: 200,
-    button: 'secondary',
-    appBundleId: 'com.example.App',
-  });
+  // An app session (no surface) is served by the helper, bound to the session app, since d9fdc31.
+  assert.equal(mockRunAppleRunnerCommand.mock.calls.length, 0);
+  assert.equal(vi.mocked(runMacOsPressAction).mock.calls.length, 1);
+  const [x, y, options] = vi.mocked(runMacOsPressAction).mock.calls[0]!;
+  assert.deepEqual([x, y], [100, 200]);
+  assert.equal(options?.button, 'secondary');
+  assert.equal(options?.bundleId, 'com.example.App');
+  assert.equal(options?.surface, 'app');
+  assert.equal(options?.clicks, 1);
+  assert.deepEqual(result, { holdMs: 45 });
 });
 
 test('iosRunnerOverrides remaps a later chunk failure to global press indices', async () => {

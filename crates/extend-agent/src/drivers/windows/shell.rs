@@ -15,12 +15,24 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Opens a file, program, `shell:` path or link with its default handler.
 pub fn shell_open(target: &str) -> Result<(), String> {
     let target_w = HSTRING::from(target);
-    let result = unsafe { ShellExecuteW(None, w!("open"), &target_w, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &target_w,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
     // ShellExecute returns a value greater than 32 on success.
     if result.0 as isize > 32 {
         Ok(())
     } else {
-        Err(format!("Windows couldn't open {target:?} (error {}).", result.0 as isize))
+        Err(format!(
+            "Windows couldn't open {target:?} (error {}).",
+            result.0 as isize
+        ))
     }
 }
 
@@ -35,19 +47,31 @@ pub fn launch_app(app: &StartApp) -> Result<(), String> {
 /// Runs a PowerShell one-liner without a console window.
 fn powershell(script: &str) -> Result<String, String> {
     let out = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("couldn't run PowerShell: {e}"))?;
     if !out.status.success() {
-        return Err(format!("PowerShell failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Every app in the Start menu.
 pub fn start_apps() -> Result<Vec<StartApp>, String> {
-    let json = powershell("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress")?;
+    let json = powershell(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress",
+    )?;
     parse_start_apps(&json)
 }
 
@@ -64,6 +88,10 @@ pub fn bring_to_front(hwnd: HWND) {
 
 /// `cmd /c ver`, for the probe's OS version.
 pub fn ver() -> Option<String> {
-    let out = Command::new("cmd.exe").args(["/D", "/C", "ver"]).creation_flags(CREATE_NO_WINDOW).output().ok()?;
+    let out = Command::new("cmd.exe")
+        .args(["/D", "/C", "ver"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
     super::probe_logic::parse_ver(&String::from_utf8_lossy(&out.stdout))
 }

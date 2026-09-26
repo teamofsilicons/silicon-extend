@@ -18,7 +18,14 @@ fn mouse(flags: MOUSE_EVENT_FLAGS, data: i32) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
-            mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: 0 },
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: data as u32,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
         },
     }
 }
@@ -27,7 +34,13 @@ fn key(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
-            ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 },
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(vk),
+                wScan: scan,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
         },
     }
 }
@@ -90,9 +103,10 @@ pub fn keystrokes(strokes: &[KeyStroke], cancel: &AtomicBool) -> Result<(), Stri
             return Err("cancelled".into());
         }
         match *s {
-            KeyStroke::Unicode(unit) => {
-                send(&[key(0, unit, KEYEVENTF_UNICODE), key(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)])?
-            }
+            KeyStroke::Unicode(unit) => send(&[
+                key(0, unit, KEYEVENTF_UNICODE),
+                key(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+            ])?,
             KeyStroke::Key(vk) => send(&[key(vk, 0, KEYBD_EVENT_FLAGS(0)), key(vk, 0, KEYEVENTF_KEYUP)])?,
             KeyStroke::Chord(modifier, vk) => send(&[
                 key(modifier, 0, KEYBD_EVENT_FLAGS(0)),

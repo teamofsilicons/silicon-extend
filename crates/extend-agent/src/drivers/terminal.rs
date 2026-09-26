@@ -94,8 +94,15 @@ pub fn shell_argv() -> Vec<String> {
         let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
         return vec![comspec, "/D".into(), "/S".into(), "/C".into()];
     }
-    let shell = std::env::var("SHELL").ok().filter(|s| Path::new(s).is_file()).unwrap_or_else(|| "/bin/sh".into());
-    let name = Path::new(&shell).file_name().and_then(|n| n.to_str()).unwrap_or("sh").to_owned();
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| Path::new(s).is_file())
+        .unwrap_or_else(|| "/bin/sh".into());
+    let name = Path::new(&shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sh")
+        .to_owned();
     // A login shell gives the Carbon's usual PATH even when the app was started at login.
     if matches!(name.as_str(), "bash" | "zsh" | "fish" | "ksh") {
         vec![shell, "-l".into(), "-c".into()]
@@ -114,7 +121,10 @@ pub async fn run(inv: &Invocation<'_>) -> Output {
         Some(dir) => {
             let p = expand_home(dir, &home);
             if !p.is_dir() {
-                return Output::fail("invalid_args", format!("--cwd {dir} isn't a directory on this computer"));
+                return Output::fail(
+                    "invalid_args",
+                    format!("--cwd {dir} isn't a directory on this computer"),
+                );
             }
             p
         }
@@ -133,7 +143,13 @@ fn expand_home(dir: &str, home: &Path) -> PathBuf {
     }
 }
 
-pub async fn execute(req: &TerminalRequest, cwd: &Path, workdir: &Path, timeout: Duration, cancel: &CancelToken) -> Output {
+pub async fn execute(
+    req: &TerminalRequest,
+    cwd: &Path,
+    workdir: &Path,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Output {
     let argv = shell_argv();
     let mut cmd = tokio::process::Command::new(&argv[0]);
     cmd.args(&argv[1..]);
@@ -162,8 +178,14 @@ pub async fn execute(req: &TerminalRequest, cwd: &Path, workdir: &Path, timeout:
         Err(e) => return Output::fail("command_failed", format!("couldn't start {}: {e}", argv[0])),
     };
     let pid = child.id();
-    let out_task = tokio::spawn(capture(child.stdout.take().expect("stdout"), workdir.join("stdout.txt")));
-    let err_task = tokio::spawn(capture(child.stderr.take().expect("stderr"), workdir.join("stderr.txt")));
+    let out_task = tokio::spawn(capture(
+        child.stdout.take().expect("stdout"),
+        workdir.join("stdout.txt"),
+    ));
+    let err_task = tokio::spawn(capture(
+        child.stderr.take().expect("stderr"),
+        workdir.join("stderr.txt"),
+    ));
 
     enum End {
         Exited(std::process::ExitStatus),
@@ -181,16 +203,24 @@ pub async fn execute(req: &TerminalRequest, cwd: &Path, workdir: &Path, timeout:
         let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         let _ = child.start_kill();
     }
-    let (stdout, stderr) = match tokio::time::timeout(Duration::from_secs(5), async { (out_task.await, err_task.await) }).await {
-        Ok((Ok(o), Ok(e))) => (o, e),
-        // A grandchild kept the pipes open past the kill; report what we have.
-        _ => (Captured::default(), Captured::default()),
-    };
+    let (stdout, stderr) =
+        match tokio::time::timeout(Duration::from_secs(5), async { (out_task.await, err_task.await) }).await {
+            Ok((Ok(o), Ok(e))) => (o, e),
+            // A grandchild kept the pipes open past the kill; report what we have.
+            _ => (Captured::default(), Captured::default()),
+        };
     let duration_ms = started.elapsed().as_millis() as u64;
     let mut files = Vec::new();
     for (c, name) in [(&stdout, "stdout.txt"), (&stderr, "stderr.txt")] {
-        if c.truncated && let Some(path) = &c.full_path {
-            files.push(LocalFile { path: path.clone(), name: name.into(), content_type: "text/plain".into(), kind: FileKind::Log });
+        if c.truncated
+            && let Some(path) = &c.full_path
+        {
+            files.push(LocalFile {
+                path: path.clone(),
+                name: name.into(),
+                content_type: "text/plain".into(),
+                kind: FileKind::Log,
+            });
         }
     }
     let exit_code = match &end {
@@ -218,31 +248,57 @@ pub async fn execute(req: &TerminalRequest, cwd: &Path, workdir: &Path, timeout:
         ok: false,
         output: output.clone(),
         text: Some(if text.is_empty() { message.clone() } else { text.clone() }),
-        error: Some(CommandError { code: code.into(), message, details }),
+        error: Some(CommandError {
+            code: code.into(),
+            message,
+            details,
+        }),
         files: files.clone(),
     };
     match end {
-        End::Exited(status) if status.success() => {
-            Output { ok: true, output, text: Some(text), error: None, files }
-        }
+        End::Exited(status) if status.success() => Output {
+            ok: true,
+            output,
+            text: Some(text),
+            error: None,
+            files,
+        },
         End::Exited(status) => match status.code() {
-            Some(code) => fail("command_failed", format!("The command exited with code {code}."), serde_json::json!({ "exit_code": code })),
+            Some(code) => fail(
+                "command_failed",
+                format!("The command exited with code {code}."),
+                serde_json::json!({ "exit_code": code }),
+            ),
             None => {
                 let signal = exit_signal(&status);
                 fail(
                     "command_failed",
-                    format!("The command was ended by signal {}.", signal.map_or("?".into(), |s| s.to_string())),
+                    format!(
+                        "The command was ended by signal {}.",
+                        signal.map_or("?".into(), |s| s.to_string())
+                    ),
                     serde_json::json!({ "exit_code": null, "signal": signal }),
                 )
             }
         },
-        End::Failed(e) => fail("command_failed", format!("couldn't wait for the command: {e}"), serde_json::Value::Null),
+        End::Failed(e) => fail(
+            "command_failed",
+            format!("couldn't wait for the command: {e}"),
+            serde_json::Value::Null,
+        ),
         End::Timeout => fail(
             "command_timeout",
-            format!("The command didn't finish within {} ms and was stopped.", timeout.as_millis()),
+            format!(
+                "The command didn't finish within {} ms and was stopped.",
+                timeout.as_millis()
+            ),
             serde_json::json!({ "exit_code": null }),
         ),
-        End::Cancelled => fail("cancelled", "Extend cancelled this command.".into(), serde_json::json!({ "exit_code": null })),
+        End::Cancelled => fail(
+            "cancelled",
+            "Extend cancelled this command.".into(),
+            serde_json::json!({ "exit_code": null }),
+        ),
     }
 }
 
@@ -260,7 +316,9 @@ fn exit_signal(_status: &std::process::ExitStatus) -> Option<i32> {
 /// Kills the command and everything it started.
 #[cfg(unix)]
 pub fn kill_tree(pid: Option<u32>) {
-    let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) else { return };
+    let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) else {
+        return;
+    };
     // SAFETY: signalling our own child's process group (created with process_group(0)).
     unsafe {
         libc::kill(-pid, libc::SIGTERM);
@@ -277,7 +335,9 @@ pub fn kill_tree(pid: Option<u32>) {
 #[cfg(windows)]
 pub fn kill_tree(pid: Option<u32>) {
     if let Some(pid) = pid {
-        let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).output();
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .output();
     }
 }
 
@@ -316,7 +376,11 @@ async fn capture(mut reader: impl AsyncRead + Unpin, spill: PathBuf) -> Captured
     if let Some(mut f) = file {
         let _ = f.flush().await;
     }
-    Captured { text: String::from_utf8_lossy(&inline).into_owned(), truncated, full_path: truncated.then_some(spill) }
+    Captured {
+        text: String::from_utf8_lossy(&inline).into_owned(),
+        truncated,
+        full_path: truncated.then_some(spill),
+    }
 }
 
 #[cfg(test)]
@@ -329,7 +393,16 @@ mod tests {
 
     #[test]
     fn parses_run_with_flags() {
-        let r = parse(&s(&["run", "ls -la | wc -l", "--cwd", "/tmp", "--env", "A=1", "--env=B=x=y"])).unwrap();
+        let r = parse(&s(&[
+            "run",
+            "ls -la | wc -l",
+            "--cwd",
+            "/tmp",
+            "--env",
+            "A=1",
+            "--env=B=x=y",
+        ]))
+        .unwrap();
         assert_eq!(r.command, "ls -la | wc -l");
         assert_eq!(r.cwd.as_deref(), Some("/tmp"));
         assert_eq!(r.env, vec![("A".into(), "1".into()), ("B".into(), "x=y".into())]);
@@ -349,7 +422,11 @@ mod tests {
 
         async fn go(cmd: &str, timeout: Duration) -> Output {
             let dir = tempfile::tempdir().unwrap();
-            let req = TerminalRequest { command: cmd.into(), cwd: None, env: vec![("EXTEND_T".into(), "hello".into())] };
+            let req = TerminalRequest {
+                command: cmd.into(),
+                cwd: None,
+                env: vec![("EXTEND_T".into(), "hello".into())],
+            };
             let out = execute(&req, dir.path(), dir.path(), timeout, &CancelToken::new()).await;
             // Files must be read before the temp dir goes away.
             for f in &out.files {
@@ -402,7 +479,11 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 t2.cancel();
             });
-            let req = TerminalRequest { command: "sleep 30".into(), cwd: None, env: vec![] };
+            let req = TerminalRequest {
+                command: "sleep 30".into(),
+                cwd: None,
+                env: vec![],
+            };
             let out = execute(&req, dir.path(), dir.path(), Duration::from_secs(60), &token).await;
             assert_eq!(out.error.unwrap().code, "cancelled");
         }
@@ -410,8 +491,19 @@ mod tests {
         #[tokio::test]
         async fn large_output_is_truncated_and_kept_as_a_file() {
             let dir = tempfile::tempdir().unwrap();
-            let req = TerminalRequest { command: "head -c 600000 /dev/zero | tr '\\0' a".into(), cwd: None, env: vec![] };
-            let out = execute(&req, dir.path(), dir.path(), Duration::from_secs(20), &CancelToken::new()).await;
+            let req = TerminalRequest {
+                command: "head -c 600000 /dev/zero | tr '\\0' a".into(),
+                cwd: None,
+                env: vec![],
+            };
+            let out = execute(
+                &req,
+                dir.path(),
+                dir.path(),
+                Duration::from_secs(20),
+                &CancelToken::new(),
+            )
+            .await;
             assert!(out.ok);
             assert_eq!(out.output["stdout"].as_str().unwrap().len(), INLINE_LIMIT);
             assert_eq!(out.output["stdout_truncated"], true);

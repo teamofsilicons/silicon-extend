@@ -9,11 +9,7 @@ import { listIosApps } from './core/app-resolution.ts';
 import type { DeviceBinding, RuntimeFacts } from '@agent-device/contracts/platform-runtime';
 import type { PlatformRuntimeOperations } from '@agent-device/contracts/platform-runtime-operations';
 import type { SnapshotRuntimeHost } from '@agent-device/contracts/snapshot-runtime';
-import {
-  SESSION_SURFACES,
-  type MacOsSurfaceBackend,
-  type SessionSurface,
-} from '@agent-device/contracts/session';
+import { SESSION_SURFACES, macOsSurfaceBackend } from '@agent-device/contracts/session';
 import { HOVER_UNAVAILABLE_HINT } from '@agent-device/contracts/touch-runtime';
 import type { AppleOS, DeviceInfo } from '@agent-device/kernel/device';
 import { createApplePlatformRuntime } from './runtime.ts';
@@ -417,16 +413,11 @@ function expectTvRemoteFact(
   }
 }
 
-const MACOS_SURFACE_BACKENDS: Record<SessionSurface, MacOsSurfaceBackend> = {
-  app: 'xctest',
-  'frontmost-app': 'macos-helper',
-  desktop: 'macos-helper',
-  menubar: 'macos-helper',
-};
-
+// The runtime follows the contract's surface-to-backend table (session-surface.ts pins the table
+// itself). Since d9fdc31 every macOS surface, the app surface included, is served by the helper.
 test.each([
-  ...SESSION_SURFACES.map((surface) => [surface, MACOS_SURFACE_BACKENDS[surface]] as const),
-  [undefined, 'xctest'] as const,
+  ...SESSION_SURFACES.map((surface) => [surface, macOsSurfaceBackend(surface)] as const),
+  [undefined, macOsSurfaceBackend(undefined)] as const,
 ])(
   'the macOS %s surface captures and finds text through the %s backend',
   async (surface, backend) => {

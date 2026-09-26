@@ -22,7 +22,11 @@ pub fn computer_word() -> &'static str {
 pub fn os_version() -> Option<String> {
     let info = os_info::get();
     let v = info.version().to_string();
-    if v.is_empty() || v == "Unknown" { None } else { Some(truncate(&v, 64)) }
+    if v.is_empty() || v == "Unknown" {
+        None
+    } else {
+        Some(truncate(&v, 64))
+    }
 }
 
 /// Hardware model where the OS says it (`Mac15,6`, a DMI product name), else the OS name.
@@ -37,19 +41,28 @@ pub fn model() -> Option<String> {
 
 /// The computer's network name.
 pub fn hostname() -> String {
-    gethostname::gethostname().to_string_lossy().trim_end_matches(".local").to_string()
+    gethostname::gethostname()
+        .to_string_lossy()
+        .trim_end_matches(".local")
+        .to_string()
 }
 
 #[cfg(target_os = "macos")]
 fn platform_model() -> Option<String> {
-    let out = std::process::Command::new("/usr/sbin/sysctl").args(["-n", "hw.model"]).output().ok()?;
+    let out = std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.model"])
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if s.is_empty() { None } else { Some(s) }
 }
 
 #[cfg(target_os = "linux")]
 fn platform_model() -> Option<String> {
-    for p in ["/sys/devices/virtual/dmi/id/product_name", "/sys/firmware/devicetree/base/model"] {
+    for p in [
+        "/sys/devices/virtual/dmi/id/product_name",
+        "/sys/firmware/devicetree/base/model",
+    ] {
         if let Ok(s) = std::fs::read_to_string(p) {
             let s = s.trim_matches(|c: char| c.is_whitespace() || c == '\0').to_string();
             if !s.is_empty() && s != "To Be Filled By O.E.M." {
@@ -75,7 +88,10 @@ mod tests {
 
     #[test]
     fn describes_this_computer() {
-        assert!(matches!(device_os(), DeviceOs::Macos | DeviceOs::Linux | DeviceOs::Windows));
+        assert!(matches!(
+            device_os(),
+            DeviceOs::Macos | DeviceOs::Linux | DeviceOs::Windows
+        ));
         assert!(!hostname().is_empty());
         if let Some(m) = model() {
             assert!(m.chars().count() <= 128);

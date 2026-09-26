@@ -53,15 +53,19 @@ try:
     time.sleep(2)
     stopped=command('record','stop')
     assert stopped['recordingScope']=='app' and stopped['nativePathDisposition']=='retired',stopped
-    pixels=subprocess.check_output(['ffmpeg','-v','error','-sseof','-0.2','-i',str(output),'-frames:v','1','-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','-'])
-    assert len(pixels)==3 and 50<pixels[1]<110 and pixels[2]>125, ('public app capture lost its target',list(pixels))
+    raw=subprocess.check_output(['ffmpeg','-v','error','-i',str(output),'-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','-'])
+    frames=[raw[i:i+3] for i in range(0,len(raw),3)]
+    # Every frame from the first: the target was covered before capture began, and the X server
+    # seeds a newly redirected window with the covering peer's pixels until the app redraws.
+    leaked=[i for i,pixel in enumerate(frames) if not (50<pixel[1]<110 and pixel[2]>125)]
+    assert frames and not leaked, ('public app capture recorded something other than its target',len(frames),[list(frames[i]) for i in leaked[:5]])
     subprocess.run(['ffmpeg','-v','error','-i',str(output),'-f','null','-'],check=True)
     # The covering peer must still occupy the desktop after the entire public recording.
     desktop=subprocess.check_output(['ffmpeg','-v','error','-f','x11grab','-video_size','641x481','-i',':99','-frames:v','1','-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','-'])
     assert desktop[1]>200 and desktop[2]<30,('capture changed foreground or did not overlap',list(desktop))
     rejected=work/'missing.mp4'
     result=subprocess.run(['python3',str(root/'vendor/agent-device/linux/screen-record.py'),'--out',str(rejected),'--status',str(work/'missing.json'),'--app-id','no-such-extend-app'],capture_output=True,text=True)
-    assert result.returncode!=0 and not rejected.exists(),result
+    assert result.returncode!=0 and not rejected.exists() and 'after waiting' in result.stderr,result
     duplicate=subprocess.Popen(['python3',str(fixture_script)])
     try:
         time.sleep(.5)

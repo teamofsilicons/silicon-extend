@@ -10,7 +10,7 @@ shows which Silicon is using the computer, with a **Stop** button. The wire cont
              ┌────────────── extend-agent ──────────────────────────────────────────────┐
  Extend  ◄───┤ enroll.rs    POST /enrollments + enrollment socket (code, rotations, paired) │
  service ◄───┤ agent.rs     device socket: hello, frames, ping/pong, backoff, close codes   │
-         ◄───┤ dispatch.rs  per-session queues, deadline/cancel, attachments, uploads      │
+         ◄───┤ dispatch.rs  per-device queues, deadline/cancel, attachments, uploads       │
              │ hosted.rs    attach → extend_hosted::driver_for → routes `target` commands   │
              │ drivers/     local.rs = platform driver + terminal.rs                        │
              │   agent_device.rs  Mac/Linux: node vendor/agent-device … --json             │
@@ -58,7 +58,11 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
 - `agent.lock`: the single-instance lock, so two copies never fight over one credential.
 - `attached.json`, `hosted/<device_id>/`: devices this computer carries.
 - `agent-device/`: agent-device's own daemon state (`AGENT_DEVICE_STATE_DIR`).
-- `sessions/<session_id>/`: recordings and armed replay scripts that outlive a single command.
+- `sessions/<session_id>/`: recordings and armed replay scripts that outlive a single command;
+  `live-session` while the running app has that session in use, and `cleanup-pending.json` while a
+  failed cleanup waits to be retried.
+- `agent-device/extend-runtime-root.json`: the install path of the runtime that started the
+  agent-device daemon (written by the packaged entry, `apps/desktop/runtime-entry.mjs`).
 - `work/<command_id>/`: each command's scratch directory, removed once its result is sent.
 - `logs/extend-agent.log`: the log, rotated at 10 MB.
 
@@ -83,8 +87,10 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
 - **Probing.** The agent probes again every 30 s, and every 5 s while a setup step still needs the
   Carbon. It sends a new `hello` when capabilities or `missing` change, and `setup_progress` when
   only the setup changed.
-- **Commands.** Commands run one at a time per (target, session) and in order; different sessions
-  run side by side.
+- **Commands.** Each device (this computer, or a device it carries) has one queue: its commands,
+  and its sessions' setup and cleanup, run one at a time and in order. Different devices run side by
+  side. A command that arrives for a session that already ended is answered `session_ended` at once
+  and never runs (the last 256 ended sessions are remembered).
   - Before anything runs, the device checks the command itself. It returns `unknown_command` for
     names not in `COMMANDS` (and for `NOT_EXPOSED` names, naming the replacement). It returns
     `invalid_args` for any `RESERVED_FLAGS`. It also refuses flags that would reach outside the
@@ -93,7 +99,8 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
   - **Deadline.** `timeout_ms` is clamped to 1–300 s, and time spent queued counts against it. A
     fifth of the deadline, at most 5 s, is kept back for uploads. When the deadline passes, the
     command's cancel token fires. The driver then gets 3 s to wind down and the answer is
-    `command_timeout`.
+    `command_timeout`. A command whose deadline passed while it waited says what it waited on: the
+    previous session's cleanup, this session's setup, or the command before it.
   - **Cancel.** `cancel` stops a running or queued command, and the answer is `cancelled`.
   - **Attachments.** Each attachment is decoded into `work/<id>/attachments/`. Every
     `attachment:<name>` argument, and every `--flag=attachment:<name>`, becomes that local path.
@@ -103,12 +110,33 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
     that fails makes the result `ok:false` with `upload_failed`. Files beyond the upload ids are
     named in the text.
 - **Sessions.** `session_started`/`session_ended` update the indicator and call the driver's
-  hooks in the device's command queue. Setup finishes before its first command; ending a session
-  cancels queued/running commands and finishes cleanup before the next session starts. Different
-  devices keep independent queues. On macOS and Linux, ending a session stops a recording and a log capture that are still
-  running, then closes the agent-device session. `takeover` shows the reason and **Done**, which
-  sends `takeover_done`. `environment` shows or clears the test-environment banner. `unpaired`
-  forgets the credential.
+  hooks in the device's queue. Setup finishes before its first command; ending a session cancels
+  its queued and running commands and finishes cleanup before the next session starts. Setup hooks
+  are cut off after 150 s and cleanup hooks after 180 s, and the cut is logged. A `session_started`
+  the service re-sends after a reconnect does not reset the session, so a running recording or log
+  capture is still stopped at session end. `takeover` shows the reason and **Done**, which sends
+  `takeover_done`. `environment` shows or clears the test-environment banner.
+- **Revoke, unpair and Quit.** Revoke pair (in the app or offline), being unpaired (4401, the
+  `unpaired` frame, the device removed) and Quit first cancel the running and queued commands of
+  every session, then clean each session up on its device's queue; Quit waits up to 10 s.
+  `unpaired` then forgets the credential.
+- **Cleanup on Mac and Linux.** Ending a session stops a recording and a log capture that are
+  still running, then closes the agent-device session (`SESSION_NOT_FOUND` counts as closed, and a
+  session where agent-device never ran is not closed at all). If `close` fails twice, the running
+  app forces a release: `agent-device daemon stop`, then `device release --stale --platform <p>`
+  (claims live per user in `~/.agent-device/device-claims`; `--stale` releases only claims whose
+  owner is provably gone). If that fails too, the session is kept in
+  `sessions/<id>/cleanup-pending.json` and the computer is **held**: setup stays complete and the
+  service keeps it `ready`, but every capability only agent-device provides moves to `missing` with
+  one reason (what happened, why, that the release is retried, and that restarting the computer
+  clears it). `terminal` and `takeover` keep working, and a new session can start. Background
+  retries run after 15 s, 30 s, 1 min, 2 min, then every 5 min, up to 12 per run of the app; they
+  force the release only while no session is in use, and every new session start forces it first.
+  After a local session's setup or cleanup the app re-checks its capabilities at once. If the app
+  restarts mid-session, the session the service announces again is left alone (recording and log
+  state from before the restart is lost); a session that ended while the app was down is closed
+  when the next one starts. One-off `extend-agent exec --end-session` and `probe` never force and
+  never retry; they leave the pending cleanup for the running app.
 - **Devices this computer carries.** On `attach`, the agent calls
   `extend_hosted::driver_for(HostedDevice { …, state_dir: hosted/<id>, agent_device: <argv> })`.
   It then sends `attached` with that driver's probe; a device the driver can't carry goes offline,
@@ -129,15 +157,20 @@ Carbon's login shell with plain pipes, so stdout and stderr stay separate. It re
   spaces.
 
 **Mac and Linux: agent-device.** Each command becomes
-`node …/agent-device.mjs <command> <args> --platform macos|linux --session extend-<session_id> --json`.
-It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fork addition (see
-`vendor/agent-device/FORK.md`) so one run returns both the JSON and the text the CLI would print.
+`agent-device.mjs <command> <args> --platform macos|linux --session extend-<session_id> --json`,
+run by node. When agent-device is a node script (always, as packaged) node gets the arguments as
+JSON over stdin through a small loader, so `ps` shows only
+`node --input-type=module -e <loader> -- …/agent-device.mjs` and typed text is in no process's
+command line. If `EXTEND_AGENT_DEVICE` or `config.json` names a plain executable instead, its
+arguments are on its command line. It runs with `AGENT_DEVICE_STATE_DIR`, and with
+`AGENT_DEVICE_JSON_TEXT=1`, a fork addition (see `vendor/agent-device/FORK.md`) so one run returns
+both the JSON and the text the CLI would print.
 - **Output paths are always chosen here**, inside the work directory, and come back as files:
   - `screenshot [name]` writes a PNG as a `screenshot`.
   - `diff screenshot --baseline …` reads its inputs from attachments and returns a `diff`.
   - `record start|stop` keeps the video in the session and returns a `recording` on stop.
   - `logs stop` copies `app.log` and returns it as a `log`.
-  - `open`/`close --save-script` returns a `replay_script`.
+  - `open`/`close --save-script` returns a `replay_script`; the script records the app's path.
   - `test` returns its artifacts, and `--out` / `--report-junit` are rewritten into the work
     directory.
 - Input files (replay scripts, baselines, step files) must come as attachments. A path on the
@@ -145,17 +178,35 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
 - agent-device's error codes map to Extend's: `INVALID_ARGS` becomes `invalid_args`, and
   `UNSUPPORTED_*` becomes `unsupported_on_device`. Every other code is lowercased. The original
   code and hint stay in `details`.
+- **Mac app names.** `open <app>` and `close <app>` find the app by its bundle file name, as
+  `open -a` does, ignoring case, a trailing `.app` and invisible marks, and pass agent-device its
+  absolute `.app` path (so result text may show `/Applications/Visual Studio Code.app`). Search
+  order: `/Applications` (3 levels), `~/Applications` (3), `/System/Applications` (2), then
+  `/System/Cryptexes/App/System/Applications`, `/System/Library/CoreServices/Applications` and
+  `/System/Library/CoreServices` (1 each). If agent-device still answers `APP_NOT_INSTALLED`,
+  Spotlight (`mdfind`) is asked and the command retried. Names are resolved after the command is
+  planned, so `--save-script` in any position keeps the app. Bundle ids, `settings`, links and
+  paths are passed unchanged. Limit: an app whose display name differs from its file name
+  (`OBS Studio`, `Code`, `iTerm2`) relies on agent-device's own display-name match.
+- **Known gap:** `record start --quality normal` fails with `invalid_args` on Mac and Linux, because
+  `normal` is passed on unchanged and agent-device accepts `medium|high` (Mac) or no quality (Linux).
+  See TECHNICAL.md open question 15.
 
 **macOS probe.**
 - It checks Accessibility (`AXIsProcessTrusted`) and Screen Recording
   (`CGPreflightScreenCaptureAccess`) without prompting. Those two are the setup steps, and the
   window's **Open** buttons take the Carbon to the right System Settings page.
+- Every session uses agent-device's native helper, whatever the state of Xcode or UI Automation
+  (there is no XCTest runner gate any more). A session starts on the frontmost app
+  (`open --surface frontmost-app`); `open <link>` opens with the system (`/usr/bin/open`) and then
+  follows the frontmost app.
 - Typing (`fill`/`type`/`focus`) uses the native helper with Accessibility and keyboard events.
-  The helper checks field ownership and focus before sending text; a focus failure stops the
+  The helper checks field ownership and focus before each key event; a focus failure stops the
   command. Text is passed over stdin rather than command-line arguments.
-- `record` still uses XCUITest and needs Xcode and **UI Automation** (`automationmodetool`).
-  Without that setup, `screen.record` is reported missing with the exact fix. These are not
-  setup steps because other commands remain useful without recording.
+- Recording uses the helper's ScreenCaptureKit recorder: `screen.record` is reported whenever
+  Screen Recording is granted and agent-device supports `record`. Neither Xcode nor UI Automation
+  is needed. (`gather()` still runs `automationmodetool` and `xcode-select`, although nothing uses
+  their results any more.)
 - Permissions belong to the app that launched the agent: Silicon Extend.app when installed, or the
   terminal during development.
 
@@ -167,8 +218,11 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
   - gnome-screenshot, scrot or `import` (grim on Wayland), for capture
   - xclip or xsel (wl-clipboard), for the clipboard
   - xdg-open, for links
-- agent-device doesn't record or read logs on Linux, so `screen.record` and `logs` are reported as
-  `missing`.
+- Recording (X11 only) needs python3, ffmpeg with ffprobe, and xwininfo (x11-utils), and an
+  ffmpeg whose `-encoders` list has libx264 and whose `-devices` list has x11grab; the ffmpeg check
+  is cached until the binary changes. What is missing is named (libx264, x11grab or the tool), with an install hint that also
+  mentions Fedora's `ffmpeg-free` and RPM Fusion. On Wayland `screen.record` is missing (no portal
+  recording yet). `logs` is reported missing on Linux.
 - Nothing on Linux blocks sessions: every gap is in `missing`, with the package to install.
 
 **Windows.** This is Extend's own driver, in `drivers/windows/`.
@@ -183,9 +237,13 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
 
 ## The UI
 
+- **Look.** The window and banner follow Silicon Interface's system (paper and cobalt, IBM Plex
+  Sans and Mono, Source Serif 4 titles), with the fonts inlined in `ui/page.html` (SIL Open Font
+  License 1.1). The tray icon is Extend's mark.
 - **Menu bar / tray.**
-  - The icon changes with state: an outline while unpaired, solid when paired, orange while a
-    Silicon is using the computer, and amber when something needs the Carbon.
+  - The icon changes with state: Extend's mark, faint while unpaired or when something needs the
+    Carbon, solid when paired, and risograph orange-red (`#E0452B`) while a Silicon is using the
+    computer.
   - The menu shows the headline ("Pairing code: 4F9C2A", "Paired to c:alice", "si:chef is using
     this Mac") and the device name.
   - It also shows the test environment, **Stop si:chef**, **Done** during a takeover, and the
@@ -194,7 +252,8 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
 - **Window** (a wry webview):
   - the big pairing code with a countdown and where to enter it
   - the setup steps with **Open**
-  - "Not available yet": each missing capability with its reason
+  - "Not available yet": each missing capability with its reason (while a computer is held, the
+    same reason appears once per withheld capability)
   - the device name, the Carbon it's paired to and the team
   - the test-environment banner and devices carried
   - **Revoke pair…** with an in-window confirmation
@@ -202,8 +261,11 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
 - **Banner.** A small always-on-top strip at the bottom centre of the screen reads "si:chef is using
   this Mac" with **Stop**, or "si:chef needs you: <reason>" with **Done**.
   - It is shown for as long as a session lasts.
-  - Drag its text or orange dot to move it. **−** collapses it to a small indicator;
-    click the indicator to restore it. The chosen position and collapsed state survive status updates.
+  - Drag its grip (the dots) to move it. **−** collapses it to a small pill that keeps **Stop** (or **Done**
+    during a takeover) and the test-environment tag, so stopping stays one tap; click the pill to
+    restore it. Sizes: 420x52 expanded, 250x44 collapsed (360x44 with an environment). The
+    collapsed state resets when the session ends, when the in-use session changes and when a new
+    takeover arrives; the position survives status updates.
   - The menu bar keeps **Stop** / **Done** available and includes **Show activity banner**.
   - It never takes focus, so it doesn't steal the Silicon's typing.
   - Its button works on the first click.
@@ -220,9 +282,9 @@ It runs with `AGENT_DEVICE_STATE_DIR`, and with `AGENT_DEVICE_JSON_TEXT=1`, a fo
 ## Tests
 
 ```
-CARGO_TARGET_DIR=target/agent cargo test -p extend-agent            # 107 unit + 7 integration
-CARGO_TARGET_DIR=target/agent cargo clippy -p extend-agent --all-targets -- -D warnings
-CARGO_TARGET_DIR=target/agent cargo check --target x86_64-pc-windows-msvc -p extend-agent
+cargo test -p extend-agent            # 142 unit + 9 integration (2026-09-27, macOS)
+cargo clippy -p extend-agent --all-targets -- -D warnings
+cargo check --target x86_64-pc-windows-msvc -p extend-agent
 ```
 
 - `tests/fake_service.rs` runs the whole life of a computer against an in-process axum service:
@@ -233,5 +295,15 @@ CARGO_TARGET_DIR=target/agent cargo check --target x86_64-pc-windows-msvc -p ext
   - `unpaired` followed by a new enrollment
   - Revoke pair, 4401, 4409 (no reconnect until asked), 4426, reconnect after a drop, and a
     refused credential
+  - capabilities re-checked right after a session's setup and cleanup
+- The unit tests cover, among others: interrupting a running command at session end, idle worker
+  restart, a hung cleanup cut off, late commands for an ended session, `SESSION_NOT_FOUND` on close,
+  held-computer reporting, forced and non-forced background retries, restart mid-session, a session
+  that ended while the app was down, named Mac apps with `--save-script`, and banner collapse and
+  restore.
 - `apps/desktop/linux-e2e/` runs the Linux driver for real in Docker. `apps/desktop/README.md`
   has the macOS real-run notes.
+- Not run on a real desktop (2026-09-27): the banner's collapse, restore and drag in real windows on
+  macOS, Windows and Linux; named apps opened by the real helper (`open 'Visual Studio Code'`,
+  `open iTerm`, `open WhatsApp`); `open <URL>` then `snapshot`; a forced release after a real stuck
+  recording.

@@ -32,14 +32,20 @@ impl std::fmt::Display for ConnectError {
 
 /// Opens a WebSocket with `Authorization` set.
 pub async fn connect(url: &Url, authorization: &str) -> Result<Socket, ConnectError> {
-    let mut req = url.as_str().into_client_request().map_err(|e| ConnectError::Other(e.to_string()))?;
+    let mut req = url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| ConnectError::Other(e.to_string()))?;
     let headers = req.headers_mut();
     headers.insert(
         "Authorization",
         HeaderValue::from_str(authorization).map_err(|_| ConnectError::Other("credential isn't header-safe".into()))?,
     );
     headers.insert(API_VERSION_HEADER, HeaderValue::from(API_VERSION));
-    headers.insert("User-Agent", HeaderValue::from_str(&crate::service::user_agent()).expect("ascii"));
+    headers.insert(
+        "User-Agent",
+        HeaderValue::from_str(&crate::service::user_agent()).expect("ascii"),
+    );
     let fut = tokio_tungstenite::connect_async(req);
     match tokio::time::timeout(Duration::from_secs(20), fut).await {
         Err(_) => Err(ConnectError::Other("timed out connecting to Extend".into())),

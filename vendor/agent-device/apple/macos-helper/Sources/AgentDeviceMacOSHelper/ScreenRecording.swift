@@ -18,6 +18,70 @@ func nativeRecordingDisplayIndex(windowFrames: [CGRect], displayFrames: [CGRect]
   return bestIndex
 }
 
+/// Whether the recorded app can still appear in an app-scoped recording.
+enum RecordedAppState: Equatable {
+  case visible
+  case notVisible
+  case exited
+}
+
+/// The app shows in a recording only through a layer-0 window that is on screen. A hidden app
+/// (Command-H), a minimized window or a window on another Space leaves the frames without it.
+func recordedAppHasVisibleWindow(windowInfo: [[String: Any]], pid: pid_t) -> Bool {
+  windowInfo.contains { window in
+    guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+          (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+          ((window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) > 0,
+          let rawBounds = window[kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+          !bounds.isEmpty
+    else { return false }
+    return true
+  }
+}
+
+func observeRecordedApp(pid: pid_t) -> RecordedAppState {
+  if kill(pid, 0) != 0 && errno == ESRCH { return .exited }
+  guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+    // No window list is no evidence either way; only a list without the app counts.
+    return .visible
+  }
+  return recordedAppHasVisibleWindow(windowInfo: info, pid: pid) ? .visible : .notVisible
+}
+
+/// Whether a stopped recording failed. A stream macOS ended after frames were written is a stop
+/// reason ("interrupted"): the writer still closes the MP4, so the video up to that point is
+/// complete and the helper exits 0. Only a writer that did not complete, or a capture that
+/// ended before its first frame, is a failure.
+func nativeRecordingFinishFailure(
+  interruption: String?,
+  sawFirstFrame: Bool,
+  writerCompleted: Bool,
+  details: [String: String]
+) -> HelperError? {
+  if let interruption, !sawFirstFrame {
+    return .commandFailed("macOS stopped the screen capture before the first frame: \(interruption)", details: details)
+  }
+  if !writerCompleted {
+    var details = details
+    if let interruption { details["interruption"] = interruption }
+    return .commandFailed("recording did not finish", details: details)
+  }
+  return nil
+}
+
+/// ScreenCaptureKit refuses a capture Screen Recording is not allowed for with SCStreamError
+/// userDeclined (-3801). That refusal names the permission and a reason the caller turns into a
+/// way forward; any other error is passed on unchanged.
+func nativeRecordingStartError(_ error: Error) -> Error {
+  let nsError = error as NSError
+  guard nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain", nsError.code == -3801 else { return error }
+  return HelperError.commandFailed(
+    "macOS refused the screen capture because Screen Recording is not allowed for Silicon Extend",
+    details: ["reason": "screen_recording_permission_denied", "permission": "screen-recording"]
+  )
+}
+
 struct NativeRecordingOptions {
   let path: String
   let statusPath: String
@@ -59,6 +123,12 @@ private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDele
   private var lastFrame: CMSampleBuffer?
   private var firstWallTime: TimeInterval?
   private var failure: Error?
+  /// macOS ended the stream: the Carbon stopped it from the screen-recording indicator, the
+  /// recorded display went away, or the system revoked capture. The frames written until then
+  /// are still a complete video, so this is a stop reason, not a failure.
+  private var interruption: Error?
+  private var appPid: pid_t?
+  private var appNotVisibleSeconds: Double = 0
   private var frames = 0
   private var signals: [DispatchSourceSignal] = []
   private var stopReason: String?
@@ -69,11 +139,11 @@ private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDele
   init(options: NativeRecordingOptions) { self.options = options }
 
   func stream(_ stream: SCStream, didStopWithError error: Error) {
-    queue.async { self.failure = error }
+    queue.async { self.interruption = self.interruption ?? error }
   }
 
   func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
-    guard type == .screen, sample.isValid, failure == nil,
+    guard type == .screen, sample.isValid, failure == nil, interruption == nil,
           let info = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
           let rawStatus = info.first?[.status] as? Int, SCFrameStatus(rawValue: rawStatus) == .complete,
           CMSampleBufferGetImageBuffer(sample) != nil else { return }
@@ -104,28 +174,56 @@ private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDele
                                "backend": "ScreenCaptureKit", "pid": getpid()]
     if let stopReason { status["reason"] = stopReason }
     if let failure { status["error"] = String(describing: failure) }
+    if let interruption { status["interruption"] = describeInterruption(interruption) }
+    if appNotVisibleSeconds > 0 { status["appNotVisibleMs"] = Int(appNotVisibleSeconds * 1000) }
     try JSONSerialization.data(withJSONObject: status).write(to: URL(fileURLWithPath: options.statusPath), options: .atomic)
+  }
+
+  private func describeInterruption(_ error: Error) -> String {
+    let nsError = error as NSError
+    return "\(nsError.localizedDescription) (\(nsError.domain) \(nsError.code))"
   }
 
   func run() async throws -> [String: String] {
     // Preflight can describe the launching terminal rather than this signed helper. The actual
     // ScreenCaptureKit acquisition remains authoritative and returns the OS permission error.
-    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    let content: SCShareableContent
+    do {
+      content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    } catch {
+      throw nativeRecordingStartError(error)
+    }
     let display: SCDisplay
     let filter: SCContentFilter
     if let bundle = options.bundleId {
       guard let app = content.applications.first(where: { $0.bundleIdentifier == bundle }) else {
-        throw HelperError.commandFailed("the requested app is not available for capture", details: ["bundleId": bundle])
+        throw HelperError.commandFailed(
+          "the requested app is not running or has no window macOS can capture",
+          details: ["reason": "app_not_available", "bundleId": bundle]
+        )
       }
-      let windows = content.windows.filter { $0.owningApplication?.processID == app.processID && $0.windowLayer == 0 }
-      guard let displayIndex = nativeRecordingDisplayIndex(windowFrames: windows.map(\.frame), displayFrames: content.displays.map(\.frame)) else {
-        throw HelperError.commandFailed("the requested app has no capturable window", details: [
-          "bundleId": bundle, "pid": String(app.processID),
-          "windows": windows.map { String(describing: $0.frame) }.joined(separator: ";"),
-          "displays": content.displays.map { String(describing: $0.frame) }.joined(separator: ";")
-        ])
+      // Choose the display from the app's real, on-screen windows, as screenshots do: larger
+      // invisible backing windows must not move the recording to a display without the app.
+      let owned = content.windows.filter { $0.owningApplication?.processID == app.processID }
+      let bound = boundAppWindowIndices(
+        candidates: captureWindowCandidates(owned),
+        accessible: accessibleWindowFrames(pid: app.processID),
+        requireOnScreen: true,
+        fallbackToOnScreen: true
+      )
+      guard let displayIndex = nativeRecordingDisplayIndex(windowFrames: bound.map { owned[$0].frame }, displayFrames: content.displays.map(\.frame)) else {
+        throw HelperError.commandFailed(
+          "the requested app has no window on screen to record. Show one of its windows on the current Space (unhide the app or unminimize the window), then start the recording again.",
+          details: [
+            "reason": "app_window_not_on_screen",
+            "bundleId": bundle, "pid": String(app.processID),
+            "windows": owned.map { "\($0.frame) layer=\($0.windowLayer) onScreen=\($0.isOnScreen)" }.joined(separator: ";"),
+            "displays": content.displays.map { String(describing: $0.frame) }.joined(separator: ";")
+          ]
+        )
       }
       display = content.displays[displayIndex]
+      appPid = app.processID
       filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
     } else {
       guard let main = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else {
@@ -165,23 +263,47 @@ private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDele
     }
     let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
     try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-    do { try await stream.startCapture() } catch { writer.cancelWriting(); throw error }
+    do { try await stream.startCapture() } catch { writer.cancelWriting(); throw nativeRecordingStartError(error) }
     let started = ProcessInfo.processInfo.systemUptime
+    var lastAppCheck = started
     while true {
-      let elapsed = ProcessInfo.processInfo.systemUptime - started
+      let now = ProcessInfo.processInfo.systemUptime
+      let elapsed = now - started
       let size = (try? FileManager.default.attributesOfItem(atPath: options.path)[.size] as? NSNumber)?.intValue ?? 0
+      // Once a second, and at once when the stream ends: an app that quit usually ends the
+      // stream too, and "the app quit" is the more useful reason to report.
+      var appState: RecordedAppState?
+      var appInterval: Double = 0
+      let interrupted = queue.sync { interruption != nil }
+      if let appPid, interrupted || now - lastAppCheck >= 1 {
+        appState = observeRecordedApp(pid: appPid)
+        appInterval = now - lastAppCheck
+        lastAppCheck = now
+      }
       let shouldStop = queue.sync { () -> Bool in
         if getppid() != parent { stopReason = "owner-exited" }
+        switch appState {
+        case .exited?: stopReason = stopReason ?? "app-exited"
+        case .notVisible?: appNotVisibleSeconds += appInterval
+        default: break
+        }
+        if interruption != nil { stopReason = stopReason ?? "interrupted" }
         if elapsed * 1000 >= Double(options.durationMs) { stopReason = "duration-limit" }
         // Reserve space for queued frames and the closing MP4 metadata. The final file is checked too.
         if size >= options.maxBytes - min(16_777_216, options.maxBytes / 4) { stopReason = "size-limit" }
-        if firstTime == nil && elapsed > 10 { failure = HelperError.commandFailed("no screen frames arrived") }
+        if firstTime == nil && elapsed > 10 {
+          failure = HelperError.commandFailed(
+            "macOS delivered no screen frames within 10 seconds of starting the capture",
+            details: ["reason": "no_screen_frames"]
+          )
+        }
         return stopReason != nil || failure != nil
       }
       if shouldStop { break }
       try await Task.sleep(nanoseconds: 50_000_000)
     }
-    do { try await stream.stopCapture() } catch { queue.sync { failure = failure ?? error } }
+    // A stream macOS already ended cannot be stopped again; that error says nothing new.
+    do { try await stream.stopCapture() } catch { queue.sync { if interruption == nil { failure = failure ?? error } } }
     queue.sync {
       if let firstTime, let firstWallTime, let lastFrame, input.isReadyForMoreMediaData {
         let elapsed = min(ProcessInfo.processInfo.systemUptime - firstWallTime, Double(options.durationMs) / 1000)
@@ -203,13 +325,16 @@ private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDele
     signals.removeAll()
     let finalSize = (try? FileManager.default.attributesOfItem(atPath: options.path)[.size] as? NSNumber)?.intValue ?? 0
     try queue.sync {
-      if writer.status != .completed {
-        failure = failure ?? HelperError.commandFailed("recording did not finish", details: [
+      failure = failure ?? nativeRecordingFinishFailure(
+        interruption: interruption.map(describeInterruption),
+        sawFirstFrame: firstTime != nil,
+        writerCompleted: writer.status == .completed,
+        details: [
           "frames": String(frames), "firstPts": String(firstTime?.seconds ?? -1),
           "lastPts": String(lastFrame?.presentationTimeStamp.seconds ?? -1),
           "writerError": String(describing: writer.error)
-        ])
-      }
+        ]
+      )
       if finalSize > options.maxBytes {
         failure = HelperError.commandFailed("recording exceeded its file size limit")
         try FileManager.default.removeItem(atPath: options.path)
@@ -217,7 +342,12 @@ private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDele
       try writeStatus(failure == nil ? "completed" : "failed")
       if let failure { throw failure }
     }
-    return ["path": options.path, "reason": stopReason ?? "stopped", "backend": "ScreenCaptureKit"]
+    var result = ["path": options.path, "reason": stopReason ?? "stopped", "backend": "ScreenCaptureKit"]
+    queue.sync {
+      if let interruption { result["interruption"] = describeInterruption(interruption) }
+      if appNotVisibleSeconds > 0 { result["appNotVisibleMs"] = String(Int(appNotVisibleSeconds * 1000)) }
+    }
+    return result
   }
 }
 

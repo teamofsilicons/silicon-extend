@@ -15,11 +15,17 @@ pub struct Refusal {
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
-    Refusal { code: "invalid_args", message: message.into() }
+    Refusal {
+        code: "invalid_args",
+        message: message.into(),
+    }
 }
 
 fn unsupported(message: impl Into<String>) -> Refusal {
-    Refusal { code: "unsupported_on_device", message: message.into() }
+    Refusal {
+        code: "unsupported_on_device",
+        message: message.into(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,21 +136,52 @@ pub enum Action {
     Snapshot(SnapshotOptions),
     GetText(Target),
     GetAttrs(Target),
-    Find { locator: Locator, query: String, action: FindAction },
-    Is { predicate: Predicate, target: Target, value: Option<String> },
+    Find {
+        locator: Locator,
+        query: String,
+        action: FindAction,
+    },
+    Is {
+        predicate: Predicate,
+        target: Target,
+        value: Option<String>,
+    },
     Wait(Wait),
-    Screenshot { name: String, scale: Option<f64>, fullscreen: bool },
-    Click { target: Target, button: Button, count: u32, interval_ms: u64 },
+    Screenshot {
+        name: String,
+        scale: Option<f64>,
+        fullscreen: bool,
+    },
+    Click {
+        target: Target,
+        button: Button,
+        count: u32,
+        interval_ms: u64,
+    },
     Hover(Target),
     Focus(Target),
-    Fill { target: Target, text: String },
+    Fill {
+        target: Target,
+        text: String,
+    },
     Type(String),
-    Scroll { direction: Direction, fraction: f64, pixels: Option<i32> },
+    Scroll {
+        direction: Direction,
+        fraction: f64,
+        pixels: Option<i32>,
+    },
     ClipboardRead,
     ClipboardWrite(String),
-    Open { target: Option<String>, surface: Surface },
-    Close { app: Option<String> },
-    Apps { all: bool },
+    Open {
+        target: Option<String>,
+        surface: Surface,
+    },
+    Close {
+        app: Option<String>,
+    },
+    Apps {
+        all: bool,
+    },
     AppState,
 }
 
@@ -152,10 +189,30 @@ pub enum Action {
 pub const DEFAULT_WAIT_MS: u64 = 10_000;
 
 /// Flags every command accepts and the Windows driver ignores (they tune agent-device's own daemon).
-const IGNORED_SWITCHES: &[&str] = &["--settle", "--force-full", "--no-record", "--verbose", "--debug", "-v", "--foreground"];
+const IGNORED_SWITCHES: &[&str] = &[
+    "--settle",
+    "--force-full",
+    "--no-record",
+    "--verbose",
+    "--debug",
+    "-v",
+    "--foreground",
+];
 const VALUE_FLAGS: &[&str] = &[
-    "-d", "--depth", "-s", "--scope", "--timeout", "--button", "--count", "--pixels", "--scale", "--surface",
-    "--delay-ms", "--hold-ms", "--interval-ms", "--crop-on",
+    "-d",
+    "--depth",
+    "-s",
+    "--scope",
+    "--timeout",
+    "--button",
+    "--count",
+    "--pixels",
+    "--scale",
+    "--surface",
+    "--delay-ms",
+    "--hold-ms",
+    "--interval-ms",
+    "--crop-on",
 ];
 
 fn check_flags(p: &ParsedArgs, command: &str, allowed: &[&str]) -> Result<(), Refusal> {
@@ -169,7 +226,8 @@ fn check_flags(p: &ParsedArgs, command: &str, allowed: &[&str]) -> Result<(), Re
 }
 
 fn parse_u64(v: &str, what: &str) -> Result<u64, Refusal> {
-    v.parse::<u64>().map_err(|_| invalid(format!("{what} must be a whole number of milliseconds, got {v:?}.")))
+    v.parse::<u64>()
+        .map_err(|_| invalid(format!("{what} must be a whole number of milliseconds, got {v:?}.")))
 }
 
 fn parse_selector(s: &str) -> Result<Selector, Refusal> {
@@ -179,7 +237,9 @@ fn parse_selector(s: &str) -> Result<Selector, Refusal> {
 /// A target from the positionals: `@e3`, `<x> <y>`, or a selector (several tokens are joined).
 pub fn parse_target(positionals: &[String]) -> Result<Target, Refusal> {
     match positionals {
-        [] => Err(invalid("Give a target: a ref like @e3 from the last snapshot, or a selector like 'label=\"Save\"'.")),
+        [] => Err(invalid(
+            "Give a target: a ref like @e3 from the last snapshot, or a selector like 'label=\"Save\"'.",
+        )),
         [x, y] if args::is_number(x) && args::is_number(y) => {
             let (x, y) = (x.parse::<f64>().unwrap_or(0.0), y.parse::<f64>().unwrap_or(0.0));
             Ok(Target::Point(x.round() as i32, y.round() as i32))
@@ -192,7 +252,9 @@ pub fn parse_target(positionals: &[String]) -> Result<Target, Refusal> {
 /// One target token followed by text (`fill @e3 hello world`).
 fn target_and_text(positionals: &[String], command: &str) -> Result<(Target, String), Refusal> {
     if positionals.len() < 2 {
-        return Err(invalid(format!("{command} needs a target and the text: {command} <@ref|selector> <text>.")));
+        return Err(invalid(format!(
+            "{command} needs a target and the text: {command} <@ref|selector> <text>."
+        )));
     }
     Ok((parse_target(&positionals[..1])?, positionals[1..].join(" ")))
 }
@@ -223,16 +285,32 @@ fn optional_ms(p: &ParsedArgs, positional: Option<&String>) -> Result<u64, Refus
 
 fn unsupported_command(command: &str) -> Option<&'static str> {
     Some(match command {
-        "record" => "Screen recording isn't available in Silicon Extend for Windows yet. Take screenshots with `extend screenshot` instead.",
-        "logs" => "Device logs aren't available in Silicon Extend for Windows yet. Use `extend terminal run` to read log files.",
-        "alert" => "System pop-up handling isn't available on Windows yet. Read the dialog with `extend snapshot -i` and click its buttons.",
-        "replay" | "test" | "batch" => "Replaying saved steps isn't available in Silicon Extend for Windows yet. Run the commands one at a time.",
-        "diff" => "diff isn't available on Windows yet. Take a new `extend snapshot` or `extend screenshot` and compare.",
-        "longpress" | "swipe" | "gesture" => "Touch gestures don't exist on a Windows computer. Use click, press, scroll or hover.",
-        "back" | "home" | "app-switcher" => "Windows has no system back, home or app-switcher buttons. Use click, open or close.",
+        "record" => {
+            "Screen recording isn't available in Silicon Extend for Windows yet. Take screenshots with `extend screenshot` instead."
+        }
+        "logs" => {
+            "Device logs aren't available in Silicon Extend for Windows yet. Use `extend terminal run` to read log files."
+        }
+        "alert" => {
+            "System pop-up handling isn't available on Windows yet. Read the dialog with `extend snapshot -i` and click its buttons."
+        }
+        "replay" | "test" | "batch" => {
+            "Replaying saved steps isn't available in Silicon Extend for Windows yet. Run the commands one at a time."
+        }
+        "diff" => {
+            "diff isn't available on Windows yet. Take a new `extend snapshot` or `extend screenshot` and compare."
+        }
+        "longpress" | "swipe" | "gesture" => {
+            "Touch gestures don't exist on a Windows computer. Use click, press, scroll or hover."
+        }
+        "back" | "home" | "app-switcher" => {
+            "Windows has no system back, home or app-switcher buttons. Use click, open or close."
+        }
         "tv-remote" => "This is a computer, not a TV: there are no remote buttons.",
         "keyboard" => "Windows computers have a physical keyboard; there's no on-screen keyboard to check or hide.",
-        "install" | "reinstall" => "Installing apps isn't supported on Windows through Extend. Use `extend terminal run` with an installer.",
+        "install" | "reinstall" => {
+            "Installing apps isn't supported on Windows through Extend. Use `extend terminal run` with an installer."
+        }
         "adb" => "adb is for Android devices, not Windows computers.",
         "notifications" => "Reading notifications is only available on Android.",
         "display" => "display is for TVs.",
@@ -250,15 +328,39 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
     let pos = &p.positionals;
     match command {
         "snapshot" => {
-            check_flags(&p, command, &["-i", "--interactive", "-d", "--depth", "-s", "--scope", "--raw", "--actions", "-c", "--compact", "--diff"])?;
+            check_flags(
+                &p,
+                command,
+                &[
+                    "-i",
+                    "--interactive",
+                    "-d",
+                    "--depth",
+                    "-s",
+                    "--scope",
+                    "--raw",
+                    "--actions",
+                    "-c",
+                    "--compact",
+                    "--diff",
+                ],
+            )?;
             if p.has("--diff") {
-                return Err(unsupported("snapshot --diff isn't available on Windows yet. Take a new snapshot."));
+                return Err(unsupported(
+                    "snapshot --diff isn't available on Windows yet. Take a new snapshot.",
+                ));
             }
             if !pos.is_empty() {
-                return Err(invalid(format!("snapshot takes no positional arguments, got {:?}.", pos.join(" "))));
+                return Err(invalid(format!(
+                    "snapshot takes no positional arguments, got {:?}.",
+                    pos.join(" ")
+                )));
             }
             let depth = match p.value("-d").or(p.value("--depth")) {
-                Some(v) => Some(v.parse::<usize>().map_err(|_| invalid(format!("-d must be a whole number, got {v:?}.")))?),
+                Some(v) => Some(
+                    v.parse::<usize>()
+                        .map_err(|_| invalid(format!("-d must be a whole number, got {v:?}.")))?,
+                ),
                 None => None,
             };
             Ok(Action::Snapshot(SnapshotOptions {
@@ -285,7 +387,11 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
                 Some("role") if pos.len() > 1 => (Locator::Role, &pos[1..]),
                 Some("id") if pos.len() > 1 => (Locator::Id, &pos[1..]),
                 Some(_) => (Locator::Any, &pos[..]),
-                None => return Err(invalid("find needs something to look for: find <text> [click|fill <text>|list].")),
+                None => {
+                    return Err(invalid(
+                        "find needs something to look for: find <text> [click|fill <text>|list].",
+                    ));
+                }
             };
             let query = rest[0].clone();
             let action = match rest.get(1).map(String::as_str) {
@@ -299,14 +405,20 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
                     FindAction::Fill(rest[2..].join(" "))
                 }
                 Some("wait") => FindAction::Wait(optional_ms(&p, rest.get(2))?),
-                Some(other) => return Err(invalid(format!("find doesn't know the action {other:?}; use click, fill <text>, focus, wait [ms] or list."))),
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "find doesn't know the action {other:?}; use click, fill <text>, focus, wait [ms] or list."
+                    )));
+                }
             };
             Ok(Action::Find { locator, query, action })
         }
         "is" => {
             check_flags(&p, command, &[])?;
             let Some(predicate) = pos.first().and_then(|s| parse_predicate(s)) else {
-                return Err(invalid("Use is visible|hidden|exists|absent|editable|selected|focused|text <selector> [value]."));
+                return Err(invalid(
+                    "Use is visible|hidden|exists|absent|editable|selected|focused|text <selector> [value].",
+                ));
             };
             if pos.len() < 2 {
                 return Err(invalid("is needs a selector."));
@@ -319,13 +431,21 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
             } else {
                 (parse_target(&pos[1..])?, None)
             };
-            Ok(Action::Is { predicate, target, value })
+            Ok(Action::Is {
+                predicate,
+                target,
+                value,
+            })
         }
         "wait" => {
             check_flags(&p, command, &[])?;
             match pos.first().map(String::as_str) {
-                None => Err(invalid("Use wait <ms>, wait text <text> [ms], wait <selector> [ms] or wait absent <selector> [ms].")),
-                Some(ms) if pos.len() == 1 && ms.parse::<u64>().is_ok() => Ok(Action::Wait(Wait::Ms(parse_u64(ms, "wait")?))),
+                None => Err(invalid(
+                    "Use wait <ms>, wait text <text> [ms], wait <selector> [ms] or wait absent <selector> [ms].",
+                )),
+                Some(ms) if pos.len() == 1 && ms.parse::<u64>().is_ok() => {
+                    Ok(Action::Wait(Wait::Ms(parse_u64(ms, "wait")?)))
+                }
                 Some("text") => {
                     let text = pos.get(1).ok_or_else(|| invalid("wait text needs the text."))?.clone();
                     Ok(Action::Wait(Wait::Text(text, optional_ms(&p, pos.get(2))?)))
@@ -336,15 +456,32 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
                 }
                 Some(_) => {
                     let (target_tokens, ms) = match pos.last() {
-                        Some(last) if pos.len() > 1 && last.parse::<u64>().is_ok() => (&pos[..pos.len() - 1], Some(last)),
+                        Some(last) if pos.len() > 1 && last.parse::<u64>().is_ok() => {
+                            (&pos[..pos.len() - 1], Some(last))
+                        }
                         _ => (&pos[..], None),
                     };
-                    Ok(Action::Wait(Wait::Present(parse_target(target_tokens)?, optional_ms(&p, ms)?)))
+                    Ok(Action::Wait(Wait::Present(
+                        parse_target(target_tokens)?,
+                        optional_ms(&p, ms)?,
+                    )))
                 }
             }
         }
         "screenshot" => {
-            check_flags(&p, command, &["--scale", "--fullscreen", "--full", "-f", "--overlay-refs", "--crop-on", "--normalize-status-bar"])?;
+            check_flags(
+                &p,
+                command,
+                &[
+                    "--scale",
+                    "--fullscreen",
+                    "--full",
+                    "-f",
+                    "--overlay-refs",
+                    "--crop-on",
+                    "--normalize-status-bar",
+                ],
+            )?;
             if p.has("--crop-on") {
                 return Err(unsupported("screenshot --crop-on isn't available on Windows."));
             }
@@ -356,7 +493,9 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
             }
             let scale = match p.value("--scale") {
                 Some(v) => {
-                    let s = v.parse::<f64>().map_err(|_| invalid(format!("--scale must be a number from 0.01 to 1, got {v:?}.")))?;
+                    let s = v
+                        .parse::<f64>()
+                        .map_err(|_| invalid(format!("--scale must be a number from 0.01 to 1, got {v:?}.")))?;
                     if !(0.01..=1.0).contains(&s) {
                         return Err(invalid(format!("--scale must be from 0.01 to 1, got {v}.")));
                     }
@@ -364,19 +503,38 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
                 }
                 None => None,
             };
-            let name = args::with_extension(&args::safe_file_name(pos.first().map_or("", String::as_str), "screenshot.png"), &[".png"]);
-            Ok(Action::Screenshot { name, scale, fullscreen: p.has("--fullscreen") || p.has("--full") || p.has("-f") })
+            let name = args::with_extension(
+                &args::safe_file_name(pos.first().map_or("", String::as_str), "screenshot.png"),
+                &[".png"],
+            );
+            Ok(Action::Screenshot {
+                name,
+                scale,
+                fullscreen: p.has("--fullscreen") || p.has("--full") || p.has("-f"),
+            })
         }
         "click" | "press" => {
-            check_flags(&p, command, &["--button", "--count", "--hold-ms", "--interval-ms", "--double-tap"])?;
+            check_flags(
+                &p,
+                command,
+                &["--button", "--count", "--hold-ms", "--interval-ms", "--double-tap"],
+            )?;
             let button = match p.value("--button") {
                 None | Some("primary") | Some("left") => Button::Primary,
                 Some("secondary") | Some("right") => Button::Secondary,
                 Some("middle") => Button::Middle,
-                Some(other) => return Err(invalid(format!("--button must be primary or secondary, got {other:?}."))),
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "--button must be primary or secondary, got {other:?}."
+                    )));
+                }
             };
             let mut count = match p.value("--count") {
-                Some(v) => v.parse::<u32>().ok().filter(|c| (1..=20).contains(c)).ok_or_else(|| invalid(format!("--count must be 1 to 20, got {v:?}.")))?,
+                Some(v) => v
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|c| (1..=20).contains(c))
+                    .ok_or_else(|| invalid(format!("--count must be 1 to 20, got {v:?}.")))?,
                 None => 1,
             };
             if p.has("--double-tap") {
@@ -386,7 +544,12 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
                 Some(v) => parse_u64(v, "--interval-ms")?,
                 None => 80,
             };
-            Ok(Action::Click { target: parse_target(pos)?, button, count, interval_ms })
+            Ok(Action::Click {
+                target: parse_target(pos)?,
+                button,
+                count,
+                interval_ms,
+            })
         }
         "hover" => {
             check_flags(&p, command, &[])?;
@@ -420,14 +583,27 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
                 _ => return Err(invalid("Use scroll up|down|left|right [fraction] [--pixels <n>].")),
             };
             let fraction = match pos.get(1) {
-                Some(v) => v.parse::<f64>().ok().filter(|f| *f > 0.0 && *f <= 10.0).ok_or_else(|| invalid(format!("The scroll amount must be a positive number, got {v:?}.")))?,
+                Some(v) => v
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|f| *f > 0.0 && *f <= 10.0)
+                    .ok_or_else(|| invalid(format!("The scroll amount must be a positive number, got {v:?}.")))?,
                 None => 0.5,
             };
             let pixels = match p.value("--pixels") {
-                Some(v) => Some(v.parse::<i32>().ok().filter(|n| *n > 0).ok_or_else(|| invalid(format!("--pixels must be a positive whole number, got {v:?}.")))?),
+                Some(v) => Some(
+                    v.parse::<i32>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| invalid(format!("--pixels must be a positive whole number, got {v:?}.")))?,
+                ),
                 None => None,
             };
-            Ok(Action::Scroll { direction, fraction, pixels })
+            Ok(Action::Scroll {
+                direction,
+                fraction,
+                pixels,
+            })
         }
         "clipboard" => {
             check_flags(&p, command, &[])?;
@@ -440,28 +616,52 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
         "open" => {
             check_flags(&p, command, &["--surface", "--relaunch", "--activity", "--save-script"])?;
             if p.has("--save-script") {
-                return Err(unsupported("--save-script isn't available on Windows: replay scripts need agent-device, which doesn't run on Windows."));
+                return Err(unsupported(
+                    "--save-script isn't available on Windows: replay scripts need agent-device, which doesn't run on Windows.",
+                ));
             }
             let surface = match p.value("--surface") {
                 None | Some("app") => {
-                    if pos.is_empty() { Surface::FrontmostApp } else { Surface::App }
+                    if pos.is_empty() {
+                        Surface::FrontmostApp
+                    } else {
+                        Surface::App
+                    }
                 }
                 Some("frontmost-app") => Surface::FrontmostApp,
                 Some("desktop") => Surface::Desktop,
-                Some("menubar") => return Err(unsupported("Windows has no menu bar surface. Use --surface desktop to read the taskbar and every window.")),
-                Some(other) => return Err(invalid(format!("--surface must be app, frontmost-app or desktop, got {other:?}."))),
+                Some("menubar") => {
+                    return Err(unsupported(
+                        "Windows has no menu bar surface. Use --surface desktop to read the taskbar and every window.",
+                    ));
+                }
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "--surface must be app, frontmost-app or desktop, got {other:?}."
+                    )));
+                }
             };
             if surface != Surface::App && !pos.is_empty() && !is_url(&pos[0]) {
-                return Err(invalid(format!("open --surface {} doesn't take an app.", surface.as_str())));
+                return Err(invalid(format!(
+                    "open --surface {} doesn't take an app.",
+                    surface.as_str()
+                )));
             }
-            Ok(Action::Open { target: (!pos.is_empty()).then(|| pos.join(" ")), surface })
+            Ok(Action::Open {
+                target: (!pos.is_empty()).then(|| pos.join(" ")),
+                surface,
+            })
         }
         "close" => {
             check_flags(&p, command, &["--save-script", "--shutdown"])?;
             if p.has("--save-script") {
-                return Err(unsupported("--save-script isn't available on Windows: replay scripts need agent-device, which doesn't run on Windows."));
+                return Err(unsupported(
+                    "--save-script isn't available on Windows: replay scripts need agent-device, which doesn't run on Windows.",
+                ));
             }
-            Ok(Action::Close { app: (!pos.is_empty()).then(|| pos.join(" ")) })
+            Ok(Action::Close {
+                app: (!pos.is_empty()).then(|| pos.join(" ")),
+            })
         }
         "apps" => {
             check_flags(&p, command, &["--all"])?;
@@ -504,7 +704,9 @@ pub fn is_url(s: &str) -> bool {
             && scheme.len() > 1 // `C:\…` is a drive, not a scheme
             && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-        return scheme_ok && (rest.starts_with("//") || matches!(scheme.to_ascii_lowercase().as_str(), "mailto" | "tel" | "ms-settings"));
+        return scheme_ok
+            && (rest.starts_with("//")
+                || matches!(scheme.to_ascii_lowercase().as_str(), "mailto" | "tel" | "ms-settings"));
     }
     false
 }
@@ -521,13 +723,30 @@ mod tests {
     fn snapshot_flags() {
         assert_eq!(
             parse("snapshot", &s(&["-i", "-d", "3", "-s", "Save"])).unwrap(),
-            Action::Snapshot(SnapshotOptions { interactive: true, depth: Some(3), scope: Some("Save".into()), raw: false })
+            Action::Snapshot(SnapshotOptions {
+                interactive: true,
+                depth: Some(3),
+                scope: Some("Save".into()),
+                raw: false
+            })
         );
-        assert_eq!(parse("snapshot", &s(&["--raw"])).unwrap(), Action::Snapshot(SnapshotOptions { raw: true, ..Default::default() }));
+        assert_eq!(
+            parse("snapshot", &s(&["--raw"])).unwrap(),
+            Action::Snapshot(SnapshotOptions {
+                raw: true,
+                ..Default::default()
+            })
+        );
         assert_eq!(parse("snapshot", &s(&["-d", "x"])).unwrap_err().code, "invalid_args");
-        assert_eq!(parse("snapshot", &s(&["--diff"])).unwrap_err().code, "unsupported_on_device");
+        assert_eq!(
+            parse("snapshot", &s(&["--diff"])).unwrap_err().code,
+            "unsupported_on_device"
+        );
         assert_eq!(parse("snapshot", &s(&["--bogus"])).unwrap_err().code, "invalid_args");
-        assert!(parse("snapshot", &s(&["--settle"])).is_ok(), "harmless agent-device flags are ignored");
+        assert!(
+            parse("snapshot", &s(&["--settle"])).is_ok(),
+            "harmless agent-device flags are ignored"
+        );
     }
 
     #[test]
@@ -545,61 +764,125 @@ mod tests {
     fn click_and_friends() {
         assert_eq!(
             parse("click", &s(&["@e2", "--button", "secondary"])).unwrap(),
-            Action::Click { target: Target::Ref("@e2".into()), button: Button::Secondary, count: 1, interval_ms: 80 }
+            Action::Click {
+                target: Target::Ref("@e2".into()),
+                button: Button::Secondary,
+                count: 1,
+                interval_ms: 80
+            }
         );
         assert_eq!(
             parse("press", &s(&["10", "20", "--count", "2"])).unwrap(),
-            Action::Click { target: Target::Point(10, 20), button: Button::Primary, count: 2, interval_ms: 80 }
+            Action::Click {
+                target: Target::Point(10, 20),
+                button: Button::Primary,
+                count: 2,
+                interval_ms: 80
+            }
         );
-        assert_eq!(parse("click", &s(&["@e2", "--count", "0"])).unwrap_err().code, "invalid_args");
-        assert_eq!(parse("click", &s(&["@e2", "--button", "thumb"])).unwrap_err().code, "invalid_args");
-        assert_eq!(parse("hover", &s(&["@e1"])).unwrap(), Action::Hover(Target::Ref("@e1".into())));
-        assert_eq!(parse("focus", &s(&["@e1"])).unwrap(), Action::Focus(Target::Ref("@e1".into())));
+        assert_eq!(
+            parse("click", &s(&["@e2", "--count", "0"])).unwrap_err().code,
+            "invalid_args"
+        );
+        assert_eq!(
+            parse("click", &s(&["@e2", "--button", "thumb"])).unwrap_err().code,
+            "invalid_args"
+        );
+        assert_eq!(
+            parse("hover", &s(&["@e1"])).unwrap(),
+            Action::Hover(Target::Ref("@e1".into()))
+        );
+        assert_eq!(
+            parse("focus", &s(&["@e1"])).unwrap(),
+            Action::Focus(Target::Ref("@e1".into()))
+        );
     }
 
     #[test]
     fn text_commands() {
         assert_eq!(
             parse("fill", &s(&["@e3", "hello", "world"])).unwrap(),
-            Action::Fill { target: Target::Ref("@e3".into()), text: "hello world".into() }
+            Action::Fill {
+                target: Target::Ref("@e3".into()),
+                text: "hello world".into()
+            }
         );
         assert_eq!(parse("fill", &s(&["@e3"])).unwrap_err().code, "invalid_args");
-        assert_eq!(parse("type", &s(&["hi there"])).unwrap(), Action::Type("hi there".into()));
+        assert_eq!(
+            parse("type", &s(&["hi there"])).unwrap(),
+            Action::Type("hi there".into())
+        );
         assert_eq!(parse("type", &[]).unwrap_err().code, "invalid_args");
         assert_eq!(parse("clipboard", &s(&["read"])).unwrap(), Action::ClipboardRead);
-        assert_eq!(parse("clipboard", &s(&["write", "a", "b"])).unwrap(), Action::ClipboardWrite("a b".into()));
-        assert_eq!(parse("clipboard", &s(&["write"])).unwrap(), Action::ClipboardWrite(String::new()));
+        assert_eq!(
+            parse("clipboard", &s(&["write", "a", "b"])).unwrap(),
+            Action::ClipboardWrite("a b".into())
+        );
+        assert_eq!(
+            parse("clipboard", &s(&["write"])).unwrap(),
+            Action::ClipboardWrite(String::new())
+        );
         assert_eq!(parse("clipboard", &s(&["peek"])).unwrap_err().code, "invalid_args");
     }
 
     #[test]
     fn queries() {
-        assert_eq!(parse("get", &s(&["text", "@e1"])).unwrap(), Action::GetText(Target::Ref("@e1".into())));
-        assert!(matches!(parse("get", &s(&["attrs", "label=OK"])).unwrap(), Action::GetAttrs(Target::Selector(_))));
+        assert_eq!(
+            parse("get", &s(&["text", "@e1"])).unwrap(),
+            Action::GetText(Target::Ref("@e1".into()))
+        );
+        assert!(matches!(
+            parse("get", &s(&["attrs", "label=OK"])).unwrap(),
+            Action::GetAttrs(Target::Selector(_))
+        ));
         assert_eq!(parse("get", &s(&["size", "@e1"])).unwrap_err().code, "invalid_args");
         assert_eq!(
             parse("find", &s(&["Save", "click"])).unwrap(),
-            Action::Find { locator: Locator::Any, query: "Save".into(), action: FindAction::Click }
+            Action::Find {
+                locator: Locator::Any,
+                query: "Save".into(),
+                action: FindAction::Click
+            }
         );
         assert_eq!(
             parse("find", &s(&["label", "Email", "fill", "a@b.c"])).unwrap(),
-            Action::Find { locator: Locator::Label, query: "Email".into(), action: FindAction::Fill("a@b.c".into()) }
+            Action::Find {
+                locator: Locator::Label,
+                query: "Email".into(),
+                action: FindAction::Fill("a@b.c".into())
+            }
         );
         assert_eq!(
             parse("find", &s(&["Save"])).unwrap(),
-            Action::Find { locator: Locator::Any, query: "Save".into(), action: FindAction::List }
+            Action::Find {
+                locator: Locator::Any,
+                query: "Save".into(),
+                action: FindAction::List
+            }
         );
         assert_eq!(
             parse("find", &s(&["text", "OK", "wait", "500"])).unwrap(),
-            Action::Find { locator: Locator::Text, query: "OK".into(), action: FindAction::Wait(500) }
+            Action::Find {
+                locator: Locator::Text,
+                query: "OK".into(),
+                action: FindAction::Wait(500)
+            }
         );
         assert_eq!(parse("find", &s(&["x", "fly"])).unwrap_err().code, "invalid_args");
         match parse("is", &s(&["visible", "label=OK"])).unwrap() {
-            Action::Is { predicate: Predicate::Visible, value: None, .. } => {}
+            Action::Is {
+                predicate: Predicate::Visible,
+                value: None,
+                ..
+            } => {}
             other => panic!("{other:?}"),
         }
         match parse("is", &s(&["text", "@e2", "Hello", "there"])).unwrap() {
-            Action::Is { predicate: Predicate::Text, value: Some(v), target: Target::Ref(r) } => {
+            Action::Is {
+                predicate: Predicate::Text,
+                value: Some(v),
+                target: Target::Ref(r),
+            } => {
                 assert_eq!(v, "Hello there");
                 assert_eq!(r, "@e2");
             }
@@ -611,48 +894,138 @@ mod tests {
     #[test]
     fn waits() {
         assert_eq!(parse("wait", &s(&["1500"])).unwrap(), Action::Wait(Wait::Ms(1500)));
-        assert_eq!(parse("wait", &s(&["text", "Welcome", "2000"])).unwrap(), Action::Wait(Wait::Text("Welcome".into(), 2000)));
-        assert_eq!(parse("wait", &s(&["text", "Welcome"])).unwrap(), Action::Wait(Wait::Text("Welcome".into(), DEFAULT_WAIT_MS)));
-        assert_eq!(parse("wait", &s(&["@e12"])).unwrap(), Action::Wait(Wait::Present(Target::Ref("@e12".into()), DEFAULT_WAIT_MS)));
-        assert!(matches!(parse("wait", &s(&["role=button label=Go", "5000"])).unwrap(), Action::Wait(Wait::Present(Target::Selector(_), 5000))));
-        assert!(matches!(parse("wait", &s(&["absent", "label=Loading", "300"])).unwrap(), Action::Wait(Wait::Absent(_, 300))));
-        assert_eq!(parse("wait", &s(&["@e1", "--timeout", "700"])).unwrap(), Action::Wait(Wait::Present(Target::Ref("@e1".into()), 700)));
+        assert_eq!(
+            parse("wait", &s(&["text", "Welcome", "2000"])).unwrap(),
+            Action::Wait(Wait::Text("Welcome".into(), 2000))
+        );
+        assert_eq!(
+            parse("wait", &s(&["text", "Welcome"])).unwrap(),
+            Action::Wait(Wait::Text("Welcome".into(), DEFAULT_WAIT_MS))
+        );
+        assert_eq!(
+            parse("wait", &s(&["@e12"])).unwrap(),
+            Action::Wait(Wait::Present(Target::Ref("@e12".into()), DEFAULT_WAIT_MS))
+        );
+        assert!(matches!(
+            parse("wait", &s(&["role=button label=Go", "5000"])).unwrap(),
+            Action::Wait(Wait::Present(Target::Selector(_), 5000))
+        ));
+        assert!(matches!(
+            parse("wait", &s(&["absent", "label=Loading", "300"])).unwrap(),
+            Action::Wait(Wait::Absent(_, 300))
+        ));
+        assert_eq!(
+            parse("wait", &s(&["@e1", "--timeout", "700"])).unwrap(),
+            Action::Wait(Wait::Present(Target::Ref("@e1".into()), 700))
+        );
         assert_eq!(parse("wait", &[]).unwrap_err().code, "invalid_args");
     }
 
     #[test]
     fn screenshots() {
-        assert_eq!(parse("screenshot", &[]).unwrap(), Action::Screenshot { name: "screenshot.png".into(), scale: None, fullscreen: false });
+        assert_eq!(
+            parse("screenshot", &[]).unwrap(),
+            Action::Screenshot {
+                name: "screenshot.png".into(),
+                scale: None,
+                fullscreen: false
+            }
+        );
         assert_eq!(
             parse("screenshot", &s(&["../../x/page", "--scale", "0.5", "--fullscreen"])).unwrap(),
-            Action::Screenshot { name: "page.png".into(), scale: Some(0.5), fullscreen: true }
+            Action::Screenshot {
+                name: "page.png".into(),
+                scale: Some(0.5),
+                fullscreen: true
+            }
         );
-        assert_eq!(parse("screenshot", &s(&["--scale", "2"])).unwrap_err().code, "invalid_args");
-        assert_eq!(parse("screenshot", &s(&["--overlay-refs"])).unwrap_err().code, "unsupported_on_device");
+        assert_eq!(
+            parse("screenshot", &s(&["--scale", "2"])).unwrap_err().code,
+            "invalid_args"
+        );
+        assert_eq!(
+            parse("screenshot", &s(&["--overlay-refs"])).unwrap_err().code,
+            "unsupported_on_device"
+        );
     }
 
     #[test]
     fn apps_and_surfaces() {
-        assert_eq!(parse("open", &s(&["Notepad"])).unwrap(), Action::Open { target: Some("Notepad".into()), surface: Surface::App });
-        assert_eq!(parse("open", &s(&["Visual", "Studio", "Code"])).unwrap(), Action::Open { target: Some("Visual Studio Code".into()), surface: Surface::App });
-        assert_eq!(parse("open", &s(&["--surface", "desktop"])).unwrap(), Action::Open { target: None, surface: Surface::Desktop });
-        assert_eq!(parse("open", &[]).unwrap(), Action::Open { target: None, surface: Surface::FrontmostApp });
-        assert_eq!(parse("open", &s(&["--surface", "menubar"])).unwrap_err().code, "unsupported_on_device");
-        assert_eq!(parse("open", &s(&["Notepad", "--surface", "desktop"])).unwrap_err().code, "invalid_args");
+        assert_eq!(
+            parse("open", &s(&["Notepad"])).unwrap(),
+            Action::Open {
+                target: Some("Notepad".into()),
+                surface: Surface::App
+            }
+        );
+        assert_eq!(
+            parse("open", &s(&["Visual", "Studio", "Code"])).unwrap(),
+            Action::Open {
+                target: Some("Visual Studio Code".into()),
+                surface: Surface::App
+            }
+        );
+        assert_eq!(
+            parse("open", &s(&["--surface", "desktop"])).unwrap(),
+            Action::Open {
+                target: None,
+                surface: Surface::Desktop
+            }
+        );
+        assert_eq!(
+            parse("open", &[]).unwrap(),
+            Action::Open {
+                target: None,
+                surface: Surface::FrontmostApp
+            }
+        );
+        assert_eq!(
+            parse("open", &s(&["--surface", "menubar"])).unwrap_err().code,
+            "unsupported_on_device"
+        );
+        assert_eq!(
+            parse("open", &s(&["Notepad", "--surface", "desktop"]))
+                .unwrap_err()
+                .code,
+            "invalid_args"
+        );
         assert_eq!(parse("close", &[]).unwrap(), Action::Close { app: None });
-        assert_eq!(parse("close", &s(&["--save-script"])).unwrap_err().code, "unsupported_on_device");
+        assert_eq!(
+            parse("close", &s(&["--save-script"])).unwrap_err().code,
+            "unsupported_on_device"
+        );
         assert_eq!(parse("apps", &s(&["--all"])).unwrap(), Action::Apps { all: true });
         assert_eq!(parse("appstate", &[]).unwrap(), Action::AppState);
         assert_eq!(
             parse("scroll", &s(&["down", "0.3", "--pixels", "200"])).unwrap(),
-            Action::Scroll { direction: Direction::Down, fraction: 0.3, pixels: Some(200) }
+            Action::Scroll {
+                direction: Direction::Down,
+                fraction: 0.3,
+                pixels: Some(200)
+            }
         );
         assert_eq!(parse("scroll", &s(&["sideways"])).unwrap_err().code, "invalid_args");
     }
 
     #[test]
     fn unsupported_commands_explain_themselves() {
-        for c in ["record", "logs", "alert", "replay", "test", "batch", "diff", "longpress", "swipe", "back", "home", "tv-remote", "keyboard", "install", "adb"] {
+        for c in [
+            "record",
+            "logs",
+            "alert",
+            "replay",
+            "test",
+            "batch",
+            "diff",
+            "longpress",
+            "swipe",
+            "back",
+            "home",
+            "tv-remote",
+            "keyboard",
+            "install",
+            "adb",
+        ] {
             let e = parse(c, &[]).unwrap_err();
             assert_eq!(e.code, "unsupported_on_device", "{c}");
             assert!(e.message.len() > 20, "{c}");

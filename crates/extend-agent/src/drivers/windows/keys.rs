@@ -62,14 +62,27 @@ mod tests {
 
     #[test]
     fn plans_text() {
-        assert_eq!(plan("hi"), vec![KeyStroke::Unicode('h' as u16), KeyStroke::Unicode('i' as u16)]);
-        assert_eq!(plan("a\nb"), vec![KeyStroke::Unicode(97), KeyStroke::Key(vk::RETURN), KeyStroke::Unicode(98)]);
+        assert_eq!(
+            plan("hi"),
+            vec![KeyStroke::Unicode('h' as u16), KeyStroke::Unicode('i' as u16)]
+        );
+        assert_eq!(
+            plan("a\nb"),
+            vec![
+                KeyStroke::Unicode(97),
+                KeyStroke::Key(vk::RETURN),
+                KeyStroke::Unicode(98)
+            ]
+        );
         assert_eq!(plan("\r\n"), vec![KeyStroke::Key(vk::RETURN)]);
         assert_eq!(plan("\t\u{8}"), vec![KeyStroke::Key(vk::TAB), KeyStroke::Key(vk::BACK)]);
         // An emoji outside the BMP is a surrogate pair.
         assert_eq!(plan("😀"), vec![KeyStroke::Unicode(0xD83D), KeyStroke::Unicode(0xDE00)]);
         assert_eq!(plan("é"), vec![KeyStroke::Unicode(0xE9)]);
         assert!(plan("").is_empty());
-        assert_eq!(clear_field(), vec![KeyStroke::Chord(vk::CONTROL, vk::A), KeyStroke::Key(vk::DELETE)]);
+        assert_eq!(
+            clear_field(),
+            vec![KeyStroke::Chord(vk::CONTROL, vk::A), KeyStroke::Key(vk::DELETE)]
+        );
     }
 }

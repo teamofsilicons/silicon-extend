@@ -4,6 +4,14 @@
 Run on the host with Docker, the built extend CLI, ffmpeg and a development Extend
 service using local IAM (c:alice/si:chef). Only the disposable container is recorded.
 No source runtime is mounted into it. This is a manual lane, not production IAM proof.
+
+First it installs the package into a pristine debian:trixie with apt, once with Depends only and
+once with Recommends (package-install-check.sh; needs network access), because an install into
+the linux-e2e image, which already holds every -dev package, proves nothing about the package's
+own dependency lines. Then it records through the service inside the linux-e2e image, which
+build-image.sh builds (or rebuilds) when it is missing or was built from another Dockerfile.
+Everything the lane prints is also kept in summary.txt beside its artifacts under
+target/desktop/linux-recording/.
 """
 import argparse
 import hashlib
@@ -16,17 +24,49 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[3]
-parser = argparse.ArgumentParser(description=__doc__)
+HARNESS = Path(__file__).parent.resolve()
+DEFAULT_IMAGE = 'silicon-extend-linux-e2e'
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--package', required=True, type=Path)
 parser.add_argument('--service-url', default='http://127.0.0.1:8480')
 parser.add_argument('--container-service-url', default='http://host.docker.internal:8480')
-parser.add_argument('--image', default='silicon-extend-linux-recording')
+parser.add_argument('--image', default=DEFAULT_IMAGE,
+                    help='desktop image to record in (default: %(default)s, built by build-image.sh)')
+parser.add_argument('--install-image', default='debian:trixie',
+                    help='pristine image for the package install check (default: %(default)s)')
+parser.add_argument('--skip-install-check', action='store_true',
+                    help='skip the pristine install check (it needs network access for apt)')
 args = parser.parse_args()
 package = args.package.resolve(strict=True)
 output_root = ROOT / 'target/desktop/linux-recording'
 output_root.mkdir(parents=True, exist_ok=True)
 work = Path(tempfile.mkdtemp(prefix='service-recording-', dir=output_root))
 work.chmod(0o777)
+summary = open(work / 'summary.txt', 'a', buffering=1)
+
+
+def report(*parts):
+    line = ' '.join(str(part) for part in parts)
+    print(line, flush=True)
+    summary.write(line + '\n')
+
+
+report('Package:', package, 'sha256', hashlib.sha256(package.read_bytes()).hexdigest())
+if args.skip_install_check:
+    report('SKIPPED pristine install check (--skip-install-check); Depends and Recommends are unverified')
+else:
+    for phase in ['depends', 'recommends']:
+        result = subprocess.run(['docker', 'run', '--rm', '-e', 'PHASE=' + phase,
+                                 '-v', str(package) + ':/tmp/extend-package.deb:ro', '-v', str(HARNESS) + ':/harness:ro',
+                                 args.install_image, 'bash', '/harness/package-install-check.sh'],
+                                capture_output=True, text=True)
+        (work / f'install-{phase}.log').write_text(result.stdout + result.stderr)
+        if result.returncode != 0:
+            report(f'FAILED pristine install check ({phase}); see', work / f'install-{phase}.log')
+            raise SystemExit(result.stdout[-4000:] + result.stderr[-4000:])
+        report(result.stdout.strip().splitlines()[-1])
+if args.image == DEFAULT_IMAGE:
+    subprocess.run(['bash', str(HARNESS / 'build-image.sh')], check=True)
 launcher = work / 'extend-recording-fixture'
 launcher.write_text('#!/bin/sh\nexec python3 /harness/record-fixture.py\n')
 launcher.chmod(0o755)
@@ -34,7 +74,7 @@ container = 'extend-record-service-' + uuid.uuid4().hex[:12]
 device = None
 session = False
 started_container = False
-print('Artifacts:', work, flush=True)
+report('Artifacts:', work)
 
 
 def cli(who, *command, expect_json=True):
@@ -77,7 +117,7 @@ try:
         'docker', 'run', '-d', '--rm', '--init', '--name', container,
         '-e', 'EXTEND_API_URL=' + args.container_service_url,
         '-v', str(package) + ':/tmp/extend-package.deb:ro',
-        '-v', str(Path(__file__).parent.resolve()) + ':/harness:ro',
+        '-v', str(HARNESS) + ':/harness:ro',
         '-v', str(work) + ':/tmp/out', args.image,
         'bash', '/harness/record-service-container.sh',
     ], check=True, stdout=subprocess.DEVNULL)
@@ -108,7 +148,7 @@ try:
         cli('chef', 'file', 'get', file_id, '--out', str(downloaded))
         assert hashlib.sha256(output.read_bytes()).digest() == hashlib.sha256(downloaded.read_bytes()).digest()
         (work / (scope + '-result.json')).write_text(json.dumps(result, indent=2))
-        print('PASS installed Linux package:', scope, 'recording, relay, upload, full decode and identical repeat download', flush=True)
+        report('PASS installed Linux package:', scope, 'recording, relay, upload, full decode and identical repeat download')
 finally:
     try:
         if session:

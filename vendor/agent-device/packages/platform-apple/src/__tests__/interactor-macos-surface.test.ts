@@ -117,6 +117,27 @@ test('macOS text entry and focus use the native helper without starting XCTest',
   expect(runAppleRunnerCommand).not.toHaveBeenCalled();
 });
 
+test.each(SURFACE_ROWS.map(([surface]) => surface))(
+  'macOS focus, type and fill on the %s surface carry the session surface to the helper',
+  async (surface) => {
+    // A frontmost-app session recorded the app that was frontmost when it opened; the helper
+    // needs the surface to follow whatever is frontmost when the text is entered instead.
+    const interactor = createAppleInteractor(macOsDevice, {
+      appBundleId: 'com.tinyspeck.slackmacgap',
+      ...(surface === undefined ? {} : { surface }),
+    });
+    await interactor.focus(20, 30);
+    await interactor.type('https://example.com\n');
+    await interactor.fill(20, 30, 'value');
+    expect(runMacOsTextAction).toHaveBeenCalledTimes(3);
+    for (const [, options] of vi.mocked(runMacOsTextAction).mock.calls) {
+      expect(options).toMatchObject({ bundleId: 'com.tinyspeck.slackmacgap' });
+      expect(options?.surface).toBe(surface);
+    }
+    expect(runAppleRunnerCommand).not.toHaveBeenCalled();
+  },
+);
+
 function reachedBackend(): MacOsSurfaceBackend {
   const helper = helperEntryPoints.some((entry) => vi.mocked(entry).mock.calls.length > 0);
   const runner = runnerEntryPoints.some((entry) => vi.mocked(entry).mock.calls.length > 0);

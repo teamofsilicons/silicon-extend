@@ -16,7 +16,7 @@ import { expireRefFrame } from '../../ref-frame.ts';
 import type { DaemonInvokeFn, DaemonRequest, DaemonResponse } from '../../daemon-request.ts';
 import type { SessionState } from '../../session-state.ts';
 import { SessionStore } from '../../session-store.ts';
-import { contextFromFlags } from '../../context.ts';
+import { contextFromFlags, type DaemonCommandContext } from '../../context.ts';
 import { readCommandMessage, successText } from '@agent-device/kernel/success-text';
 import type { RequestCaptureProof } from '../../capture-disclosure.ts';
 import { withCaptureDisclosures } from '../../capture-disclosure.ts';
@@ -348,7 +348,7 @@ async function handleFindType(
   match: ResolvedMatch,
   value: string | undefined,
 ): Promise<DaemonResponse> {
-  const { req, logPath, session } = ctx;
+  const { session } = ctx;
   if (!value) {
     return errorResponse('INVALID_ARGS', 'find type requires text');
   }
@@ -366,7 +366,7 @@ async function handleFindType(
   const response = await executeBoundTypeText(
     { operations: { typeText } },
     [value],
-    contextFromFlags(logPath, req.flags, session.appBundleId, session.trace?.outPath),
+    findLegContext(ctx),
   );
   recordFindAction(ctx, match, 'type');
   return { ok: true, data: response ?? { ref: match.ref } };
@@ -376,7 +376,7 @@ async function dispatchFocusForFindMatch(
   ctx: FindContext,
   match: ResolvedMatch,
 ): Promise<DaemonResponse> {
-  const { req, logPath, session } = ctx;
+  const { session } = ctx;
   const coveredResponse = rejectCoveredFindMatch(match, 'be focused');
   if (coveredResponse) return coveredResponse;
   const coords = match.resolvedNode.rect ? centerOfRect(match.resolvedNode.rect) : null;
@@ -396,9 +396,24 @@ async function dispatchFocusForFindMatch(
   const response = await executeFocusPoint(
     { operations: { focusPoint } },
     coords,
-    contextFromFlags(logPath, req.flags, session.appBundleId, session.trace?.outPath),
+    findLegContext(ctx),
   );
   return { ok: true, data: response ?? { ref: match.ref } };
+}
+
+/**
+ * The command context for find's own focus and type legs, which call the device directly instead
+ * of re-entering a handler. It carries the session surface like every handler context does: a
+ * macOS `frontmost-app` session records the app that was frontmost when it opened as its bundle,
+ * and without the surface the helper would focus and type into that app instead of the one that
+ * is frontmost now.
+ */
+function findLegContext(ctx: FindContext): DaemonCommandContext {
+  const { req, logPath, session } = ctx;
+  return {
+    ...contextFromFlags(logPath, req.flags, session.appBundleId, session.trace?.outPath),
+    ...(session.surface === undefined ? {} : { surface: session.surface }),
+  };
 }
 
 function rejectCoveredFindMatch(match: ResolvedMatch, interaction: string): DaemonResponse | null {

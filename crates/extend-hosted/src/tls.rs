@@ -27,12 +27,7 @@ pub(crate) async fn tcp(host: &str, port: u16, timeout: Duration) -> io::Result<
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let s = tokio::time::timeout(timeout, TcpStream::connect((host, port)))
         .await
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("{host}:{port} didn't answer"),
-            )
-        })??;
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, format!("{host}:{port} didn't answer")))??;
     let _ = s.set_nodelay(true);
     Ok(s)
 }
@@ -54,12 +49,7 @@ pub(crate) async fn tls_verified(host: &str, port: u16, timeout: Duration) -> io
     tls_with(connector, host, port, timeout).await
 }
 
-async fn tls_with(
-    connector: native_tls::TlsConnector,
-    host: &str,
-    port: u16,
-    timeout: Duration,
-) -> io::Result<Stream> {
+async fn tls_with(connector: native_tls::TlsConnector, host: &str, port: u16, timeout: Duration) -> io::Result<Stream> {
     let tcp = tcp(host, port, timeout).await?;
     let connector = tokio_native_tls::TlsConnector::from(connector);
     let domain = host.trim_start_matches('[').trim_end_matches(']');
@@ -71,11 +61,7 @@ async fn tls_with(
 }
 
 impl AsyncRead for Stream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Stream::Plain(s) => Pin::new(s).poll_read(cx, buf),
             Stream::Tls(s) => Pin::new(s.as_mut()).poll_read(cx, buf),
@@ -84,11 +70,7 @@ impl AsyncRead for Stream {
 }
 
 impl AsyncWrite for Stream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             Stream::Plain(s) => Pin::new(s).poll_write(cx, buf),
             Stream::Tls(s) => Pin::new(s.as_mut()).poll_write(cx, buf),

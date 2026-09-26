@@ -21,7 +21,7 @@ use extend_agent::credential;
 use extend_agent::hosted::DriverFactory;
 use extend_agent::status::Phase;
 use extend_driver::{Driver, Invocation, LocalFile, Output, Probe};
-use extend_protocol::model::{FileKind, Setup};
+use extend_protocol::model::{FileKind, MissingCapability, Setup};
 use extend_protocol::{Capability, DeviceOs};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -35,10 +35,22 @@ const DEVICE_ID: &str = "7c1e09ab";
 #[derive(Debug, Clone)]
 enum Seen {
     CreateEnrollment(Value),
-    EnrollmentSocket { auth: String },
-    DeviceSocket { auth: String },
-    DeviceSelf { auth: String },
-    Upload { id: String, name: String, content_type: String, sha_ok: bool, bytes: usize },
+    EnrollmentSocket {
+        auth: String,
+    },
+    DeviceSocket {
+        auth: String,
+    },
+    DeviceSelf {
+        auth: String,
+    },
+    Upload {
+        id: String,
+        name: String,
+        content_type: String,
+        sha_ok: bool,
+        bytes: usize,
+    },
     Revoke,
     Stop,
     Frame(Value),
@@ -74,7 +86,10 @@ impl Fake {
         tx.send(text).unwrap();
     }
     fn frames(&self) -> Vec<Value> {
-        self.seen().into_iter().filter_map(|s| if let Seen::Frame(v) = s { Some(v) } else { None }).collect()
+        self.seen()
+            .into_iter()
+            .filter_map(|s| if let Seen::Frame(v) = s { Some(v) } else { None })
+            .collect()
     }
     fn count(&self, f: impl Fn(&Seen) -> bool) -> usize {
         self.seen().iter().filter(|s| f(s)).count()
@@ -82,7 +97,10 @@ impl Fake {
 }
 
 fn auth(h: &HeaderMap) -> String {
-    h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_owned()
+    h.get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned()
 }
 
 async fn create_enrollment(State(f): State<Fake>, Json(body): Json<Value>) -> Response {
@@ -115,7 +133,12 @@ async fn get_enrollment() -> Response {
     Json(json!({"type":"enrollment","data":{"state":"waiting","pairing_code":"4F9C2A","code_expires_at":expires_in(300)}})).into_response()
 }
 
-async fn enrollment_socket(State(f): State<Fake>, headers: HeaderMap, Path(_id): Path<String>, ws: WebSocketUpgrade) -> Response {
+async fn enrollment_socket(
+    State(f): State<Fake>,
+    headers: HeaderMap,
+    Path(_id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Response {
     if auth(&headers) != format!("Extend-Enrollment {SECRET}") {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -136,7 +159,10 @@ async fn device_socket(State(f): State<Fake>, headers: HeaderMap, ws: WebSocketU
 async fn relay(f: Fake, mut socket: WebSocket, close_with: Option<u16>) {
     if let Some(code) = close_with {
         let _ = socket
-            .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame { code, reason: "test".into() })))
+            .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
+                code,
+                reason: "test".into(),
+            })))
             .await;
         return;
     }
@@ -182,22 +208,40 @@ async fn stop(State(f): State<Fake>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-async fn upload(State(f): State<Fake>, Path(id): Path<String>, headers: HeaderMap, body: axum::body::Bytes) -> StatusCode {
+async fn upload(
+    State(f): State<Fake>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> StatusCode {
     let h = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
     let digest = extend_protocol::ids::hex_lower(&Sha256::digest(&body));
     let sha_ok = h("x-content-sha256") == digest;
-    f.push(Seen::Upload { id, name: h("x-file-name"), content_type: h("content-type"), sha_ok, bytes: body.len() });
+    f.push(Seen::Upload {
+        id,
+        name: h("x-file-name"),
+        content_type: h("content-type"),
+        sha_ok,
+        bytes: body.len(),
+    });
     if h("authorization") != format!("Extend-Device {CREDENTIAL}") {
         return StatusCode::UNAUTHORIZED;
     }
-    if sha_ok { StatusCode::CREATED } else { StatusCode::UNPROCESSABLE_ENTITY }
+    if sha_ok {
+        StatusCode::CREATED
+    } else {
+        StatusCode::UNPROCESSABLE_ENTITY
+    }
 }
 
 async fn start_fake() -> (Fake, SocketAddr) {
     let fake = Fake::default();
     let app = Router::new()
         .route("/api/v1/enrollments", post(create_enrollment))
-        .route("/api/v1/enrollments/{id}", get(get_enrollment).delete(|| async { StatusCode::NO_CONTENT }))
+        .route(
+            "/api/v1/enrollments/{id}",
+            get(get_enrollment).delete(|| async { StatusCode::NO_CONTENT }),
+        )
         .route("/api/v1/enrollments/{id}/connect", get(enrollment_socket))
         .route("/api/v1/device", get(device_self).delete(revoke))
         .route("/api/v1/device/stop", post(stop))
@@ -211,20 +255,42 @@ async fn start_fake() -> (Fake, SocketAddr) {
 }
 
 /// A computer that can take screenshots and snapshots, and run a slow command.
+#[derive(Default)]
 struct FakeComputer {
     started: Mutex<Vec<String>>,
     ended: Mutex<Vec<String>>,
+    /// Commands and lifecycle hooks in the order they happened.
+    events: Mutex<Vec<String>>,
+    /// An ended session still holds the screen (a failed release): only the terminal works.
+    /// Session setup releases it; session cleanup leaves it held again.
+    held: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
 impl Driver for FakeComputer {
     async fn probe(&self) -> Probe {
+        let held = self.held.load(std::sync::atomic::Ordering::SeqCst);
+        let (capabilities, missing) = if held {
+            let reason = "Session 0ld ended, but agent-device couldn't release this computer".to_owned();
+            (
+                vec![Capability::Terminal],
+                vec![MissingCapability {
+                    capability: Capability::ScreenRead,
+                    reason,
+                }],
+            )
+        } else {
+            (
+                vec![Capability::ScreenRead, Capability::ScreenCapture, Capability::Terminal],
+                vec![],
+            )
+        };
         Probe {
             os: extend_agent::sysinfo::device_os(),
             os_version: Some("99.0".into()),
             model: Some("Test".into()),
-            capabilities: vec![Capability::ScreenRead, Capability::ScreenCapture, Capability::Terminal],
-            missing: vec![],
+            capabilities,
+            missing,
             setup: Setup::complete(),
             agent_device_version: Some("0.21.15".into()),
             online: true,
@@ -243,17 +309,27 @@ impl Driver for FakeComputer {
                 })
             }
             "wait" => {
+                self.events.lock().unwrap().push(format!("wait {}", inv.session_id));
                 inv.cancel.cancelled().await;
+                self.events.lock().unwrap().push(format!("waited {}", inv.session_id));
                 Output::fail("cancelled", "stopped")
             }
-            other => Output::ok(json!({"ran": other, "args": inv.args}), format!("@e1 [button] \"{other}\"")),
+            other => Output::ok(
+                json!({"ran": other, "args": inv.args}),
+                format!("@e1 [button] \"{other}\""),
+            ),
         }
     }
     async fn session_started(&self, s: &str) {
         self.started.lock().unwrap().push(s.into());
+        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
     }
     async fn session_ended(&self, s: &str) {
         self.ended.lock().unwrap().push(s.into());
+        self.events.lock().unwrap().push(format!("ended {s}"));
+        if s == "b40" {
+            self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -290,7 +366,15 @@ async fn start(paired: bool) -> Harness {
     start_with(paired, &[]).await
 }
 
+async fn start_with_held(held: bool) -> Harness {
+    start_inner(true, &[], held).await
+}
+
 async fn start_with(paired: bool, closes: &[u16]) -> Harness {
+    start_inner(paired, closes, false).await
+}
+
+async fn start_inner(paired: bool, closes: &[u16], held: bool) -> Harness {
     let (fake, addr) = start_fake().await;
     fake.0.lock().unwrap().next_device_close.extend(closes.iter().copied());
     let dir = tempfile::tempdir().unwrap();
@@ -306,7 +390,8 @@ async fn start_with(paired: bool, closes: &[u16]) -> Harness {
             })
             .unwrap();
     }
-    let computer = Arc::new(FakeComputer { started: Mutex::new(vec![]), ended: Mutex::new(vec![]) });
+    let computer = Arc::new(FakeComputer::default());
+    computer.held.store(held, std::sync::atomic::Ordering::SeqCst);
     let factory: DriverFactory = Arc::new(|_d| Ok(Box::new(Tv) as Box<dyn Driver>));
     let (agent, handle) = Agent::new(AgentDeps {
         config,
@@ -316,7 +401,14 @@ async fn start_with(paired: bool, closes: &[u16]) -> Harness {
         probe_interval: Duration::from_secs(3600),
     });
     let task = tokio::spawn(agent.run());
-    Harness { fake, handle, computer, _dir: dir, state, task }
+    Harness {
+        fake,
+        handle,
+        computer,
+        _dir: dir,
+        state,
+        task,
+    }
 }
 
 async fn eventually<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
@@ -340,23 +432,42 @@ async fn full_life_of_a_paired_computer() {
 
     // 1. Enrollment: the app asks for a code without logging in.
     let body = eventually("enrollment", || {
-        fake.seen().into_iter().find_map(|s| if let Seen::CreateEnrollment(b) = s { Some(b) } else { None })
+        fake.seen().into_iter().find_map(|s| {
+            if let Seen::CreateEnrollment(b) = s {
+                Some(b)
+            } else {
+                None
+            }
+        })
     })
     .await;
     assert_eq!(body["type"], "enrollment");
     assert_eq!(body["data"]["os"], extend_agent::sysinfo::device_os().as_str());
     assert_eq!(body["data"]["app_version"], extend_agent::config::APP_VERSION);
-    eventually("code shown", || (h.handle.status.get().pairing.map(|p| p.code) == Some("4F9C2A".into())).then_some(())).await;
+    eventually("code shown", || {
+        (h.handle.status.get().pairing.map(|p| p.code) == Some("4F9C2A".into())).then_some(())
+    })
+    .await;
     eventually("enrollment socket", || {
-        (fake.count(|s| matches!(s, Seen::EnrollmentSocket { auth } if auth == &format!("Extend-Enrollment {SECRET}"))) == 1).then_some(())
+        (fake.count(|s| matches!(s, Seen::EnrollmentSocket { auth } if auth == &format!("Extend-Enrollment {SECRET}")))
+            == 1)
+            .then_some(())
     })
     .await;
 
     // 2. The code rotates; pings are answered.
     fake.send(json!({"type":"code","pairing_code":"7b21e0","code_expires_at":expires_in(300)}));
-    eventually("rotated code", || (h.handle.status.get().pairing.map(|p| p.code) == Some("7B21E0".into())).then_some(())).await;
+    eventually("rotated code", || {
+        (h.handle.status.get().pairing.map(|p| p.code) == Some("7B21E0".into())).then_some(())
+    })
+    .await;
     fake.send(json!({"type":"ping","nonce":17}));
-    eventually("pong 17", || fake.frames().into_iter().find(|f| f["type"] == "pong" && f["nonce"] == 17)).await;
+    eventually("pong 17", || {
+        fake.frames()
+            .into_iter()
+            .find(|f| f["type"] == "pong" && f["nonce"] == 17)
+    })
+    .await;
 
     // 3. Paired: the credential is stored and the device socket opens with it.
     fake.send(json!({"type":"paired","device_id":DEVICE_ID,"device_credential":CREDENTIAL,
@@ -364,37 +475,66 @@ async fn full_life_of_a_paired_computer() {
     let hello = eventually("hello", || frame_of(&fake, "hello", 0)).await;
     assert_eq!(hello["app_version"], extend_agent::config::APP_VERSION);
     assert_eq!(hello["agent_device_version"], "0.21.15");
-    assert_eq!(hello["capabilities"], json!(["screen.read", "screen.capture", "terminal"]));
+    assert_eq!(
+        hello["capabilities"],
+        json!(["screen.read", "screen.capture", "terminal"])
+    );
     assert_eq!(hello["setup"]["state"], "complete");
     let stored = std::fs::read_to_string(h.state.join("credential.json")).unwrap();
     assert!(stored.contains(CREDENTIAL));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        assert_eq!(std::fs::metadata(h.state.join("credential.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(h.state.join("credential.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
     // The device socket and GET /api/v1/device both carry the credential.
-    assert!(fake.seen().iter().any(|s| matches!(s, Seen::DeviceSocket { auth } if auth == &format!("Extend-Device {CREDENTIAL}"))));
+    assert!(
+        fake.seen()
+            .iter()
+            .any(|s| matches!(s, Seen::DeviceSocket { auth } if auth == &format!("Extend-Device {CREDENTIAL}")))
+    );
     eventually("device details", || {
         let s = h.handle.status.get();
-        (s.phase == Phase::Online && s.device.as_ref().and_then(|d| d.owner.clone()) == Some("c:alice".into())).then_some(())
+        (s.phase == Phase::Online && s.device.as_ref().and_then(|d| d.owner.clone()) == Some("c:alice".into()))
+            .then_some(())
     })
     .await;
-    assert!(fake.seen().iter().any(|s| matches!(s, Seen::DeviceSelf { auth } if auth == &format!("Extend-Device {CREDENTIAL}"))));
+    assert!(
+        fake.seen()
+            .iter()
+            .any(|s| matches!(s, Seen::DeviceSelf { auth } if auth == &format!("Extend-Device {CREDENTIAL}")))
+    );
     // The environment from `paired` was replaced by GET /api/v1/device (null): production.
     let status_file: Value = serde_json::from_slice(&std::fs::read(h.state.join("status.json")).unwrap()).unwrap();
     assert_eq!(status_file["pid"], std::process::id());
 
     // 4. A session starts: the indicator names the Silicon.
-    fake.send(json!({"type":"session_started","target":null,"session_id":"a3f","silicon_id":"si:chef","since":expires_in(0)}));
-    eventually("in use", || h.handle.status.get().in_use.filter(|u| u.silicon_id == "si:chef")).await;
-    eventually("driver told", || (h.computer.started.lock().unwrap().as_slice() == ["a3f"]).then_some(())).await;
+    fake.send(
+        json!({"type":"session_started","target":null,"session_id":"a3f","silicon_id":"si:chef","since":expires_in(0)}),
+    );
+    eventually("in use", || {
+        h.handle.status.get().in_use.filter(|u| u.silicon_id == "si:chef")
+    })
+    .await;
+    eventually("driver told", || {
+        (h.computer.started.lock().unwrap().as_slice() == ["a3f"]).then_some(())
+    })
+    .await;
     assert!(h.handle.status.get().headline().contains("si:chef is using this"));
 
     // 5. A command that makes a file: upload first, then the result listing it.
     let upload_id = "0192f000-0000-7000-8000-0000000000aa";
-    fake.send(json!({"type":"command","id":"0192f000-0000-7000-8000-000000000001","session_id":"a3f","target":null,
-        "command":"screenshot","args":[],"attachments":[],"timeout_ms":30000,"upload_ids":[upload_id]}));
+    fake.send(
+        json!({"type":"command","id":"0192f000-0000-7000-8000-000000000001","session_id":"a3f","target":null,
+        "command":"screenshot","args":[],"attachments":[],"timeout_ms":30000,"upload_ids":[upload_id]}),
+    );
     let result = eventually("screenshot result", || frame_of(&fake, "result", 0)).await;
     assert_eq!(result["id"], "0192f000-0000-7000-8000-000000000001");
     assert_eq!(result["ok"], true);
@@ -404,11 +544,26 @@ async fn full_life_of_a_paired_computer() {
     assert_eq!(result["files"][0]["content_type"], "image/png");
     assert_eq!(result["files"][0]["size_bytes"], 21);
     let seen = fake.seen();
-    let upload_at = seen.iter().position(|s| matches!(s, Seen::Upload { .. })).expect("upload");
-    let result_at = seen.iter().position(|s| matches!(s, Seen::Frame(f) if f["type"] == "result")).unwrap();
-    assert!(upload_at < result_at, "the file must be uploaded before the result is sent");
+    let upload_at = seen
+        .iter()
+        .position(|s| matches!(s, Seen::Upload { .. }))
+        .expect("upload");
+    let result_at = seen
+        .iter()
+        .position(|s| matches!(s, Seen::Frame(f) if f["type"] == "result"))
+        .unwrap();
+    assert!(
+        upload_at < result_at,
+        "the file must be uploaded before the result is sent"
+    );
     match &seen[upload_at] {
-        Seen::Upload { id, name, content_type, sha_ok, bytes } => {
+        Seen::Upload {
+            id,
+            name,
+            content_type,
+            sha_ok,
+            bytes,
+        } => {
             assert_eq!(id, upload_id);
             assert_eq!(name, "screenshot.png");
             assert_eq!(content_type, "image/png");
@@ -419,16 +574,20 @@ async fn full_life_of_a_paired_computer() {
     }
 
     // 6. A reserved flag is refused with a precise message; the driver never sees it.
-    fake.send(json!({"type":"command","id":"0192f000-0000-7000-8000-000000000002","session_id":"a3f","command":"snapshot",
-        "args":["-i","--platform","ios"],"timeout_ms":30000,"upload_ids":[]}));
+    fake.send(
+        json!({"type":"command","id":"0192f000-0000-7000-8000-000000000002","session_id":"a3f","command":"snapshot",
+        "args":["-i","--platform","ios"],"timeout_ms":30000,"upload_ids":[]}),
+    );
     let r = eventually("refused", || frame_of(&fake, "result", 1)).await;
     assert_eq!(r["ok"], false);
     assert_eq!(r["error"]["code"], "invalid_args");
     assert!(r["error"]["message"].as_str().unwrap().contains("--platform"));
 
     // 7. Cancel stops a running command.
-    fake.send(json!({"type":"command","id":"0192f000-0000-7000-8000-000000000003","session_id":"a3f","command":"wait",
-        "args":["60000"],"timeout_ms":120000,"upload_ids":[]}));
+    fake.send(
+        json!({"type":"command","id":"0192f000-0000-7000-8000-000000000003","session_id":"a3f","command":"wait",
+        "args":["60000"],"timeout_ms":120000,"upload_ids":[]}),
+    );
     tokio::time::sleep(Duration::from_millis(200)).await;
     fake.send(json!({"type":"cancel","id":"0192f000-0000-7000-8000-000000000003"}));
     let r = eventually("cancelled", || frame_of(&fake, "result", 2)).await;
@@ -441,57 +600,99 @@ async fn full_life_of_a_paired_computer() {
 
     // 9. Takeover shows the reason; Done goes up the socket.
     fake.send(json!({"type":"takeover","target":null,"session_id":"a3f","reason":"Please approve the admin prompt","expires_at":expires_in(1800)}));
-    eventually("takeover", || h.handle.status.get().takeover.filter(|t| t.reason == "Please approve the admin prompt")).await;
+    eventually("takeover", || {
+        h.handle
+            .status
+            .get()
+            .takeover
+            .filter(|t| t.reason == "Please approve the admin prompt")
+    })
+    .await;
     h.handle.actions.send(UiAction::TakeoverDone { target: None }).unwrap();
     eventually("takeover_done", || frame_of(&fake, "takeover_done", 0)).await;
     fake.send(json!({"type":"takeover_ended","target":null,"session_id":"a3f"}));
-    eventually("takeover cleared", || h.handle.status.get().takeover.is_none().then_some(())).await;
+    eventually("takeover cleared", || {
+        h.handle.status.get().takeover.is_none().then_some(())
+    })
+    .await;
 
     // 10. The session ends: the indicator clears and the driver closes its session.
     fake.send(json!({"type":"session_ended","target":null,"session_id":"a3f","reason":"stopped_by_carbon"}));
     eventually("not in use", || h.handle.status.get().in_use.is_none().then_some(())).await;
-    eventually("driver ended", || (h.computer.ended.lock().unwrap().as_slice() == ["a3f"]).then_some(())).await;
+    eventually("driver ended", || {
+        (h.computer.ended.lock().unwrap().as_slice() == ["a3f"]).then_some(())
+    })
+    .await;
 
     // 11. Test environment banner comes and goes with `environment`.
     fake.send(json!({"type":"environment","environment":{"environment_id":"9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c","name":"checkout-e2e","state":"ready"}}));
-    eventually("env banner", || h.handle.status.get().environment.filter(|e| e.name == "checkout-e2e")).await;
+    eventually("env banner", || {
+        h.handle.status.get().environment.filter(|e| e.name == "checkout-e2e")
+    })
+    .await;
     fake.send(json!({"type":"environment","environment":null}));
-    eventually("env cleared", || h.handle.status.get().environment.is_none().then_some(())).await;
+    eventually("env cleared", || {
+        h.handle.status.get().environment.is_none().then_some(())
+    })
+    .await;
 
     // 12. Attach a TV: the host reports it with the TV driver's probe and routes its commands.
-    fake.send(json!({"type":"attach","device_id":"0000aaaa","os":"samsung_tv","name":"Lounge TV","address":"10.0.0.5"}));
+    fake.send(
+        json!({"type":"attach","device_id":"0000aaaa","os":"samsung_tv","name":"Lounge TV","address":"10.0.0.5"}),
+    );
     let attached = eventually("attached", || frame_of(&fake, "attached", 0)).await;
     assert_eq!(attached["device_id"], "0000aaaa");
     assert_eq!(attached["online"], true);
     assert_eq!(attached["capabilities"], json!(["input.remote", "apps.launch"]));
-    fake.send(json!({"type":"command","id":"0192f000-0000-7000-8000-000000000004","session_id":"b40","target":"0000aaaa",
-        "command":"tv-remote","args":["press","home"],"timeout_ms":30000,"upload_ids":[]}));
+    fake.send(
+        json!({"type":"command","id":"0192f000-0000-7000-8000-000000000004","session_id":"b40","target":"0000aaaa",
+        "command":"tv-remote","args":["press","home"],"timeout_ms":30000,"upload_ids":[]}),
+    );
     let r = eventually("tv result", || frame_of(&fake, "result", 3)).await;
     assert_eq!(r["ok"], true);
     assert_eq!(r["text"], "pressed on the TV");
-    fake.send(json!({"type":"command","id":"0192f000-0000-7000-8000-000000000005","session_id":"b40","target":"0000bbbb",
-        "command":"tv-remote","args":["press","home"],"timeout_ms":30000,"upload_ids":[]}));
+    fake.send(
+        json!({"type":"command","id":"0192f000-0000-7000-8000-000000000005","session_id":"b40","target":"0000bbbb",
+        "command":"tv-remote","args":["press","home"],"timeout_ms":30000,"upload_ids":[]}),
+    );
     let r = eventually("unknown target", || frame_of(&fake, "result", 4)).await;
     assert_eq!(r["error"]["code"], "unsupported_on_device");
 
     // 13. `refresh` re-reads the device.
     let before = fake.count(|s| matches!(s, Seen::DeviceSelf { .. }));
     fake.send(json!({"type":"refresh"}));
-    eventually("refreshed", || (fake.count(|s| matches!(s, Seen::DeviceSelf { .. })) > before).then_some(())).await;
+    eventually("refreshed", || {
+        (fake.count(|s| matches!(s, Seen::DeviceSelf { .. })) > before).then_some(())
+    })
+    .await;
 
     // 14. Service pings are answered with the same nonce.
     fake.send(json!({"type":"ping","nonce":42}));
-    eventually("pong 42", || fake.frames().into_iter().find(|f| f["type"] == "pong" && f["nonce"] == 42)).await;
+    eventually("pong 42", || {
+        fake.frames()
+            .into_iter()
+            .find(|f| f["type"] == "pong" && f["nonce"] == 42)
+    })
+    .await;
 
     // 15. Unpaired: the credential is forgotten and a new pairing code appears.
     fake.send(json!({"type":"unpaired","reason":"device_removed"}));
-    eventually("second enrollment", || (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 2).then_some(())).await;
-    eventually("pairing again", || (h.handle.status.get().phase == Phase::Enrolling).then_some(())).await;
+    eventually("second enrollment", || {
+        (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 2).then_some(())
+    })
+    .await;
+    eventually("pairing again", || {
+        (h.handle.status.get().phase == Phase::Enrolling).then_some(())
+    })
+    .await;
     assert!(!h.state.join("credential.json").exists());
     assert!(h.handle.status.get().device.is_none());
 
     h.handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), h.task).await.expect("agent stops").unwrap();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .expect("agent stops")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -500,11 +701,68 @@ async fn revoke_pair_from_the_app() {
     let fake = h.fake.clone();
     eventually("hello", || frame_of(&fake, "hello", 0)).await;
     h.handle.actions.send(UiAction::RevokePair).unwrap();
-    eventually("DELETE /api/v1/device", || fake.seen().iter().any(|s| matches!(s, Seen::Revoke)).then_some(())).await;
-    eventually("back to pairing", || (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 1).then_some(())).await;
+    eventually("DELETE /api/v1/device", || {
+        fake.seen().iter().any(|s| matches!(s, Seen::Revoke)).then_some(())
+    })
+    .await;
+    eventually("back to pairing", || {
+        (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 1).then_some(())
+    })
+    .await;
     assert!(!h.state.join("credential.json").exists());
     h.handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), h.task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn revoke_pair_from_the_app_stops_a_running_command_before_cleanup() {
+    let h = start(true).await;
+    let fake = h.fake.clone();
+    eventually("hello", || frame_of(&fake, "hello", 0)).await;
+    fake.send(
+        json!({"type":"session_started","target":null,"session_id":"a3f","silicon_id":"si:chef","since":expires_in(0)}),
+    );
+    fake.send(
+        json!({"type":"command","id":"0192f000-0000-7000-8000-000000000009","session_id":"a3f","command":"wait",
+        "args":["300000"],"timeout_ms":300000,"upload_ids":[]}),
+    );
+    eventually("command running", || {
+        h.computer
+            .events
+            .lock()
+            .unwrap()
+            .contains(&"wait a3f".to_string())
+            .then_some(())
+    })
+    .await;
+    // Revoke over HTTP: the service's own session_ended frame is never read on this path.
+    h.handle.actions.send(UiAction::RevokePair).unwrap();
+    eventually("DELETE /api/v1/device", || {
+        fake.seen().iter().any(|s| matches!(s, Seen::Revoke)).then_some(())
+    })
+    .await;
+    eventually("cleanup", || {
+        h.computer
+            .events
+            .lock()
+            .unwrap()
+            .contains(&"ended a3f".to_string())
+            .then_some(())
+    })
+    .await;
+    // The running command was stopped first, and cleanup ran after it, not beside it.
+    assert_eq!(
+        *h.computer.events.lock().unwrap(),
+        ["wait a3f", "waited a3f", "ended a3f"]
+    );
+    h.handle.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -513,34 +771,95 @@ async fn close_4401_means_unpaired() {
     let fake = h.fake.clone();
     eventually("hello", || frame_of(&fake, "hello", 0)).await;
     fake.send(json!("__close_4401"));
-    eventually("new enrollment", || (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 1).then_some(())).await;
+    eventually("new enrollment", || {
+        (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 1).then_some(())
+    })
+    .await;
     assert!(!h.state.join("credential.json").exists());
     h.handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), h.task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
 async fn close_4409_means_superseded_and_no_reconnect() {
     let h = start_with(true, &[4409]).await;
     let fake = h.fake.clone();
-    eventually("superseded", || (h.handle.status.get().phase == Phase::Superseded).then_some(())).await;
+    eventually("superseded", || {
+        (h.handle.status.get().phase == Phase::Superseded).then_some(())
+    })
+    .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(fake.count(|s| matches!(s, Seen::DeviceSocket { .. })), 1, "a superseded app must not reconnect");
+    assert_eq!(
+        fake.count(|s| matches!(s, Seen::DeviceSocket { .. })),
+        1,
+        "a superseded app must not reconnect"
+    );
     // The Carbon can take the connection back.
     h.handle.actions.send(UiAction::Reconnect).unwrap();
     eventually("hello after reconnect", || frame_of(&fake, "hello", 0)).await;
     assert!(h.state.join("credential.json").exists());
     h.handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), h.task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
 async fn close_4426_means_upgrade_required() {
     let h = start_with(true, &[4426]).await;
-    eventually("upgrade required", || (h.handle.status.get().phase == Phase::UpgradeRequired).then_some(())).await;
+    eventually("upgrade required", || {
+        (h.handle.status.get().phase == Phase::UpgradeRequired).then_some(())
+    })
+    .await;
     assert!(h.state.join("credential.json").exists());
     h.handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), h.task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// The periodic check is an hour apart here, so only the check after a session's setup and
+/// cleanup can tell the service what changed: a computer released when a session starts, or
+/// held again after one ends.
+#[tokio::test]
+async fn capabilities_are_checked_again_after_session_setup_and_cleanup() {
+    let h = start_with_held(true).await;
+    let fake = h.fake.clone();
+    let first = eventually("hello", || frame_of(&fake, "hello", 0)).await;
+    assert_eq!(first["capabilities"], json!(["terminal"]), "{first}");
+    assert_eq!(
+        first["setup"]["state"], "complete",
+        "a held computer stays ready: {first}"
+    );
+    fake.send(
+        json!({"type":"session_started","target":null,"session_id":"b40","silicon_id":"si:chef","since":expires_in(0)}),
+    );
+    let released = eventually("a hello after the session's setup", || frame_of(&fake, "hello", 1)).await;
+    assert_eq!(
+        released["capabilities"],
+        json!(["screen.read", "screen.capture", "terminal"]),
+        "{released}"
+    );
+    fake.send(json!({"type":"session_ended","target":null,"session_id":"b40","reason":"stopped_by_carbon"}));
+    let held = eventually("a hello after the session's cleanup", || frame_of(&fake, "hello", 2)).await;
+    assert_eq!(held["capabilities"], json!(["terminal"]), "{held}");
+    assert!(
+        held["missing"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("couldn't release"),
+        "{held}"
+    );
+    h.handle.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -558,13 +877,18 @@ async fn a_dropped_socket_reconnects_and_says_hello_again() {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
-    tokio::time::timeout(Duration::from_secs(10), second).await.expect("reconnected within 10 s");
+    tokio::time::timeout(Duration::from_secs(10), second)
+        .await
+        .expect("reconnected within 10 s");
     assert_eq!(fake.count(|s| matches!(s, Seen::DeviceSocket { .. })), 2);
     // Stop while connected again still works.
     h.handle.actions.send(UiAction::Stop { target: None }).unwrap();
     eventually("stop", || frame_of(&fake, "stop", 0)).await;
     h.handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), h.task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), h.task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -583,14 +907,20 @@ async fn a_refused_credential_on_connect_means_unpaired() {
     let state = config.state_dir.clone();
     let (agent, handle) = Agent::new(AgentDeps {
         config,
-        local: Arc::new(FakeComputer { started: Mutex::new(vec![]), ended: Mutex::new(vec![]) }),
+        local: Arc::new(FakeComputer::default()),
         hosted_factory: Arc::new(|_d| Err("none".into())),
         credentials: store,
         probe_interval: Duration::from_secs(3600),
     });
     let task = tokio::spawn(agent.run());
-    eventually("enrollment after 401", || (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 1).then_some(())).await;
+    eventually("enrollment after 401", || {
+        (fake.count(|s| matches!(s, Seen::CreateEnrollment(_))) == 1).then_some(())
+    })
+    .await;
     assert!(!state.join("credential.json").exists());
     handle.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), task).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .unwrap()
+        .unwrap();
 }

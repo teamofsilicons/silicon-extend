@@ -99,14 +99,10 @@ pub(crate) fn parse_tv_remote(args: &[String]) -> Result<RemotePress, String> {
     while let Some(a) = it.next() {
         match a {
             "--duration-ms" | "--duration" => {
-                let v = it
-                    .next()
-                    .ok_or("--duration-ms needs a number of milliseconds")?;
+                let v = it.next().ok_or("--duration-ms needs a number of milliseconds")?;
                 duration = Some(parse_ms(v)?);
             }
-            _ if a.starts_with("--duration-ms=") => {
-                duration = Some(parse_ms(&a["--duration-ms=".len()..])?)
-            }
+            _ if a.starts_with("--duration-ms=") => duration = Some(parse_ms(&a["--duration-ms=".len()..])?),
             "--json" => {}
             _ if a.starts_with("--") => return Err(format!("tv-remote doesn't take {a}")),
             "press" | "longpress" if action.is_none() => action = Some(a),
@@ -218,10 +214,7 @@ pub(crate) fn find_app<'a, T>(
         .or_else(|| apps.iter().find(|a| id(a).to_lowercase() == w))
         .or_else(|| apps.iter().find(|a| name(a).to_lowercase() == w))
         .or_else(|| {
-            let hits: Vec<&T> = apps
-                .iter()
-                .filter(|a| name(a).to_lowercase().contains(&w))
-                .collect();
+            let hits: Vec<&T> = apps.iter().filter(|a| name(a).to_lowercase().contains(&w)).collect();
             if hits.len() == 1 { Some(hits[0]) } else { None }
         })
 }
@@ -462,9 +455,7 @@ mod tests {
             Some(Duration::from_millis(900))
         );
         assert_eq!(
-            parse_tv_remote(&s(&["press", "Play-Pause"]))
-                .unwrap()
-                .button,
+            parse_tv_remote(&s(&["press", "Play-Pause"])).unwrap().button,
             Button::PlayPause
         );
         assert_eq!(
@@ -485,20 +476,14 @@ mod tests {
 
     #[test]
     fn open_parsing() {
-        assert_eq!(
-            parse_open(&s(&["YouTube"])).unwrap(),
-            OpenTarget::App("YouTube".into())
-        );
+        assert_eq!(parse_open(&s(&["YouTube"])).unwrap(), OpenTarget::App("YouTube".into()));
         assert_eq!(
             parse_open(&s(&["https://example.com"])).unwrap(),
             OpenTarget::Url("https://example.com".into())
         );
         assert_eq!(
             parse_open(&s(&["com.google.ios.youtube", "youtube://watch?v=1"])).unwrap(),
-            OpenTarget::AppWithUrl(
-                "com.google.ios.youtube".into(),
-                "youtube://watch?v=1".into()
-            )
+            OpenTarget::AppWithUrl("com.google.ios.youtube".into(), "youtube://watch?v=1".into())
         );
         assert!(parse_open(&s(&["Finder", "--surface", "app"])).is_err());
         assert!(parse_open(&[]).is_err());
@@ -537,10 +522,7 @@ mod tests {
             split_host_port("192.168.1.2:49153"),
             ("192.168.1.2".into(), Some(49153))
         );
-        assert_eq!(
-            split_host_port("[fe80::1]:7000"),
-            ("fe80::1".into(), Some(7000))
-        );
+        assert_eq!(split_host_port("[fe80::1]:7000"), ("fe80::1".into(), Some(7000)));
         assert_eq!(split_host_port("fe80::1"), ("fe80::1".into(), None));
         assert_eq!(url_host("fe80::1"), "[fe80::1]");
     }
