@@ -714,7 +714,16 @@ impl Driver for AgentDeviceDriver {
             if facts.logs_running {
                 let _ = self.invoke(session_id, &["logs".into(), "stop".into()], &dir, t, &cancel).await;
             }
-            let _ = self.invoke(session_id, &["close".into()], &dir, t, &cancel).await;
+            let mut closed = self.invoke(session_id, &["close".into()], &dir, t, &cancel).await;
+            if closed.error.as_ref().is_some_and(|e| e.details["agent_device"]["reason"] == "session_cleanup_incomplete") {
+                // Failed recording export may still dispose the native recorder. A second close
+                // confirms the remaining cleanup and releases the retained claim.
+                closed = self.invoke(session_id, &["close".into()], &dir, t, &cancel).await;
+            }
+            if !closed.ok {
+                tracing::warn!(session_id, error = ?closed.error, "session cleanup remains incomplete; retaining its state and artifacts");
+                return;
+            }
         }
         self.sessions.lock().unwrap().remove(session_id);
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -1018,6 +1027,47 @@ mod tests {
         assert_eq!(map_error_code("COMMAND_FAILED"), "command_failed");
         let out = parse_result("", "node: not found", false);
         assert_eq!(out.error.unwrap().code, "command_failed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_cleanup_retries_incomplete_cleanup_and_preserves_unreleased_state() {
+        use std::os::unix::fs::PermissionsExt as _;
+        for (recover, reason, attempts) in [
+            (true, "session_cleanup_incomplete", "2"),
+            (false, "session_cleanup_incomplete", "2"),
+            (false, "unrelated_failure", "1"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = dir.path().join("state");
+            std::fs::create_dir_all(&state).unwrap();
+            let script = dir.path().join("fake-ad");
+            std::fs::write(&script, format!(r#"#!/bin/sh
+count=0
+[ ! -f "$AGENT_DEVICE_STATE_DIR/count" ] || count=$(cat "$AGENT_DEVICE_STATE_DIR/count")
+count=$((count + 1))
+echo "$count" > "$AGENT_DEVICE_STATE_DIR/count"
+if [ "$count" -ge 2 ] && {recover}; then
+  echo '{{"success":true,"data":{{}}}}'
+else
+  echo '{{"success":false,"error":{{"code":"COMMAND_FAILED","message":"cleanup failed","details":{{"reason":"{reason}"}}}}}}'
+  exit 1
+fi
+"#)).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let driver = AgentDeviceDriver::new(
+                Some(vec![script.display().to_string()]), None, "linux", state.clone(),
+                dir.path().join("sessions"), std::sync::Arc::new(|_: &ProbeInput<'_>| unreachable!()),
+            );
+            driver.sessions.lock().unwrap().insert("a3f".into(), SessionFacts::default());
+            let scratch = driver.session_dir("a3f");
+            std::fs::create_dir_all(&scratch).unwrap();
+            std::fs::write(scratch.join("capture.mp4"), "retry material").unwrap();
+            driver.session_ended("a3f").await;
+            assert_eq!(std::fs::read_to_string(state.join("count")).unwrap().trim(), attempts);
+            assert_eq!(scratch.exists(), !recover);
+            assert_eq!(driver.sessions.lock().unwrap().contains_key("a3f"), !recover);
+        }
     }
 
     #[cfg(unix)]

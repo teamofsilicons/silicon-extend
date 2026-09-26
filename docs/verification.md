@@ -141,3 +141,9 @@ compatibility. These checks do not establish completion of the entire product co
   devices still run concurrently and session end cancels pending commands. All 110 agent unit
   tests and seven fake-service tests pass. The rebuilt signed Mac app selected the expected app
   in a real recording run, but that single run does not establish that all foreground races are fixed.
+- The stuck live test session `bridge-c67` subsequently closed successfully through the same
+  daemon, confirming cleanup retry releases a real retained claim. Bridge now retries the typed
+  `session_cleanup_incomplete` result once on session end and preserves state/artifacts if cleanup
+  still fails. The regression failed before this driver change and passes for recovery, persistent
+  cleanup failure and a same-message error with a different reason. All 111 agent unit tests and
+  seven fake-service tests pass after this change.
