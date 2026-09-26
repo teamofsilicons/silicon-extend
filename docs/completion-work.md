@@ -9,7 +9,7 @@ An implementation or passing mock does not close a physical-device or production
 - Android: physical-device coverage, large APK/Briefcase inputs and recording beyond the
   native 180-second limit. Local ADB pairing, command execution, installation, logs and
   recording are implemented; see the verification record for exercised paths.
-- Desktop: Mac recording stress/recovery, hidden-stage/multi-display coverage and daemon refresh on updates; notarized helper distribution;
+- Desktop: Mac recording stress/recovery, hidden-stage/multi-display coverage and active-session update policy; notarized helper distribution;
   Windows runtime and recording; Linux recording and current desktop support.
 - Hardware: physical Android/Fire TV, iPhone/iPad, Apple TV, Samsung/LG TVs. Record actual
   device/OS and exercised operations; simulator/mock results remain separate.
@@ -66,3 +66,7 @@ An implementation or passing mock does not close a physical-device or production
 - Named Mac app binding now passes snapshots, nonblank screenshots and app-scoped recording
   with a second owned app in front. See the named-app verification entry for scope and
   Stage Manager limitations. URL-only opens still follow the foreground app.
+
+- Packaged daemon refresh now has a content-based runtime version. A real empty-session daemon
+  test reproduces unstamped stale reuse, verifies replacement by changed stamped code, and checks
+  reuse by an identical relocated artifact. Active-session updates remain unverified.

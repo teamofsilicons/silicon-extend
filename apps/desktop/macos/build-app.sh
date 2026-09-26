@@ -71,6 +71,9 @@ tar -C "$AD" --exclude='.build' --exclude='.swiftpm' --exclude='DerivedData' --e
   | tar -C "$APP/Contents/Resources/agent-device" -xf -
 tar -xzf "$NODE_TARBALL" -C "$APP/Contents/Resources/node" --strip-components=1 \
   --include='*/bin/node' --include='*/LICENSE'
+# Stamp before signing: signing timestamps must not invalidate an otherwise identical runtime.
+"$APP/Contents/Resources/node/bin/node" "$ROOT/apps/desktop/stamp-runtime.mjs" \
+  "$APP/Contents/Resources/agent-device" "$APP/Contents/MacOS/agent-device-macos-helper"
 plutil -lint "$APP/Contents/Info.plist"
 
 step "Code signature ($SIGN_IDENTITY)"

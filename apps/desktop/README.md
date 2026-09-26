@@ -40,6 +40,11 @@ Silicon Bridge.app/Contents/
 - Node is pinned to 22.23.3. Both architecture checksums in `macos/node-sha256.txt` come from
   `https://nodejs.org/dist/v22.23.3/SHASUMS256.txt`; cached and offline tarballs are checked too.
   The agent-device fork is rebuilt on every packaging run to include current source changes.
+- Mac and Linux packaging stamp the staged runtime version with a SHA-256 build suffix.
+  The digest covers packaged code/assets, the Node platform/version and (on Mac) the native
+  helper before signing. Changed code therefore triggers the existing daemon takeover path;
+  identical copied artifacts retain the same identity despite paths, mtimes or signing timestamps.
+  The vendor source manifest and Bridge's public version are not changed by packaging.
 - `bridge-agent` finds the bundled agent-device and Node through `../Resources`. Setting
   `BRIDGE_AGENT_DEVICE` or `BRIDGE_NODE` overrides them.
 - Checked here: the bundle built (176 MB, 52 MB zipped), `plutil -lint` passed, and
@@ -171,3 +176,16 @@ which Windows 10 and 11 ship.
 **None of the Windows side has run on Windows.** From this Mac it is checked with
 `cargo check` and `cargo clippy -- -D warnings` against `--target x86_64-pc-windows-msvc`, and
 the driver's pure logic is unit-tested. The script itself hasn't run.
+
+### Packaged daemon update verification
+
+```sh
+node --test apps/desktop/stamp-runtime.test.mjs
+node apps/desktop/runtime-update-e2e.mjs <built-agent-device-package>
+```
+
+The second command creates isolated copies and an empty session store. It first reproduces stale
+reuse without a build stamp, then verifies that the new artifact executes in a new daemon and that
+an identical relocated copy reuses it. It stops its owned daemon afterward and never opens a device.
+The changed-version path uses the runtime's existing shutdown/cleanup behavior; this check does
+not exercise updating during an active device session.

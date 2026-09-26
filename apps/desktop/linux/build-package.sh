@@ -43,6 +43,7 @@ mkdir -p "$STAGE/bin" "$STAGE/lib/silicon-bridge/agent-device" "$STAGE/lib/silic
 install -m 0755 "$BRIDGE_AGENT_BIN" "$STAGE/bin/bridge-agent"
 tar -C "$AD" -cf - bin dist linux package.json LICENSE | tar -C "$STAGE/lib/silicon-bridge/agent-device" -xf -
 tar -xJf "$NODE_TARBALL" -C "$STAGE/lib/silicon-bridge/node" --strip-components=1 --wildcards '*/bin/node' '*/LICENSE'
+"$STAGE/lib/silicon-bridge/node/bin/node" "$ROOT/apps/desktop/stamp-runtime.mjs" "$STAGE/lib/silicon-bridge/agent-device"
 cat > "$STAGE/share/applications/silicon-bridge.desktop" <<EOF
 [Desktop Entry]
 Type=Application

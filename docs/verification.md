@@ -205,3 +205,27 @@ compatibility. These checks do not establish completion of the entire product co
   explicitly refresh idle daemons; repeatedly replacing an app bundle is not proof of refresh.
   Native recording stress/recovery, hidden-stage/multi-display coverage, URL targeting,
   notarization, other platforms, physical hardware and production integrations remain open.
+
+
+### 2026-09-26 — packaged runtime build identity
+
+- The stale-daemon cause was the installed-runtime identity contract: identical package versions
+  are intentionally reused without comparing filesystem fingerprints. Bridge's rebuilt fork
+  previously retained upstream version `0.21.15` even when its behavior changed.
+- Mac/Linux staging now appends `+bridge.<sha256>` to the fork's package version. The digest
+  covers the staged code/assets, canonical package metadata, Node platform/architecture/version,
+  and the Mac native helper before signing. Relocation and filesystem timestamps do not affect it.
+  The vendor source manifest and Bridge's public release version remain unchanged.
+- Four focused tests pass: identical relocated content, same-size/same-mtime code changes, native
+  helper changes and rejection of incomplete staging. The real-daemon harness first reproduced
+  stale reuse by unstamped A/B artifacts, then verified a changed PID and execution of build B
+  after stamping. An identical relocated B reused that daemon. Cleanup used the runtime's own
+  stop command against its isolated state directory; no devices or active sessions were opened.
+- This proves refresh of an idle packaged daemon. Active-session update behavior, Windows release
+  handling, notarization and production publication remain separate gates. Windows uses Bridge's
+  native driver and does not bundle this Node daemon. Linux's packaging hook is added, but its
+  full package build was not rerun in this check.
+- Two successive Developer ID Mac builds retained identical runtime build identities. Deep/strict
+  signature verification, bundled Node execution and archive-manifest equality passed. The final
+  app contains no local-test environment overrides. Output is the signed, not-notarized
+  `target/desktop/macos/Silicon Bridge.app` and its 43-MB zip.
