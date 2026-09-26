@@ -43,7 +43,7 @@ An implementation or passing mock does not close a physical-device or production
   XCTest. Unicode, exact whitespace, clearing, secure-field replacement and cancellation are
   covered. Both OS grants are enabled and recognized by the running GUI app. Native ScreenCaptureKit
   recording now passes short static/animated recording and service artifact-transfer checks without
-  XCTest. Duration/file-limit stress, owner-loss recovery, hidden-stage app capture, notarization,
+  XCTest. Full 30-minute/1-GiB limits, hidden-stage app capture, notarization,
   other desktop platforms and production remain open.
 
 ## Release prerequisites inspected
@@ -70,3 +70,7 @@ An implementation or passing mock does not close a physical-device or production
 - Packaged daemon refresh now has a content-based runtime version. A real empty-session daemon
   test reproduces unstamped stale reuse, verifies replacement by changed stamped code, and checks
   reuse by an identical relocated artifact. Active-session updates remain unverified.
+
+- Mac reduced duration/file limits and abrupt native recorder-owner exit now pass real
+  GUI-owned recording and full decoding. The full 30-minute run was stopped by the Carbon;
+  full caps remain unverified. See the recording limits entry for exact results.

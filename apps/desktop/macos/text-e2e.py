@@ -12,6 +12,7 @@ import plistlib
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -22,10 +23,16 @@ parser.add_argument("--helper", type=pathlib.Path, default=ROOT / "target/deskto
 parser.add_argument("--bridge", type=pathlib.Path, help="Also exercise the packaged Bridge driver and selector dispatch")
 parser.add_argument("--record", action="store_true", help="Also exercise native and packaged screen recording against this fixture")
 parser.add_argument("--record-only", action="store_true", help="Exercise recording of an animated fixture without keyboard or mouse input")
+parser.add_argument("--record-duration-limit", action="store_true", help="Run the real public recording command until its default 30-minute cap")
+parser.add_argument("--record-stress", action="store_true", help="Also verify a reduced file cap and abrupt recorder-owner exit through the GUI app")
 parser.add_argument("--device", help="Run capture through a GUI Bridge app paired to the local test service")
 parser.add_argument("--artifacts", type=pathlib.Path, help="Keep the downloaded recording and a decoded frame for visual verification")
 parser.add_argument("--service-url", default="http://127.0.0.1:8480")
 args = parser.parse_args()
+if args.record_stress or args.record_duration_limit:
+    if not args.device:
+        parser.error("recording stress checks require --device for GUI-owned permissions")
+    args.record_only = True
 if args.record_only:
     args.record = True
 BUNDLE = f"com.teamofsilicons.bridge.textfixture.{uuid.uuid4().hex}"
@@ -54,19 +61,19 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
     register = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
     subprocess.run([register, "-f", "-v", str(app.parent)], check=True)
     state = work / "state.json"
-    fixture = subprocess.Popen([str(binary), str(state), *( ["--animate"] if args.record_only else [])], stdout=subprocess.DEVNULL)
+    fixture = subprocess.Popen([str(binary), str(state), *( ["--animate"] if args.record_only else []), *( ["--noise"] if args.record_stress else [])], stdout=subprocess.DEVNULL)
     peer = None
     peer_app = None
     remote_session = None
     remote_env = {**os.environ, "BRIDGE_API_URL": args.service_url, "SILICON_HOME": str(work / "cli-home"), "BRIDGE_TELEMETRY": "off"}
 
     def remote_cli(*command):
-        result = subprocess.run([str(ROOT / "target/debug/bridge"), *command], env=remote_env, capture_output=True, text=True, timeout=60)
+        result = subprocess.run([str(ROOT / "target/debug/bridge"), *command], env=remote_env, capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, (command, result.stdout, result.stderr)
         return result.stdout
 
     def remote(*command):
-        response = json.loads(remote_cli(*command, "--json"))["data"]["result"]
+        response = json.loads(remote_cli("--timeout", "90000", *command, "--json"))["data"]["result"]
         assert response["ok"], response
         return response
 
@@ -158,7 +165,7 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
             if args.device:
                 remote_cli("login", "si:chef")
                 remote_session = remote_cli("session", "new", args.device, "--connect").strip()
-            for mode in ["manual", "duration-limit"]:
+            for mode in ["manual", "duration-limit", *( ["size-limit", "owner-exited"] if args.record_stress else [])]:
                 assert fixture.poll() is None, "fixture exited before recording"
                 if not args.record_only:
                     send(request("native recording " + mode))
@@ -166,16 +173,43 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
                 command = [str(args.helper), "record", "--out", str(output), "--status", str(status), "--bundle-id", BUNDLE, "--fps", "12"]
                 if mode == "duration-limit":
                     command += ["--max-duration-ms", "1500"]
+                if mode == "size-limit":
+                    command += ["--max-bytes", str(16 * 1024 * 1024), "--max-duration-ms", "60000"]
+                if mode == "owner-exited":
+                    command += ["--max-duration-ms", "10000"]
                 if args.device:
+                    if mode == "owner-exited":
+                        owner = work / "recorder-owner.py"
+                        owner.write_text("""import json, os, pathlib, subprocess, sys, time
+status = pathlib.Path(sys.argv[1])
+child = subprocess.Popen(sys.argv[2:])
+deadline = time.monotonic() + 8
+while time.monotonic() < deadline:
+    if child.poll() is not None:
+        raise RuntimeError('recorder exited before readiness')
+    if status.exists() and json.loads(status.read_text()).get('state') == 'recording':
+        time.sleep(1)
+        os._exit(0)  # abrupt owner loss: no wait, signal or graceful cleanup
+    time.sleep(.05)
+child.terminate()
+child.wait(timeout=3)
+raise RuntimeError('recorder never became ready')
+""")
+                        command = [sys.executable, str(owner), str(status), *command]
                     script = shlex.join(command)
                     if mode == "manual":
                         script += ' & recorder_pid=$!; sleep 2; kill -TERM "$recorder_pid"; wait "$recorder_pid"'
                     remote("terminal", "run", script)
+                    until(lambda: status.exists() and json.loads(status.read_text()).get("state") in ["completed", "failed"], timeout=12)
                     complete = json.loads(status.read_text())
                     assert complete["state"] == "completed", complete
                     assert complete["reason"] == ("stopped" if mode == "manual" else mode), complete
-                    video_info(output)
-                    print(f"PASS GUI-owned native recording: {mode}, valid H.264 MP4")
+                    info = video_info(output)
+                    if mode == "size-limit":
+                        assert output.stat().st_size <= 16 * 1024 * 1024, output.stat().st_size
+                    if mode == "owner-exited":
+                        assert float(info["format"]["duration"]) < 8, info
+                    print(f"PASS GUI-owned native recording: {mode}, valid H.264 MP4, {output.stat().st_size} bytes, {info['format']['duration']} seconds", flush=True)
                     continue
                 recorder = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
@@ -257,6 +291,34 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
                     shutil.copy2(output, saved)
                     subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "0.5", "-i", str(saved), "-frames:v", "1", "-update", "1", str(args.artifacts / "recording-frame.png")], check=True)
                 print("PASS real-service recording: GUI app, command relay, upload and CLI download")
+                if args.record_duration_limit:
+                    started = remote("record", "start", "duration-cap", "--scope", "app", "--fps", "1", "--hide-touches")
+                    source = pathlib.Path(started["output"]["outPath"])
+                    source = source.with_name(source.stem + ".native" + source.suffix)
+                    statuses = list(source.parent.glob(source.name + ".*.status.json"))
+                    assert len(statuses) == 1, statuses
+                    recording_status = statuses[0]
+                    identity = json.loads(recording_status.read_text())
+                    beginning = time.monotonic()
+                    print(f"START full 30-minute cap check: recorder pid={identity['pid']}, session={remote_session}", flush=True)
+                    while recording_status.exists() and time.monotonic() - beginning < 1815:
+                        time.sleep(30)
+                        if not recording_status.exists():
+                            break
+                        # Keep the session's ordinary idle timeout from ending this cap check.
+                        remote("snapshot", "-i")
+                        print(f"RUNNING full duration check: {time.monotonic() - beginning:.0f}s, {source.stat().st_size} bytes", flush=True)
+                    output = work / "duration-cap.mp4"
+                    response = remote("record", "stop", "--out", str(output))
+                    assert len(response["files"]) == 1, response
+                    info = video_info(output)
+                    duration = float(info["format"]["duration"])
+                    assert 1799 <= duration <= 1801, info
+                    assert output.stat().st_size <= 1024 ** 3, output.stat().st_size
+                    if args.artifacts:
+                        shutil.copy2(output, args.artifacts / "duration-cap.mp4")
+                    print(f"PASS public 30-minute recording cap: {duration}s, {output.stat().st_size} bytes, full decode and download", flush=True)
+
 
         if args.bridge:
             home = work / "bridge-home"
@@ -295,21 +357,23 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
                     contents = args.bridge.parent.parent
                     subprocess.run([str(contents / "Resources/node/bin/node"), str(contents / "Resources/agent-device/bin/agent-device.mjs"), "daemon", "stop", "--state-dir", str(home / ".bridge-agent/agent-device"), "--clean"], check=True, timeout=30)
     finally:
-        if remote_session:
-            remote_cli("session", "end", remote_session)
-        if peer is not None:
-            peer.terminate()
-            try:
-                peer.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                peer.kill()
-                peer.wait()
-        if peer_app is not None:
-            subprocess.run([register, "-u", str(peer_app)], check=True)
-        fixture.terminate()
         try:
-            fixture.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            fixture.kill()
-            fixture.wait()
-        subprocess.run([register, "-u", str(app.parent)], check=True)
+            if remote_session:
+                remote_cli("session", "end", remote_session)
+        finally:
+            if peer is not None:
+                peer.terminate()
+                try:
+                    peer.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    peer.kill()
+                    peer.wait()
+            if peer_app is not None:
+                subprocess.run([register, "-u", str(peer_app)], check=True)
+            fixture.terminate()
+            try:
+                fixture.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                fixture.kill()
+                fixture.wait()
+            subprocess.run([register, "-u", str(app.parent)], check=True)

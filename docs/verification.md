@@ -229,3 +229,25 @@ compatibility. These checks do not establish completion of the entire product co
   signature verification, bundled Node execution and archive-manifest equality passed. The final
   app contains no local-test environment overrides. Output is the signed, not-notarized
   `target/desktop/macos/Silicon Bridge.app` and its 43-MB zip.
+
+
+### 2026-09-26 — Mac recording limits and owner loss
+
+- GUI-owned session `105` passed native manual stop, a 1.5-second duration limit, a
+  16-MiB file limit and abrupt recorder-owner exit. Each result was H.264 MP4 and passed
+  full ffmpeg decoding. The file-limit recording stopped with `size-limit` at 12,666,951
+  bytes and 52.58 seconds; owner loss stopped with `owner-exited` at 1.11 seconds.
+- The same run passed named-app capture with an overlapping foreground peer and a public
+  recording start/stop through the local service, upload and CLI download. Saved artifacts
+  are in ignored `target/desktop/macos/record-stress-verification/`.
+- `text-e2e.py --record-stress --device <id>` reproduces these checks. The animated fixture
+  supplies changing image content; its owner-loss case exits without signaling the recorder.
+  Fixture cleanup runs even when session cleanup fails.
+- A separate `--record-duration-limit` run in session `d7a` was interrupted at about
+  100 seconds with service end reason `stopped_by_carbon`. The 30-minute cap is NOT verified,
+  and this run is not counted as a recorder failure. No automatic restart was made.
+- The full 1-GiB cap, hidden-stage/multi-display capture and default touch overlays remain
+  open. Reduced limits do not close those gates. After the interruption the session was
+  inactive, the test daemon was stopped through its CLI, and the app's production Info.plist
+  was restored. Developer ID signature, bundled Node execution and archive byte equality
+  passed; neither the app nor its zip contains local-test environment overrides.
