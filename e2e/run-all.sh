@@ -40,6 +40,9 @@ else
 fi
 
 if [ -x apps/android/gradlew ]; then
+  # No system Java on the build Mac: use Homebrew's JDK 17 when JAVA_HOME isn't set (apps/android/README.md).
+  : "${JAVA_HOME:=$( [ -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ] && echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home || /usr/libexec/java_home 2>/dev/null )}"
+  export JAVA_HOME
   run android-unit bash -c "cd apps/android && ./gradlew --quiet testDebugUnitTest"
 else
   skip android "apps/android not present"

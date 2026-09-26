@@ -283,20 +283,17 @@ async fn handle(state: &AppState, world: &World, device_id: &str, key: &(String,
         }
         DeviceFrame::Result(outcome) => state.hub.resolve(key, outcome).await,
         DeviceFrame::Stop { target: Some(t) } => {
-            if let Ok(Some(h)) = domain::load_device(state, world, t.as_str()).await {
-                if h.host_device_id.as_deref() == Some(device_id) {
+            if let Ok(Some(h)) = domain::load_device(state, world, t.as_str()).await
+                && h.host_device_id.as_deref() == Some(device_id) {
                     let _ = stop_running(state, world, &h).await;
                 }
-            }
         }
         DeviceFrame::TakeoverDone { target: Some(t) } => {
-            if let Ok(Some(h)) = domain::load_device(state, world, t.as_str()).await {
-                if h.host_device_id.as_deref() == Some(device_id) {
-                    if let Some(sid) = &h.in_use_session {
+            if let Ok(Some(h)) = domain::load_device(state, world, t.as_str()).await
+                && h.host_device_id.as_deref() == Some(device_id)
+                    && let Some(sid) = &h.in_use_session {
                         let _ = super::sessions::release(state, world, sid, &owner(&h)).await;
                     }
-                }
-            }
         }
         DeviceFrame::Stop { target: None } => {
             if let Ok(Some(d)) = domain::load_device(state, world, device_id).await {
