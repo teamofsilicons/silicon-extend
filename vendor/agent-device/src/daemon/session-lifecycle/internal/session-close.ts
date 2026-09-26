@@ -318,12 +318,6 @@ async function runCloseTeardownAndRelease(params: {
     finalizeOrdinaryCloseScript,
     platformResourceCleanup: params.platformResourceCleanup,
   });
-  const leaseRelease = await releaseProviderLeaseForClose({
-    session,
-    leaseRegistry,
-    leaseLifecycleProvider,
-  });
-  if (leaseRelease.response) return { kind: 'response', response: leaseRelease.response };
   const cleanupAggregate = closeCleanupError(sessionName, cleanupFailures);
   const deviceClaimBlockingError = platformCloseError ?? cleanupAggregate;
   if (deviceClaimBlockingError) {
@@ -337,11 +331,17 @@ async function runCloseTeardownAndRelease(params: {
         },
       });
     }
-  } else {
-    await clearDeviceClaim(session.deviceClaim);
+    // Retain the session and its ownership so close can retry unfinished cleanup.
+    throw deviceClaimBlockingError;
   }
+  const leaseRelease = await releaseProviderLeaseForClose({
+    session,
+    leaseRegistry,
+    leaseLifecycleProvider,
+  });
+  if (leaseRelease.response) return { kind: 'response', response: leaseRelease.response };
+  await clearDeviceClaim(session.deviceClaim);
   sessionStore.delete(sessionName);
-  if (deviceClaimBlockingError) throw deviceClaimBlockingError;
   if (saveScriptError) throw saveScriptError;
   return { kind: 'closed', providerData: leaseRelease.providerData, shutdownResult };
 }

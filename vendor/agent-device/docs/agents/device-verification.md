@@ -53,6 +53,8 @@ behavior, and xctestrun build/cache logic stays outside request execution.
 
 - Close manually opened sessions, including failed verification attempts, using their original
   `--session`, `--platform`, `--udid`, and `--state-dir` values.
+- A failed close retains the session, device claim and provider lease for cleanup retry. Retry
+  the same close after addressing the reported failure; ownership is released after cleanup succeeds.
 - Use a purpose-specific session name for experiments, and an isolated `--state-dir` under
   `/private/tmp` when you need cleanup isolation beyond the current worktree's default daemon.
 - If `close` is blocked or ownership looks stuck, inspect it with

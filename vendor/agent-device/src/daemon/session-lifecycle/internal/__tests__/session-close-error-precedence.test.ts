@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from 'vitest';
+import { beforeEach, expect, test } from 'vitest';
 import {
   sessionCloseShutdownFixture,
   type SessionState,
@@ -11,6 +11,7 @@ const {
   fs,
   handleSessionCommands,
   inspectDeviceClaims,
+  LeaseRegistry,
   makeIosSimulatorRecordingSession,
   makeSession,
   makeSessionStore,
@@ -71,18 +72,12 @@ test('targeted close preserves the platform-close AppError and still runs later 
   });
   // A failed close is not recorded as `Closed`.
   expect(session.actions.some((action) => action.command === 'close')).toBe(false);
-  // Subsequent independent cleanup still ran, and the session was still deleted.
+  // Independent cleanup still runs; the session remains available for retry.
   expect(mockReleaseRunnerOnClose).toHaveBeenCalledWith(session.device.id, { retain: false });
-  expect(sessionStore.get(sessionName)).toBeUndefined();
+  expect(sessionStore.get(sessionName)).toBeDefined();
 });
 
-// #1478-adjacent (device-claim retention observability): a failed platform close deliberately
-// keeps the enforced device claim (handing an unconfirmed device to the next session would be
-// worse), but the session record is still deleted on the very next line. Before this pair of
-// tests, nothing said so — the claim just quietly named a session `session list` no longer
-// reported. These two tests pin both branches of that decision so a future refactor cannot
-// silently invert either one.
-test('a failed platform close retains the device claim and reports it', async () => {
+test('a failed platform close retains the session and claim until a successful retry', async () => {
   const claimsRoot = mkdtempForTestSync('agent-device-session-close-claim-retained-');
   const previousClaimsDir = process.env.AGENT_DEVICE_CLAIMS_DIR;
   process.env.AGENT_DEVICE_CLAIMS_DIR = claimsRoot;
@@ -147,11 +142,9 @@ test('a failed platform close retains the device claim and reports it', async ()
     );
 
     expect(thrown).toBe(platformCloseError);
-    // The session is still deleted (deliberate, pre-existing behavior) even though the claim
-    // could not be confirmed released.
-    expect(sessionStore.get(sessionName)).toBeUndefined();
+    expect(sessionStore.get(sessionName)).toBeDefined();
 
-    // The claim itself was NOT cleared: it is still live, still naming the deleted session.
+    // Retain ownership until cleanup is confirmed.
     const claimState = inspectDeviceClaims({ serial: device.id })[0];
     expect(claimState?.classification).toBe('live');
     expect(claimState?.claim?.session).toBe(sessionName);
@@ -170,6 +163,16 @@ test('a failed platform close retains the device claim and reports it', async ()
         data: { deviceKey: acquired.ownership.deviceKey, session: sessionName },
       }),
     );
+    const retried = await handleSessionCommands({
+      req: { token: 't', session: sessionName, command: 'close', positionals: [], flags: {} },
+      sessionName,
+      logPath: path.join(claimsRoot, 'retry.log'),
+      sessionStore,
+      invoke: noopInvoke,
+    });
+    expect(retried?.ok).toBe(true);
+    expect(sessionStore.get(sessionName)).toBeUndefined();
+    expect(inspectDeviceClaims({ serial: device.id })).toEqual([]);
   } finally {
     if (previousClaimsDir === undefined) delete process.env.AGENT_DEVICE_CLAIMS_DIR;
     else process.env.AGENT_DEVICE_CLAIMS_DIR = previousClaimsDir;
@@ -178,11 +181,10 @@ test('a failed platform close retains the device claim and reports it', async ()
 });
 
 // The retention decision has TWO inputs — `platformCloseError ?? cleanupAggregate` — and the test
-// above only drives the first. A best-effort cleanup failure is the branch operators actually hit
-// more often (a wedged perfetto stop, a dead helper), and it reaches the same retention through a
+// above only drives the first. A failed recording finish reaches retention through a
 // different value, so it needs its own pin: making the aggregate stop blocking the claim would
 // leave the test above green.
-test('a failing best-effort cleanup also retains the device claim and reports it', async () => {
+test('failed resource cleanup retains the session and claim until a successful retry', async () => {
   const claimsRoot = mkdtempForTestSync('agent-device-session-close-claim-cleanup-failure-');
   const previousClaimsDir = process.env.AGENT_DEVICE_CLAIMS_DIR;
   process.env.AGENT_DEVICE_CLAIMS_DIR = claimsRoot;
@@ -190,10 +192,10 @@ test('a failing best-effort cleanup also retains the device claim and reports it
     const sessionStore = makeSessionStore();
     const sessionName = 'close-claim-cleanup-failure-session';
     const device = {
-      platform: 'android' as const,
-      id: 'emulator-5556',
-      name: 'Pixel',
-      kind: 'emulator' as const,
+      platform: 'apple' as const,
+      id: 'sim-recording-failed-close',
+      name: 'iPhone',
+      kind: 'simulator' as const,
       booted: true,
     };
     const acquired = await acquireDeviceClaim({
@@ -209,24 +211,35 @@ test('a failing best-effort cleanup also retains the device claim and reports it
     if (acquired.status !== 'acquired') {
       throw new Error('expected the test session to acquire a device claim');
     }
-    const session = {
-      ...makeSession(sessionName, device),
-      appBundleId: 'com.example.app',
-      deviceClaim: acquired.ownership,
-    } as SessionState;
-    session.perfCapture = {
-      handle: {
-        inspect: () => ({ kind: 'perfetto', mode: 'trace' }),
-        setOutputPath: () => {},
-        finish: vi.fn(async () => {
-          throw new AppError('COMMAND_FAILED', 'perfetto stop failed');
-        }),
-        forceCleanup: async () => ({ status: 'cleaned' }),
-        [Symbol.asyncDispose]: async () => {},
+    const session = makeIosSimulatorRecordingSession(sessionStore, sessionName, {
+      device,
+      recorderExitCode: 1,
+    });
+    session.deviceClaim = acquired.ownership;
+    const leaseRegistry = new LeaseRegistry();
+    const lease = leaseRegistry.allocateLease({
+      tenantId: 'tenant-a',
+      runId: 'recording-close',
+      leaseProvider: 'test-provider',
+      deviceKey: 'apple:' + device.id,
+      clientId: 'client-a',
+    });
+    session.lease = {
+      leaseId: lease.leaseId,
+      tenantId: lease.tenantId,
+      runId: lease.runId,
+      leaseBackend: lease.backend,
+      leaseProvider: lease.leaseProvider,
+      deviceKey: lease.deviceKey,
+      clientId: lease.clientId,
+      expiresAt: lease.expiresAt,
+    };
+    let releaseAttempts = 0;
+    const leaseLifecycleProvider = {
+      release: async () => {
+        releaseAttempts += 1;
+        return {};
       },
-      envelope: {} as SessionState['perfCapture'] extends { envelope: infer Envelope }
-        ? Envelope
-        : never,
     };
     sessionStore.set(sessionName, session);
 
@@ -249,6 +262,8 @@ test('a failing best-effort cleanup also retains the device claim and reports it
             sessionName,
             logPath: path.join(mkdtempForTestSync('daemon'), 'daemon.log'),
             sessionStore,
+            leaseRegistry,
+            leaseLifecycleProvider,
             invoke: noopInvoke,
           });
         } catch (error) {
@@ -262,10 +277,12 @@ test('a failing best-effort cleanup also retains the device claim and reports it
     expect(thrown).toMatchObject({
       details: expect.objectContaining({
         reason: 'session_cleanup_incomplete',
-        failedSteps: ['perf_capture'],
+        failedSteps: ['recording'],
       }),
     });
-    expect(sessionStore.get(sessionName)).toBeUndefined();
+    expect(sessionStore.get(sessionName)).toBeDefined();
+    expect(releaseAttempts).toBe(0);
+    expect(leaseRegistry.listActiveLeases()).toHaveLength(1);
 
     const claimState = inspectDeviceClaims({ serial: device.id })[0];
     expect(claimState?.classification).toBe('live');
@@ -283,6 +300,20 @@ test('a failing best-effort cleanup also retains the device claim and reports it
         data: { deviceKey: acquired.ownership.deviceKey, session: sessionName },
       }),
     );
+    const retried = await handleSessionCommands({
+      req: { token: 't', session: sessionName, command: 'close', positionals: [], flags: {} },
+      sessionName,
+      logPath: path.join(claimsRoot, 'retry.log'),
+      sessionStore,
+      leaseRegistry,
+      leaseLifecycleProvider,
+      invoke: noopInvoke,
+    });
+    expect(retried?.ok).toBe(true);
+    expect(releaseAttempts).toBe(1);
+    expect(leaseRegistry.listActiveLeases()).toHaveLength(0);
+    expect(sessionStore.get(sessionName)).toBeUndefined();
+    expect(inspectDeviceClaims({ serial: device.id })).toEqual([]);
   } finally {
     if (previousClaimsDir === undefined) delete process.env.AGENT_DEVICE_CLAIMS_DIR;
     else process.env.AGENT_DEVICE_CLAIMS_DIR = previousClaimsDir;
@@ -401,11 +432,10 @@ test('targeted close skips platform dispatch and preserves the error when the re
   });
   // A skipped close is not recorded as `Closed`.
   expect(session.actions.some((action) => action.command === 'close')).toBe(false);
-  // Later independent cleanup still ran (runner release re-attempted), and the
-  // session was still deleted.
+  // Independent cleanup still runs; the session remains available for retry.
   expect(mockStopIosRunnerSession).toHaveBeenCalledOnce();
   expect(mockReleaseRunnerOnClose).toHaveBeenCalledWith(session.device.id, { retain: false });
-  expect(sessionStore.get(sessionName)).toBeUndefined();
+  expect(sessionStore.get(sessionName)).toBeDefined();
 });
 
 // Live evidence (2026-08-02): a plain `open` followed by `close --save-script` used to fold the

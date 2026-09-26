@@ -124,3 +124,13 @@ compatibility. These checks do not establish completion of the entire product co
 - These checks establish native AppKit input and packaged local-driver behavior. They do
   not establish arbitrary third-party app compatibility, production relay behavior,
   recording, notarization or publication.
+
+## Session close recovery — 2026-09-26
+
+- Mac recording exercises exposed a retained device claim whose session had been deleted
+  after failed cleanup. The agent-device close path now preserves the session and ownership
+  until teardown succeeds, allowing the same close operation to be retried.
+- The regression failed before the fix (four failures, one pass). After the fix, 29 lifecycle
+  tests pass, including failed recording finish, successful retry, device claim release and
+  retaining a provider lease until cleanup succeeds. These are daemon boundary tests, not
+  evidence that the intermittent native MP4 finalization failure has been resolved.
