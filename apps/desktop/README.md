@@ -189,3 +189,34 @@ reuse without a build stamp, then verifies that the new artifact executes in a n
 an identical relocated copy reuses it. It stops its owned daemon afterward and never opens a device.
 The changed-version path uses the runtime's existing shutdown/cleanup behavior; this check does
 not exercise updating during an active device session.
+
+
+### X11 recording worker development (2026-09-26)
+
+`vendor/agent-device/linux/screen-record.py` is the native recording worker under development.
+It accepts a root screen or explicit X11 window ID, writes H.264 MP4, publishes first-frame
+readiness, and enforces duration/file limits. SIGINT/TERM/HUP and owner exit finalize the video;
+Linux parent-death signaling also stops the encoder if its supervisor is killed.
+
+Run its manual Linux lane with a rebuilt `linux-e2e` image containing ffmpeg:
+
+```sh
+docker build -t silicon-bridge-linux-e2e apps/desktop/linux-e2e
+mkdir -p target/desktop/linux-recording
+docker run --rm --init \
+  -v "$PWD":/src:ro \
+  -v "$PWD/target/desktop/linux-recording":/tmp/out \
+  silicon-bridge-linux-e2e bash /src/apps/desktop/linux-e2e/record-e2e.sh
+```
+
+The fixture runs only inside the isolated Xvfb desktop. Each invocation preserves artifacts
+in a fresh directory. The lane tests manual stop, reduced duration/file limits, owner exit,
+supervisor SIGKILL, window/device dimensions, full decoding, nonblank frames and invalid inputs.
+It is a manual lane, not selected by CI.
+
+This worker is **not yet connected to the public `record` command**. Durable runtime ownership,
+recovery, app identity resolution, obscured/hidden-window behavior and artifact-transfer tests
+remain necessary. X11 window capture uses ffmpeg's
+[documented x11grab window ID input](https://ffmpeg.org/ffmpeg-devices.html#x11grab); a successful
+window recording alone does not prove hidden or occluded app isolation. Wayland deliberately
+refuses this worker, including XWayland displays; its portal/PipeWire implementation remains open.

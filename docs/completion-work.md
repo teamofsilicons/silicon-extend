@@ -74,3 +74,7 @@ An implementation or passing mock does not close a physical-device or production
 - Mac reduced duration/file limits and abrupt native recorder-owner exit now pass real
   GUI-owned recording and full decoding. The full 30-minute run was stopped by the Carbon;
   full caps remain unverified. See the recording limits entry for exact results.
+
+- The native X11 recording worker now passes real unprivileged Xvfb/GTK tests for short window
+  and device capture, reduced limits, owner loss and supervisor death. Public command wiring,
+  durable recovery, app binding/isolation and Wayland portal support remain in progress.

@@ -251,3 +251,24 @@ compatibility. These checks do not establish completion of the entire product co
   inactive, the test daemon was stopped through its CLI, and the app's production Info.plist
   was restored. Developer ID signature, bundled Node execution and archive byte equality
   passed; neither the app nor its zip contains local-test environment overrides.
+
+
+### 2026-09-26 — native X11 recording worker
+
+- Added the Linux native worker; it is not yet wired to public recording admission or commands.
+  It captures an explicit XID or the root display with ffmpeg, encodes H.264 MP4, publishes
+  atomic readiness/finalization status, limits duration/file size, and finalizes on signals or
+  owning-parent exit. Linux parent-death signaling prevents a killed supervisor leaving its
+  encoder running. The native artifact is retained for later runtime export.
+- Live tests ran as unprivileged `carbon` in Debian trixie arm64 with Xvfb 1280x800, GTK3,
+  ffmpeg 7.1.5 and an animated 641x481 fixture. Window recordings pad to 642x482; device recording
+  covers 1280x800. Manual stop, 1.8-second duration limit, 1-MiB file limit and abrupt owner
+  exit passed full decoding and nonblank frame checks. The reduced file cap stopped at
+  793,075 bytes. Killing the supervisor with SIGKILL stopped its encoder and left a decodable MP4.
+- Invalid fps/size, existing outputs, missing DISPLAY and Wayland were rejected without changing
+  artifacts. Results: `/tmp/bridge-linux-recording.log`; saved videos under ignored
+  `target/desktop/linux-recording/recording-s1_mt3aa/`. Python syntax and shell syntax checks pass.
+- This is a manual native-worker lane. Public start/stop, app identity binding, durable daemon
+  recovery, overlay/export/transfer, obscured/hidden windows, full 30-minute/1-GiB limits, current
+  Wayland portal support and release packaging remain open. No Linux capability was enabled
+  solely from these native-worker results.

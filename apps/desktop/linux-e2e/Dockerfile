@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11-utils openbox dbus dbus-x11 at-spi2-core \
       python3 python3-gi gir1.2-atspi-2.0 gir1.2-gtk-3.0 \
       xdotool imagemagick scrot xclip xdg-utils wmctrl \
-      gnome-calculator fonts-dejavu-core procps jq \
+      gnome-calculator fonts-dejavu-core procps jq ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Node 22 LTS (agent-device needs 22.12 or newer; Debian ships 20).
