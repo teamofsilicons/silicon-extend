@@ -8,6 +8,9 @@ app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 180, y: 180, width: 560, height: 330),
                       styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "Bridge text input verification"
+if let screen = NSScreen.main {
+  window.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.maxY - 80))
+}
 let first = NSTextField(string: "first value")
 let second = NSTextField(string: "untouched")
 let secure = NSSecureTextField(string: "")
@@ -23,7 +26,13 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
   first.stringValue = "first value"
   window.makeFirstResponder(first)
 }
+var frame = 0
+let animated = CommandLine.arguments.contains("--animate")
 let timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+  if animated {
+    frame += 1
+    first.stringValue = "Recording frame \(frame)"
+  }
   let values = fields.map { field -> [String: Any] in
     let rect = window.convertToScreen(field.convert(field.bounds, to: nil))
     return ["value": field.stringValue, "x": rect.midX,

@@ -48,6 +48,10 @@ export type AppleScreenRecordingClockAnchor = Readonly<{
 
 export type AppleScreenRecordingHost = Readonly<{
   availability(device: DeviceInfo): Promise<AppleScreenRecordingAvailability>;
+  startMacOs(
+    input: Readonly<{ outputPath: string; bundleId?: string; fps?: number }>,
+    signal?: AbortSignal,
+  ): Promise<ScreenRecordingBackgroundProcess>;
   runRunner(
     device: DeviceInfo,
     request: AppleScreenRecordingRunnerRequest,

@@ -124,6 +124,8 @@ struct AgentDeviceMacOSHelper {
       return try handlePress(arguments: Array(arguments.dropFirst()))
     case "text":
       return try handleTextEntry()
+    case "record":
+      return try handleScreenRecording(arguments: Array(arguments.dropFirst()))
     case "screenshot":
       return try handleScreenshot(arguments: Array(arguments.dropFirst()))
     case "audio-probe":

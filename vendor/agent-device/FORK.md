@@ -5,6 +5,13 @@ Forked from https://github.com/callstack/agent-device at commit `bce6f52` (2026-
 Bridge runs this fork on Mac and Linux devices (and on a Mac hosting an iPhone or iPad) to read the screen
 and act on it. Changes made for Bridge are listed below, newest first, so they can be offered upstream.
 
+- **2026-09-26 — Native macOS recording.** A signed ScreenCaptureKit helper writes H.264 MP4
+  without XCTest. Startup waits for its first frame and records exact process ownership;
+  the existing durable recording lifecycle handles stop, export and recovery. App/device scope,
+  FPS, duration/file bounds, signals and owner exit are implemented. Native display selection
+  ignores empty/off-screen auxiliary windows. Live animated app recordings pass manual stop,
+  a short duration cap, artifact transfer, full decoding and visual inspection; longer limits
+  and owner-loss stress remain separate gates.
 - **2026-09-26 — Retryable session cleanup.** Failed platform close or resource cleanup keeps
   the session alongside its device claim, and defers provider lease release. Retrying close can
   finish cleanup and release ownership instead of leaving a claim for a deleted session.
@@ -13,7 +20,7 @@ and act on it. Changes made for Bridge are listed below, newest first, so they c
   Accessibility helper instead of starting XCTest. It validates app/field focus, selects text
   through AX ranges, sends Unicode keyboard events, verifies non-secure replacement and stops
   on cancellation. Text is supplied over stdin. Unit dispatch tests and Bridge's live AppKit
-  fixture cover the helper and packaged selector path. Recording still uses XCTest.
+  fixture cover the helper and packaged selector path.
 - **2026-09-26 — Linux: xclip clipboard writes no longer time out.** `clipboard write` with xclip ran
   `xclip -selection clipboard` directly; xclip forks a child that keeps serving the selection and
   inherits the stdout/stderr pipes, so the 5 s wait always timed out. It now runs through

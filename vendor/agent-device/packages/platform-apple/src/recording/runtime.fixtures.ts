@@ -101,6 +101,9 @@ export function appleRecordingHost(
       runRunner: async (_device: DeviceInfo, request: AppleScreenRecordingRunnerRequest) =>
         request.kind === 'start' ? coreDeviceRunnerStart : {},
       startSimulator,
+      startMacOs: async () => {
+        throw new Error('unused macOS recording transport');
+      },
       inspectProcess: async () => 'owned-alive' as const,
       terminateProcess: async () => 'terminated' as const,
       inspectRunner: async () => 'owned-alive' as const,
@@ -110,6 +113,14 @@ export function appleRecordingHost(
     },
     provided,
     {
+      startMacOs: async (
+        input: Parameters<ScreenRecordingRuntimeHost['apple']['startMacOs']>[0],
+        signal?: AbortSignal,
+      ) => {
+        store.files.set(input.outputPath, 'fake-video');
+        if (!provided.startMacOs) throw new Error('unused macOS recording transport');
+        return await provided.startMacOs(input, signal);
+      },
       startSimulator: async (
         device: DeviceInfo,
         outputPath: string,

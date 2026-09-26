@@ -147,3 +147,31 @@ compatibility. These checks do not establish completion of the entire product co
   still fails. The regression failed before this driver change and passes for recovery, persistent
   cleanup failure and a same-message error with a different reason. All 111 agent unit tests and
   seven fake-service tests pass after this change.
+
+## Native Mac recording — 2026-09-26
+
+- ScreenCaptureKit now captures to H.264 MP4 through the signed GUI app, without Xcode or an
+  XCTest permission prompt. The runtime waits for the first frame and durable process identity;
+  cancellation, recovery and export use the existing owned-process lifecycle. A failed native
+  finalization is reported as failure, not uploaded as a successful video.
+- The fragmented MP4 writer failed during a real changing-screen capture with AVFoundation
+  `-11800` / underlying `-16341`. Ordinary MP4 output subsequently passed repeated animated
+  capture and full decode checks. This is observed evidence, not proof against every encoder failure.
+- Display selection formerly used the first app window, which could be empty or off-screen.
+  It now chooses the largest positive window/display intersection. The new native regressions
+  failed under the first-window strategy before the correction.
+- Live GUI-owned tests passed manual stop and a 1.5-second duration cap. Sessions `518`, `f7e`
+  and `4b3` passed app capture, real local service relay, upload, CLI download and full ffmpeg
+  decode. The final run also verified changing frames and a decoded image showing only the
+  fixture app against a black background. Artifacts are under
+  `target/desktop/macos/recording-verification/` (ignored build output).
+- The local service uses development IAM/Briefcase/Ting stand-ins. These results do not prove
+  production integrations, every Mac app, multi-monitor live behavior, 30-minute/1-GiB stress,
+  owner-loss recovery, default touch-overlay rendering, notarization or publication. Explicit
+  app targeting still uses the frontmost-app route and remains a hardening requirement.
+- Validation: 39 recording runtime/ownership/recovery tests, five native helper tests, workspace
+  lint/typechecking and the signed app build pass. The production bundle contains no local-test
+  environment overrides. The vendor layering gate cannot complete in this nested checkout:
+  249 tooling tests pass, six fail because tracked-source enumeration resolves the parent Git
+  tree and `origin/main` is absent. Its final production scan therefore did not run; this gate
+  remains open rather than being counted as passed.

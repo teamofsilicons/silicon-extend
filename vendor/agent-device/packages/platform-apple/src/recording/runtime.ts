@@ -90,7 +90,7 @@ type AppleRecordingStartParams = Readonly<{
 
 async function startAppleRecording(params: AppleRecordingStartParams) {
   params.signal.throwIfAborted();
-  return params.device.kind === 'simulator'
+  return params.device.kind === 'simulator' || params.device.appleOs === 'macos'
     ? await startAppleSimulatorRecording(params)
     : await startAppleRunnerRecording(params);
 }
@@ -98,19 +98,35 @@ async function startAppleRecording(params: AppleRecordingStartParams) {
 async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
   const { host, device, owner, input, signal } = params;
   await validateAppleSimulatorRecording(device, input, host.screenRecording.apple.isRunnerBundleId);
-  const clockAnchor = input.activeSessionApp
-    ? await host.screenRecording.apple.captureClockAnchor(
-        device,
-        input.activeSessionApp.bundleId,
-        signal,
-      )
-    : undefined;
+  const isMac = device.appleOs === 'macos';
+  if (isMac && input.scope === 'app' && !input.activeSessionApp?.bundleId) {
+    throw new AppError('INVALID_ARGS', 'App-scoped recording requires an active app session');
+  }
+  const backendLabel = isMac ? 'ScreenCaptureKit' : SIMULATOR_BACKEND_LABEL;
+  const targetLabel = isMac ? 'macOS recording' : SIMULATOR_TARGET_LABEL;
+  const clockAnchor =
+    !isMac && input.activeSessionApp
+      ? await host.screenRecording.apple.captureClockAnchor(
+          device,
+          input.activeSessionApp.bundleId,
+          signal,
+        )
+      : undefined;
   // The recorder owns its own file and the export is produced from a copy of it (ADR 0024 2.3), so a
   // stop that fails midway cannot leave the caller's path holding bytes the next attempt has to guess
   // about. `simctl` is told where to write; the caller's path is written once, from the copy.
   const nativePath = nativeRecordingPath(input.outputPath);
   await host.screenRecording.outputs.prepare(nativePath);
-  const nativeProcess = await host.screenRecording.apple.startSimulator(device, nativePath, signal);
+  const nativeProcess = isMac
+    ? await host.screenRecording.apple.startMacOs(
+        {
+          outputPath: nativePath,
+          ...(input.scope === 'app' ? { bundleId: input.activeSessionApp!.bundleId } : {}),
+          ...(input.fps === undefined ? {} : { fps: input.fps }),
+        },
+        signal,
+      )
+    : await host.screenRecording.apple.startSimulator(device, nativePath, signal);
   const processes = nativeProcess.markers;
   if (!processes || processes.length === 0) {
     await settleAppleSimulatorProcess(nativeProcess).catch(() => {});
@@ -120,7 +136,10 @@ async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
     signal.throwIfAborted();
     host.screenRecording.ownedProcesses.replace(
       { kind: 'session', sessionId: input.sessionId },
-      processes.map((process) => ({ ...process, purpose: 'simctl-screen-recording' })),
+      processes.map((process) => ({
+        ...process,
+        purpose: isMac ? 'macos-screen-recording' : 'simctl-screen-recording',
+      })),
     );
   } catch (error) {
     try {
@@ -143,8 +162,15 @@ async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
     await nativeProcess.terminate();
     const result = await nativeProcess.wait;
     recorderResult = result;
-    recorderExit = describeSimctlRecorderExit(result);
+    recorderExit = describeSimctlRecorderExit(result, backendLabel);
     host.screenRecording.ownedProcesses.clear({ kind: 'session', sessionId: input.sessionId });
+    if (isMac && result.exitCode !== 0) {
+      throw new AppError(
+        'COMMAND_FAILED',
+        'Native macOS recording did not finalize successfully',
+        execFailureDetails(result),
+      );
+    }
     return {
       observation: { recorder: 'confirmed' },
       ...(recorderExit === undefined
@@ -154,13 +180,13 @@ async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
           }),
     };
   };
-  const startedSnapshot = snapshot(input, SIMULATOR_BACKEND_LABEL, {}, clockAnchor);
+  const startedSnapshot = snapshot(input, backendLabel, {}, clockAnchor);
   return startResult({
     device,
     owner,
     input,
     descriptor: {
-      backend: 'simctl',
+      backend: isMac ? 'macos-helper' : 'simctl',
       outputPath: nativePath,
       processes,
       recording: simulatorExportCoordinates(startedSnapshot),
@@ -184,7 +210,7 @@ async function startAppleSimulatorRecording(params: AppleRecordingStartParams) {
               return await finalizeAppleRecordingFromCollected({
                 host,
                 snapshot: current,
-                targetLabel: SIMULATOR_TARGET_LABEL,
+                targetLabel,
                 collectedPath,
                 exportPath,
                 nativePath,
@@ -225,11 +251,11 @@ function simulatorExportHandle(
 ): ScreenRecordingLiveHandle {
   const {
     host,
-    restored: { recording, nativePath, cleanup },
+    restored: { recording, nativePath, cleanup, backend },
   } = params;
   const snapshot: ScreenRecordingLiveSnapshot = Object.freeze({
     ...recording,
-    backend: SIMULATOR_BACKEND_LABEL,
+    backend: backend === 'macos-helper' ? 'ScreenCaptureKit' : SIMULATOR_BACKEND_LABEL,
     gestureEvents: [],
   });
   return createScreenRecordingLiveHandle(snapshot, {
@@ -241,7 +267,7 @@ function simulatorExportHandle(
           stop: async () => ({
             observation: { recorder: 'confirmed' as const },
             warning:
-              'simctl recordVideo had already ended when record stop reattached to it; ' +
+              'The native recorder had already ended when record stop reattached to it; ' +
               'the video covers only what the recorder wrote before it stopped.',
           }),
           collect: async (collectedPath) => {
@@ -251,7 +277,7 @@ function simulatorExportHandle(
             await finalizeAppleRecordingFromCollected({
               host,
               snapshot: current,
-              targetLabel: SIMULATOR_TARGET_LABEL,
+              targetLabel: backend === 'macos-helper' ? 'macOS recording' : SIMULATOR_TARGET_LABEL,
               collectedPath,
               exportPath,
               nativePath,
@@ -376,14 +402,17 @@ async function runAppleRecordingOperation<T>(operation: () => Promise<T>): Promi
   }
 }
 
-function describeSimctlRecorderExit(result: HostCommandResult): string | undefined {
+function describeSimctlRecorderExit(
+  result: HostCommandResult,
+  backendLabel: string,
+): string | undefined {
   // A termination record stop asked for comes back with the signal still attached and the exit code
   // normalized to 0 by the host, so checking the signal first would blame the recorder for our own
   // SIGTERM escalation.
   if (result.exitCode === 0) return undefined;
   return result.signal
-    ? `simctl recordVideo was killed by ${result.signal}`
-    : `simctl recordVideo exited with code ${result.exitCode}`;
+    ? `${backendLabel} was killed by ${result.signal}`
+    : `${backendLabel} exited with code ${result.exitCode}`;
 }
 
 // An unreadable file is the one export failure the recorder's exit explains: the next `record stop`

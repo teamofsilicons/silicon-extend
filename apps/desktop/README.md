@@ -28,7 +28,7 @@ Silicon Bridge.app/Contents/
   MacOS/bridge-agent            the app
   MacOS/agent-device-macos-helper   agent-device's helper, built here and signed with the app
   Resources/agent-device/       the fork's bin/, dist/, package.json and the Apple sources it builds
-                                on first use (apple/runner for typing and recording, the helpers)
+                                on first use (Apple device runners and the native helpers)
   Resources/node/bin/node       Node 22 (official build, downloaded and cached in target/desktop/.cache)
 ```
 
@@ -49,7 +49,28 @@ Silicon Bridge.app/Contents/
 - Start at login: `bridge-agent install-autostart` writes a LaunchAgent that points at the
   bundle's binary.
 
-### What the real Mac run showed (macOS 27, this machine)
+### Native Mac input and recording (2026-09-26)
+
+The signed GUI app now uses Accessibility for text entry and ScreenCaptureKit for recording,
+without an XCTest setup prompt. Both grants are enabled for Silicon Bridge. Recording produces
+H.264 MP4, accepts 1–60 fps, and supports the selected app or the main display. App capture chooses
+the display with the largest overlap with its windows; other apps are excluded. Recordings are
+bounded to 30 minutes and 1 GiB, and stop when their owning process exits. Long-duration, file-limit
+and owner-exit live stress checks remain pending; the short automatic-duration path is verified.
+
+After pairing the GUI app to the local test service, run:
+
+```sh
+python3 apps/desktop/macos/text-e2e.py --record-only --device <local-test-device-id> --artifacts target/desktop/macos/recording-verification
+```
+
+This opens an animated fixture, verifies manual and automatic recording stop, then exercises
+the service's app selection, capture, upload and CLI download. It fully decodes the resulting
+video, checks that frames change and saves a frame for visual inspection. Omit `--record-only`
+and use `--record` to include native text-entry checks. These checks require the signed GUI app
+to be running; shell-launched helpers can have different Screen Recording permissions.
+
+### Initial Mac run before native input and recording (macOS 27, this machine)
 
 These ran through the agent's own driver (`bridge-agent exec …`). The rest ran through the local
 Bridge service on `:8480`: pair, a Silicon session, then commands with uploads.

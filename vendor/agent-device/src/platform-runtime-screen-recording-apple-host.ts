@@ -4,6 +4,11 @@ import type { DeviceInfo } from '@agent-device/kernel/device';
 export function createAppleScreenRecordingHost(): ScreenRecordingRuntimeHost['apple'] {
   return Object.freeze({
     availability: appleScreenRecordingAvailability,
+    startMacOs: async (input, signal) => {
+      const { startMacOsRecording } =
+        await import('./platform-runtime-screen-recording-macos-host.ts');
+      return await startMacOsRecording(input, signal);
+    },
     runRunner: async (device, request, signal) => {
       const { runAppleRecordingRunner } =
         await import('./platform-runtime-screen-recording-apple-runner-host.ts');
@@ -48,6 +53,15 @@ export function createAppleScreenRecordingHost(): ScreenRecordingRuntimeHost['ap
 }
 
 async function appleScreenRecordingAvailability(device: DeviceInfo) {
+  if (device.appleOs === 'macos') {
+    const { macOsNativeRecordingAvailable } = await import('@agent-device/platform-apple/macos');
+    return macOsNativeRecordingAvailable()
+      ? ({ available: true } as const)
+      : ({
+          available: false,
+          hint: 'Native macOS recording requires the local Apple provider.',
+        } as const);
+  }
   if (device.kind === 'simulator') {
     const { resolveAppleSimulatorScreenRecordingTransport } =
       await import('./platform-runtime-screen-recording-apple-transport.ts');

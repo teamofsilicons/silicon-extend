@@ -18,6 +18,87 @@ import {
   simulator,
 } from './runtime.fixtures.ts';
 
+const mac = { ...coreDevice, appleOs: 'macos' as const, target: 'desktop' as const };
+
+test.each(['app', 'device', 'system'] as const)(
+  'native macOS recording preserves %s scope and requested frame rate',
+  async (scope) => {
+    const startMacOs = vi.fn(async () => ({
+      markers: [processIdentity],
+      wait: Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
+      terminate: async () => {},
+    }));
+    const runRunner = vi.fn();
+    const operations = createAppleScreenRecordingOperations({
+      host: appleHost({ apple: { startMacOs, runRunner } }),
+      device: mac,
+      owner: localRuntimeOwner('apple'),
+      signal: new AbortController().signal,
+    });
+    const started = await operations.screenRecordingStart(input({ scope, fps: 24 }));
+    expect(startMacOs).toHaveBeenCalledWith(
+      {
+        outputPath: '/tmp/capture.native.mp4',
+        fps: 24,
+        ...(scope === 'app' ? { bundleId: 'com.example.app' } : {}),
+      },
+      expect.any(AbortSignal),
+    );
+    expect(started.envelope.descriptor.body.backend).toBe('macos-helper');
+    expect(runRunner).not.toHaveBeenCalled();
+    await expect(started.pendingHandle.transfer().finish()).resolves.toMatchObject({
+      status: 'completed',
+    });
+  },
+);
+
+test('a native recorder finalization failure never publishes an otherwise readable partial movie', async () => {
+  const complete = vi.fn(async () => ({}));
+  const operations = createAppleScreenRecordingOperations({
+    host: appleHost({
+      complete,
+      apple: {
+        startMacOs: async () => ({
+          markers: [processIdentity],
+          wait: Promise.resolve({ exitCode: 1, stdout: 'writer failure', stderr: '' }),
+          terminate: async () => {},
+        }),
+      },
+    }),
+    device: mac,
+    owner: localRuntimeOwner('apple'),
+    signal: new AbortController().signal,
+  });
+  const handle = (await operations.screenRecordingStart(input())).pendingHandle.transfer();
+  await expect(handle.finish()).rejects.toThrow('did not finalize successfully');
+  expect(complete).not.toHaveBeenCalled();
+});
+
+test('native recording cancellation after acquisition stops the unpublished capture', async () => {
+  const controller = new AbortController();
+  const reason = new Error('stop acquisition');
+  const terminate = vi.fn(async () => {});
+  const operations = createAppleScreenRecordingOperations({
+    host: appleHost({
+      apple: {
+        startMacOs: async () => {
+          controller.abort(reason);
+          return {
+            markers: [processIdentity],
+            wait: Promise.resolve({ exitCode: 0, stdout: '', stderr: '' }),
+            terminate,
+          };
+        },
+      },
+    }),
+    device: mac,
+    owner: localRuntimeOwner('apple'),
+    signal: controller.signal,
+  });
+  await expect(operations.screenRecordingStart(input())).rejects.toBe(reason);
+  expect(terminate).toHaveBeenCalledTimes(1);
+});
+
 test('uses the closed Apple runner and finalizer for a CoreDevice recording', async () => {
   const calls: string[] = [];
   const operations = createAppleScreenRecordingOperations({
@@ -128,12 +209,22 @@ test('an invalidated runner recording still names its device-side path as owed',
   });
 });
 
-test('uses simctl on simulators and retains the macOS runner path', async () => {
+test('uses simctl on simulators and native ScreenCaptureKit on macOS', async () => {
   const calls: string[] = [];
   const ownedProcesses = { replace: vi.fn(), clear: vi.fn() };
   const host = appleHost({
     apple: {
       captureClockAnchor: async () => ({ wallClockAtMs: 100, uptimeMs: 50 }),
+      startMacOs: async () => {
+        calls.push('native:start');
+        return {
+          markers: [processIdentity],
+          terminate: async () => {
+            calls.push('native:stop');
+          },
+          wait: Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }),
+        };
+      },
       startSimulator: async () => ({
         markers: [processIdentity],
         terminate: async () => {
@@ -200,8 +291,8 @@ test('uses simctl on simulators and retains the macOS runner path', async () => 
   expect(calls).toEqual([
     'simctl-stop',
     'finalize:iOS recording',
-    'runner:start',
-    'runner:stop',
+    'native:start',
+    'native:stop',
     'finalize:macOS recording',
   ]);
   expect(ownedProcesses.replace).toHaveBeenCalledWith({ kind: 'session', sessionId: 'sim' }, [

@@ -9,7 +9,7 @@ An implementation or passing mock does not close a physical-device or production
 - Android: physical-device coverage, large APK/Briefcase inputs and recording beyond the
   native 180-second limit. Local ADB pairing, command execution, installation, logs and
   recording are implemented; see the verification record for exercised paths.
-- Desktop: Mac recording without an unanswered setup prompt; notarized helper distribution;
+- Desktop: Mac recording stress/recovery and explicit app-target hardening; notarized helper distribution;
   Windows runtime and recording; Linux recording and current desktop support.
 - Hardware: physical Android/Fire TV, iPhone/iPad, Apple TV, Samsung/LG TVs. Record actual
   device/OS and exercised operations; simulator/mock results remain separate.
@@ -41,8 +41,10 @@ An implementation or passing mock does not close a physical-device or production
 - Next implementation area: desktop missing recording/input capabilities and release packaging.
 - Mac native `fill`/`type`/`focus` now pass live AppKit and packaged local-driver tests without
   XCTest. Unicode, exact whitespace, clearing, secure-field replacement and cancellation are
-  covered. Both OS grants are enabled and recognized by the running GUI app. Recording still
-  uses XCTest; notarization, other desktop platforms and production remain open.
+  covered. Both OS grants are enabled and recognized by the running GUI app. Native ScreenCaptureKit
+  recording now passes short static/animated recording and service artifact-transfer checks without
+  XCTest. Duration/file-limit stress, owner-loss recovery, explicit app targeting, notarization,
+  other desktop platforms and production remain open.
 
 ## Release prerequisites inspected
 

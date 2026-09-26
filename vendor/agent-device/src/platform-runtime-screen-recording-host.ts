@@ -75,6 +75,7 @@ function createLazyAppleHost(): ScreenRecordingRuntimeHost['apple'] {
   };
   return Object.freeze({
     availability: async (device) => (await load()).availability(device),
+    startMacOs: async (input, signal) => await (await load()).startMacOs(input, signal),
     runRunner: async (device, request, signal) =>
       await (await load()).runRunner(device, request, signal),
     startSimulator: async (device, outputPath, signal) =>

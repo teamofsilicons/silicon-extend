@@ -61,7 +61,7 @@ export type AppleSimulatorExportCoordinates = Pick<
 
 export type AppleRecordingDescriptor =
   | Readonly<{
-      backend: 'simctl';
+      backend: 'simctl' | 'macos-helper';
       outputPath: string;
       processes: readonly ManagedProcessIdentity[];
       recording?: AppleSimulatorExportCoordinates;
@@ -81,7 +81,7 @@ type AppleRecordingDescriptorCodec = DurableDescriptorCodec<
 >;
 
 const encodeAppleRecordingDescriptor: AppleRecordingDescriptorCodec['encode'] = (descriptor) => {
-  if (descriptor.backend === 'simctl') {
+  if (descriptor.backend !== 'runner') {
     const encoded: ReturnType<AppleRecordingDescriptorCodec['encode']> = {
       backend: descriptor.backend,
       outputPath: descriptor.outputPath,
@@ -151,7 +151,7 @@ export async function cleanupAppleRecording(
   if (decoded.status !== 'decoded' || !descriptorMatchesAppleDevice(device, decoded.descriptor)) {
     return { status: 'cleanup-pending', reason: 'manual-recovery-required' };
   }
-  if (decoded.descriptor.backend === 'simctl') {
+  if (decoded.descriptor.backend !== 'runner') {
     return await cleanupSimulator(host, decoded.descriptor.processes, sessionId);
   }
   return await cleanupRunner(host, device, decoded.descriptor);
@@ -230,6 +230,7 @@ async function cleanupRunner(
 /** What a recovered simulator export needs besides the coordinates its manifest kept. */
 export type AppleSimulatorExportRestore = Readonly<{
   recording: AppleSimulatorExportCoordinates;
+  backend: 'simctl' | 'macos-helper';
   /** The file `simctl` wrote, or the copy a first attempt already collected. */
   nativePath: string;
   cleanup(): Promise<CleanupOutcome>;
@@ -262,7 +263,7 @@ export async function reattachAppleRecording(
       'Apple screen-recording descriptor does not match the bound device.',
     );
   }
-  return decoded.descriptor.backend === 'simctl'
+  return decoded.descriptor.backend !== 'runner'
     ? await reattachSimulatorRecording(params, decoded.descriptor)
     : await reattachRunnerRecording(host, device, decoded.descriptor);
 }
@@ -285,7 +286,7 @@ async function reattachSimulatorRecording(
     host: AppleScreenRecordingOperationHost;
     envelope: DurableResourceEnvelope<typeof SCREEN_RECORDING_RESOURCE_KIND>;
   }>,
-  descriptor: Extract<AppleRecordingDescriptor, { backend: 'simctl' }>,
+  descriptor: Extract<AppleRecordingDescriptor, { backend: 'simctl' | 'macos-helper' }>,
 ): Promise<AppleRecordingReattachment> {
   const ownership = await Promise.all(
     descriptor.processes.map(
@@ -313,6 +314,7 @@ async function reattachSimulatorRecording(
   }
   return {
     status: 'restore-export',
+    backend: descriptor.backend,
     recording,
     nativePath: descriptor.outputPath,
     cleanup: async () =>
@@ -387,19 +389,24 @@ function decodeAppleRecordingDescriptor(
 ) {
   if (typeof body.outputPath !== 'string' || body.outputPath.length === 0)
     return invalidDescriptor();
-  if (body.backend === 'simctl') return decodeSimulatorDescriptor(body, body.outputPath);
+  if (body.backend === 'simctl' || body.backend === 'macos-helper')
+    return decodeSimulatorDescriptor(body, body.outputPath, body.backend);
   if (body.backend === 'runner') return decodeRunnerDescriptor(body, body.outputPath);
   return invalidDescriptor();
 }
 
-function decodeSimulatorDescriptor(body: Record<string, unknown>, outputPath: string) {
+function decodeSimulatorDescriptor(
+  body: Record<string, unknown>,
+  outputPath: string,
+  backend: 'simctl' | 'macos-helper',
+) {
   const processes = decodeProcessIdentities(body.processes);
   const recording = readSimulatorExportCoordinates(body.recording);
   if (!processes || recording === 'invalid') return invalidDescriptor();
   return {
     status: 'decoded' as const,
     descriptor: Object.freeze({
-      backend: 'simctl' as const,
+      backend,
       outputPath,
       processes,
       ...(recording === undefined ? {} : { recording }),
@@ -480,6 +487,7 @@ function descriptorMatchesAppleDevice(
   descriptor: AppleRecordingDescriptor,
 ): boolean {
   if (device.kind === 'simulator') return descriptor.backend === 'simctl';
+  if (descriptor.backend === 'macos-helper') return device.appleOs === 'macos';
   if (descriptor.backend !== 'runner') return false;
   if (device.appleOs === 'macos') return descriptor.remotePath === undefined;
   return isIosFamily(device)

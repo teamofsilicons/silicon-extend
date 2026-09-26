@@ -18,64 +18,72 @@ import {
   simulatorRecorderStart,
 } from './runtime.fixtures.ts';
 
-test('daemon-loss cleanup distinguishes live, dead, replaced, and corrupt simulator identity', async () => {
-  const startOperations = createAppleScreenRecordingOperations({
-    host: appleRecordingHost({
-      apple: {
-        startSimulator: async () => ({
-          markers: [processIdentity],
-          wait: new Promise(() => {}),
-          terminate: async () => {},
-        }),
-      },
-    }),
-    device: simulator,
-    owner: localRuntimeOwner('apple'),
-    signal: new AbortController().signal,
-  });
-  const started = await startOperations.screenRecordingStart(recordingInput());
-  for (const [ownership, expected, terminations] of [
-    ['owned-alive', 'cleaned', 1],
-    ['missing', 'already-missing', 0],
-    ['ownership-lost', 'cleanup-pending', 0],
-  ] as const) {
-    const terminateProcess = vi.fn(async () => 'terminated' as const);
-    const recovery = createAppleScreenRecordingOperations({
+test.each([simulator, { ...coreDevice, appleOs: 'macos' as const, target: 'desktop' as const }])(
+  'daemon-loss cleanup fences $appleOs process identities',
+  async (runtimeDevice) => {
+    const startOperations = createAppleScreenRecordingOperations({
       host: appleRecordingHost({
-        apple: { inspectProcess: async () => ownership, terminateProcess },
+        apple: {
+          startMacOs: async () => ({
+            markers: [processIdentity],
+            wait: new Promise(() => {}),
+            terminate: async () => {},
+          }),
+          startSimulator: async () => ({
+            markers: [processIdentity],
+            wait: new Promise(() => {}),
+            terminate: async () => {},
+          }),
+        },
       }),
-      device: simulator,
+      device: runtimeDevice,
+      owner: localRuntimeOwner('apple'),
+      signal: new AbortController().signal,
+    });
+    const started = await startOperations.screenRecordingStart(recordingInput());
+    for (const [ownership, expected, terminations] of [
+      ['owned-alive', 'cleaned', 1],
+      ['missing', 'already-missing', 0],
+      ['ownership-lost', 'cleanup-pending', 0],
+    ] as const) {
+      const terminateProcess = vi.fn(async () => 'terminated' as const);
+      const recovery = createAppleScreenRecordingOperations({
+        host: appleRecordingHost({
+          apple: { inspectProcess: async () => ownership, terminateProcess },
+        }),
+        device: runtimeDevice,
+        owner: localRuntimeOwner('apple'),
+        signal: new AbortController().signal,
+      });
+      await expect(
+        recovery.screenRecordingCleanup({ envelope: started.envelope }),
+      ).resolves.toMatchObject({ status: expected });
+      expect(terminateProcess).toHaveBeenCalledTimes(terminations);
+    }
+
+    const inspectProcess = vi.fn(async () => 'owned-alive' as const);
+    const corruptEnvelope = {
+      ...started.envelope,
+      descriptor: {
+        ...started.envelope.descriptor,
+        body: {
+          ...started.envelope.descriptor.body,
+          processes: [{ pid: 42, startTime: '', command: processIdentity.command }],
+        },
+      },
+    };
+    const corruptRecovery = createAppleScreenRecordingOperations({
+      host: appleRecordingHost({ apple: { inspectProcess } }),
+      device: runtimeDevice,
       owner: localRuntimeOwner('apple'),
       signal: new AbortController().signal,
     });
     await expect(
-      recovery.screenRecordingCleanup({ envelope: started.envelope }),
-    ).resolves.toMatchObject({ status: expected });
-    expect(terminateProcess).toHaveBeenCalledTimes(terminations);
-  }
-
-  const inspectProcess = vi.fn(async () => 'owned-alive' as const);
-  const corruptEnvelope = {
-    ...started.envelope,
-    descriptor: {
-      ...started.envelope.descriptor,
-      body: {
-        ...started.envelope.descriptor.body,
-        processes: [{ pid: 42, startTime: '', command: processIdentity.command }],
-      },
-    },
-  };
-  const corruptRecovery = createAppleScreenRecordingOperations({
-    host: appleRecordingHost({ apple: { inspectProcess } }),
-    device: simulator,
-    owner: localRuntimeOwner('apple'),
-    signal: new AbortController().signal,
-  });
-  await expect(
-    corruptRecovery.screenRecordingCleanup({ envelope: corruptEnvelope }),
-  ).resolves.toMatchObject({ status: 'cleanup-pending' });
-  expect(inspectProcess).not.toHaveBeenCalled();
-});
+      corruptRecovery.screenRecordingCleanup({ envelope: corruptEnvelope }),
+    ).resolves.toMatchObject({ status: 'cleanup-pending' });
+    expect(inspectProcess).not.toHaveBeenCalled();
+  },
+);
 
 type SimulatorHostOptions = Parameters<typeof appleRecordingHost>[0];
 

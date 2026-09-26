@@ -267,6 +267,29 @@ export async function startMacOsAudioProbeProcess(options: {
   );
 }
 
+export function macOsNativeRecordingAvailable(): boolean {
+  return hostPlatform() === 'darwin' && !hasScopedAppleToolProvider();
+}
+
+export async function startMacOsRecordingProcess(options: {
+  outputPath: string;
+  statusPath: string;
+  bundleId?: string;
+  fps?: number;
+}): Promise<ExecBackgroundResult> {
+  if (!macOsNativeRecordingAvailable()) {
+    throw new AppError(
+      'UNSUPPORTED_PLATFORM',
+      'Native macOS recording requires the local Apple provider',
+    );
+  }
+  const helperPath = await resolveMacOsHelperCommandPath();
+  const args = ['record', '--out', options.outputPath, '--status', options.statusPath];
+  if (options.bundleId) args.push('--bundle-id', assertMacOsBundleId(options.bundleId));
+  if (options.fps !== undefined) args.push('--fps', String(options.fps));
+  return runCmdBackground(helperPath, args, { allowFailure: true, captureOutput: true });
+}
+
 const MACOS_HELPER_TIMEOUT_MS = 30_000;
 /**
  * Every stop the host applies to the helper — a deadline, a cancelled request, a client that

@@ -17,9 +17,6 @@ pub const ACCESSIBILITY_REASON: &str =
     "Allow Accessibility for Silicon Bridge in System Settings › Privacy & Security › Accessibility.";
 pub const SCREEN_RECORDING_REASON: &str =
     "Allow Screen Recording for Silicon Bridge in System Settings › Privacy & Security › Screen & System Audio Recording.";
-pub const UI_AUTOMATION_REASON: &str = "Screen recording needs UI Automation. Allow it once: run `automationmodetool enable-automationmode-without-authentication` in Terminal and enter your password, or approve the “XCTest is trying to Enable UI Automation” prompt each time it appears.";
-pub const XCODE_REASON: &str =
-    "Screen recording needs Xcode's UI testing tools. Install Xcode from the App Store and open it once.";
 
 /// macOS's UI Automation mode, which agent-device's UI testing runner turns on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,24 +92,12 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         }
     }
 
-    // Recording goes through agent-device's UI testing runner, which needs Xcode and
-    // UI Automation; without them those commands would wait for a password prompt.
-    let automation_ready = matches!(facts.automation, AutomationMode::Enabled | AutomationMode::NoAuthentication);
-    let runner_problem = if !facts.xcode {
-        Some(XCODE_REASON)
-    } else if !automation_ready {
-        Some(UI_AUTOMATION_REASON)
-    } else {
-        None
-    };
-
     steps.push(step("screen_recording", "Allow Screen Recording for Silicon Bridge", facts.screen_recording, SCREEN_RECORDING_HELP));
     if facts.screen_recording {
         caps.push(ScreenCapture);
-        match (input.supports("record"), runner_problem) {
-            (false, _) => miss(ScreenRecord, "agent-device doesn't support `record` on this Mac.", &mut missing),
-            (true, Some(why)) => miss(ScreenRecord, why, &mut missing),
-            (true, None) => caps.push(ScreenRecord),
+        match input.supports("record") {
+            false => miss(ScreenRecord, "agent-device doesn't support `record` on this Mac.", &mut missing),
+            true => caps.push(ScreenRecord),
         }
     } else {
         for c in [ScreenCapture, ScreenRecord] {
@@ -256,19 +241,18 @@ mod tests {
     }
 
     #[test]
-    fn typing_needs_accessibility_but_recording_still_needs_ui_automation() {
+    fn native_input_and_recording_do_not_need_xctest() {
         let p = build_probe(&MacFacts { automation: AutomationMode::NeedsAuthentication, ..all_good() }, &input());
         assert!(p.capabilities.contains(&Capability::InputText));
         // Only Accessibility and Screen Recording are setup steps; this doesn't block sessions.
         assert_eq!(p.setup.state, SetupState::Complete);
         assert_eq!(p.setup.steps.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["accessibility", "screen_recording"]);
         assert!(p.capabilities.contains(&Capability::InputPointer));
-        // Recording still goes through the runner.
-        assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRecord && m.reason.contains("automationmodetool")));
+        assert!(p.capabilities.contains(&Capability::ScreenRecord));
         assert!(p.capabilities.contains(&Capability::ScreenCapture));
         let p = build_probe(&MacFacts { xcode: false, ..all_good() }, &input());
         assert!(p.capabilities.contains(&Capability::InputText));
-        assert!(p.missing.iter().any(|m| m.capability == Capability::ScreenRecord && m.reason == XCODE_REASON));
+        assert!(p.capabilities.contains(&Capability::ScreenRecord));
     }
 
     #[test]
