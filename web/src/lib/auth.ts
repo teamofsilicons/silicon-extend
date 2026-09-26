@@ -3,12 +3,12 @@
  * (silicon-iam/docs/client/login.html):
  *
  * 1. Send the browser to `<iam_login_url>?app_id=<app_id>&redirect_uri=<callback>`.
- *    IAM shows Bridge's permissions and asks the Carbon to pick teams. The website never sends
+ *    IAM shows Extend's permissions and asks the Carbon to pick teams. The website never sends
  *    a team (`org_id`): IAM refuses it.
  * 2. IAM returns to `<callback>?slt=…` (it keeps the callback's own query, so our `state` survives).
  *    The SLT lives two minutes and works once.
- * 3. The website posts it to Bridge's `POST /api/v1/auth/login`, which does the secret-authenticated
- *    exchange with IAM. The website never holds Bridge's app secret.
+ * 3. The website posts it to Extend's `POST /api/v1/auth/login`, which does the secret-authenticated
+ *    exchange with IAM. The website never holds Extend's app secret.
  *
  * IAM's SLT exchange has no PKCE, so the callback is bound to the attempt this tab started with a
  * random `state` kept in sessionStorage.
@@ -73,7 +73,7 @@ export function finishIamLogin(params: URLSearchParams, world: string, now = Dat
     throw new ApiError(0, {
       code: `iam_${error}`,
       message: `Silicon IAM did not sign you in: ${params.get("error_description") || error}.`,
-      hint: "Start sign-in again. If IAM keeps refusing, check that you approved Bridge's permissions and picked a team.",
+      hint: "Start sign-in again. If IAM keeps refusing, check that you approved Extend's permissions and picked a team.",
     });
   const slt = params.get("slt");
   const state = params.get("state");

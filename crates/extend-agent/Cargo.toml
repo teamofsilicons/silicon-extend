@@ -1,0 +1,88 @@
+[package]
+name = "extend-agent"
+description = "The Silicon Extend device agent for Mac, Windows and Linux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "extend_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "extend-agent"
+path = "src/main.rs"
+
+[features]
+default = ["tray"]
+# The menu-bar / tray icon and the pairing window. Without it the agent only runs headless.
+tray = ["dep:tray-icon", "dep:tao", "dep:wry"]
+
+[dependencies]
+extend-protocol.workspace = true
+extend-driver.workspace = true
+extend-hosted.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+futures.workspace = true
+http.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+tokio-util = { version = "0.7.16", features = ["io"] }
+keyring = "4.2.0"
+gethostname = "1.1.0"
+os_info = { version = "3.15.0", default-features = false }
+
+tray-icon = { version = "0.25.1", optional = true }
+tao = { version = "0.37.0", optional = true }
+wry = { version = "0.57.0", optional = true }
+
+# TLS: rustls on Mac and Linux; the platform's own TLS (SChannel) on Windows, which keeps C crypto
+# code out of the Windows build so it cross-checks from any host.
+[target.'cfg(not(windows))'.dependencies]
+reqwest = { version = "0.13.4", default-features = false, features = ["http2", "json", "rustls", "stream"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-native-roots"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"
+
+# Windows-native driver (UI Automation, SendInput, screen capture, clipboard).
+[target.'cfg(windows)'.dependencies]
+reqwest = { version = "0.13.4", default-features = false, features = ["http2", "json", "native-tls", "stream"] }
+tokio-tungstenite = { version = "0.29.0", features = ["native-tls"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+png = "0.18.1"
+
+[dev-dependencies]
+axum.workspace = true
+tempfile = "3.23.0"

@@ -1,0 +1,23 @@
+[package]
+name = "silicon-extend-client"
+description = "Official Rust client for Silicon Extend: let a Silicon use a Carbon's paired devices"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+extend-protocol.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true

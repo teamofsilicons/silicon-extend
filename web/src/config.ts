@@ -1,18 +1,18 @@
 /**
- * Everything the website needs to know that is not fetched from Bridge: where the API is,
- * where the Bridge apps download from, and how each kind of device is added.
+ * Everything the website needs to know that is not fetched from Extend: where the API is,
+ * where the Extend apps download from, and how each kind of device is added.
  *
  * Download links are placeholders under `/download/<platform>` until the apps are published.
  * Change them here and nowhere else.
  */
 import type { DeviceOs } from "./lib/types";
 
-const PRODUCTION_API = "https://backend.bridge.teamofsilicons.com";
+const PRODUCTION_API = "https://backend.extend.teamofsilicons.com";
 
-/** Bridge API base URL without a trailing slash; "" means same origin. */
+/** Extend API base URL without a trailing slash; "" means same origin. */
 export function apiBaseUrl(): string {
   const raw =
-    import.meta.env.VITE_BRIDGE_API_URL ??
+    import.meta.env.VITE_EXTEND_API_URL ??
     (import.meta.env.DEV ? "same-origin" : PRODUCTION_API);
   if (!raw || raw === "same-origin" || raw === "/") return "";
   return raw.replace(/\/+$/, "");
@@ -22,12 +22,12 @@ export function apiBaseUrl(): string {
 export const IAM_LOGIN_URL_OVERRIDE = import.meta.env.VITE_IAM_LOGIN_URL || "";
 
 export const LINKS = {
-  repository: "https://github.com/teamofsilicons/silicon-bridge",
-  crate: "https://crates.io/crates/silicon-bridge-client",
-  docs: "https://docs.bridge.teamofsilicons.com",
-  website: "https://bridge.teamofsilicons.com",
+  repository: "https://github.com/teamofsilicons/silicon-extend",
+  crate: "https://crates.io/crates/silicon-extend-client",
+  docs: "https://docs.extend.teamofsilicons.com",
+  website: "https://extend.teamofsilicons.com",
   api: PRODUCTION_API,
-  install: "honeycomb install 'bridge'",
+  install: "honeycomb install 'extend'",
 };
 
 export type Platform =
@@ -47,31 +47,31 @@ export interface Download {
 export const DOWNLOADS: Record<Platform, Download> = {
   android: {
     platform: "android",
-    app: "Silicon Bridge for Android",
+    app: "Silicon Extend for Android",
     href: "/download/android",
     note: "Install the .apk on the phone or tablet. Android asks once to allow installs from your browser.",
   },
   "android-tv": {
     platform: "android-tv",
-    app: "Silicon Bridge TV",
+    app: "Silicon Extend TV",
     href: "/download/android-tv",
     note: "For Android TV, Google TV and Fire TV. Install it on the TV itself.",
   },
   mac: {
     platform: "mac",
-    app: "Silicon Bridge for Mac",
+    app: "Silicon Extend for Mac",
     href: "/download/mac",
     note: "A menu bar app for macOS. Open the .dmg and drag it to Applications.",
   },
   windows: {
     platform: "windows",
-    app: "Silicon Bridge for Windows",
+    app: "Silicon Extend for Windows",
     href: "/download/windows",
     note: "A system tray app. Run the installer and allow it when Windows asks.",
   },
   linux: {
     platform: "linux",
-    app: "Silicon Bridge for Linux",
+    app: "Silicon Extend for Linux",
     href: "/download/linux",
     note: "Packages for common distributions.",
   },
@@ -94,7 +94,7 @@ export interface DeviceKind {
   label: string;
   short: string;
   os: DeviceOs;
-  /** `app`: runs a Bridge app and shows a pairing code. `host`: paired through a computer. */
+  /** `app`: runs an Extend app and shows a pairing code. `host`: paired through a computer. */
   via: "app" | "host";
   /** For `host` kinds: which paired devices can be the host. */
   host?: "mac" | "computer";
@@ -118,7 +118,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     download: "android",
     icon: "phone",
     guide: [
-      "Download Silicon Bridge for Android on the phone or tablet, and install it.",
+      "Download Silicon Extend for Android on the phone or tablet, and install it.",
       "Open the app. It shows a pairing code and never asks you to log in.",
       "Enter that code below. It changes every 5 minutes, so use the one on screen now.",
     ],
@@ -141,7 +141,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     download: "android-tv",
     icon: "tv",
     guide: [
-      "Install Silicon Bridge TV on the TV.",
+      "Install Silicon Extend TV on the TV.",
       "Open it. The pairing code is shown large on the TV.",
       "Enter that code below.",
     ],
@@ -163,7 +163,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     download: "mac",
     icon: "laptop",
     guide: [
-      "Download Silicon Bridge for Mac and move it to Applications.",
+      "Download Silicon Extend for Mac and move it to Applications.",
       "Open it from the menu bar. It shows a pairing code.",
       "Enter that code below.",
     ],
@@ -185,7 +185,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     download: "windows",
     icon: "monitor",
     guide: [
-      "Download Silicon Bridge for Windows and run the installer.",
+      "Download Silicon Extend for Windows and run the installer.",
       "Open it from the system tray. It shows a pairing code.",
       "Enter that code below.",
     ],
@@ -204,7 +204,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     download: "linux",
     icon: "monitor",
     guide: [
-      "Download Silicon Bridge for Linux and install it.",
+      "Download Silicon Extend for Linux and install it.",
       "Open it. It shows a pairing code.",
       "Enter that code below.",
     ],
@@ -225,14 +225,14 @@ export const DEVICE_KINDS: DeviceKind[] = [
     host: "mac",
     icon: "phone",
     guide: [
-      "There is no app to install on the iPhone. Bridge puts a small helper on it through your paired Mac.",
+      "There is no app to install on the iPhone. Extend puts a small helper on it through your paired Mac.",
       "Pick the paired Mac the iPhone will connect through. It needs to be online.",
       "Keep the iPhone and a cable nearby for the first setup.",
     ],
     setup: [
       "Plug the iPhone into the Mac once, and tap Trust on the iPhone.",
       "Turn on Developer Mode (Settings, then Privacy & Security). The iPhone restarts.",
-      "Bridge puts its helper on the iPhone. After that the cable isn't needed while both are on the same Wi-Fi.",
+      "Extend puts its helper on the iPhone. After that the cable isn't needed while both are on the same Wi-Fi.",
     ],
     canDo:
       "Open any app, see the screen, tap, type, swipe, scroll, and take screenshots and recordings.",
@@ -248,14 +248,14 @@ export const DEVICE_KINDS: DeviceKind[] = [
     host: "mac",
     icon: "tablet",
     guide: [
-      "There is no app to install on the iPad. Bridge puts a small helper on it through your paired Mac.",
+      "There is no app to install on the iPad. Extend puts a small helper on it through your paired Mac.",
       "Pick the paired Mac the iPad will connect through. It needs to be online.",
       "Keep the iPad and a cable nearby for the first setup.",
     ],
     setup: [
       "Plug the iPad into the Mac once, and tap Trust on the iPad.",
       "Turn on Developer Mode (Settings, then Privacy & Security). The iPad restarts.",
-      "Bridge puts its helper on the iPad. After that the cable isn't needed while both are on the same Wi-Fi.",
+      "Extend puts its helper on the iPad. After that the cable isn't needed while both are on the same Wi-Fi.",
     ],
     canDo:
       "Open any app, see the screen, tap, type, swipe, scroll, and take screenshots and recordings.",

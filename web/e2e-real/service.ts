@@ -1,9 +1,9 @@
-/** Talks to the real Bridge service directly, and plays the part of a Bridge app on a device. */
+/** Talks to the real Extend service directly, and plays the part of an Extend app on a device. */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import WebSocket from "ws";
 
-export const REAL = process.env.BRIDGE_REAL_URL || "http://127.0.0.1:8480";
+export const REAL = process.env.EXTEND_REAL_URL || "http://127.0.0.1:8480";
 
 async function call(method: string, path: string, init: { body?: unknown; headers?: Record<string, string> } = {}) {
   const res = await fetch(`${REAL}${path}`, {
@@ -38,7 +38,7 @@ export async function pairViaApi(token: string, code: string, name: string, secr
   return (await call("POST", "/api/v1/pairings", { body: { type: "pairing", data: { pairing_code: code, name } }, headers: headers(token, secret) })).data;
 }
 
-/** A pretend Bridge app: enrolls, waits to be paired, then keeps the device socket open. */
+/** A pretend Extend app: enrolls, waits to be paired, then keeps the device socket open. */
 export class FakeDevice {
   enrollmentId = "";
   secret = "";
@@ -59,7 +59,7 @@ export class FakeDevice {
   async waitPaired(timeoutMs = 10_000) {
     const until = Date.now() + timeoutMs;
     while (Date.now() < until) {
-      const r = await call("GET", `/api/v1/enrollments/${this.enrollmentId}`, { headers: { Authorization: `Bridge-Enrollment ${this.secret}` } });
+      const r = await call("GET", `/api/v1/enrollments/${this.enrollmentId}`, { headers: { Authorization: `Extend-Enrollment ${this.secret}` } });
       if (r.data.state === "paired") {
         this.deviceId = r.data.device_id;
         this.credential = r.data.device_credential;
@@ -72,7 +72,7 @@ export class FakeDevice {
 
   /** Opens the device socket and reports setup: waiting on the Carbon, then finished. */
   async connect(setupDone: boolean) {
-    const ws = new WebSocket(`${REAL.replace(/^http/, "ws")}/api/v1/device/connect`, { headers: { Authorization: `Bridge-Device ${this.credential}` } });
+    const ws = new WebSocket(`${REAL.replace(/^http/, "ws")}/api/v1/device/connect`, { headers: { Authorization: `Extend-Device ${this.credential}` } });
     this.socket = ws;
     ws.on("message", (raw) => {
       const frame = JSON.parse(String(raw));
@@ -115,14 +115,14 @@ export class FakeDevice {
 /** Creates a ready test environment through Honeycomb's lifecycle endpoint and registers its app secret with local IAM. */
 export async function createTestEnvironment(name: string) {
   const env = readFileSync(new URL("../../e2e/dev.env", import.meta.url), "utf8");
-  const token = /^BRIDGE_HONEYCOMB_SERVICE_TOKEN=(.+)$/m.exec(env)?.[1]?.trim();
-  if (!token) throw new Error("e2e/dev.env has no BRIDGE_HONEYCOMB_SERVICE_TOKEN");
+  const token = /^EXTEND_HONEYCOMB_SERVICE_TOKEN=(.+)$/m.exec(env)?.[1]?.trim();
+  if (!token) throw new Error("e2e/dev.env has no EXTEND_HONEYCOMB_SERVICE_TOKEN");
   const environmentId = randomUUID();
   const op = randomUUID();
   const res = await fetch(`${REAL}/internal/honeycomb/organizations/acme/testing-environments/${environmentId}/operations/${op}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ operation_id: op, environment_id: environmentId, org_id: "acme", app_id: "bridge", environment_revision: 1, generation: 1, key_version: 1, action: "prepare", testing_key: "abcdefghijklmnopqrstuvwxyz012345", name }),
+    body: JSON.stringify({ operation_id: op, environment_id: environmentId, org_id: "acme", app_id: "extend", environment_revision: 1, generation: 1, key_version: 1, action: "prepare", testing_key: "abcdefghijklmnopqrstuvwxyz012345", name }),
   });
   if (!res.ok) throw new Error(`prepare → ${res.status} ${await res.text()}`);
   const secret = "ask_" + randomUUID().replace(/-/g, "") + "abcdefghijk";

@@ -102,7 +102,7 @@ extension AgentDeviceMacOSHelper {
           request.y?.isFinite != false, (request.x == nil) == (request.y == nil)
     else { throw HelperError.invalidArgs("invalid text coordinates or delay") }
     guard AXIsProcessTrusted() else {
-      throw HelperError.commandFailed("allow Accessibility for Silicon Bridge", details: ["permission": "accessibility"])
+      throw HelperError.commandFailed("allow Accessibility for Silicon Extend", details: ["permission": "accessibility"])
     }
     let app = try resolveTargetApplication(bundleId: request.bundleId, surface: nil)
     try activateTargetApplication(app)

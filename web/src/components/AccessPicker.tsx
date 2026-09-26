@@ -13,9 +13,9 @@ interface Roster {
 }
 
 /**
- * Who can be given access: the team's Silicons from Bridge. If that endpoint isn't available (an
+ * Who can be given access: the team's Silicons from Extend. If that endpoint isn't available (an
  * older service), Silicons already using the Carbon's other devices are suggested instead. Typing an
- * id always works; Bridge checks it when access is given.
+ * id always works; Extend checks it when access is given.
  */
 async function loadRoster(team: string | null): Promise<Roster> {
   if (!team) return { source: "known", items: [] };

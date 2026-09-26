@@ -29,13 +29,13 @@ def window(title):
     return result.stdout.strip().splitlines()[0] if result.returncode==0 else None
 
 try:
-    xid=wait(lambda:window('Bridge Recording Fixture'))
+    xid=wait(lambda:window('Extend Recording Fixture'))
     output=out/'isolated.mp4'; status=out/'status.json'
     recorder=subprocess.Popen(['python3',str(worker),'--out',str(output),'--status',str(status),'--window-id',xid,'--fps','12'])
     wait(lambda:status.exists() and json.loads(status.read_text()).get('state')=='recording')
     time.sleep(.5)
     peer=subprocess.Popen(['python3',str(fixture_script),'--peer'])
-    peer_id=wait(lambda:window('Bridge Recording Peer'))
+    peer_id=wait(lambda:window('Extend Recording Peer'))
     subprocess.run(['xdotool','windowmove',xid,'0','0','windowmove',peer_id,'0','0','windowraise',peer_id],check=True)
     # A whole-screen capture must see the green peer, proving that the overlap actually exists.
     subprocess.run(['ffmpeg','-v','error','-f','x11grab','-video_size','641x481','-i',':99','-frames:v','1','-y',str(out/'covered.png')],check=True)

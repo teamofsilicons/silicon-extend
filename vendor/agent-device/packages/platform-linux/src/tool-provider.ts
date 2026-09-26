@@ -273,7 +273,7 @@ const LOCAL_CLIPBOARD_WRITE_COMMANDS: Record<
     args: ['--', text],
     options: { allowFailure: false, timeoutMs: LOCAL_TOOL_TIMEOUT_MS },
   }),
-  // Silicon Bridge fork: xclip forks a child that keeps serving the selection and inherits our
+  // Silicon Extend fork: xclip forks a child that keeps serving the selection and inherits our
   // stdout/stderr pipes, so waiting for them timed out every write. Detach its output.
   xclip: (text) => ({
     cmd: 'sh',

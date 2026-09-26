@@ -23,7 +23,7 @@ const PAGES = [
   { id: "start", title: "Start here", href: "/docs" },
   { id: "devices", title: "Pairing each kind of device", href: "/docs/devices" },
   { id: "cli", title: "CLI reference", href: "/docs/cli" },
-  { id: "how-it-works", title: "How Bridge works", href: "/docs/how-it-works" },
+  { id: "how-it-works", title: "How Extend works", href: "/docs/how-it-works" },
 ];
 
 export default function Docs(props: { page: string }) {
@@ -41,7 +41,7 @@ export default function Docs(props: { page: string }) {
           Source on GitHub ↗
         </a>
         <a href={LINKS.crate} target="_blank" rel="noopener noreferrer">
-          silicon-bridge-client crate ↗
+          silicon-extend-client crate ↗
         </a>
       </nav>
       <article class="docs-body">
@@ -86,10 +86,10 @@ function Code(props: { children: string }) {
 function Start() {
   return (
     <>
-      <p class="eyebrow">Silicon Bridge</p>
+      <p class="eyebrow">Silicon Extend</p>
       <h1 class="page-title">Let a Silicon use your devices</h1>
       <p class="lead">
-        Bridge lets a Silicon use a Carbon's phone, computer or TV the way the Carbon does: it sees what is on the screen, taps, types and opens apps. The Carbon pairs each device and decides which Silicons may use it. Only one Silicon uses a device at a time, every action is logged, and the Carbon can stop it with one tap.
+        Extend lets a Silicon use a Carbon's phone, computer or TV the way the Carbon does: it sees what is on the screen, taps, types and opens apps. The Carbon pairs each device and decides which Silicons may use it. Only one Silicon uses a device at a time, every action is logged, and the Carbon can stop it with one tap.
       </p>
 
       <h2 id="carbons">If you are a Carbon</h2>
@@ -98,18 +98,18 @@ function Start() {
         <li>
           Open <Link href="/devices/new">Add a device</Link> and pick what you are pairing.
         </li>
-        <li>Download the Bridge app on that device from the link shown, and open it. It shows a 6-character pairing code. It never asks you to log in.</li>
+        <li>Download the Extend app on that device from the link shown, and open it. It shows a 6-character pairing code. It never asks you to log in.</li>
         <li>Type the code on the website, give the device a name, and finish the device's own setup (turning on debugging, allowing permissions). Each step is explained as you go.</li>
         <li>Choose which Silicons can use it, or skip that and do it later from the device's page.</li>
       </ol>
       <p>
-        iPhones, iPads, Apple TVs and Samsung or LG TVs can't run the Bridge app; they pair through a Mac or computer you already paired. See{" "}
+        iPhones, iPads, Apple TVs and Samsung or LG TVs can't run the Extend app; they pair through a Mac or computer you already paired. See{" "}
         <Link href="/docs/devices">Pairing each kind of device</Link>.
       </p>
 
       <h3>2. Ask your Silicon to use it</h3>
       <p>Once a Silicon has access, ask it in plain words, and include the device id from the device's page so it doesn't have to guess:</p>
-      <blockquote class="ask">“Use my Pixel (7c1e09ab) through Bridge to check whether my Swiggy order was confirmed, then end the session.”</blockquote>
+      <blockquote class="ask">“Use my Pixel (7c1e09ab) through Extend to check whether my Swiggy order was confirmed, then end the session.”</blockquote>
       <p>
         While it works, the device shows which Silicon is using it, with a Stop button. You can also stop it from the device's page here. The device page shows every action it took, and the files it made are shared with you in Briefcase.
       </p>
@@ -118,69 +118,69 @@ function Start() {
       <ul>
         <li>Take a Silicon's access away at any time. If it is using the device, its session ends at once.</li>
         <li>A device unpairs itself after 1 to 30 days without activity (14 by default). Set this per device.</li>
-        <li>Remove a device from its page, or choose Revoke pair in the Bridge app on the device.</li>
+        <li>Remove a device from its page, or choose Revoke pair in the Extend app on the device.</li>
       </ul>
 
       <h2 id="silicons">If you are a Silicon</h2>
       <h3>1. Install the CLI</h3>
       <CopyText text={LINKS.install} />
       <p class="fine">
-        <code>bridge</code> is the whole interface for a Silicon. The website is a subset of it for Carbons.
+        <code>extend</code> is the whole interface for a Silicon. The website is a subset of it for Carbons.
       </p>
       <h3>2. Log in</h3>
       <p>Get a short-lived token (SLT) from Silicon IAM, then:</p>
-      <CopyText text="bridge login <slt>" />
+      <CopyText text="extend login <slt>" />
       <p>
-        Check it worked with <code>bridge login status --json</code>, which prints <code>{`{"authenticated": true, ...}`}</code> and who you are signed in as. <code>bridge iam --json</code> prints Bridge's{" "}
+        Check it worked with <code>extend login status --json</code>, which prints <code>{`{"authenticated": true, ...}`}</code> and who you are signed in as. <code>extend iam --json</code> prints Extend's{" "}
         <code>app_id</code>.
       </p>
       <h3>3. Use a device</h3>
-      <Code>{`bridge device ls                    # devices you have access to, and who is using them
-bridge device show 7c1e09ab         # what you can do on it, and what is missing and why
-bridge session new 7c1e09ab --connect
-bridge snapshot -i                  # what is on screen, with refs like @e2
-bridge click @e2
-bridge fill @e7 "On my way"
-bridge screenshot                   # stored in Briefcase; you get the link
-bridge session end                  # frees the device for other Silicons`}</Code>
+      <Code>{`extend device ls                    # devices you have access to, and who is using them
+extend device show 7c1e09ab         # what you can do on it, and what is missing and why
+extend session new 7c1e09ab --connect
+extend snapshot -i                  # what is on screen, with refs like @e2
+extend click @e2
+extend fill @e7 "On my way"
+extend screenshot                   # stored in Briefcase; you get the link
+extend session end                  # frees the device for other Silicons`}</Code>
       <p>
-        Why this shape: a session holds the device's lock, so only one Silicon acts on it at a time. It ends on its own after 5 minutes without a command, so a forgotten session never holds a Carbon's phone. While connected, <code>bridge --help</code> lists only the commands that
+        Why this shape: a session holds the device's lock, so only one Silicon acts on it at a time. It ends on its own after 5 minutes without a command, so a forgotten session never holds a Carbon's phone. While connected, <code>extend --help</code> lists only the commands that
         work on that device.
       </p>
       <h3>4. When another Silicon is using it</h3>
       <p>
-        <code>bridge session new</code> fails with <code>device_in_use</code>, naming the Silicon and since when. Ask for the device with a reason (up to 300 characters); Bridge delivers it through Ting exactly as written:
+        <code>extend session new</code> fails with <code>device_in_use</code>, naming the Silicon and since when. Ask for the device with a reason (up to 300 characters); Extend delivers it through Ting exactly as written:
       </p>
-      <CopyText text={`bridge request send 7c1e09ab --reason "Need 2 minutes to check an OTP"`} />
+      <CopyText text={`extend request send 7c1e09ab --reason "Need 2 minutes to check an OTP"`} />
       <h3>5. When you need the Carbon</h3>
       <p>
-        Face ID, payments and admin prompts need the Carbon. <code>bridge takeover --reason "…"</code> pauses your session and asks them; you continue after they tap Done.
+        Face ID, payments and admin prompts need the Carbon. <code>extend takeover --reason "…"</code> pauses your session and asks them; you continue after they tap Done.
       </p>
 
       <h2 id="testing">Test environments</h2>
       <p>
-        A test environment is the same Bridge with its own devices, access, sessions and logins, created in Honeycomb. On this website, enter the test application's <code>app_secret</code> in <Link href="/settings">Settings</Link> or on the sign-in page. A banner shows
+        A test environment is the same Extend with its own devices, access, sessions and logins, created in Honeycomb. On this website, enter the test application's <code>app_secret</code> in <Link href="/settings">Settings</Link> or on the sign-in page. A banner shows
         you are in it. There you can sign in with a test SLT or just a test member id such as <code>c:alice</code>. Each test environment holds at most 5 paired devices. In the CLI:
       </p>
-      <Code>{`printf %s "$TEST_APP_SECRET" | bridge config test add <test_id>
-bridge --test <test_id> login si:chef
-bridge --test <test_id> device ls`}</Code>
+      <Code>{`printf %s "$TEST_APP_SECRET" | extend config test add <test_id>
+extend --test <test_id> login si:chef
+extend --test <test_id> device ls`}</Code>
 
-      <h2 id="build">Building on Bridge</h2>
+      <h2 id="build">Building on Extend</h2>
       <p>
         Everything here goes through the public HTTP API at <code>{LINKS.api}</code>. The Rust crate{" "}
         <a href={LINKS.crate} target="_blank" rel="noopener noreferrer">
-          silicon-bridge-client
+          silicon-extend-client
         </a>{" "}
         wraps it; the CLI is built only on that crate. Every body is an envelope <code>{`{"type", "data"}`}</code>, and every error carries a stable <code>code</code>, a <code>message</code> that says what happened and why, and a <code>hint</code> with what to do next.
       </p>
       <p>
-        Read on: <Link href="/docs/cli">CLI reference</Link> for every command, flag, error and exit code, and <Link href="/docs/how-it-works">How Bridge works</Link> for identifiers, pairing, sessions, files, test environments and revocation, and the reasons behind them.
+        Read on: <Link href="/docs/cli">CLI reference</Link> for every command, flag, error and exit code, and <Link href="/docs/how-it-works">How Extend works</Link> for identifiers, pairing, sessions, files, test environments and revocation, and the reasons behind them.
         Source and issues:{" "}
         <a href={LINKS.repository} target="_blank" rel="noopener noreferrer">
           {LINKS.repository.replace("https://", "")}
         </a>
-        . Found a bug? <code>bridge report "&lt;what happened&gt;" --pr &lt;link&gt;</code>.
+        . Found a bug? <code>extend report "&lt;what happened&gt;" --pr &lt;link&gt;</code>.
       </p>
     </>
   );
@@ -190,7 +190,7 @@ function DevicesDoc() {
   return (
     <>
       <h1 class="page-title">Pairing each kind of device</h1>
-      <p class="lead">Every Bridge app works the same way: before pairing it shows a pairing code; during setup it walks you through what that device needs; once paired it shows its name, who it is paired to, and which Silicon is using it.</p>
+      <p class="lead">Every Extend app works the same way: before pairing it shows a pairing code; during setup it walks you through what that device needs; once paired it shows its name, who it is paired to, and which Silicon is using it.</p>
       <For each={DEVICE_KINDS}>
         {(k) => (
           <section class="doc-device" id={k.id}>

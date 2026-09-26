@@ -1,6 +1,6 @@
 // Copies the informative documentation into the website at build time:
 //   understanding/cli.yaml     → the CLI reference (commands, device commands, errors, exit codes)
-//   understanding/TECHNICAL.md → "How Bridge works", rendered to HTML
+//   understanding/TECHNICAL.md → "How Extend works", rendered to HTML
 // Output: src/generated/docs.json. If the understanding/ folder isn't there (a build that only
 // has web/), the last generated file is kept.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -71,7 +71,7 @@ let technical = readFileSync(join(root, "TECHNICAL.md"), "utf8");
 technical = technical
   .replace(/^> Contract file\..*\n(> .*\n)*/m, "")
   .replace(/\n## Open questions[\s\S]*$/, "\n")
-  .replace(/IAM names this an organization; Bridge keeps IAM's wire names\./g, "Bridge keeps IAM's wire names.")
+  .replace(/IAM names this an organization; Extend keeps IAM's wire names\./g, "Extend keeps IAM's wire names.")
   .replace(/\[Open questions\]\(#open-questions\)/g, "the open questions kept with the contract")
   .replace(/\*\*See Open questions 1–3:\*\*/g, "**Open questions:**");
 

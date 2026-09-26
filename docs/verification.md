@@ -1,6 +1,6 @@
 # Verification record — 2026-09-26
 
-What was run to check that Silicon Bridge works as `understanding/UNDERSTANDING.md` intends, on what,
+What was run to check that Silicon Extend works as `understanding/UNDERSTANDING.md` intends, on what,
 and what has **not** been verified. Rerun the automated part with `e2e/run-all.sh`.
 
 ## Automated suites
@@ -8,15 +8,15 @@ and what has **not** been verified. Rerun the automated part with `e2e/run-all.s
 | Suite | Where | Result |
 |---|---|---|
 | Protocol, service, client, CLI unit tests | `cargo test --workspace` | pass |
-| Service end-to-end (`crates/bridge-service/tests/e2e.rs`) | real PostgreSQL, real HTTP/WS, scripted device | 4/4 suites: pairing, one-at-a-time, relay, files + self-destruct, takeover, stop, access removal mid-session, idle timeout, logout, pair expiry, supersede, session ids growing to 4 chars, rate limits, test environments (limit message, isolation, clean/disable/restore/purge), version negotiation |
+| Service end-to-end (`crates/extend-service/tests/e2e.rs`) | real PostgreSQL, real HTTP/WS, scripted device | 4/4 suites: pairing, one-at-a-time, relay, files + self-destruct, takeover, stop, access removal mid-session, idle timeout, logout, pair expiry, supersede, session ids growing to 4 chars, rate limits, test environments (limit message, isolation, clean/disable/restore/purge), version negotiation |
 | CLI end-to-end (`e2e/cli-e2e.sh`) | running service + `examples/fake_device` | 48/48 checks: help tree, login/status, pairing, device management, sessions, `--help` narrowing, exit codes, files, requests via Ting, takeover, activity redaction, reports, `--test` environments and isolation |
-| Real Silicon IAM (`e2e/real-iam/realiam.py all`) | local IAM containers + Bridge in SDK mode | 51/51: real SLT login, refresh/reuse, revocation, directory, access grants, signed webhooks (removal ends access; forged 401; duplicates once), testing plane with member-id login |
+| Real Silicon IAM (`e2e/real-iam/realiam.py all`) | local IAM containers + Extend in SDK mode | 51/51: real SLT login, refresh/reuse, revocation, directory, access grants, signed webhooks (removal ends access; forged 401; duplicates once), testing plane with member-id login |
 | Website (`web`) | vitest, Playwright vs mock, Playwright vs real service | 78 unit, 23 mock e2e, 4 real-service e2e |
-| Desktop agent (`crates/bridge-agent`) | macOS + Linux (Docker, arm64) | 107 unit + 7 integration (fake service) |
-| Hosted drivers (`crates/bridge-hosted`) | mocks, iOS Simulator | 63 tests; Apple TV pairing crypto against pyatv's server (opt-in) |
+| Desktop agent (`crates/extend-agent`) | macOS + Linux (Docker, arm64) | 107 unit + 7 integration (fake service) |
+| Hosted drivers (`crates/extend-hosted`) | mocks, iOS Simulator | 63 tests; Apple TV pairing crypto against pyatv's server (opt-in) |
 | Android (`apps/android`) | JVM, phone emulator (API 36), Android TV emulator (API 34) | 58 unit; 83/83 phone and 36/36 TV checks vs fake service |
 
-## Real devices, through the real service and the `bridge` CLI
+## Real devices, through the real service and the `extend` CLI
 
 | Device | What ran |
 |---|---|
@@ -62,7 +62,7 @@ by this follow-up. Release and physical-device gates above remain open.
   exit; connection preferences now commit on the IO dispatcher. The vendored libadb source
   also fixes a lost OPEN acknowledgement and allocates stream IDs atomically. With these
   changes, 100 rapid TLS shell commands and the complete real-service CLI suite pass.
-- `e2e/android-adb.sh` passed against the local Rust Bridge service and PostgreSQL with the
+- `e2e/android-adb.sh` passed against the local Rust Extend service and PostgreSQL with the
   Android emulator: CLI shell, install/reinstall, binary push/pull with artifact retrieval,
   logs/marker, downloaded MP4, Carbon Stop, refusal after Stop and cleanup before a new session.
   IAM, Briefcase and Ting in this run were the development stand-ins.
@@ -108,9 +108,9 @@ compatibility. These checks do not establish completion of the entire product co
   punctuation substitution. Non-secure `fill` verifies the final exact value and reports a
   failure if the application transforms or rejects it. Explicit per-character delay still
   uses individual character events.
-- The packaged `bridge-agent exec` path passed `open`, `snapshot`, selector-based `fill`
+- The packaged `extend-agent exec` path passed `open`, `snapshot`, selector-based `fill`
   and `type` against the isolated fixture. Its dedicated daemon was stopped after the test.
-  Run `python3 apps/desktop/macos/text-e2e.py --bridge 'target/desktop/macos/Silicon Bridge.app/Contents/MacOS/bridge-agent'`
+  Run `python3 apps/desktop/macos/text-e2e.py --extend 'target/desktop/macos/Silicon Extend.app/Contents/MacOS/extend-agent'`
   after building and granting Accessibility. The test opens only its own temporary app.
 - 48 focused TypeScript tests and 7 Rust probe tests pass, as do workspace TypeScript
   checking and lint. The new dispatch regression was observed failing with the original
@@ -135,14 +135,14 @@ compatibility. These checks do not establish completion of the entire product co
   retaining a provider lease until cleanup succeeds. These are daemon boundary tests, not
   evidence that the intermittent native MP4 finalization failure has been resolved.
 
-- Bridge's driver setup and teardown now share a per-device queue with commands. Previously these
+- Extend's driver setup and teardown now share a per-device queue with commands. Previously these
   hooks ran outside the command queue; the regression failed until the dispatcher performed cleanup
   before accepting the next session's commands. The fixed test verifies cleanup, new setup, then command execution. Separate
   devices still run concurrently and session end cancels pending commands. All 110 agent unit
   tests and seven fake-service tests pass. The rebuilt signed Mac app selected the expected app
   in a real recording run, but that single run does not establish that all foreground races are fixed.
-- The stuck live test session `bridge-c67` subsequently closed successfully through the same
-  daemon, confirming cleanup retry releases a real retained claim. Bridge now retries the typed
+- The stuck live test session `extend-c67` subsequently closed successfully through the same
+  daemon, confirming cleanup retry releases a real retained claim. Extend now retries the typed
   `session_cleanup_incomplete` result once on session end and preserves state/artifacts if cleanup
   still fails. The regression failed before this driver change and passes for recovery, persistent
   cleanup failure and a same-message error with a different reason. All 111 agent unit tests and
@@ -210,25 +210,25 @@ compatibility. These checks do not establish completion of the entire product co
 ### 2026-09-26 — packaged runtime build identity
 
 - The stale-daemon cause was the installed-runtime identity contract: identical package versions
-  are intentionally reused without comparing filesystem fingerprints. Bridge's rebuilt fork
+  are intentionally reused without comparing filesystem fingerprints. Extend's rebuilt fork
   previously retained upstream version `0.21.15` even when its behavior changed.
-- Mac/Linux staging now appends `+bridge.<sha256>` to the fork's package version. The digest
+- Mac/Linux staging now appends `+extend.<sha256>` to the fork's package version. The digest
   covers the staged code/assets, canonical package metadata, Node platform/architecture/version,
   and the Mac native helper before signing. Relocation and filesystem timestamps do not affect it.
-  The vendor source manifest and Bridge's public release version remain unchanged.
+  The vendor source manifest and Extend's public release version remain unchanged.
 - Four focused tests pass: identical relocated content, same-size/same-mtime code changes, native
   helper changes and rejection of incomplete staging. The real-daemon harness first reproduced
   stale reuse by unstamped A/B artifacts, then verified a changed PID and execution of build B
   after stamping. An identical relocated B reused that daemon. Cleanup used the runtime's own
   stop command against its isolated state directory; no devices or active sessions were opened.
 - This proves refresh of an idle packaged daemon. Active-session update behavior, Windows release
-  handling, notarization and production publication remain separate gates. Windows uses Bridge's
+  handling, notarization and production publication remain separate gates. Windows uses Extend's
   native driver and does not bundle this Node daemon. Linux's packaging hook is added, but its
   full package build was not rerun in this check.
 - Two successive Developer ID Mac builds retained identical runtime build identities. Deep/strict
   signature verification, bundled Node execution and archive-manifest equality passed. The final
   app contains no local-test environment overrides. Output is the signed, not-notarized
-  `target/desktop/macos/Silicon Bridge.app` and its 43-MB zip.
+  `target/desktop/macos/Silicon Extend.app` and its 43-MB zip.
 
 
 ### 2026-09-26 — Mac recording limits and owner loss
@@ -266,7 +266,7 @@ compatibility. These checks do not establish completion of the entire product co
   exit passed full decoding and nonblank frame checks. The reduced file cap stopped at
   793,075 bytes. Killing the supervisor with SIGKILL stopped its encoder and left a decodable MP4.
 - Invalid fps/size, existing outputs, missing DISPLAY and Wayland were rejected without changing
-  artifacts. Results: `/tmp/bridge-linux-recording.log`; saved videos under ignored
+  artifacts. Results: `/tmp/extend-linux-recording.log`; saved videos under ignored
   `target/desktop/linux-recording/recording-s1_mt3aa/`. Python syntax and shell syntax checks pass.
 - This is a manual native-worker lane. Public start/stop, app identity binding, durable daemon
   recovery, overlay/export/transfer, obscured/hidden windows, full 30-minute/1-GiB limits, current
@@ -288,12 +288,12 @@ compatibility. These checks do not establish completion of the entire product co
 - Real unprivileged Debian/Xvfb tests passed public start/stop and full decode; daemon SIGKILL
   followed by a new public stop recovered the video and reported unavailable touch events.
   Both device and system scopes ran. Native artifacts were retired only after successful export.
-- Built the Linux agent and exercised Bridge's driver probe and public `exec record` path.
+- Built the Linux agent and exercised Extend's driver probe and public `exec record` path.
   This exposed two existing wrapper bugs: `outPath` was not recognized, and moving the export
-  invalidated the runtime's durable path. Both regressions failed before correction. Bridge now
+  invalidated the runtime's durable path. Both regressions failed before correction. Extend now
   recognizes `outPath`, copies for upload, retains the committed source and reports missing/copy
   errors instead of success with no file. Unit checks cover repeated exports and copy refusal.
-- Final live run: `/tmp/bridge-linux-driver-record-final.log`, artifacts in ignored
+- Final live run: `/tmp/extend-linux-driver-record-final.log`, artifacts in ignored
   `target/desktop/linux-recording/runtime-recording-l2sf3ujf/`. The driver returned one recording
   artifact, full ffmpeg decoding passed, and the manifest's source remained present. Test daemons
   and fixtures were stopped; all screen activity was inside the owned Xvfb container.
@@ -302,7 +302,7 @@ compatibility. These checks do not establish completion of the entire product co
   old direct-xclip call; it now checks the existing detached-output command and stdin contract.
   The Linux probe's screenshot-independence regression also failed before correction.
 - `check:affected --run` still fails before selecting gates because it resolves this nested
-  workspace's root as Silicon Bridge and looks for its nonexistent package.json. The depgraph
+  workspace's root as Silicon Extend and looks for its nonexistent package.json. The depgraph
   likewise does not recognize nested tracked paths. These remain unpassed gates.
 - CLI help and Linux package dependency guidance now describe the implemented whole-screen
   path. No new Linux release package or public deployment was produced. App identity/isolation,
@@ -321,13 +321,13 @@ compatibility. These checks do not establish completion of the entire product co
   durable-resource recovery. Additional app/window-manager coverage remains necessary.
 - The unprivileged Xvfb public lane passed with the target covered before recording began:
   bound identity, unchanged foreground, target-colored output, full MP4 decode, native-file
-  retirement, and missing/ambiguous app refusal. Evidence: `/tmp/bridge-linux-public-app-final.log`,
+  retirement, and missing/ambiguous app refusal. Evidence: `/tmp/extend-linux-public-app-final.log`,
   artifacts `target/desktop/linux-recording/public-app-recording-sfz4714y/`.
 - Native isolation lanes passed target resize and unmap: both ended with `source-ended` and
-  playable target-only video (`/tmp/bridge-linux-isolation-resize.log` and
-  `/tmp/bridge-linux-isolation-unmap.log`). The native lifecycle suite also passed manual stop,
+  playable target-only video (`/tmp/extend-linux-isolation-resize.log` and
+  `/tmp/extend-linux-isolation-unmap.log`). The native lifecycle suite also passed manual stop,
   reduced duration/file limits, owner exit, supervisor SIGKILL and root-screen capture with the
-  new source (`/tmp/bridge-linux-composite-lifecycle.log`). These are manual container lanes.
+  new source (`/tmp/extend-linux-composite-lifecycle.log`). These are manual container lanes.
 - All 64 focused Linux/host TypeScript tests, full workspace typechecking, lint and runtime build
   pass. Python syntax, package-script syntax and diff whitespace checks pass. CLI help, desktop
   instructions and Linux package dependency guidance describe the supported single-window path.
@@ -348,7 +348,7 @@ compatibility. These checks do not establish completion of the entire product co
   distro compatibility; build on the oldest intended distribution before widening that claim.
 - Built the optimized tray-enabled agent on Debian trixie arm64, installed the `.deb`, and ran
   version, headless capability probe and terminal execution using the installed runtime. Final
-  build log: `/tmp/bridge-linux-package-release-final.log`. Tarball: 51,414,281 bytes; `.deb`:
+  build log: `/tmp/extend-linux-package-release-final.log`. Tarball: 51,414,281 bytes; `.deb`:
   33,279,808 bytes. All 595 packaged regular files match between tarball, staging and `.deb`
   staging. Artifact hashes and runtime identity are in ignored `target/desktop/linux/verification.json`.
 - New manual lane `apps/desktop/linux-e2e/record-service-e2e.py` installs the package in a fresh
@@ -356,9 +356,9 @@ compatibility. These checks do not establish completion of the entire product co
   never the source runtime. It pairs a new owned device to the existing local development service
   and uses separate CLI homes for the development Carbon and Silicon accounts.
 - Both debug and optimized packages passed app-only and whole-screen recording via the real
-  Bridge CLI/service/agent. Each video was uploaded, downloaded, fully decoded, checked for
+  Extend CLI/service/agent. Each video was uploaded, downloaded, fully decoded, checked for
   expected geometry and changing frames, then downloaded again with identical SHA-256. The
-  optimized evidence is `/tmp/bridge-linux-service-record-release.log` and ignored artifacts
+  optimized evidence is `/tmp/extend-linux-service-record-release.log` and ignored artifacts
   `target/desktop/linux-recording/service-recording-rh6ph038/`. Test sessions ended, test devices
   were removed and their containers stopped successfully. The existing service remained running.
 - Shell/Python syntax and diff checks pass. These checks exercise Xvfb, headless agent operation,
@@ -371,7 +371,7 @@ compatibility. These checks do not establish completion of the entire product co
 - The on-device Android app previously ran one `screenrecord --time-limit 180` process. New
   `RecordingTest#beyondNativeLimit` exercised an animated test fixture for 187 seconds and failed
   against the installed old implementation: its MP4 stopped at 180,436 ms
-  (`/tmp/bridge-android-long-before.log`).
+  (`/tmp/extend-android-long-before.log`).
 - Added a session-owned native supervisor that sequences up to 180-second segments, stops at a
   monotonic 30-minute deadline or a reserved file-size threshold, and fences rollover before Stop.
   Child/supervisor signals require a command line containing the capture's unique directory.
@@ -382,7 +382,7 @@ compatibility. These checks do not establish completion of the entire product co
   finalization failure. The stop text discloses brief gaps between native recorder restarts.
 - The real long test passed with two segments, 187,824.544 ms, 2,278,619 bytes and 418 encoded
   packets, including 14 packets after 181 seconds. Full host ffmpeg decoding passed using the
-  source time base; timestamps strictly increase. Evidence: `/tmp/bridge-android-long-after.log`,
+  source time base; timestamps strictly increase. Evidence: `/tmp/extend-android-long-after.log`,
   ignored `target/android-recording/long.mp4`. This long run preceded the final interruptible-wait
   cleanup fix; final-code rollover/finalization was rerun in the short lane below.
 - The broader lifecycle test exposed an existing logs-start readiness race: the following marker
@@ -391,9 +391,9 @@ compatibility. These checks do not establish completion of the entire product co
   handling while the supervisor slept. Its timer now waits interruptibly, allowing prompt cleanup.
 - Final installed-code `LocalAdbTest#realLocalDaemon` passed shell, APK install/uninstall, binary
   transfer, cancellation, log marker capture, recording, session Stop, disconnect and owned-file
-  cleanup (`/tmp/bridge-android-segments-lifecycle-final.log`). The new manual
+  cleanup (`/tmp/extend-android-segments-lifecycle-final.log`). The new manual
   `e2e/android-recording.sh` short lane passed reduced-duration stop, multiple segments, full decode
-  and timestamp checks (`/tmp/bridge-android-final-recording-lane.log`, ignored
+  and timestamp checks (`/tmp/extend-android-final-recording-lane.log`, ignored
   `target/android-recording/run-yPc6h1oR/`). No capture processes or remote directories remained.
 - All 64 Android JVM tests and debug/app-test APK builds pass. Only emulator-5554 (Android 16)
   was modified. A connected Pixel 8 was inventoried, not exercised. Full 30-minute/1-GiB limits,
@@ -427,12 +427,12 @@ compatibility. These checks do not establish completion of the entire product co
 - Final result: 186.9295 seconds, 43,286,430 bytes, 2,104 packets, final frame at 186.830433 seconds;
   full decoding and strictly increasing timestamps pass. Creator and Carbon downloads have SHA-256
   `0e98634cfbc0fd74b897c42fd775772c215ddfb6c693170c328acb3f40b552a5`.
-  Evidence: `/tmp/bridge-android-service-long-final.log`, ignored
+  Evidence: `/tmp/extend-android-service-long-final.log`, ignored
   `target/android-recording/service-ghqrk9z3/verification.json` and `recording.mp4`.
 - All 64 JVM tests, app/test APK builds and the strengthened reduced-duration native timing test
-  pass (`/tmp/bridge-android-service-final-build.log`, `/tmp/bridge-android-sparse-bounded.log`).
+  pass (`/tmp/extend-android-service-final-build.log`, `/tmp/extend-android-sparse-bounded.log`).
   After cleanup there were no capture processes or capture directories. Instrumentation/reinstall
   had left previously granted accessibility/notification listeners unbound; only the emulator's
-  existing Bridge grants were rebound. The physical Pixel 8 was not modified.
+  existing Extend grants were rebound. The physical Pixel 8 was not modified.
 - This closes local long-recording relay/upload/download verification on Android 16. Production
   IAM/OBO/Briefcase, full 30-minute/1-GiB tests, physical phones/TVs and release signing remain open.

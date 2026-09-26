@@ -9,10 +9,10 @@ import { stampRuntime } from './stamp-runtime.mjs';
 
 const [runtime] = process.argv.slice(2);
 if (!runtime) throw new Error('Usage: node runtime-update-e2e.mjs <built-agent-device>');
-const scratch = mkdtempSync(path.join(os.tmpdir(), 'bridge-runtime-update-'));
+const scratch = mkdtempSync(path.join(os.tmpdir(), 'extend-runtime-update-'));
 const state = path.join(scratch, 'state');
 const marker = path.join(scratch, 'started-build');
-const env = { ...process.env, AGENT_DEVICE_STATE_DIR: state, BRIDGE_ARTIFACT_MARKER_PATH: marker };
+const env = { ...process.env, AGENT_DEVICE_STATE_DIR: state, EXTEND_ARTIFACT_MARKER_PATH: marker };
 delete env.AGENT_DEVICE_DAEMON_BASE_URL;
 delete env.AGENT_DEVICE_DAEMON_AUTH_TOKEN;
 const artifacts = ['A', 'B'].map((label) => {
@@ -21,12 +21,12 @@ const artifacts = ['A', 'B'].map((label) => {
   for (const name of ['bin', 'dist', 'package.json']) cpSync(path.join(runtime, name), path.join(root, name), { recursive: true });
   const manifestPath = path.join(root, 'package.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  manifest.version = manifest.bridgeRuntime?.upstreamVersion ?? manifest.version;
-  delete manifest.bridgeRuntime;
+  manifest.version = manifest.extendRuntime?.upstreamVersion ?? manifest.version;
+  delete manifest.extendRuntime;
   writeFileSync(manifestPath, JSON.stringify(manifest));
   const entry = path.join(root, 'dist/src/internal/daemon.js');
   assert.ok(existsSync(entry), 'expected the packaged daemon entry');
-  writeFileSync(entry, `import { writeFileSync as writeBridgeBuildMarker } from 'node:fs';\nwriteBridgeBuildMarker(process.env.BRIDGE_ARTIFACT_MARKER_PATH, '${label}');\n${readFileSync(entry, 'utf8')}`);
+  writeFileSync(entry, `import { writeFileSync as writeExtendBuildMarker } from 'node:fs';\nwriteExtendBuildMarker(process.env.EXTEND_ARTIFACT_MARKER_PATH, '${label}');\n${readFileSync(entry, 'utf8')}`);
   return root;
 });
 const [a, b] = artifacts;

@@ -11,17 +11,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: bridge}
-          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: bridge}
-          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: bridge.exe}
-          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: bridge.exe}
-          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: bridge}
-          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: bridge}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: extend}
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: extend}
+          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: extend.exe}
+          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: extend.exe}
+          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: extend}
+          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: extend}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: rustup target add ${{ matrix.target }}
-      - run: cargo build --locked --release -p bridge-cli --target ${{ matrix.target }}
+      - run: cargo build --locked --release -p extend-cli --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}
@@ -51,7 +51,7 @@ jobs:
         run: python3 scripts/package-cli.py --artifacts artifacts --output dist
       - uses: actions/upload-artifact@v4
         with:
-          name: bridge-honeycomb-release
+          name: extend-honeycomb-release
           path: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256

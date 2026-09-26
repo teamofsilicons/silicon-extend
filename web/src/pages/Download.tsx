@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 import { DOWNLOADS, type Platform } from "../config";
 import { Link } from "../lib/router";
 
-/** Placeholder until the Bridge apps are published; links are configured in src/config.ts. */
+/** Placeholder until the Extend apps are published; links are configured in src/config.ts. */
 export default function Download(props: { platform: string }) {
   const download = () => DOWNLOADS[props.platform as Platform];
   return (
@@ -13,7 +13,7 @@ export default function Download(props: { platform: string }) {
           <>
             <h1 class="page-title">No such download</h1>
             <p class="lead">
-              There is no Bridge app called <code>{props.platform}</code>. See <Link href="/devices/new">Add a device</Link> for the right one.
+              There is no Extend app called <code>{props.platform}</code>. See <Link href="/devices/new">Add a device</Link> for the right one.
             </p>
           </>
         }
@@ -25,9 +25,9 @@ export default function Download(props: { platform: string }) {
             <p class="lead">{d().note}</p>
             <div class="notice">
               <p>
-                This download isn't published yet. When it is, this page gives you the file. Until then, follow the Bridge repository for releases:{" "}
-                <a href="https://github.com/teamofsilicons/silicon-bridge" target="_blank" rel="noopener noreferrer">
-                  github.com/teamofsilicons/silicon-bridge
+                This download isn't published yet. When it is, this page gives you the file. Until then, follow the Extend repository for releases:{" "}
+                <a href="https://github.com/teamofsilicons/silicon-extend" target="_blank" rel="noopener noreferrer">
+                  github.com/teamofsilicons/silicon-extend
                 </a>
                 .
               </p>

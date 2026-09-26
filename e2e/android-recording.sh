@@ -9,14 +9,14 @@ SERIAL="${1:-emulator-5554}"
 }
 mkdir -p "$ROOT/target/android-recording"
 OUT="$(mktemp -d "$ROOT/target/android-recording/run-XXXXXXXX")"
-trap 'adb -s "$SERIAL" shell am force-stop com.teamofsilicons.bridge.test >/dev/null 2>&1 || true' EXIT
+trap 'adb -s "$SERIAL" shell am force-stop com.teamofsilicons.extend.test >/dev/null 2>&1 || true' EXIT
 run_case() {
   local method=$1 file=$2
   adb -s "$SERIAL" shell am instrument -w \
-    -e class "com.teamofsilicons.bridge.RecordingTest#$method" -e long_recording true \
-    com.teamofsilicons.bridge.test/androidx.test.runner.AndroidJUnitRunner >"$OUT/$method.log" 2>&1
+    -e class "com.teamofsilicons.extend.RecordingTest#$method" -e long_recording true \
+    com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner >"$OUT/$method.log" 2>&1
   if ! grep -q 'OK (1 test)' "$OUT/$method.log"; then cat "$OUT/$method.log"; exit 1; fi
-  adb -s "$SERIAL" pull "/sdcard/Android/data/com.teamofsilicons.bridge/files/$file" "$OUT/$file"
+  adb -s "$SERIAL" pull "/sdcard/Android/data/com.teamofsilicons.extend/files/$file" "$OUT/$file"
   ffmpeg -v error -xerror -i "$OUT/$file" -enc_time_base demux -fps_mode passthrough -f null -
   python3 - "$OUT/$file" <<'PY'
 import json, subprocess, sys

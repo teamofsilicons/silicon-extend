@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Silicon Bridge</string>
+  <string>Silicon Extend</string>
   <key>CFBundleDisplayName</key>
-  <string>Silicon Bridge</string>
+  <string>Silicon Extend</string>
   <key>CFBundleIdentifier</key>
-  <string>com.teamofsilicons.bridge</string>
+  <string>com.teamofsilicons.extend</string>
   <key>CFBundleVersion</key>
   <string>@VERSION@</string>
   <key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>
-  <string>bridge-agent</string>
+  <string>extend-agent</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>LSMinimumSystemVersion</key>
@@ -28,13 +28,13 @@
   <key>NSSupportsAutomaticTermination</key>
   <false/>
   <key>NSAppleEventsUsageDescription</key>
-  <string>Silicon Bridge opens and controls apps on this Mac when a Silicon you gave access to asks it to. You can stop it any time from the menu bar.</string>
+  <string>Silicon Extend opens and controls apps on this Mac when a Silicon you gave access to asks it to. You can stop it any time from the menu bar.</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Silicon Bridge takes screenshots and recordings for the Silicons you gave access to this Mac. Every file goes to your Briefcase.</string>
+  <string>Silicon Extend takes screenshots and recordings for the Silicons you gave access to this Mac. Every file goes to your Briefcase.</string>
   <key>NSAccessibilityUsageDescription</key>
-  <string>Silicon Bridge reads what is on screen and clicks and types for the Silicons you gave access to this Mac.</string>
+  <string>Silicon Extend reads what is on screen and clicks and types for the Silicons you gave access to this Mac.</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>Silicon Bridge reaches TVs and an iPhone or iPad on your network that you added through this Mac.</string>
+  <string>Silicon Extend reaches TVs and an iPhone or iPad on your network that you added through this Mac.</string>
   <key>NSBonjourServices</key>
   <array>
     <string>_companion-link._tcp</string>

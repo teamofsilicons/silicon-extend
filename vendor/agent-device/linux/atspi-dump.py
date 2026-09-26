@@ -16,7 +16,7 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
 
 MAX_NODES = 1500
-# Silicon Bridge fork: 12 cut off GTK4 apps (GNOME Calculator's buttons sit deeper); nodes stay capped.
+# Silicon Extend fork: 12 cut off GTK4 apps (GNOME Calculator's buttons sit deeper); nodes stay capped.
 MAX_DEPTH = 40
 MAX_DESKTOP_APPS = 24
 

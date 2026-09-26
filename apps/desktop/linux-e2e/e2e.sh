@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Runs inside the silicon-bridge-linux-e2e container (see run.sh). Builds bridge-agent, starts a
+# Runs inside the silicon-extend-linux-e2e container (see run.sh). Builds extend-agent, starts a
 # real X11 desktop with the AT-SPI bus and GNOME Calculator, and drives it through the agent's own
 # Linux driver (agent-device underneath): probe, open, snapshot, click, type, get, screenshot,
-# clipboard, apps, terminal, close. With BRIDGE_E2E_SERVICE set, it also runs the full agent
-# against that Bridge service: pair, session, commands with uploads, stop, remove.
+# clipboard, apps, terminal, close. With EXTEND_E2E_SERVICE set, it also runs the full agent
+# against that Extend service: pair, session, commands with uploads, stop, remove.
 set -euo pipefail
 
 log() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -11,7 +11,7 @@ fail() { printf '\n\033[31mFAILED: %s\033[0m\n' "$*"; exit 1; }
 
 export CARGO_TARGET_DIR=/target
 export SILICON_HOME=/tmp/home
-export BRIDGE_AGENT_CREDENTIAL_STORE=file
+export EXTEND_AGENT_CREDENTIAL_STORE=file
 mkdir -p "$SILICON_HOME" /tmp/out
 rm -rf /tmp/out/*
 
@@ -20,18 +20,18 @@ mkdir -p /work /opt/agent-device
 tar -C /src --exclude=./target --exclude=node_modules --exclude=./.git --exclude=./vendor/agent-device -cf - . | tar -C /work -xf -
 # agent-device's dist is self-contained: bin/, dist/, linux/atspi-dump.py and package.json are all it needs.
 tar -C /src/vendor/agent-device -cf - bin dist linux package.json | tar -C /opt/agent-device -xf -
-export BRIDGE_AGENT_DEVICE=/opt/agent-device/bin/agent-device.mjs
-node "$BRIDGE_AGENT_DEVICE" --version
+export EXTEND_AGENT_DEVICE=/opt/agent-device/bin/agent-device.mjs
+node "$EXTEND_AGENT_DEVICE" --version
 
-log "Build bridge-agent (with the tray, to prove the Linux UI compiles)"
+log "Build extend-agent (with the tray, to prove the Linux UI compiles)"
 cd /work
-cargo build -p bridge-agent 2>&1 | tail -3
-BA=/target/debug/bridge-agent
+cargo build -p extend-agent 2>&1 | tail -3
+BA=/target/debug/extend-agent
 "$BA" --version
 
 if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   log "Unit and integration tests on Linux"
-  cargo test -p bridge-agent > /tmp/cargo-test.log 2>&1 || { grep -E "FAILED|panicked" /tmp/cargo-test.log; fail "cargo test"; }
+  cargo test -p extend-agent > /tmp/cargo-test.log 2>&1 || { grep -E "FAILED|panicked" /tmp/cargo-test.log; fail "cargo test"; }
   grep -E "^test result" /tmp/cargo-test.log
 fi
 
@@ -50,7 +50,7 @@ export DBUS_SESSION_BUS_ADDRESS
 sleep 1
 openbox >/tmp/openbox.log 2>&1 &
 sleep 1
-export GTK_A11Y=atspi NO_AT_BRIDGE=0
+export GTK_A11Y=atspi NO_AT_EXTEND=0
 gnome-calculator >/tmp/calculator.log 2>&1 &
 for _ in $(seq 100); do wmctrl -l 2>/dev/null | grep -qi calculator && break; sleep 0.2; done
 wmctrl -l
@@ -110,9 +110,9 @@ file_type=$(head -c 8 /tmp/out/07-screenshot/calc.png | od -An -c | tr -d ' ')
 echo "png header: $file_type"
 
 log "clipboard write / read"
-run 08-clip-write clipboard write "bridge-e2e"; ok 08-clip-write
+run 08-clip-write clipboard write "extend-e2e"; ok 08-clip-write
 run 09-clip-read clipboard read; ok 09-clip-read
-jq -r .text /tmp/out/09-clip-read.json | grep -q "bridge-e2e" || fail "clipboard read"
+jq -r .text /tmp/out/09-clip-read.json | grep -q "extend-e2e" || fail "clipboard read"
 
 log "apps / appstate"
 # agent-device has no app inventory on Linux; the probe reports apps.list as missing, and the
@@ -135,14 +135,14 @@ run 14-reserved snapshot --platform ios
 log "close"
 run 15-close close; ok 15-close
 
-if [[ -n "${BRIDGE_E2E_SERVICE:-}" ]]; then
-  log "Full agent against $BRIDGE_E2E_SERVICE"
-  S="$BRIDGE_E2E_SERVICE"
+if [[ -n "${EXTEND_E2E_SERVICE:-}" ]]; then
+  log "Full agent against $EXTEND_E2E_SERVICE"
+  S="$EXTEND_E2E_SERVICE"
   curl -fsS "$S/api/version" >/dev/null || fail "service unreachable at $S"
   "$BA" run --headless --service-url "$S" >/tmp/agent.out 2>/tmp/agent.err &
   AGENT=$!
-  for _ in $(seq 100); do jq -e .pairing.code "$SILICON_HOME/.bridge-agent/status.json" >/dev/null 2>&1 && break; sleep 0.1; done
-  CODE=$(jq -r .pairing.code "$SILICON_HOME/.bridge-agent/status.json")
+  for _ in $(seq 100); do jq -e .pairing.code "$SILICON_HOME/.extend-agent/status.json" >/dev/null 2>&1 && break; sleep 0.1; done
+  CODE=$(jq -r .pairing.code "$SILICON_HOME/.extend-agent/status.json")
   echo "pairing code $CODE"
   login() { curl -fsS -X POST "$S/api/v1/auth/login" -H 'content-type: application/json' -d "{\"type\":\"login\",\"data\":{\"slt\":\"$1\"}}" | jq -r .data.access_token; }
   CT=$(login c:alice); ST=$(login si:chef)
@@ -150,7 +150,7 @@ if [[ -n "${BRIDGE_E2E_SERVICE:-}" ]]; then
   DEV=$(curl -fsS -X POST "$S/api/v1/pairings" -H "authorization: Bearer $CT" "${H[@]}" \
         -d "{\"type\":\"pairing\",\"data\":{\"pairing_code\":\"$CODE\",\"name\":\"Linux e2e\",\"silicon_ids\":[\"si:chef\"]}}" | jq -r .data.device_id)
   echo "paired as $DEV"
-  for _ in $(seq 100); do [[ "$(jq -r .phase "$SILICON_HOME/.bridge-agent/status.json")" == "online" ]] && break; sleep 0.1; done
+  for _ in $(seq 100); do [[ "$(jq -r .phase "$SILICON_HOME/.extend-agent/status.json")" == "online" ]] && break; sleep 0.1; done
   # The service marks the device ready once it has processed hello.
   for _ in $(seq 100); do
     [[ "$(curl -fsS "$S/api/v1/devices/$DEV" -H "authorization: Bearer $CT" -H "x-org-id: acme" | jq -r .data.state)" == "ready" ]] && break; sleep 0.1
@@ -171,7 +171,7 @@ if [[ -n "${BRIDGE_E2E_SERVICE:-}" ]]; then
   curl -fsS -o /dev/null -w "remove device: %{http_code}\n" -X DELETE "$S/api/v1/devices/$DEV" -H "authorization: Bearer $CT" "${H[@]}" -d "{\"type\":\"confirmation\",\"data\":{\"confirm\":\"$DEV\"}}"
   sleep 2
   cat /tmp/agent.out
-  [[ ! -e "$SILICON_HOME/.bridge-agent/credential.json" ]] || fail "credential kept after unpair"
+  [[ ! -e "$SILICON_HOME/.extend-agent/credential.json" ]] || fail "credential kept after unpair"
   kill -TERM "$AGENT"; wait "$AGENT" || true
 fi
 

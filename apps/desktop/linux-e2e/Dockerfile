@@ -1,11 +1,11 @@
-# A Linux desktop for exercising Silicon Bridge's Linux agent for real: Xvfb, a light window
+# A Linux desktop for exercising Silicon Extend's Linux agent for real: Xvfb, a light window
 # manager, the AT-SPI accessibility bus, xdotool, screenshot and clipboard tools, a GTK app
-# (GNOME Calculator), Node 22 for agent-device, and the Rust toolchain to build bridge-agent.
+# (GNOME Calculator), Node 22 for agent-device, and the Rust toolchain to build extend-agent.
 #
 # The repository is mounted at /src at run time (see run.sh); nothing is baked in, so one image
 # serves every run and cargo's caches live in named volumes.
 #
-#   docker build -t silicon-bridge-linux-e2e apps/desktop/linux-e2e
+#   docker build -t silicon-extend-linux-e2e apps/desktop/linux-e2e
 #   apps/desktop/linux-e2e/run.sh
 FROM debian:trixie
 
@@ -36,5 +36,5 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-to
 
 # A Carbon's desktop session runs as a normal user.
 RUN useradd -m -s /bin/bash carbon
-ENV DISPLAY=:99 NO_AT_BRIDGE=0 GTK_A11Y=atspi
+ENV DISPLAY=:99 NO_AT_EXTEND=0 GTK_A11Y=atspi
 WORKDIR /home/carbon

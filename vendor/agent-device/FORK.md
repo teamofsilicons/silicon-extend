@@ -1,4 +1,4 @@
-# Silicon Bridge fork of agent-device
+# Silicon Extend fork of agent-device
 
 Forked from https://github.com/callstack/agent-device at commit `bce6f52` (2026-09-25, v0.21.15), MIT licensed.
 
@@ -19,7 +19,7 @@ and act on it. Changes made for Bridge are listed below, newest first, so they c
 - **2026-09-26 — macOS native text entry.** `fill`, `type` and `focus` route to the signed
   Accessibility helper instead of starting XCTest. It validates app/field focus, selects text
   through AX ranges, sends Unicode keyboard events, verifies non-secure replacement and stops
-  on cancellation. Text is supplied over stdin. Unit dispatch tests and Bridge's live AppKit
+  on cancellation. Text is supplied over stdin. Unit dispatch tests and Extend's live AppKit
   fixture cover the helper and packaged selector path.
 - **2026-09-26 — Linux: xclip clipboard writes no longer time out.** `clipboard write` with xclip ran
   `xclip -selection clipboard` directly; xclip forks a child that keeps serving the selection and
@@ -31,8 +31,8 @@ and act on it. Changes made for Bridge are listed below, newest first, so they c
   capped at 1500. Files: `packages/platform-linux/src/atspi-bridge.ts`, `linux/atspi-dump.py`.
 - **2026-09-26 — `AGENT_DEVICE_JSON_TEXT=1` puts the human text in `--json` output.** With the variable
   set, a successful `--json` result is `{"success": true, "data": …, "text": "<what the command prints
-  without --json>"}`. Bridge's desktop agent (`crates/bridge-agent`) runs every command once with
-  `--json` and needs both: the structured result for the service and the text the `bridge` CLI prints
+  without --json>"}`. Extend's desktop agent (`crates/extend-agent`) runs every command once with
+  `--json` and needs both: the structured result for the service and the text the `extend` CLI prints
   (the snapshot tree with `@eN` refs, `Tapped @e6 (511, 374)`, …). Without the variable nothing
   changes. Files: `src/cli/commands/shared.ts` (`writeCommandOutput`), `src/commands/output/json.ts`
   (`printJson` type, `jsonTextRequested`). Upstreamable as an opt-in flag.

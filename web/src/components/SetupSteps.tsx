@@ -88,8 +88,8 @@ export function SetupSteps(props: { device: Device; onComplete?: (setup: Setup) 
                 <span>
                   Waiting for {props.device.name} to connect and report its setup.{" "}
                   {props.device.host_device_id
-                    ? "Keep the host computer awake with its Bridge app open."
-                    : "Keep the Bridge app open on the device; it connects on its own once the code is accepted."}
+                    ? "Keep the host computer awake with its Extend app open."
+                    : "Keep the Extend app open on the device; it connects on its own once the code is accepted."}
                 </span>
               </p>
             </Show>

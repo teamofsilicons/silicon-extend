@@ -1,4 +1,4 @@
-/** Fixture identities and secrets for the mock Bridge service. Shared with the Playwright tests. */
+/** Fixture identities and secrets for the mock Extend service. Shared with the Playwright tests. */
 
 export const MOCK_PORT = Number(process.env.MOCK_PORT || 8490);
 

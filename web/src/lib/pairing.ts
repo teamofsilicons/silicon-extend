@@ -32,7 +32,7 @@ export function normalizePairingCode(input: string): NormalizedCode {
   return { code, valid: true, problem: null };
 }
 
-/** The 6-character code as the Bridge app shows it, in two groups of three for reading aloud. */
+/** The 6-character code as the Extend app shows it, in two groups of three for reading aloud. */
 export function displayPairingCode(code: string): string {
   const { code: clean } = normalizePairingCode(code);
   return clean.length > 3 ? `${clean.slice(0, 3)} ${clean.slice(3)}` : clean;

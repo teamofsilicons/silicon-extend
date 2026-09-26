@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# End-to-end test of the `bridge` CLI against a running Bridge service (local IAM) and a fake device.
+# End-to-end test of the `extend` CLI against a running Extend service (local IAM) and a fake device.
 #
-#   e2e/cli-e2e.sh [api_url]      (default http://127.0.0.1:8480; the service must use BRIDGE_IAM_MODE=local
-#                                  with c:alice, si:chef, si:sous in team acme, and BRIDGE_HONEYCOMB_SERVICE_TOKEN=hck_local_dev_token)
+#   e2e/cli-e2e.sh [api_url]      (default http://127.0.0.1:8480; the service must use EXTEND_IAM_MODE=local
+#                                  with c:alice, si:chef, si:sous in team acme, and EXTEND_HONEYCOMB_SERVICE_TOKEN=hck_local_dev_token)
 set -euo pipefail
 API=${1:-http://127.0.0.1:8480}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-BRIDGE="$ROOT/target/debug/bridge"
+EXTEND="$ROOT/target/debug/extend"
 FAKE="$ROOT/target/debug/examples/fake_device"
 WORK=$(mktemp -d)
 trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$WORK"' EXIT
-export BRIDGE_API_URL=$API BRIDGE_TELEMETRY=off
+export EXTEND_API_URL=$API EXTEND_TELEMETRY=off
 
 pass=0
 ok() { pass=$((pass+1)); echo "  ✓ $1"; }
 die() { echo "  ✗ $1"; exit 1; }
-as() { local who=$1; shift; mkdir -p "$WORK/$who"; SILICON_HOME="$WORK/$who" "$BRIDGE" "$@"; }
+as() { local who=$1; shift; mkdir -p "$WORK/$who"; SILICON_HOME="$WORK/$who" "$EXTEND" "$@"; }
 expect_exit() { local want=$1; shift; set +e; "$@" >"$WORK/out" 2>"$WORK/err"; local got=$?; set -e; [ "$got" = "$want" ] || { cat "$WORK/out" "$WORK/err"; die "expected exit $want, got $got: $*"; }; }
 jq_() { python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1]))" "$1"; }
 
@@ -29,11 +29,11 @@ start_fake() { # os [secret] -> sets CODE, FAKE_LOG
 echo "CLI end-to-end against $API"
 
 # ── Help and discovery ──
-as nobody --help | grep -q "Getting started" && ok "bridge --help is a documentation tree"
-as nobody device --help | grep -q "bridge device pair" && ok "bridge device --help lists what's under it"
-as nobody iam --json | jq_ 'd["data"]["app_id"]' | grep -q bridge && ok "bridge iam --json gives app_id"
+as nobody --help | grep -q "Getting started" && ok "extend --help is a documentation tree"
+as nobody device --help | grep -q "extend device pair" && ok "extend device --help lists what's under it"
+as nobody iam --json | jq_ 'd["data"]["app_id"]' | grep -q extend && ok "extend iam --json gives app_id"
 expect_exit 3 as nobody login status --json; grep -q '"authenticated": *false' "$WORK/out" && ok "login status --json reports authenticated:false (exit 3)"
-expect_exit 2 as nobody frobnicate; grep -q "not a bridge command" "$WORK/err" && ok "unknown command explains itself (exit 2)"
+expect_exit 2 as nobody frobnicate; grep -q "not an extend command" "$WORK/err" && ok "unknown command explains itself (exit 2)"
 expect_exit 2 as nobody boot; grep -q "doesn't relay" "$WORK/err" && ok "agent-device developer command is refused with a reason"
 expect_exit 2 as nobody config home /definitely/not/here; grep -q "not a directory" "$WORK/err" && ok "config home rejects a non-directory"
 
@@ -76,7 +76,7 @@ as chef file keep "$FILE" | grep -q permanent && ok "file kept permanently"
 as sous login si:sous >/dev/null
 as alice device access grant "$DEV" si:sous >/dev/null
 expect_exit 6 as sous session new "$DEV"
-grep -q "bridge request send $DEV" "$WORK/err" && ok "second Silicon gets exit 6 and the request command"
+grep -q "extend request send $DEV" "$WORK/err" && ok "second Silicon gets exit 6 and the request command"
 as sous request send "$DEV" --reason "Need two minutes for an OTP" | grep -q "si:chef" && ok "request delivered to si:chef"
 curl -s "$API/dev/ting" | grep -q "Need two minutes for an OTP" && ok "Ting received the reason verbatim"
 
@@ -94,7 +94,7 @@ expect_exit 6 as chef snapshot
 grep -q "stopped" "$WORK/err" && ok "Silicon learns the session ended and why"
 
 # ── Report and version ──
-as chef report "fill loses the last character" --pr https://github.com/teamofsilicons/silicon-bridge/pull/1 | grep -q "sent" && ok "bug report sent"
+as chef report "fill loses the last character" --pr https://github.com/teamofsilicons/silicon-extend/pull/1 | grep -q "sent" && ok "bug report sent"
 as chef version | grep -q "API v1" && ok "version shows the negotiated API"
 
 # ── Remove ──
@@ -108,7 +108,7 @@ ENV=$(python3 -c 'import uuid;print(uuid.uuid4())')
 SECRET=ask_$(python3 -c 'import secrets,base64;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))')
 OP=$(python3 -c 'import uuid;print(uuid.uuid4())')
 curl -sf -XPUT "$API/internal/honeycomb/organizations/acme/testing-environments/$ENV/operations/$OP" -H 'authorization: Bearer hck_local_dev_token' -H 'content-type: application/json' \
-  -d "{\"operation_id\":\"$OP\",\"environment_id\":\"$ENV\",\"org_id\":\"acme\",\"app_id\":\"bridge\",\"environment_revision\":1,\"generation\":1,\"key_version\":1,\"action\":\"prepare\",\"testing_key\":\"abcdefghijklmnopqrstuvwxyz012345\",\"name\":\"cli-e2e\"}" >/dev/null
+  -d "{\"operation_id\":\"$OP\",\"environment_id\":\"$ENV\",\"org_id\":\"acme\",\"app_id\":\"extend\",\"environment_revision\":1,\"generation\":1,\"key_version\":1,\"action\":\"prepare\",\"testing_key\":\"abcdefghijklmnopqrstuvwxyz012345\",\"name\":\"cli-e2e\"}" >/dev/null
 curl -sf -XPOST "$API/dev/iam/test-apps" -H 'content-type: application/json' -d "{\"type\":\"t\",\"data\":{\"secret\":\"$SECRET\",\"environment_id\":\"$ENV\"}}"
 printf %s "$SECRET" | as alice config test add "$ENV" | grep -q cli-e2e && ok "test environment added from stdin"
 expect_exit 11 as alice env show

@@ -9,7 +9,7 @@ export function printJson(result: JsonResult): void {
 }
 
 /**
- * Silicon Bridge fork: with `AGENT_DEVICE_JSON_TEXT=1`, `--json` output also carries the text the
+ * Silicon Extend fork: with `AGENT_DEVICE_JSON_TEXT=1`, `--json` output also carries the text the
  * command prints without `--json`, so a relay can return both from one run.
  */
 export function jsonTextRequested(): boolean {

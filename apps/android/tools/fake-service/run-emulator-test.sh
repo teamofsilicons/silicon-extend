@@ -1,5 +1,5 @@
 #!/bin/sh
-# End-to-end test of the Android app on a running emulator against fake_bridge.py.
+# End-to-end test of the Android app on a running emulator against fake_extend.py.
 #
 #   tools/fake-service/run-emulator-test.sh phone      # phone/tablet scenario
 #   tools/fake-service/run-emulator-test.sh tv         # TV scenario (on a TV emulator, or FORCE_TV=1 on a phone)
@@ -15,7 +15,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 APP_DIR=$(cd "$HERE/../.." && pwd)
 ADB=${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}
 APK=${APK:-$APP_DIR/app/build/outputs/apk/debug/app-debug.apk}
-PKG=com.teamofsilicons.bridge
+PKG=com.teamofsilicons.extend
 OUT=${OUT:-$HERE/out}
 LOG=$OUT/fake-$SCENARIO.log
 mkdir -p "$OUT"
@@ -30,11 +30,11 @@ echo "== install $APK"
 for p in com.android.settings com.google.android.settings.intelligence; do "$ADB" shell am force-stop $p || true; done
 
 echo "== fake service on :$PORT (log: $LOG)"
-pkill -f "fake_bridge.py --port $PORT" 2>/dev/null || true
+pkill -f "fake_extend.py --port $PORT" 2>/dev/null || true
 sleep 0.5
 IMG="$OUT/test-image.png"
 [ -f "$IMG" ] || python3 "$HERE/make_test_png.py" "$IMG"
-python3 "$HERE/fake_bridge.py" --port "$PORT" --scenario "$SCENARIO" --image "$IMG" --out "$OUT/uploads" > "$LOG" 2>&1 &
+python3 "$HERE/fake_extend.py" --port "$PORT" --scenario "$SCENARIO" --image "$IMG" --out "$OUT/uploads" > "$LOG" 2>&1 &
 FAKE=$!
 trap 'kill $FAKE 2>/dev/null || true' EXIT
 sleep 1
@@ -58,8 +58,8 @@ sleep 3
 CODE=$(state | field pairing_code)
 SHOWN=""
 for _ in $(seq 1 10); do
-  "$ADB" shell uiautomator dump /sdcard/bridge-ui.xml >/dev/null 2>&1 || true
-  SHOWN=$("$ADB" shell cat /sdcard/bridge-ui.xml | grep -o 'text="[0-9A-F]\{3\} [0-9A-F]\{3\}"' | head -1 | sed 's/text="\(.*\)"/\1/' | tr -d ' ')
+  "$ADB" shell uiautomator dump /sdcard/extend-ui.xml >/dev/null 2>&1 || true
+  SHOWN=$("$ADB" shell cat /sdcard/extend-ui.xml | grep -o 'text="[0-9A-F]\{3\} [0-9A-F]\{3\}"' | head -1 | sed 's/text="\(.*\)"/\1/' | tr -d ' ')
   [ -n "$SHOWN" ] && break
   # Dismiss a system "isn't responding" dialog if the emulator shows one.
   "$ADB" shell input keyevent KEYCODE_ENTER || true
@@ -68,9 +68,9 @@ done
 if [ "$SHOWN" = "$CODE" ]; then echo "PASS pairing screen shows the live code ($SHOWN)"; else echo "FAIL pairing screen shows '$SHOWN', service has '$CODE'"; fi
 
 echo "== grant accessibility, notification access and background use"
-"$ADB" shell settings put secure enabled_accessibility_services $PKG/$PKG.a11y.BridgeAccessibilityService
+"$ADB" shell settings put secure enabled_accessibility_services $PKG/$PKG.a11y.ExtendAccessibilityService
 "$ADB" shell settings put secure accessibility_enabled 1
-"$ADB" shell cmd notification allow_listener $PKG/$PKG.notif.BridgeNotificationListener >/dev/null 2>&1 || true
+"$ADB" shell cmd notification allow_listener $PKG/$PKG.notif.ExtendNotificationListener >/dev/null 2>&1 || true
 "$ADB" shell dumpsys deviceidle whitelist +$PKG >/dev/null
 sleep 4
 

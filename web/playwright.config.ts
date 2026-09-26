@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// The e2e suite runs the website against the in-memory mock of the Bridge service, on ports of its
+// The e2e suite runs the website against the in-memory mock of the Extend service, on ports of its
 // own so it doesn't collide with `pnpm dev:mock`. Tests share the mock's state, so they run one at a
 // time and reset it first.
 const MOCK_PORT = 8491;
@@ -29,7 +29,7 @@ export default defineConfig({
       stdout: "ignore",
     },
     {
-      command: `BRIDGE_API_PROXY=http://127.0.0.1:${MOCK_PORT} PORT=${WEB_PORT} npx vite --strictPort`,
+      command: `EXTEND_API_PROXY=http://127.0.0.1:${MOCK_PORT} PORT=${WEB_PORT} npx vite --strictPort`,
       url: `http://localhost:${WEB_PORT}/`,
       reuseExistingServer: false,
       stdout: "ignore",

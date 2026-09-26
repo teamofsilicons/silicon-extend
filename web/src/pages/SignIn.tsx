@@ -4,7 +4,7 @@ import { session } from "../lib/session";
 import { ApiError, toApiError } from "../lib/api";
 import { beginIamLogin } from "../lib/auth";
 import { Button, ErrorNote } from "../components/ui";
-import { BridgeMark } from "../components/BridgeMark";
+import { ExtendMark } from "../components/ExtendMark";
 import { TestingSecretForm } from "../components/TestingSecretForm";
 import { navigate } from "../lib/router";
 import { write } from "../lib/storage";
@@ -26,7 +26,7 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
     setError(null);
     try {
       const info = await s.client().iam();
-      write("session", "bridge.next", props.next ?? "/devices");
+      write("session", "extend.next", props.next ?? "/devices");
       const url = beginIamLogin(info, location.origin, worldKey());
       location.assign(url);
     } catch (e) {
@@ -66,12 +66,12 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
   return (
     <section class="page sign-in" data-testid="sign-in">
       <div class="sign-in-card">
-        <BridgeMark size={40} />
+        <ExtendMark size={40} />
         <h1 class="page-title">
           Let your Silicons use <em>your devices</em>
         </h1>
         <p class="lead">
-          Pair your phones, computers and TVs with Silicon Bridge, then choose which Silicons can use each one. You can stop a Silicon at any time.
+          Pair your phones, computers and TVs with Silicon Extend, then choose which Silicons can use each one. You can stop a Silicon at any time.
         </p>
 
         <Show when={props.reason}>
@@ -93,7 +93,7 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
         <Button variant="primary" class="wide" onClick={withIam} busy={busy() === "iam"} data-testid="sign-in-iam">
           Continue with Silicon IAM <ArrowRight size={16} aria-hidden="true" />
         </Button>
-        <p class="fine">IAM asks you to approve Bridge and pick your teams, then sends you back here. Bridge never sees your password.</p>
+        <p class="fine">IAM asks you to approve Extend and pick your teams, then sends you back here. Extend never sees your password.</p>
 
         <div class="divider">
           <span>or</span>

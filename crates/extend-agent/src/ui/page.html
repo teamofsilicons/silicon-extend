@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silicon Extend</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #111827; --muted: #6b7280; --line: #e5e7eb; --card: #f9fafb;
+    --accent: #111827; --accent-fg: #ffffff; --use: #f97316; --use-bg: #fff7ed; --env: #a16207; --env-bg: #fefce8;
+    --danger: #dc2626; --danger-bg: #fef2f2; --ok: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111315; --fg: #f3f4f6; --muted: #9ca3af; --line: #2a2e33; --card: #181b1f;
+      --accent: #f3f4f6; --accent-fg: #111315; --use-bg: #2a1a0e; --env-bg: #262108; --danger-bg: #2a1212;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Ubuntu, sans-serif; }
+  body { padding: 20px; -webkit-user-select: none; user-select: none; }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .spread { justify-content: space-between; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.online { color: var(--ok); border-color: currentColor; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 14px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .code { font: 600 52px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.14em;
+    text-align: center; padding: 18px 0 10px; -webkit-user-select: text; user-select: text; }
+  .banner { border-radius: 12px; padding: 12px 14px; margin-top: 14px; display: flex; align-items: center; gap: 12px; }
+  .banner.use { background: var(--use-bg); border: 1px solid var(--use); }
+  .banner.env { background: var(--env-bg); border: 1px solid var(--env); color: var(--env); }
+  .banner .grow { flex: 1; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--use); flex: none; }
+  button { font: inherit; border-radius: 8px; padding: 6px 14px; border: 1px solid var(--line); background: var(--bg);
+    color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.stop { background: var(--use); color: #fff; border-color: var(--use); font-weight: 600; }
+  button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  button.link { border: none; background: none; color: var(--danger); padding: 0; }
+  ol.steps { list-style: none; padding: 0; margin: 8px 0 0; }
+  ol.steps li { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+  ol.steps li:first-child { border-top: none; }
+  .mark { width: 18px; flex: none; text-align: center; }
+  .done { color: var(--ok); }
+  .todo { color: var(--use); }
+  .failed { color: var(--danger); }
+  .hidden { display: none !important; }
+  .confirm { background: var(--danger-bg); border-color: var(--danger); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; -webkit-user-select: text; user-select: text; }
+  footer { margin-top: 18px; display: flex; justify-content: space-between; align-items: center; }
+  /* The banner window */
+  body.banner-view { padding: 0; overflow: hidden; }
+  body.banner-view .bar { display: flex; align-items: center; gap: 10px; height: 100vh; background: var(--bg);
+    border: 2px solid var(--use); padding: 8px 10px 8px 14px; }
+  body.banner-view .bar .grow { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.banner-view .env { font-size: 11px; color: var(--env); }
+  .banner-drag { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: grab; }
+  .banner-drag:active { cursor: grabbing; }
+  #banner-minimize { padding: 4px 9px; flex: none; }
+  #banner-restore { display: none; min-width: 0; flex: 1; padding: 4px 8px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  body.banner-minimized .banner-drag { flex: none; padding: 8px 4px; }
+  body.banner-minimized #banner-text, body.banner-minimized #banner-env,
+  body.banner-minimized #banner-button, body.banner-minimized #banner-minimize { display: none; }
+  body.banner-minimized #banner-restore { display: block; }
+</style>
+</head>
+<body>
+<div id="main">
+  <div class="row spread">
+    <h1>Silicon Extend</h1>
+    <span id="conn" class="pill">Starting…</span>
+  </div>
+
+  <div id="env" class="banner env hidden"><div class="grow"><b>Test environment:</b> <span id="env-name"></span></div></div>
+
+  <div id="in-use" class="banner use hidden">
+    <span class="dot"></span>
+    <div class="grow"><b id="use-who"></b> is using this <span class="word"></span><div class="small muted" id="use-since"></div></div>
+    <button class="stop" data-action="stop">Stop</button>
+  </div>
+
+  <div id="takeover" class="banner use hidden">
+    <div class="grow"><b id="to-who">A Silicon</b> handed this <span class="word"></span> to you<div id="to-reason"></div>
+      <div class="small muted" id="to-until"></div></div>
+    <button class="primary" data-action="takeover_done">Done</button>
+  </div>
+
+  <div id="pairing" class="card hidden">
+    <div class="muted">Pairing code</div>
+    <div class="code" id="code">······</div>
+    <div>Go to <b>extend.teamofsilicons.com</b>, choose <b>Add a device › <span id="kind"></span></b>, and enter this code.</div>
+    <div class="small muted" id="code-expiry" style="margin-top:6px"></div>
+  </div>
+
+  <div id="paired" class="card hidden">
+    <dl>
+      <dt>Name</dt><dd id="dev-name">—</dd>
+      <dt>Paired to</dt><dd id="dev-owner">—</dd>
+      <dt>Team</dt><dd id="dev-team">—</dd>
+      <dt>Device id</dt><dd id="dev-id">—</dd>
+    </dl>
+  </div>
+
+  <div id="superseded" class="card hidden">
+    <div>Another copy of Silicon Extend is connected for this <span class="word"></span>.</div>
+    <div style="margin-top:10px"><button class="primary" data-action="reconnect">Connect this copy instead</button></div>
+  </div>
+
+  <div id="upgrade" class="card hidden">Extend needs a newer version of this app. Download the latest Silicon Extend from extend.teamofsilicons.com.</div>
+
+  <div id="setup" class="card hidden">
+    <div class="row spread"><b>Setup</b><button data-action="reprobe">Check again</button></div>
+    <ol class="steps" id="steps"></ol>
+  </div>
+
+  <div id="missing" class="card hidden">
+    <b>Not available yet</b>
+    <ol class="steps" id="missing-list"></ol>
+  </div>
+
+  <div id="attached" class="card hidden">
+    <b>Devices this <span class="word"></span> carries</b>
+    <ol class="steps" id="attached-list"></ol>
+  </div>
+
+  <div id="problem" class="small muted hidden" style="margin-top:12px"></div>
+
+  <div id="confirm" class="card confirm hidden">
+    <b>Revoke pair?</b>
+    <div style="margin-top:6px">This removes this <span class="word"></span> from <span id="confirm-owner">the Carbon's</span> account and ends every Silicon's access to it right away.</div>
+    <div class="row" style="margin-top:12px; justify-content:flex-end">
+      <button data-action="cancel_revoke">Cancel</button>
+      <button class="danger" data-action="revoke">Revoke pair</button>
+    </div>
+  </div>
+
+  <footer>
+    <span class="small muted" id="version"></span>
+    <button id="revoke-link" class="link hidden" data-action="ask_revoke">Revoke pair…</button>
+  </footer>
+</div>
+
+<div id="banner" class="hidden">
+  <div class="bar">
+    <div class="banner-drag" title="Drag to move">
+      <span class="dot"></span>
+      <div class="grow" id="banner-text"></div>
+    </div>
+    <span class="env" id="banner-env"></span>
+    <button class="stop" id="banner-button" data-action="stop">Stop</button>
+    <button id="banner-minimize" data-action="banner_minimize" aria-label="Minimize activity banner" title="Minimize">−</button>
+    <button id="banner-restore" data-action="banner_restore" aria-label="Restore activity banner" title="Restore activity banner"></button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var view = window.__view || 'main';
+  var state = null;
+  var $ = function (id) { return document.getElementById(id); };
+  var show = function (id, on) { $(id).classList.toggle('hidden', !on); };
+  var send = function (msg) { try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) {} };
+
+  if (view === 'banner') {
+    document.body.classList.add('banner-view');
+    show('main', false);
+    show('banner', true);
+    document.querySelector('.banner-drag').addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      send({ action: 'banner_drag' });
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-action]');
+    if (!el) return;
+    var action = el.getAttribute('data-action');
+    if (action === 'ask_revoke') { show('confirm', true); return; }
+    if (action === 'cancel_revoke') { show('confirm', false); return; }
+    if (action === 'revoke') { show('confirm', false); }
+    var msg = { action: action };
+    if (el.hasAttribute('data-step')) msg.step = el.getAttribute('data-step');
+    if (el.hasAttribute('data-target')) msg.target = el.getAttribute('data-target');
+    send(msg);
+  });
+
+  function since(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    return 'since ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function countdown() {
+    if (!state || !state.pairing) return;
+    var left = Math.max(0, Math.round((new Date(state.pairing.expires_at) - new Date()) / 1000));
+    $('code-expiry').textContent = left > 0
+      ? 'A new code appears in ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + '.'
+      : 'Getting a new code…';
+  }
+  setInterval(countdown, 1000);
+
+  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+  function mark(status) {
+    if (status === 'done') return '<span class="mark done">✓</span>';
+    if (status === 'failed') return '<span class="mark failed">✕</span>';
+    return '<span class="mark todo">●</span>';
+  }
+
+  window.__extend = function (s, minimized) {
+    state = s;
+    var word = s.computer_word || 'computer';
+    document.querySelectorAll('.word').forEach(function (el) { el.textContent = word; });
+    var takeover = s.takeover;
+    var inUse = s.in_use;
+
+    if (view === 'banner') {
+      document.body.classList.toggle('banner-minimized', !!minimized);
+      $('banner-restore').textContent = takeover ? 'Needs you ↗' : (inUse ? inUse.silicon_id : 'In use') + ' ↗';
+      if (takeover) {
+        $('banner-text').textContent = (inUse ? inUse.silicon_id : 'A Silicon') + ' needs you: ' + takeover.reason;
+        $('banner-button').textContent = 'Done';
+        $('banner-button').setAttribute('data-action', 'takeover_done');
+        $('banner-button').className = 'primary';
+      } else if (inUse) {
+        $('banner-text').textContent = inUse.silicon_id + ' is using this ' + word;
+        $('banner-button').textContent = 'Stop';
+        $('banner-button').setAttribute('data-action', 'stop');
+        $('banner-button').className = 'stop';
+      }
+      $('banner-env').textContent = s.environment ? 'Test: ' + s.environment.name : '';
+      $('banner-restore').title = $('banner-text').textContent + ' — click to restore';
+      return;
+    }
+
+    var phase = s.phase;
+    var conn = $('conn');
+    conn.className = 'pill' + (phase === 'online' ? ' online' : '');
+    conn.textContent = { starting: 'Starting…', enrolling: 'Not paired', online: 'Connected', reconnecting: 'Reconnecting…',
+      superseded: 'Not connected', upgrade_required: 'Update needed' }[phase] || phase;
+
+    show('env', !!s.environment);
+    if (s.environment) $('env-name').textContent = s.environment.name;
+
+    show('in-use', !!inUse && !takeover);
+    if (inUse) { $('use-who').textContent = inUse.silicon_id; $('use-since').textContent = since(inUse.since) + ' · session ' + inUse.session_id; }
+    show('takeover', !!takeover);
+    if (takeover) {
+      $('to-who').textContent = inUse ? inUse.silicon_id : 'A Silicon';
+      $('to-reason').textContent = takeover.reason;
+      $('to-until').textContent = 'Press Done when you have finished. It goes back on its own at ' + new Date(takeover.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.';
+    }
+
+    var pairing = phase === 'enrolling';
+    show('pairing', pairing);
+    $('kind').textContent = s.os_label || word;
+    $('code').textContent = s.pairing ? s.pairing.code : '······';
+    countdown();
+
+    var d = s.device;
+    show('paired', !!d && !pairing);
+    if (d) {
+      $('dev-name').textContent = d.name || '—';
+      $('dev-owner').textContent = d.owner || '—';
+      $('dev-team').textContent = d.team || '—';
+      $('dev-id').textContent = d.device_id;
+      $('confirm-owner').textContent = d.owner ? d.owner + "'s" : "the Carbon's";
+    }
+    show('revoke-link', !!d && !pairing);
+    if (!d || pairing) show('confirm', false);
+    show('superseded', phase === 'superseded');
+    show('upgrade', phase === 'upgrade_required');
+
+    var steps = (s.setup && s.setup.steps) || [];
+    var pending = steps.filter(function (x) { return x.status !== 'done'; });
+    show('setup', steps.length > 0 && (pending.length > 0 || pairing));
+    $('steps').innerHTML = steps.map(function (st) {
+      var btn = '';
+      if (st.status !== 'done' && s.settings_steps && s.settings_steps.indexOf(st.key) >= 0) {
+        btn = '<button data-action="open_settings" data-step="' + esc(st.key) + '">Open</button>';
+      }
+      return '<li>' + mark(st.status) + '<div style="flex:1"><div>' + esc(st.title) + '</div>' +
+        (st.help ? '<div class="small muted">' + esc(st.help) + '</div>' : '') +
+        (st.error ? '<div class="small failed">' + esc(st.error) + '</div>' : '') + '</div>' + btn + '</li>';
+    }).join('');
+
+    var missing = s.missing || [];
+    show('missing', missing.length > 0 && phase !== 'enrolling');
+    $('missing-list').innerHTML = missing.map(function (m) {
+      return '<li>' + mark('todo') + '<div style="flex:1"><div>' + esc(m.capability) + '</div><div class="small muted">' +
+        esc(m.reason) + '</div></div></li>';
+    }).join('');
+
+    var carried = s.attached || [];
+    show('attached', carried.length > 0);
+    $('attached-list').innerHTML = carried.map(function (a) {
+      var line = a.error ? '<span class="failed">' + esc(a.error) + '</span>'
+        : a.in_use ? esc(a.in_use.silicon_id) + ' is using it'
+        : a.online ? 'Online' : 'Offline';
+      return '<li>' + mark(a.error ? 'failed' : a.online ? 'done' : 'todo') + '<div style="flex:1"><div>' + esc(a.name) +
+        ' <span class="small muted">' + esc(a.os) + '</span></div><div class="small muted">' + line + '</div></div></li>';
+    }).join('');
+
+    show('problem', !!s.last_error && phase !== 'online');
+    $('problem').textContent = s.last_error || '';
+    $('version').textContent = 'Version ' + s.app_version;
+  };
+
+  send({ action: 'ready' });
+})();
+</script>
+</body>
+</html>

@@ -16,16 +16,16 @@ run() { # name, command...
 }
 skip() { SUMMARY+=("– $1: skipped, $2"); echo "– $1 skipped: $2"; }
 
-run rust-unit-and-service-e2e cargo test --workspace --exclude bridge-agent
-run bridge-agent-tests cargo test -p bridge-agent
+run rust-unit-and-service-e2e cargo test --workspace --exclude extend-agent
+run extend-agent-tests cargo test -p extend-agent
 run clippy cargo clippy --workspace --all-targets -- -D warnings
 
 # The CLI suite needs a running service with the local stand-ins.
-cargo build -q -p bridge-service -p bridge-cli --example fake_device
+cargo build -q -p extend-service -p extend-cli --example fake_device
 if curl -fsS http://127.0.0.1:8480/ready >/dev/null 2>&1; then
   run cli-e2e bash e2e/cli-e2e.sh
 else
-  (set -a; . e2e/dev.env; set +a; ./target/debug/bridge-service >"$LOG/service.log" 2>&1) & SVC=$!
+  (set -a; . e2e/dev.env; set +a; ./target/debug/extend-service >"$LOG/service.log" 2>&1) & SVC=$!
   sleep 3
   run cli-e2e bash e2e/cli-e2e.sh
   kill $SVC 2>/dev/null

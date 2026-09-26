@@ -483,156 +483,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bridge-agent"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bridge-driver",
- "bridge-hosted",
- "bridge-protocol",
- "bytes",
- "clap",
- "futures",
- "gethostname",
- "http",
- "keyring",
- "libc",
- "os_info",
- "png",
- "rand 0.9.5",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tao",
- "tempfile",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "url",
- "uuid",
- "windows",
- "wry",
-]
-
-[[package]]
-name = "bridge-cli"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bridge-protocol",
- "serde",
- "serde_json",
- "silicon-bridge-client",
- "time",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "bridge-driver"
-version = "1.0.0"
-dependencies = [
- "async-trait",
- "bridge-protocol",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "bridge-hosted"
-version = "1.0.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bridge-driver",
- "bridge-protocol",
- "chacha20poly1305",
- "ed25519-dalek",
- "futures-util",
- "hex",
- "hkdf 0.12.4",
- "mdns-sd",
- "native-tls",
- "num-bigint",
- "plist",
- "rand 0.9.5",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-native-tls",
- "tokio-tungstenite",
- "tracing",
- "url",
- "uuid",
- "x25519-dalek",
-]
-
-[[package]]
-name = "bridge-protocol"
-version = "1.0.0"
-dependencies = [
- "base64 0.22.1",
- "rand 0.9.5",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.21",
- "time",
- "uuid",
-]
-
-[[package]]
-name = "bridge-service"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bridge-protocol",
- "bytes",
- "futures",
- "hex",
- "hmac 0.12.1",
- "http",
- "rand 0.9.5",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "silicon-bridge-client",
- "silicon-iam-client",
- "space-station",
- "sqlx",
- "subtle",
- "thiserror 2.0.21",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tower",
- "tower-http 0.7.1",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1401,6 +1251,156 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "extend-agent"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "extend-driver",
+ "extend-hosted",
+ "extend-protocol",
+ "futures",
+ "gethostname",
+ "http",
+ "keyring",
+ "libc",
+ "os_info",
+ "png",
+ "rand 0.9.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tao",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "url",
+ "uuid",
+ "windows",
+ "wry",
+]
+
+[[package]]
+name = "extend-cli"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "extend-protocol",
+ "serde",
+ "serde_json",
+ "silicon-extend-client",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "extend-driver"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "extend-protocol",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "extend-hosted"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "extend-driver",
+ "extend-protocol",
+ "futures-util",
+ "hex",
+ "hkdf 0.12.4",
+ "mdns-sd",
+ "native-tls",
+ "num-bigint",
+ "plist",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "uuid",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "extend-protocol"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "extend-service"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "extend-protocol",
+ "futures",
+ "hex",
+ "hmac 0.12.1",
+ "http",
+ "rand 0.9.5",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "silicon-extend-client",
+ "silicon-iam-client",
+ "space-station",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tower-http 0.7.1",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4215,10 +4215,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "silicon-bridge-client"
+name = "silicon-extend-client"
 version = "1.0.0"
 dependencies = [
- "bridge-protocol",
+ "extend-protocol",
  "reqwest",
  "serde",
  "serde_json",

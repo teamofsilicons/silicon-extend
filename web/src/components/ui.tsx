@@ -3,7 +3,7 @@ import { Check, CircleAlert, Laptop, LoaderCircle, Monitor, Smartphone, Tablet, 
 import type { ApiError } from "../lib/api";
 import type { Device } from "../lib/types";
 
-/** Shows exactly what Bridge said: the message, the hint, and the ids to report it with. */
+/** Shows exactly what Extend said: the message, the hint, and the ids to report it with. */
 export function ErrorNote(props: { error: ApiError | null | undefined; compact?: boolean; testid?: string }) {
   return (
     <Show when={props.error}>

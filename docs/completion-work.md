@@ -97,14 +97,14 @@ An implementation or passing mock does not close a physical-device or production
   physical-phone coverage.
 
 
-- Release repository discovery: `teamofsilicons/silicon-bridge` exists privately on GitHub,
+- Release repository discovery: `teamofsilicons/silicon-extend` exists privately on GitHub,
   with main at `cb3257effb349ef76d44e7fe5388b67ddf13e935` (initial commit, 2026-08-24).
   It contains `UNDERSTANDING.md` and `interface-api-ref.html`. This checkout still has no
   configured remote and begins at a different root commit. Integrating histories must preserve
   those existing files; no push, overwrite or CI run has been performed by this check.
 
 
-- Android long recording now passes the actual local Bridge service path with a verified animated
+- Android long recording now passes the actual local Extend service path with a verified animated
   fixture: 186.9295 seconds, 2,104 frames, 43,286,430 bytes, full decode and identical Silicon/Carbon
   downloads. A sparse-video timing bug found during this check was corrected using native segment
   timing evidence and an explicit final timestamp. Local transfer is verified; production IAM/OBO

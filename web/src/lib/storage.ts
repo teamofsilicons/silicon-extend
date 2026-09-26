@@ -13,7 +13,7 @@ const memory = new Map<string, string>();
 function area(kind: "local" | "session"): Storage | null {
   try {
     const s = kind === "local" ? window.localStorage : window.sessionStorage;
-    const probe = "__bridge_probe__";
+    const probe = "__extend_probe__";
     s.setItem(probe, "1");
     s.removeItem(probe);
     return s;

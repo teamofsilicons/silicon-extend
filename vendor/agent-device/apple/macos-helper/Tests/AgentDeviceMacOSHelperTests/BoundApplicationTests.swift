@@ -11,7 +11,7 @@ final class BoundApplicationTests: XCTestCase {
   }
 
   func testSnapshotDoesNotSubstituteFrontmostForMissingBoundApp() {
-    let bundle = "com.teamofsilicons.bridge.nonexistent.\(UUID().uuidString)"
+    let bundle = "com.teamofsilicons.extend.nonexistent.\(UUID().uuidString)"
     XCTAssertThrowsError(try captureSnapshotResponse(surface: "app", bundleId: bundle)) { error in
       guard case HelperError.commandFailed(_, let details) = error else { return XCTFail("wrong error: \(error)") }
       XCTAssertEqual(details["bundleId"], bundle)

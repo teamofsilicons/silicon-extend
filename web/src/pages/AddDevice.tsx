@@ -125,7 +125,7 @@ export default function AddDevice() {
                   <button role="listitem" class="kind-card" data-testid={`kind-${k.id}`} onClick={() => dispatch({ type: "choose_kind", kind: k.id })}>
                     <KindIcon kind={k} />
                     <span class="kind-label">{k.label}</span>
-                    <span class="kind-via">{k.via === "app" ? "Bridge app on the device" : k.host === "mac" ? "Through your paired Mac" : "Through a paired computer"}</span>
+                    <span class="kind-via">{k.via === "app" ? "Extend app on the device" : k.host === "mac" ? "Through your paired Mac" : "Through a paired computer"}</span>
                   </button>
                 )}
               </For>
@@ -266,7 +266,7 @@ export default function AddDevice() {
               <div class="card" data-testid="setup-step-card">
                 <p class="success-line">
                   <Check size={16} aria-hidden="true" /> <strong>{device().name}</strong> is paired{s.world().kind === "testing" ? " in the test environment" : ""}. Now finish its setup
-                  {kind()?.via === "host" ? " — the host computer's Bridge app walks you through it." : " on the device."}
+                  {kind()?.via === "host" ? " — the host computer's Extend app walks you through it." : " on the device."}
                 </p>
                 <SetupSteps device={device()} onComplete={() => dispatch({ type: "setup_complete" })} />
                 <div class="wizard-nav">
@@ -307,9 +307,9 @@ export default function AddDevice() {
                   <p>
                     {state().granted.join(", ")} can use it now. Tell {state().granted.length === 1 ? "it" : "them"} the device id, or ask in plain words:
                   </p>
-                  <blockquote class="ask">“Use my {kind()?.short ?? "device"} ({device().device_id}) through Bridge to …”</blockquote>
+                  <blockquote class="ask">“Use my {kind()?.short ?? "device"} ({device().device_id}) through Extend to …”</blockquote>
                   <p class="fine">A Silicon finds it with:</p>
-                  <CopyText text={`bridge device show ${device().device_id}`} />
+                  <CopyText text={`extend device show ${device().device_id}`} />
                 </Show>
                 <div class="wizard-nav">
                   <Button onClick={() => setState(initialState())}>Add another device</Button>
@@ -375,7 +375,7 @@ function CodeStep(props: { code: string; onInput: (code: string) => void; onBack
         if (normalized().valid) props.onNext();
       }}
     >
-      <label for="pairing-code">Pairing code shown in the Bridge app</label>
+      <label for="pairing-code">Pairing code shown in the Extend app</label>
       <input
         id="pairing-code"
         class="code-input"
@@ -448,7 +448,7 @@ function HostStep(props: {
               <div class="host-list" role="radiogroup" aria-label={`Paired ${what()}s`}>
                 <For each={list()}>
                   {(d) => {
-                    const blocked = () => (!d.online ? `Offline, last seen ${relativeTime(d.last_seen_at)}. Open the Bridge app on it.` : d.state !== "ready" ? "Its own setup isn't finished." : null);
+                    const blocked = () => (!d.online ? `Offline, last seen ${relativeTime(d.last_seen_at)}. Open the Extend app on it.` : d.state !== "ready" ? "Its own setup isn't finished." : null);
                     return (
                       <label class={`host-option ${props.hostId === d.device_id ? "selected" : ""} ${blocked() ? "blocked" : ""}`} data-testid="host-option">
                         <input type="radio" name="host" value={d.device_id} checked={props.hostId === d.device_id} disabled={!!blocked()} onChange={() => props.onPick(d.device_id)} />

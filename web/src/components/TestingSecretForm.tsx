@@ -5,7 +5,7 @@ import { navigate } from "../lib/router";
 import { Button, ErrorNote, toast } from "./ui";
 
 /**
- * Enter a test application's app_secret. Bridge validates it (GET /api/v1/testing-environment)
+ * Enter a test application's app_secret. Extend validates it (GET /api/v1/testing-environment)
  * before anything switches, so a bad secret never leaves the tab half in a test world.
  */
 export function TestingSecretForm() {

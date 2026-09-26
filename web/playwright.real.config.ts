@@ -1,9 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Final pass against the real Bridge service (crates/bridge-service) running locally with
-// BRIDGE_IAM_MODE=local on BRIDGE_REAL_URL (default http://127.0.0.1:8480). This config does not
+// Final pass against the real Extend service (crates/extend-service) running locally with
+// EXTEND_IAM_MODE=local on EXTEND_REAL_URL (default http://127.0.0.1:8480). This config does not
 // start or stop the service; it only starts the website, proxied to it.
-const REAL = process.env.BRIDGE_REAL_URL || "http://127.0.0.1:8480";
+const REAL = process.env.EXTEND_REAL_URL || "http://127.0.0.1:8480";
 const WEB_PORT = 5192;
 
 export default defineConfig({
@@ -16,7 +16,7 @@ export default defineConfig({
   use: { baseURL: `http://localhost:${WEB_PORT}`, trace: "retain-on-failure", screenshot: "only-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } }],
   webServer: {
-    command: `BRIDGE_API_PROXY=${REAL} PORT=${WEB_PORT} npx vite --strictPort`,
+    command: `EXTEND_API_PROXY=${REAL} PORT=${WEB_PORT} npx vite --strictPort`,
     url: `http://localhost:${WEB_PORT}/`,
     reuseExistingServer: false,
     stdout: "ignore",

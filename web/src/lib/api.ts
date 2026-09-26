@@ -1,5 +1,5 @@
 /**
- * The Bridge API client used by the website. It speaks exactly `understanding/api.yaml`:
+ * The Extend API client used by the website. It speaks exactly `understanding/api.yaml`:
  * every body is an envelope `{type, data}`, every failure becomes an `ApiError` carrying the
  * service's `code`, `message` and `hint`, and nothing is ever reduced to "something went wrong".
  *
@@ -11,7 +11,7 @@ import type {
   ActivityEntry,
   AttachOs,
   AuthSession,
-  BridgeRequest,
+  ExtendRequest,
   Device,
   DeviceDetail,
   ErrorBody,
@@ -58,7 +58,7 @@ export function toApiError(error: unknown): ApiError {
   const message = error instanceof Error ? error.message : String(error);
   return new ApiError(0, {
     code: "client_error",
-    message: `The website failed before it could talk to Bridge: ${message}`,
+    message: `The website failed before it could talk to Extend: ${message}`,
     hint: "Reload the page. If it happens again, report it with the steps you took.",
   });
 }
@@ -154,7 +154,7 @@ export function pairFromSession(session: AuthSession, now: number): TokenPair {
   };
 }
 
-export class BridgeClient {
+export class ExtendClient {
   private refreshing: Promise<TokenPair> | null = null;
   constructor(readonly ctx: ClientContext) {}
 
@@ -181,7 +181,7 @@ export class BridgeClient {
   baseHeaders(options: Pick<RequestOptions, "team" | "path" | "body" | "ifMatch" | "headers">): Record<string, string> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (options.body) headers["Content-Type"] = "application/json";
-    if (options.path.startsWith("/api/v1/")) headers["Silicon-Bridge-API-Version"] = String(API_MAJOR);
+    if (options.path.startsWith("/api/v1/")) headers["Silicon-Extend-API-Version"] = String(API_MAJOR);
     const mode = options.team ?? "required";
     if (mode !== "none") {
       const team = this.ctx.team();
@@ -195,7 +195,7 @@ export class BridgeClient {
     }
     const secret = this.ctx.testingSecret();
     if (secret) headers["X-Testing-Application-Secret"] = secret;
-    if (this.ctx.telemetryOff()) headers["X-Bridge-Telemetry"] = "off";
+    if (this.ctx.telemetryOff()) headers["X-Extend-Telemetry"] = "off";
     if (options.ifMatch) headers["If-Match"] = options.ifMatch;
     return { ...headers, ...options.headers };
   }
@@ -209,8 +209,8 @@ export class BridgeClient {
       const reason = error instanceof Error ? error.message : String(error);
       throw new ApiError(0, {
         code: "network_error",
-        message: `Could not reach Bridge at ${where} (${reason}).`,
-        hint: "Check your connection. If Bridge is up, it may not allow this website's origin (CORS), or a local service may not be running.",
+        message: `Could not reach Extend at ${where} (${reason}).`,
+        hint: "Check your connection. If Extend is up, it may not allow this website's origin (CORS), or a local service may not be running.",
       });
     }
   }
@@ -233,10 +233,10 @@ export class BridgeClient {
         throw new ApiError(response.status, { ...data, request_id: data.request_id ?? requestId ?? undefined });
       throw new ApiError(response.status, {
         code: `http_${response.status}`,
-        message: `Bridge answered HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""} without an error envelope.`,
+        message: `Extend answered HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""} without an error envelope.`,
         hint:
           response.status >= 500
-            ? "Bridge or something in front of it is failing. Try again in a minute."
+            ? "Extend or something in front of it is failing. Try again in a minute."
             : "The website and the service disagree about this request. Report it with the request id.",
         request_id: requestId ?? undefined,
       });
@@ -245,14 +245,14 @@ export class BridgeClient {
     if (!envelope || typeof envelope.type !== "string" || !("data" in envelope))
       throw new ApiError(response.status, {
         code: "unexpected_response",
-        message: `Bridge answered HTTP ${response.status} without the {"type", "data"} envelope.`,
+        message: `Extend answered HTTP ${response.status} without the {"type", "data"} envelope.`,
         hint: "The website and the service disagree on the contract. Report it with the request id.",
         request_id: requestId ?? undefined,
       });
     if (expect && envelope.type !== expect)
       throw new ApiError(response.status, {
         code: "unexpected_response",
-        message: `Expected a "${expect}" response from Bridge, got "${envelope.type}".`,
+        message: `Expected a "${expect}" response from Extend, got "${envelope.type}".`,
         hint: "The website and the service disagree on the contract. Report it with the request id.",
         request_id: requestId ?? undefined,
       });
@@ -304,7 +304,7 @@ export class BridgeClient {
   refresh(stale: TokenPair): Promise<TokenPair> {
     if (this.refreshing) return this.refreshing;
     const lock = this.ctx.lock ?? (<R,>(_name: string, fn: () => Promise<R>) => fn());
-    this.refreshing = lock(`bridge-refresh:${this.ctx.worldKey}`, async () => {
+    this.refreshing = lock(`extend-refresh:${this.ctx.worldKey}`, async () => {
       const current = this.ctx.tokens.load();
       if (!current)
         throw new ApiError(401, {
@@ -350,7 +350,7 @@ export class BridgeClient {
       auth: false,
       team: "none",
       expect: "version",
-      headers: { "Silicon-Bridge-Supported-API-Versions": String(API_MAJOR) },
+      headers: { "Silicon-Extend-Supported-API-Versions": String(API_MAJOR) },
     });
     return data;
   }
@@ -579,9 +579,9 @@ export class BridgeClient {
     ).data;
   }
 
-  async listDeviceRequests(deviceId: string, cursor?: string | null): Promise<Page<BridgeRequest>> {
+  async listDeviceRequests(deviceId: string, cursor?: string | null): Promise<Page<ExtendRequest>> {
     return (
-      await this.request<Page<BridgeRequest>>({
+      await this.request<Page<ExtendRequest>>({
         method: "GET",
         path: `/api/v1/devices/${encodeURIComponent(deviceId)}/requests`,
         query: { cursor },

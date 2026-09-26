@@ -2,7 +2,7 @@
 """Record beyond 180 seconds through a paired emulator and the local development service.
 
 Requires debug and test APKs, a connected on-device ADB client, local IAM users c:alice and
-si:chef, a paired device granting si:chef access, the built Bridge CLI, ffmpeg and ffprobe.
+si:chef, a paired device granting si:chef access, the built Extend CLI, ffmpeg and ffprobe.
 The Pixel/physical-device path is deliberately excluded from this manual emulator lane.
 """
 import argparse
@@ -32,8 +32,8 @@ session = None
 def cli(who, *command, json_output=True):
     home = work / who
     home.mkdir(exist_ok=True)
-    env = dict(os.environ, SILICON_HOME=str(home), BRIDGE_API_URL=args.service_url, BRIDGE_TELEMETRY='off')
-    cmd = [str(ROOT / 'target/debug/bridge'), '--timeout', '90000', *command]
+    env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url, EXTEND_TELEMETRY='off')
+    cmd = [str(ROOT / 'target/debug/extend'), '--timeout', '90000', *command]
     if json_output:
         cmd.append('--json')
     result = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=100)
@@ -52,9 +52,9 @@ try:
     cli('alice', 'login', 'c:alice')
     session = cli('chef', 'session', 'new', args.device, '--connect', json_output=False)
     assert '2000' in remote('adb', 'shell', 'id -u')['text']
-    subprocess.run([*adb, 'shell', 'am', 'start', '-n', 'com.teamofsilicons.bridge.test/com.teamofsilicons.bridge.RecordingFixtureActivity'], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run([*adb, 'shell', 'am', 'start', '-n', 'com.teamofsilicons.extend.test/com.teamofsilicons.extend.RecordingFixtureActivity'], check=True, stdout=subprocess.DEVNULL)
     time.sleep(1)
-    subprocess.run([*adb, 'shell', 'pidof', 'com.teamofsilicons.bridge.test'], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run([*adb, 'shell', 'pidof', 'com.teamofsilicons.extend.test'], check=True, stdout=subprocess.DEVNULL)
     remote('record', 'start', 'long-service-proof', '--scope', 'device')
     print('Recording started; waiting 187 seconds to cross the native cap.', flush=True)
     time.sleep(187)
@@ -84,4 +84,4 @@ finally:
         if session:
             cli('chef', 'session', 'end', session)
     finally:
-        subprocess.run([*adb, 'shell', 'am', 'force-stop', 'com.teamofsilicons.bridge.test'], check=True)
+        subprocess.run([*adb, 'shell', 'am', 'force-stop', 'com.teamofsilicons.extend.test'], check=True)

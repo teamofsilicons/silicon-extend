@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stamp the staged fork, never the source checkout. Installed daemon reuse compares version
-// strings, so each distinct Bridge runtime needs its own version even between upstream releases.
+// strings, so each distinct Extend runtime needs its own version even between upstream releases.
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -15,7 +15,7 @@ function canonical(value) {
 }
 
 function buildVersion(base, digest) {
-  return `${base}${base.includes('+') ? '.' : '+'}bridge.${digest}`;
+  return `${base}${base.includes('+') ? '.' : '+'}extend.${digest}`;
 }
 
 export function stampRuntime(root, nativeFiles = []) {
@@ -24,10 +24,10 @@ export function stampRuntime(root, nativeFiles = []) {
   if (manifest.name !== 'agent-device' || typeof manifest.version !== 'string') {
     throw new Error('Expected the staged agent-device package');
   }
-  const previous = manifest.bridgeRuntime;
+  const previous = manifest.extendRuntime;
   const base = previous && manifest.version === buildVersion(previous.upstreamVersion, previous.sha256)
     ? previous.upstreamVersion : manifest.version;
-  delete manifest.bridgeRuntime;
+  delete manifest.extendRuntime;
   manifest.version = base;
   const hash = createHash('sha256');
   function add(label, bytes) {
@@ -54,7 +54,7 @@ export function stampRuntime(root, nativeFiles = []) {
   }
   const digest = hash.digest('hex');
   manifest.version = buildVersion(base, digest);
-  manifest.bridgeRuntime = { upstreamVersion: base, sha256: digest };
+  manifest.extendRuntime = { upstreamVersion: base, sha256: digest };
   const temporary = `${manifestPath}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
   renameSync(temporary, manifestPath);

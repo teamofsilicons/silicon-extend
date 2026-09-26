@@ -150,7 +150,7 @@ export interface Session {
   command_count?: number;
 }
 
-export interface BridgeRequest {
+export interface ExtendRequest {
   request_id: string;
   device_id: string;
   from: string;

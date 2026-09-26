@@ -1,10 +1,10 @@
 # Device protocol
 
-How a Bridge app (Android, Android TV, Mac, Windows, Linux) talks to the Bridge service. The Rust
-types are in `crates/bridge-protocol/src/frames.rs` and `model.rs`; this page is the same contract
+How an Extend app (Android, Android TV, Mac, Windows, Linux) talks to the Extend service. The Rust
+types are in `crates/extend-protocol/src/frames.rs` and `model.rs`; this page is the same contract
 for apps written in other languages (the Android app is Kotlin).
 
-Service URL: production `https://backend.bridge.teamofsilicons.com`, local development
+Service URL: production `https://backend.extend.teamofsilicons.com`, local development
 `http://127.0.0.1:8480` (the Android emulator reaches it as `http://10.0.2.2:8480`). WebSocket URLs
 are the same host with `ws://` / `wss://`.
 
@@ -15,7 +15,7 @@ POST /api/v1/enrollments
 {"type":"enrollment","data":{"os":"android","os_version":"15","model":"Pixel 9","app_version":"1.0.0"}}
 
 201 {"type":"enrollment","data":{
-  "enrollment_id":"0192…","enrollment_secret":"bes_…","pairing_code":"4F9C2A",
+  "enrollment_id":"0192…","enrollment_secret":"ees_…","pairing_code":"4F9C2A",
   "code_expires_at":"2026-09-26T10:05:00.000Z","rotates_every_s":300}}
 ```
 
@@ -25,14 +25,14 @@ Show `pairing_code` large (uppercase, 6 hexadecimal characters). Then open the e
 
 ```
 GET /api/v1/enrollments/{enrollment_id}/connect   (WebSocket upgrade)
-Authorization: Bridge-Enrollment <enrollment_secret>
+Authorization: Extend-Enrollment <enrollment_secret>
 ```
 
 Frames from the service (JSON text messages):
 
 ```json
 {"type":"code","pairing_code":"7B21E0","code_expires_at":"2026-09-26T10:10:00.000Z"}
-{"type":"paired","device_id":"7c1e09ab","device_credential":"bdc_…","environment":null}
+{"type":"paired","device_id":"7c1e09ab","device_credential":"edc_…","environment":null}
 {"type":"ping","nonce":17}
 ```
 
@@ -46,7 +46,7 @@ start a new one. Polling alternative: `GET /api/v1/enrollments/{id}` with the sa
 
 ```
 GET /api/v1/device/connect   (WebSocket upgrade)
-Authorization: Bridge-Device <device_credential>
+Authorization: Extend-Device <device_credential>
 ```
 
 Keep it open always. Reconnect with exponential backoff from 1 s to 60 s with full jitter. Close
@@ -61,12 +61,12 @@ codes: `4401` credential invalid or device unpaired (forget the credential, go b
  "capabilities":["screen.read","screen.capture","input.touch","input.text","nav.system","apps.launch","apps.list","takeover","notifications","links"],
  "missing":[{"capability":"adb","reason":"Wireless debugging is off. Turn it on in Developer options."}],
  "setup":{"state":"needs_carbon","steps":[
-   {"key":"accessibility","title":"Allow Silicon Bridge to control the screen","status":"done"},
+   {"key":"accessibility","title":"Allow Silicon Extend to control the screen","status":"done"},
    {"key":"wireless_debugging","title":"Turn on wireless debugging","status":"needs_carbon","help":"Settings › System › Developer options › Wireless debugging"}]}}
 ```
 
 Send `hello` again whenever capabilities or setup change (or send `{"type":"setup_progress","setup":{…}}`
-for setup-only changes). Capability names are in `crates/bridge-protocol/src/capability.rs`.
+for setup-only changes). Capability names are in `crates/extend-protocol/src/capability.rs`.
 
 ### Frames the service sends
 
@@ -129,7 +129,7 @@ from `upload_ids`:
 
 ```
 PUT /api/v1/device/artifacts/{upload_id}
-Authorization: Bridge-Device <device_credential>
+Authorization: Extend-Device <device_credential>
 Content-Type: image/png
 X-Content-SHA256: <64 lowercase hex of the bytes>
 X-File-Name: screenshot.png
@@ -146,7 +146,7 @@ DELETE /api/v1/device        → 204. "Revoke pair" (confirm with the Carbon fir
 POST   /api/v1/device/stop   → 204. Same as the stop frame, for when the socket is down.
 ```
 
-All with `Authorization: Bridge-Device <device_credential>`.
+All with `Authorization: Extend-Device <device_credential>`.
 
 ## 4. What every app shows
 

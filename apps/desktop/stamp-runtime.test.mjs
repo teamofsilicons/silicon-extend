@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { stampRuntime } from './stamp-runtime.mjs';
 
 function fixture(t) {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'bridge-runtime-stamp-'));
+  const root = mkdtempSync(path.join(os.tmpdir(), 'extend-runtime-stamp-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const staged = path.join(root, 'first');
   for (const dir of ['bin', 'dist']) mkdirSync(path.join(staged, dir), { recursive: true });
@@ -34,7 +34,7 @@ test('a same-size rewrite with the original timestamp changes the version', (t) 
   writeFileSync(file, "export const behavior = 'new';");
   utimesSync(file, before.atime, before.mtime);
   assert.notEqual(stampRuntime(staged), first);
-  assert.equal(JSON.parse(readFileSync(path.join(staged, 'package.json'))).bridgeRuntime.upstreamVersion, '0.21.15');
+  assert.equal(JSON.parse(readFileSync(path.join(staged, 'package.json'))).extendRuntime.upstreamVersion, '0.21.15');
 });
 
 test('native helper changes also invalidate the build identity', (t) => {

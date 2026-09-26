@@ -4,10 +4,10 @@ import { readFileSync } from "node:fs";
 
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
 
-// The dev server proxies the API to a local Bridge service so the site runs same-origin in
-// development. `BRIDGE_API_PROXY` picks the target: the Rust service on 8480 by default, or the
+// The dev server proxies the API to a local Extend service so the site runs same-origin in
+// development. `EXTEND_API_PROXY` picks the target: the Rust service on 8480 by default, or the
 // mock on 8490 (`pnpm dev:mock`).
-const target = process.env.BRIDGE_API_PROXY || "http://127.0.0.1:8480";
+const target = process.env.EXTEND_API_PROXY || "http://127.0.0.1:8480";
 
 export default defineConfig({
   plugins: [solid()],

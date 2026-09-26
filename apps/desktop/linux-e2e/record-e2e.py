@@ -26,7 +26,7 @@ def wait(predicate, timeout=12):
 fixture = subprocess.Popen(['python3', str(root/'apps/desktop/linux-e2e/record-fixture.py'), '--noise'])
 try:
     def find_window():
-        result = subprocess.run(['xdotool', 'search', '--name', '^Bridge Recording Fixture$'],capture_output=True,text=True)
+        result = subprocess.run(['xdotool', 'search', '--name', '^Extend Recording Fixture$'],capture_output=True,text=True)
         return result.stdout.strip().splitlines()[0] if result.returncode == 0 else None
     xid = wait(find_window)
     for mode in ['manual', 'duration-limit', 'size-limit', 'owner-exited', 'device', 'worker-killed']:

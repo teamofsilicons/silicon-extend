@@ -6,7 +6,7 @@
  */
 import { createMemo, createRoot, createSignal } from "solid-js";
 import { apiBaseUrl } from "../config";
-import { ApiError, BridgeClient, type TokenPair, type TokenStore } from "./api";
+import { ApiError, ExtendClient, type TokenPair, type TokenStore } from "./api";
 import { read, readJson, remove, write, writeJson } from "./storage";
 import type { TestingEnvironment } from "./types";
 
@@ -15,14 +15,14 @@ export type World =
   | { kind: "testing"; secret: string; environment: TestingEnvironment };
 
 export const KEYS = {
-  productionAuth: "bridge.auth.production",
-  testing: "bridge.testing",
-  testingAuth: (environmentId: string) => `bridge.auth.testing.${environmentId}`,
+  productionAuth: "extend.auth.production",
+  testing: "extend.testing",
+  testingAuth: (environmentId: string) => `extend.auth.testing.${environmentId}`,
   team: (world: World) =>
-    world.kind === "production" ? "bridge.team.production" : `bridge.team.testing.${world.environment.environment_id}`,
-  telemetry: "bridge.telemetry",
-  theme: "bridge.theme",
-  loginState: "bridge.login.state",
+    world.kind === "production" ? "extend.team.production" : `extend.team.testing.${world.environment.environment_id}`,
+  telemetry: "extend.telemetry",
+  theme: "extend.theme",
+  loginState: "extend.login.state",
 };
 
 export const APP_SECRET = /^ask_[A-Za-z0-9_-]{43}$/;
@@ -101,7 +101,7 @@ function createSession() {
   const client = createMemo(() => {
     const w = world();
     const tokens = store();
-    return new BridgeClient({
+    return new ExtendClient({
       baseUrl: apiBaseUrl(),
       tokens,
       worldKey: w.kind === "production" ? "production" : `testing:${w.environment.environment_id}`,

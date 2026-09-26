@@ -52,15 +52,15 @@ try:
     assert 'overlayWarning' in data and 'restart' in data['overlayWarning'], data
     subprocess.run(['ffmpeg','-v','error','-i',str(recovered),'-f','null','-'],check=True)
     print('PASS public stop recovers after daemon SIGKILL and discloses lost touch events',flush=True)
-    if os.environ.get('BRIDGE_RECORD_DRIVER'):
-        agent = os.environ['BRIDGE_RECORD_DRIVER']
-        driver_env = dict(os.environ, SILICON_HOME=str(work/'bridge-home'), BRIDGE_AGENT_DEVICE=str(root/'vendor/agent-device/bin/agent-device.mjs'), BRIDGE_TELEMETRY='off')
+    if os.environ.get('EXTEND_RECORD_DRIVER'):
+        agent = os.environ['EXTEND_RECORD_DRIVER']
+        driver_env = dict(os.environ, SILICON_HOME=str(work/'extend-home'), EXTEND_AGENT_DEVICE=str(root/'vendor/agent-device/bin/agent-device.mjs'), EXTEND_TELEMETRY='off')
         probe = subprocess.run([agent,'probe','--json'],env=driver_env,capture_output=True,text=True,check=True,timeout=30)
         report = json.loads(probe.stdout)
         assert 'screen.record' in report['capabilities'], report
         def driver(*args):
             result=subprocess.run([agent,'exec','--session','abc','--timeout-ms','60000','--out',str(work/'driver-output'),*args],env=driver_env,capture_output=True,text=True,timeout=65)
-            print('Bridge driver:', result.stdout.strip(),result.stderr.strip(),flush=True)
+            print('Extend driver:', result.stdout.strip(),result.stderr.strip(),flush=True)
             assert result.returncode == 0, result.stderr
             data=json.loads(result.stdout)
             assert result.returncode==0 and data['ok'],data
@@ -74,9 +74,9 @@ try:
             assert video.is_file(),result
             subprocess.run(['ffmpeg','-v','error','-i',str(video),'-f','null','-'],check=True)
             assert Path(result['output']['outPath']).is_file(), 'stop moved the committed export away from its durable manifest'
-            print('PASS Bridge driver probe, recording start/stop, returned artifact and full decode',flush=True)
+            print('PASS Extend driver probe, recording start/stop, returned artifact and full decode',flush=True)
         finally:
-            subprocess.run(['node',str(root/'vendor/agent-device/bin/agent-device.mjs'),'daemon','stop','--state-dir',str(work/'bridge-home/.bridge-agent/agent-device'),'--clean'],env=driver_env,check=True,timeout=30)
+            subprocess.run(['node',str(root/'vendor/agent-device/bin/agent-device.mjs'),'daemon','stop','--state-dir',str(work/'extend-home/.extend-agent/agent-device'),'--clean'],env=driver_env,check=True,timeout=30)
 
 
 finally:

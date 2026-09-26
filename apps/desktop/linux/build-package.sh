@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Builds the Linux tarball and .deb for Silicon Bridge. Run it on Linux (or in the linux-e2e
+# Builds the Linux tarball and .deb for Silicon Extend. Run it on Linux (or in the linux-e2e
 # container: apps/desktop/linux/build-in-docker.sh). Not published anywhere.
 #
 # Layout (the same inside the tarball and under /usr in the .deb):
-#   bin/bridge-agent
-#   lib/silicon-bridge/agent-device/{bin,dist,linux,package.json}   Bridge's agent-device fork
-#   lib/silicon-bridge/node/bin/node                               Node 22 for agent-device
-#   share/applications/silicon-bridge.desktop
-#   share/doc/silicon-bridge/README
-# bridge-agent finds agent-device and node through ../lib/silicon-bridge next to its own binary.
+#   bin/extend-agent
+#   lib/silicon-extend/agent-device/{bin,dist,linux,package.json}   Extend's agent-device fork
+#   lib/silicon-extend/node/bin/node                               Node 22 for agent-device
+#   share/applications/silicon-extend.desktop
+#   share/doc/silicon-extend/README
+# extend-agent finds agent-device and node through ../lib/silicon-extend next to its own binary.
 #
 #   PROFILE=debug …        use a debug build
-#   BRIDGE_AGENT_BIN=…     package this binary instead of building one
+#   EXTEND_AGENT_BIN=…     package this binary instead of building one
 #   NODE_TARBALL=…         use this Node tarball instead of downloading
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -24,9 +24,9 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 case "$(uname -m)" in x86_64) ARCH=x64; DEB_ARCH=amd64;; aarch64|arm64) ARCH=arm64; DEB_ARCH=arm64;; *) echo "unsupported $(uname -m)"; exit 1;; esac
 [[ -f "$AD/dist/src/internal/bin.js" ]] || { echo "Build agent-device first: (cd vendor/agent-device && pnpm install && pnpm build)"; exit 1; }
 
-if [[ -z "${BRIDGE_AGENT_BIN:-}" ]]; then
-  if [[ "$PROFILE" == "release" ]]; then cargo build --release -p bridge-agent --manifest-path "$ROOT/Cargo.toml"; else cargo build -p bridge-agent --manifest-path "$ROOT/Cargo.toml"; fi
-  BRIDGE_AGENT_BIN="$TARGET_DIR/$PROFILE/bridge-agent"
+if [[ -z "${EXTEND_AGENT_BIN:-}" ]]; then
+  if [[ "$PROFILE" == "release" ]]; then cargo build --release -p extend-agent --manifest-path "$ROOT/Cargo.toml"; else cargo build -p extend-agent --manifest-path "$ROOT/Cargo.toml"; fi
+  EXTEND_AGENT_BIN="$TARGET_DIR/$PROFILE/extend-agent"
 fi
 
 mkdir -p "$OUT/.cache"
@@ -42,31 +42,31 @@ EXPECTED="$(awk -v name="$NAME" '$2 == name {print $1}' "$ROOT/apps/desktop/linu
 ACTUAL="$(sha256sum "$NODE_TARBALL" | awk '{print $1}')"
 [[ -n "$EXPECTED" && "$ACTUAL" == "$EXPECTED" ]] || { echo "Node checksum mismatch: $NODE_TARBALL" >&2; exit 1; }
 
-NAME="silicon-bridge-$VERSION-linux-$ARCH"
+NAME="silicon-extend-$VERSION-linux-$ARCH"
 STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/lib/silicon-bridge/agent-device" "$STAGE/lib/silicon-bridge/node" "$STAGE/share/applications" "$STAGE/share/doc/silicon-bridge"
-install -m 0755 "$BRIDGE_AGENT_BIN" "$STAGE/bin/bridge-agent"
-tar -C "$AD" -cf - bin dist linux package.json LICENSE | tar -C "$STAGE/lib/silicon-bridge/agent-device" -xf -
-tar -xJf "$NODE_TARBALL" -C "$STAGE/lib/silicon-bridge/node" --strip-components=1 --wildcards '*/bin/node' '*/LICENSE'
-"$STAGE/lib/silicon-bridge/node/bin/node" "$ROOT/apps/desktop/stamp-runtime.mjs" "$STAGE/lib/silicon-bridge/agent-device"
-cat > "$STAGE/share/applications/silicon-bridge.desktop" <<EOF
+mkdir -p "$STAGE/bin" "$STAGE/lib/silicon-extend/agent-device" "$STAGE/lib/silicon-extend/node" "$STAGE/share/applications" "$STAGE/share/doc/silicon-extend"
+install -m 0755 "$EXTEND_AGENT_BIN" "$STAGE/bin/extend-agent"
+tar -C "$AD" -cf - bin dist linux package.json LICENSE | tar -C "$STAGE/lib/silicon-extend/agent-device" -xf -
+tar -xJf "$NODE_TARBALL" -C "$STAGE/lib/silicon-extend/node" --strip-components=1 --wildcards '*/bin/node' '*/LICENSE'
+"$STAGE/lib/silicon-extend/node/bin/node" "$ROOT/apps/desktop/stamp-runtime.mjs" "$STAGE/lib/silicon-extend/agent-device"
+cat > "$STAGE/share/applications/silicon-extend.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Silicon Bridge
+Name=Silicon Extend
 Comment=Lets the Silicons you choose use this computer
-Exec=bridge-agent run
+Exec=extend-agent run
 Terminal=false
 Categories=Utility;
 EOF
-cat > "$STAGE/share/doc/silicon-bridge/README" <<EOF
-Silicon Bridge $VERSION for Linux
+cat > "$STAGE/share/doc/silicon-extend/README" <<EOF
+Silicon Extend $VERSION for Linux
 
-  bridge-agent run                 start it (tray icon; shows the pairing code)
-  bridge-agent run --headless      servers and CI: status on stdout
-  bridge-agent install-autostart   start at login (add --systemd for a user service)
-  bridge-agent status              what it is doing
-  bridge-agent probe               what this computer can do right now
+  extend-agent run                 start it (tray icon; shows the pairing code)
+  extend-agent run --headless      servers and CI: status on stdout
+  extend-agent install-autostart   start at login (add --systemd for a user service)
+  extend-agent status              what it is doing
+  extend-agent probe               what this computer can do right now
 
 Screen reading needs the AT-SPI bus (at-spi2-core, python3-gi, gir1.2-atspi-2.0); clicking and
 typing need xdotool (X11) or ydotool (Wayland); screenshots need gnome-screenshot, scrot or
@@ -82,20 +82,20 @@ echo "tarball: $OUT/$NAME.tar.gz"
 
 if command -v dpkg-deb >/dev/null; then
   command -v dpkg-shlibdeps >/dev/null || { echo "Install dpkg-dev to derive package library requirements" >&2; exit 1; }
-  DEB="$OUT/deb/debian/silicon-bridge"
+  DEB="$OUT/deb/debian/silicon-extend"
   rm -rf "$DEB"; mkdir -p "$DEB/DEBIAN" "$DEB/usr"
   cp -a "$STAGE/." "$DEB/usr/"
   cat > "$OUT/deb/debian/control" <<EOF
-Source: silicon-bridge
+Source: silicon-extend
 
-Package: silicon-bridge
+Package: silicon-extend
 Architecture: any
 EOF
-  SHLIBS="$(cd "$OUT/deb" && dpkg-shlibdeps -O -e"$DEB/usr/bin/bridge-agent" -e"$DEB/usr/lib/silicon-bridge/node/bin/node")"
+  SHLIBS="$(cd "$OUT/deb" && dpkg-shlibdeps -O -e"$DEB/usr/bin/extend-agent" -e"$DEB/usr/lib/silicon-extend/node/bin/node")"
   DEPENDS="$(printf '%s\n' "$SHLIBS" | sed -n 's/^shlibs:Depends=//p')"
   [[ -n "$DEPENDS" ]] || { echo "Could not derive native library dependencies" >&2; exit 1; }
   cat > "$DEB/DEBIAN/control" <<EOF
-Package: silicon-bridge
+Package: silicon-extend
 Version: $VERSION
 Architecture: $DEB_ARCH
 Maintainer: Team of Silicons <team@teamofsilicons.com>
@@ -103,10 +103,10 @@ Section: utils
 Priority: optional
 Depends: $DEPENDS, python3, python3-gi, gir1.2-atspi-2.0, at-spi2-core
 Recommends: xdotool, xclip, imagemagick, xdg-utils, ffmpeg, x11-utils, libxcomposite1, libayatana-appindicator3-1
-Description: Silicon Bridge for Linux
+Description: Silicon Extend for Linux
  Lets the Silicons a Carbon chooses use this computer, with an always-visible
  indicator and a Stop button.
 EOF
-  dpkg-deb --root-owner-group --build "$DEB" "$OUT/silicon-bridge_${VERSION}_${DEB_ARCH}.deb"
-  echo "deb: $OUT/silicon-bridge_${VERSION}_${DEB_ARCH}.deb"
+  dpkg-deb --root-owner-group --build "$DEB" "$OUT/silicon-extend_${VERSION}_${DEB_ARCH}.deb"
+  echo "deb: $OUT/silicon-extend_${VERSION}_${DEB_ARCH}.deb"
 fi

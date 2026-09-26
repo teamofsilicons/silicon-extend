@@ -1,5 +1,5 @@
 /**
- * An in-memory mock of the Bridge service, following understanding/api.yaml, so the website runs
+ * An in-memory mock of the Extend service, following understanding/api.yaml, so the website runs
  * and is tested without the Rust service. It checks what the real service checks where that
  * matters to the website: envelopes, X-Org-ID, X-Testing-Application-Secret, Idempotency-Key,
  * If-Match versions, owner-only actions, the test-environment device limit, and token rotation.
@@ -194,8 +194,8 @@ const SETUP_STEPS: Record<Os, StepDef[]> = {
   ],
   macos: [
     { key: "app_installed", title: "Install and open the app", help: "Done when the menu bar showed the pairing code." },
-    { key: "accessibility", title: "Allow Accessibility", help: "System Settings → Privacy & Security → Accessibility → Silicon Bridge.", carbon: true },
-    { key: "screen_recording", title: "Allow Screen Recording", help: "System Settings → Privacy & Security → Screen & System Audio Recording → Silicon Bridge.", carbon: true },
+    { key: "accessibility", title: "Allow Accessibility", help: "System Settings → Privacy & Security → Accessibility → Silicon Extend.", carbon: true },
+    { key: "screen_recording", title: "Allow Screen Recording", help: "System Settings → Privacy & Security → Screen & System Audio Recording → Silicon Extend.", carbon: true },
   ],
   windows: [
     { key: "app_installed", title: "Install and open the app", help: "Done when the tray showed the pairing code." },
@@ -208,12 +208,12 @@ const SETUP_STEPS: Record<Os, StepDef[]> = {
   ios: [
     { key: "trust", title: "Plug the iPhone into the Mac and tap Trust", help: "Use a cable once. Tap Trust on the iPhone and enter its passcode.", carbon: true },
     { key: "developer_mode", title: "Turn on Developer Mode", help: "Settings → Privacy & Security → Developer Mode. The iPhone restarts.", carbon: true },
-    { key: "helper", title: "Bridge puts its helper on the iPhone", help: "Keep the iPhone unlocked and near the Mac." },
+    { key: "helper", title: "Extend puts its helper on the iPhone", help: "Keep the iPhone unlocked and near the Mac." },
   ],
   ipados: [
     { key: "trust", title: "Plug the iPad into the Mac and tap Trust", help: "Use a cable once. Tap Trust on the iPad and enter its passcode.", carbon: true },
     { key: "developer_mode", title: "Turn on Developer Mode", help: "Settings → Privacy & Security → Developer Mode. The iPad restarts.", carbon: true },
-    { key: "helper", title: "Bridge puts its helper on the iPad", help: "Keep the iPad unlocked and near the Mac." },
+    { key: "helper", title: "Extend puts its helper on the iPad", help: "Keep the iPad unlocked and near the Mac." },
   ],
   tvos: [
     { key: "discover", title: "Find the Apple TV on the network", help: "The Mac looks for it on the same network." },
@@ -279,7 +279,7 @@ function kindFor(os: Os, model: string | null): DeviceRec["kind"] {
 function newEnrollment(os: Os, model: string | null, code?: string): Enrollment {
   const e: Enrollment = {
     enrollment_id: randomUUID(),
-    secret: `bes_${b64(32)}`,
+    secret: `ees_${b64(32)}`,
     os,
     model,
     os_version: null,
@@ -511,7 +511,7 @@ function environmentView(world: World) {
 function caller(ctx: Ctx): Member {
   const auth = header(ctx, "authorization");
   if (!auth?.startsWith("Bearer "))
-    fail(401, "not_signed_in", "This request needs a Bridge access token (Authorization: Bearer oat_…).", "Sign in with `bridge login <slt>` or on the website.");
+    fail(401, "not_signed_in", "This request needs an Extend access token (Authorization: Bearer oat_…).", "Sign in with `extend login <slt>` or on the website.");
   const token = auth!.slice(7);
   const record = ctx.world.accessTokens.get(token);
   if (!record) {
@@ -681,7 +681,7 @@ function ownedDevice(ctx: Ctx, member: Member, team: string): DeviceRec {
   if (!/^[0-9a-f]{8}$/.test(ctx.params.device_id))
     fail(400, "invalid_input", `${ctx.params.device_id} is not a device id (8 lowercase hexadecimal characters).`);
   if (!d || d.removed || d.team !== team || (d.owner !== member.id && d.visibility === "personal"))
-    fail(404, "device_not_found", `No device ${ctx.params.device_id} is visible to you in team ${team} and ${ctx.world.environment ? `test environment ${ctx.world.environment.name}` : "production"}.`, "List your devices with `bridge device ls`.");
+    fail(404, "device_not_found", `No device ${ctx.params.device_id} is visible to you in team ${team} and ${ctx.world.environment ? `test environment ${ctx.world.environment.name}` : "production"}.`, "List your devices with `extend device ls`.");
   if (d!.owner !== member.id)
     fail(403, "not_owner", `Only ${d!.owner}, who paired ${d!.device_id} (${d!.name}), can do this.`, "Ask them to change it.");
   return d!;
@@ -762,12 +762,12 @@ route("GET", "/live", () => none());
 route("GET", "/ready", () => none());
 
 route("GET", "/api/version", (ctx) => {
-  const raw = header(ctx, "silicon-bridge-supported-api-versions");
+  const raw = header(ctx, "silicon-extend-supported-api-versions");
   if (!raw || !/^[1-9][0-9]*(, ?[1-9][0-9]*)*$/.test(raw))
-    fail(400, "invalid_input", "Silicon-Bridge-Supported-API-Versions is required, e.g. \"1, 2\".");
+    fail(400, "invalid_input", "Silicon-Extend-Supported-API-Versions is required, e.g. \"1, 2\".");
   const versions = raw!.split(",").map((v) => Number(v.trim()));
-  if (!versions.includes(1)) fail(400, "api_version_unsupported", `No API version in common: you support ${versions.join(", ")}, Bridge supports 1.`, "Update with `honeycomb install 'bridge'`.", { client: versions, service: [1] });
-  return ok(200, "version", { api_version: 1, supported: [1], service_version: "1.0.0-mock", deprecated: [] }, { "Silicon-Bridge-API-Version": "1", Vary: "Silicon-Bridge-Supported-API-Versions" });
+  if (!versions.includes(1)) fail(400, "api_version_unsupported", `No API version in common: you support ${versions.join(", ")}, Extend supports 1.`, "Update with `honeycomb install 'extend'`.", { client: versions, service: [1] });
+  return ok(200, "version", { api_version: 1, supported: [1], service_version: "1.0.0-mock", deprecated: [] }, { "Silicon-Extend-API-Version": "1", Vary: "Silicon-Extend-Supported-API-Versions" });
 });
 
 route("GET", "/api/v1/contracts", () =>
@@ -776,13 +776,13 @@ route("GET", "/api/v1/contracts", () =>
 
 route("GET", "/api/v1/iam", (ctx) =>
   ok(200, "iam", {
-    app_id: "bridge",
+    app_id: "extend",
     iam_base_url: `${ctx.origin}/__mock/iam`,
     iam_login_url: `${ctx.origin}/__mock/iam/login`,
     api_base_url: ctx.origin,
     website_url: ctx.origin,
     docs_url: `${ctx.origin}/docs`,
-    repository_url: "https://github.com/teamofsilicons/silicon-bridge",
+    repository_url: "https://github.com/teamofsilicons/silicon-extend",
     testing_environment: environmentView(ctx.world),
   }),
 );
@@ -876,11 +876,11 @@ route("POST", "/api/v1/enrollments", (ctx) => {
 route("GET", "/api/v1/enrollments/:enrollment_id", (ctx) => {
   const e = enrollments.get(ctx.params.enrollment_id);
   if (!e) fail(404, "enrollment_not_found", "No such enrollment. It paired already or was discarded.");
-  if (header(ctx, "authorization") !== `Bridge-Enrollment ${e!.secret}`) fail(401, "enrollment_secret_invalid", "Authorization must be Bridge-Enrollment <enrollment_secret>.");
+  if (header(ctx, "authorization") !== `Extend-Enrollment ${e!.secret}`) fail(401, "enrollment_secret_invalid", "Authorization must be Extend-Enrollment <enrollment_secret>.");
   if (e!.paired) {
     enrollments.delete(e!.enrollment_id);
     const w = worlds.get(e!.paired.world)!;
-    return ok(200, "enrollment", { state: "paired", device_id: e!.paired.device_id, device_credential: `bdc_${b64(32)}`, environment: environmentView(w) });
+    return ok(200, "enrollment", { state: "paired", device_id: e!.paired.device_id, device_credential: `edc_${b64(32)}`, environment: environmentView(w) });
   }
   if (e!.code_expires < now()) {
     e!.code = hex(6).toUpperCase();
@@ -899,7 +899,7 @@ route("POST", "/api/v1/pairings", (ctx) => {
   onlyKeys(data, ["pairing_code", "name", "visibility", "pair_ttl_days", "silicon_ids"]);
   const code = data.pairing_code;
   if (typeof code !== "string" || !/^[0-9A-Fa-f]{6}$/.test(code))
-    fail(400, "invalid_input", `pairing_code must be 6 hexadecimal characters; got ${JSON.stringify(code)}.`, "Enter the 6 characters the Bridge app shows, in any case.", { field: "pairing_code" });
+    fail(400, "invalid_input", `pairing_code must be 6 hexadecimal characters; got ${JSON.stringify(code)}.`, "Enter the 6 characters the Extend app shows, in any case.", { field: "pairing_code" });
   const name = checkName(data.name);
   const visibility = data.visibility === undefined ? "team" : checkVisibility(data.visibility);
   const ttl = data.pair_ttl_days === undefined ? 14 : checkTtl(data.pair_ttl_days);
@@ -914,7 +914,7 @@ route("POST", "/api/v1/pairings", (ctx) => {
   const enrollment = [...enrollments.values()].find((e) => !e.paired && e.code === (code as string).toUpperCase() && e.code_expires > now());
   if (!enrollment) {
     w.failedClaims.set(member.id, [...failures, now()]);
-    fail(404, "pairing_code_invalid", "That pairing code is wrong, expired or already used.", "Codes rotate every 5 minutes; enter the one the Bridge app shows now.");
+    fail(404, "pairing_code_invalid", "That pairing code is wrong, expired or already used.", "Codes rotate every 5 minutes; enter the one the Extend app shows now.");
   }
   if (w.environment && [...w.devices.values()].filter((d) => !d.removed).length >= 5)
     fail(409, "test_device_limit", "In test environment you are limited to 5 paired devices per environment.", "Remove a device from this test environment, or clean it in Honeycomb.", { device_limit: 5 });
@@ -978,11 +978,11 @@ route("POST", "/api/v1/devices/:device_id/attachments", (ctx) => {
     fail(422, "host_not_eligible", `${host.name} (${host.os}) can't host ${os}: iPhones, iPads and Apple TVs pair through a Mac.`, "Pick a paired Mac.");
   if (!needsMac && !["macos", "windows", "linux"].includes(host.os))
     fail(422, "host_not_eligible", `${host.name} (${host.os}) is not a computer, so it can't host a TV.`, "Pick a paired Mac, Windows or Linux computer.");
-  if (host.host_device_id) fail(422, "host_not_eligible", `${host.name} is itself paired through another device.`, "Pick a computer running the Bridge app.");
+  if (host.host_device_id) fail(422, "host_not_eligible", `${host.name} is itself paired through another device.`, "Pick a computer running the Extend app.");
   settle(ctx.world, host);
   if (host.setup) fail(409, "device_not_ready", `${host.name} hasn't finished its own setup yet.`, "Finish its setup first.");
   if (!host.online)
-    fail(503, "device_offline", `${host.name} is offline (last seen ${host.last_seen_at ?? "never"}), so it can't set up a new device.`, "Wake the computer and open the Bridge app, then try again.");
+    fail(503, "device_offline", `${host.name} is offline (last seen ${host.last_seen_at ?? "never"}), so it can't set up a new device.`, "Wake the computer and open the Extend app, then try again.");
   const w = ctx.world;
   if (w.environment && [...w.devices.values()].filter((d) => !d.removed).length >= 5)
     fail(409, "test_device_limit", "In test environment you are limited to 5 paired devices per environment.", "Remove a device from this test environment, or clean it in Honeycomb.", { device_limit: 5 });
@@ -1186,7 +1186,7 @@ route("POST", "/api/v1/sessions", (ctx) => {
   const member = caller(ctx);
   const team = teamOf(ctx, member)!;
   requireKey(ctx);
-  if (member.type !== "silicon") fail(403, "silicon_only", "Only Silicons start sessions. Carbons manage devices.", "Ask your Silicon to run `bridge session new <device_id>`.");
+  if (member.type !== "silicon") fail(403, "silicon_only", "Only Silicons start sessions. Carbons manage devices.", "Ask your Silicon to run `extend session new <device_id>`.");
   const data = envelope(ctx, "session");
   const d = ctx.world.devices.get(String(data.device_id));
   if (!d || d.removed || d.team !== team) fail(404, "device_not_found", `No device ${String(data.device_id)} is visible to you.`);
@@ -1194,10 +1194,10 @@ route("POST", "/api/v1/sessions", (ctx) => {
 });
 
 function startSession(w: World, d: DeviceRec, siliconId: string): Reply {
-  if (!w.access.get(d.device_id)?.has(siliconId)) fail(403, "no_access", `${siliconId} has no access to ${d.device_id} (${d.name}).`, "The owner can grant it with `bridge device access grant`.");
+  if (!w.access.get(d.device_id)?.has(siliconId)) fail(403, "no_access", `${siliconId} has no access to ${d.device_id} (${d.name}).`, "The owner can grant it with `extend device access grant`.");
   const current = inUse(w, d.device_id);
   if (current)
-    fail(409, "device_in_use", `Device ${d.device_id} (${d.name}) is being used by ${current.silicon_id} in session ${current.session_id} since ${current.since}. Only one Silicon can use a device at a time.`, `Ask for it with: bridge request send ${d.device_id} --reason "<why, up to 300 characters>"`, { in_use: current });
+    fail(409, "device_in_use", `Device ${d.device_id} (${d.name}) is being used by ${current.silicon_id} in session ${current.session_id} since ${current.since}. Only one Silicon can use a device at a time.`, `Ask for it with: extend request send ${d.device_id} --reason "<why, up to 300 characters>"`, { in_use: current });
   const t = now();
   const s: SessionRec = { session_id: newSessionId(w), device_id: d.device_id, silicon_id: siliconId, state: "active", started_at: iso(t), last_command_at: null, idle_ends_at: iso(t + 300_000), ended_at: null, end_reason: null, command_count: 0 };
   w.sessions.set(s.session_id, s);
@@ -1212,7 +1212,7 @@ function sessionFor(ctx: Ctx, member: Member, team: string): SessionRec {
   const sess = ctx.world.sessions.get(ctx.params.session_id);
   const d = sess ? ctx.world.devices.get(sess.device_id) : undefined;
   if (!sess || !d || d.team !== team || (sess.silicon_id !== member.id && d.owner !== member.id))
-    fail(404, "session_not_found", `No session ${ctx.params.session_id} is visible to you.`, "List sessions with `bridge session ls`.");
+    fail(404, "session_not_found", `No session ${ctx.params.session_id} is visible to you.`, "List sessions with `extend session ls`.");
   return sess!;
 }
 const takeoverView = (s: SessionRec) => s.takeover ?? null;
@@ -1299,7 +1299,7 @@ route("GET", "/api/v1/files", (ctx) => {
 
 route("POST", "/api/v1/telemetry", (ctx) => {
   envelope(ctx, "telemetry");
-  telemetryLog.push({ at: iso(now()), off: header(ctx, "x-bridge-telemetry") === "off", body: ctx.body });
+  telemetryLog.push({ at: iso(now()), off: header(ctx, "x-extend-telemetry") === "off", body: ctx.body });
   return none();
 });
 const telemetryLog: unknown[] = [];
@@ -1308,7 +1308,7 @@ route("POST", "/api/v1/reports", (ctx) => {
   caller(ctx);
   requireKey(ctx);
   envelope(ctx, "report");
-  return ok(202, "report", { report_id: randomUUID(), notification: ctx.world.environment ? "simulated" : "queued", repository_url: "https://github.com/teamofsilicons/silicon-bridge" });
+  return ok(202, "report", { report_id: randomUUID(), notification: ctx.world.environment ? "simulated" : "queued", repository_url: "https://github.com/teamofsilicons/silicon-extend" });
 });
 
 // ───────────── Mock controls and the stand-in consent screen ─────────────
@@ -1325,7 +1325,7 @@ route("POST", "/__mock/config", (ctx) => {
   return ok(200, "config", config);
 });
 
-/** Simulates a Bridge app showing a pairing code. */
+/** Simulates an Extend app showing a pairing code. */
 route("POST", "/__mock/enroll", (ctx) => {
   const data = (ctx.body ?? {}) as Record<string, unknown>;
   const os = (data.os as Os) ?? "android";
@@ -1374,7 +1374,7 @@ route("GET", "/__mock/iam/approve", (ctx) => {
 
 // ───────────── Server ─────────────
 
-const ALLOWED_HEADERS = "Authorization, Content-Type, X-Org-ID, X-Testing-Application-Secret, Idempotency-Key, If-Match, X-Bridge-Telemetry, Silicon-Bridge-API-Version, Silicon-Bridge-Supported-API-Versions";
+const ALLOWED_HEADERS = "Authorization, Content-Type, X-Org-ID, X-Testing-Application-Secret, Idempotency-Key, If-Match, X-Extend-Telemetry, Silicon-Extend-API-Version, Silicon-Extend-Supported-API-Versions";
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   const requestId = randomUUID();
@@ -1386,7 +1386,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     "Access-Control-Allow-Origin": (req.headers.origin as string) || "*",
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": ALLOWED_HEADERS,
-    "Access-Control-Expose-Headers": "ETag, X-Request-ID, Silicon-Bridge-API-Version",
+    "Access-Control-Expose-Headers": "ETag, X-Request-ID, Silicon-Extend-API-Version",
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
   };
@@ -1399,7 +1399,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   for await (const chunk of req) chunks.push(chunk as Buffer);
   const rawBody = Buffer.concat(chunks).toString("utf8");
   const send = (status: number, body: unknown, headers: Record<string, string> = {}) => {
-    const h: Record<string, string> = { ...cors, "X-Request-ID": requestId, "Silicon-Bridge-API-Version": "1", ...headers };
+    const h: Record<string, string> = { ...cors, "X-Request-ID": requestId, "Silicon-Extend-API-Version": "1", ...headers };
     if (status === 204) {
       res.writeHead(204, h);
       res.end();
@@ -1416,7 +1416,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   try {
     if (!r) {
       if (found.length) fail(405, "method_not_allowed", `${req.method} is not allowed on ${url.pathname}.`);
-      fail(404, "not_found", `No route ${req.method} ${url.pathname} in the mock Bridge service.`, "Check api.yaml for the path.");
+      fail(404, "not_found", `No route ${req.method} ${url.pathname} in the mock Extend service.`, "Check api.yaml for the path.");
     }
     const m = r!.re.exec(url.pathname)!;
     const params: Record<string, string> = {};
@@ -1465,7 +1465,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
           code: error.code,
           message: error.message,
           hint: error.hint,
-          docs_url: `https://docs.bridge.teamofsilicons.com/errors#${error.code}`,
+          docs_url: `https://docs.extend.teamofsilicons.com/errors#${error.code}`,
           request_id: requestId,
           details: error.details,
         },
@@ -1486,5 +1486,5 @@ const server = http.createServer((req, res) => {
   });
 });
 server.listen(MOCK_PORT, "127.0.0.1", () => {
-  console.log(`mock Bridge service on http://127.0.0.1:${MOCK_PORT}  (test app_secret: ${TEST_SECRET})`);
+  console.log(`mock Extend service on http://127.0.0.1:${MOCK_PORT}  (test app_secret: ${TEST_SECRET})`);
 });

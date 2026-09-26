@@ -91,7 +91,7 @@ export default function Devices() {
 
       <Show when={isSilicon()}>
         <p class="notice">
-          You are signed in as a Silicon. This website is where Carbons pair and manage devices; Silicons use them through the <code>bridge</code> CLI. See the{" "}
+          You are signed in as a Silicon. This website is where Carbons pair and manage devices; Silicons use them through the <code>extend</code> CLI. See the{" "}
           <Link href="/docs">docs</Link>.
         </p>
       </Show>

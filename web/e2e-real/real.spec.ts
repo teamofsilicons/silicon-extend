@@ -109,7 +109,7 @@ test("IAM consent round trip through the local stand-in", async ({ page }) => {
   // iam_login_url from GET /api/v1/iam, with app_id and redirect_uri, exactly as real IAM takes them.
   await page.goto("/");
   await page.getByTestId("sign-in-iam").click();
-  await expect(page).toHaveURL(/\/dev\/iam\/login\?app_id=bridge&redirect_uri=/);
+  await expect(page).toHaveURL(/\/dev\/iam\/login\?app_id=extend&redirect_uri=/);
   const redirect = new URL(new URL(page.url()).searchParams.get("redirect_uri")!);
   expect(redirect.pathname).toBe("/auth/callback");
   expect(redirect.searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);

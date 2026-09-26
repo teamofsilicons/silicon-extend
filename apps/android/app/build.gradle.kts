@@ -6,16 +6,16 @@ plugins {
 }
 
 // The service URL a fresh install talks to. Override for local work with
-// `./gradlew assembleDebug -PbridgeServiceUrl=http://10.0.2.2:8480`.
-val productionServiceUrl = "https://backend.bridge.teamofsilicons.com"
-val debugServiceUrl = (project.findProperty("bridgeServiceUrl") as String?) ?: productionServiceUrl
+// `./gradlew assembleDebug -PextendServiceUrl=http://10.0.2.2:8480`.
+val productionServiceUrl = "https://backend.extend.teamofsilicons.com"
+val debugServiceUrl = (project.findProperty("extendServiceUrl") as String?) ?: productionServiceUrl
 
 android {
-    namespace = "com.teamofsilicons.bridge"
+    namespace = "com.teamofsilicons.extend"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.teamofsilicons.bridge"
+        applicationId = "com.teamofsilicons.extend"
         minSdk = 30
         targetSdk = 36
         versionCode = 1

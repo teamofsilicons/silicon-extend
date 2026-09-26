@@ -21,8 +21,8 @@ export default function Callback() {
       const slt = finishIamLogin(params, w.kind === "production" ? "production" : w.environment.environment_id);
       await s.client().login(slt);
       s.clearSignedOutReason();
-      const next = read("session", "bridge.next") || "/devices";
-      remove("session", "bridge.next");
+      const next = read("session", "extend.next") || "/devices";
+      remove("session", "extend.next");
       navigate(next.startsWith("/") && !next.startsWith("//") ? next : "/devices", { replace: true });
     } catch (e) {
       setError(toApiError(e));

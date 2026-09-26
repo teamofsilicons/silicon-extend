@@ -1,17 +1,17 @@
-# Maps the bridge command to the six required release targets.
+# Maps the extend command to the six required release targets.
 format_version: 1
 
-app_id: "bridge"
+app_id: "extend"
 version: "1.0.0"
 
 bin:
-  bridge: "app"
+  extend: "app"
 
 targets:
   linux-x86_64:
     root: "targets/linux-x86_64"
     executables: &unix_executables
-      app: "bin/bridge"
+      app: "bin/extend"
 
   linux-aarch64:
     root: "targets/linux-aarch64"
@@ -20,7 +20,7 @@ targets:
   windows-x86_64:
     root: "targets/windows-x86_64"
     executables: &windows_executables
-      app: "bin/bridge.exe"
+      app: "bin/extend.exe"
 
   windows-aarch64:
     root: "targets/windows-aarch64"

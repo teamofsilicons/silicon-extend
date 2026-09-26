@@ -4,41 +4,41 @@
 
 openapi: 3.1.0
 info:
-  title: Silicon Bridge API
+  title: Silicon Extend API
   version: 1.0.0-draft
   description: |
-    Silicon Bridge lets a Silicon use a Carbon's personal devices. This API is used by the `bridge` CLI
-    (through the `silicon-bridge-client` crate), the configuration website, and the Bridge apps on devices.
+    Silicon Extend lets a Silicon use a Carbon's personal devices. This API is used by the `extend` CLI
+    (through the `silicon-extend-client` crate), the configuration website, and the Extend apps on devices.
 
     Conventions
     - Every JSON body is an envelope: `{"type": "<kind>", "data": {...}}`.
     - Errors: `{"type": "error", "data": {"code", "message", "hint", "docs_url", "request_id", "details"}}`.
       `code` is stable and machine-readable; `message` says what happened and why; `hint` says what to do next.
     - Timestamps are RFC 3339 UTC with milliseconds. Durations carry their unit in the field name.
-    - Every response carries `X-Request-ID` and `Silicon-Bridge-API-Version`.
+    - Every response carries `X-Request-ID` and `Silicon-Extend-API-Version`.
     - Lists are paged with `limit` and `cursor`; the response gives `next_cursor`, null on the last page.
     - Retry a POST after an uncertain result with the same `Idempotency-Key` and the identical body.
     - Test environments: send the test application's `app_secret` in `X-Testing-Application-Secret`.
       Omit it for production. An invalid secret is an error, never a silent fall back to production.
     - Browsers: CORS mirrors the request's origin, methods and headers, and exposes `ETag`, `X-Request-ID` and
-      `Silicon-Bridge-API-Version`.
+      `Silicon-Extend-API-Version`.
 servers:
-  - url: https://backend.bridge.teamofsilicons.com
+  - url: https://backend.extend.teamofsilicons.com
 security:
   - bearerAuth: []
 tags:
   - {name: System, description: 'Health, version negotiation and contract discovery'}
   - {name: Auth, description: Sign in with a short-lived token from Silicon IAM}
-  - {name: Enrollment, description: An unpaired Bridge app getting and rotating its pairing code}
+  - {name: Enrollment, description: An unpaired Extend app getting and rotating its pairing code}
   - {name: Pairing, description: 'A Carbon claiming a pairing code, and devices paired through a host computer'}
   - {name: Devices, description: 'Listing, inspecting and configuring paired devices'}
   - {name: Access, description: Which Silicons can use a device}
   - {name: Sessions, description: 'A Silicon using a device, one Silicon at a time'}
-  - {name: Commands, description: 'agent-device commands and Bridge additions, run inside a session'}
+  - {name: Commands, description: 'agent-device commands and Extend additions, run inside a session'}
   - {name: Requests, description: 'A Silicon asking the Silicon using a device for it, delivered through Ting'}
   - {name: Activity, description: Every action taken on a device}
   - {name: Files, description: 'Screenshots, recordings, logs and replay scripts, stored in Briefcase'}
-  - {name: Device app, description: 'Endpoints used only by a paired Bridge app, with its device credential'}
+  - {name: Device app, description: 'Endpoints used only by a paired Extend app, with its device credential'}
   - {name: Testing, description: 'The selected test environment, and Honeycomb lifecycle instructions'}
   - {name: IAM webhooks, description: Signed Silicon IAM callbacks}
   - {name: Operations, description: Bug reports and telemetry}
@@ -70,10 +70,10 @@ paths:
       description: |
         Unversioned so an old client can always reach it. The client lists every major it supports; the
         service answers with the highest both support. The client then pins that version on every request
-        with `Silicon-Bridge-API-Version`. No common version is `400 api_version_unsupported` listing both sides.
+        with `Silicon-Extend-API-Version`. No common version is `400 api_version_unsupported` listing both sides.
       security: []
       parameters:
-        - name: Silicon-Bridge-Supported-API-Versions
+        - name: Silicon-Extend-Supported-API-Versions
           in: header
           required: true
           schema: {type: string, pattern: '^[1-9][0-9]*(, ?[1-9][0-9]*)*$'}
@@ -82,8 +82,8 @@ paths:
         '200':
           description: Agreed version
           headers:
-            Silicon-Bridge-API-Version: {schema: {type: string}, description: The agreed major}
-            Vary: {schema: {type: string, const: Silicon-Bridge-Supported-API-Versions}}
+            Silicon-Extend-API-Version: {schema: {type: string}, description: The agreed major}
+            Vary: {schema: {type: string, const: Silicon-Extend-Supported-API-Versions}}
           content:
             application/json:
               schema:
@@ -142,7 +142,7 @@ paths:
     get:
       tags: [System]
       operationId: iamInformation
-      summary: Public IAM application details (what `bridge iam --json` prints)
+      summary: Public IAM application details (what `extend iam --json` prints)
       security: []
       description: Available before login. Never returns a secret.
       parameters:
@@ -161,15 +161,15 @@ paths:
                     type: object
                     required: [app_id, iam_base_url, api_base_url, website_url, docs_url]
                     properties:
-                      app_id: {type: string, example: bridge}
+                      app_id: {type: string, example: extend}
                       iam_base_url: {type: string, format: uri, example: 'https://backend.iam.teamofsilicons.com'}
                       iam_login_url:
                         type: [string, 'null']
                         format: uri
                         example: 'https://auth.iam.teamofsilicons.com/login'
                         description: 'Send a Carbon here to sign in: {iam_login_url}?app_id=<app_id>&redirect_uri=<url>. IAM appends slt=<token> to redirect_uri.'
-                      api_base_url: {type: string, format: uri, example: 'https://backend.bridge.teamofsilicons.com'}
-                      website_url: {type: string, format: uri, example: 'https://bridge.teamofsilicons.com'}
+                      api_base_url: {type: string, format: uri, example: 'https://backend.extend.teamofsilicons.com'}
+                      website_url: {type: string, format: uri, example: 'https://extend.teamofsilicons.com'}
                       docs_url: {type: string, format: uri}
                       repository_url: {type: string, format: uri}
                       testing_environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
@@ -180,7 +180,7 @@ paths:
     post:
       tags: [Auth]
       operationId: login
-      summary: Exchange a Silicon IAM short-lived token for a Bridge session
+      summary: Exchange a Silicon IAM short-lived token for an Extend session
       description: |
         The CLI and client never ask for a password. They take the short-lived token (SLT) a member generates
         with the IAM CLI or the IAM consent screen. In a test environment `slt` may instead be an existing test
@@ -288,7 +288,7 @@ paths:
     get:
       tags: [Auth]
       operationId: me
-      summary: Who is signed in (what `bridge login status --json` prints)
+      summary: Who is signed in (what `extend login status --json` prints)
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -319,7 +319,7 @@ paths:
     post:
       tags: [Enrollment]
       operationId: createEnrollment
-      summary: An unpaired Bridge app asks for a pairing code
+      summary: An unpaired Extend app asks for a pairing code
       description: |
         No login. Rate-limited per IP. The app keeps `enrollment_secret` in memory or its secret store and shows
         `pairing_code`. The code rotates every 300 s; the app follows rotations on the enrollment WebSocket or by
@@ -359,7 +359,7 @@ paths:
                     required: [enrollment_id, enrollment_secret, pairing_code, code_expires_at, rotates_every_s]
                     properties:
                       enrollment_id: {type: string, format: uuid}
-                      enrollment_secret: {type: string, pattern: '^bes_[A-Za-z0-9_-]{43}$', description: Returned once}
+                      enrollment_secret: {type: string, pattern: '^ees_[A-Za-z0-9_-]{43}$', description: Returned once}
                       pairing_code: {$ref: '#/components/schemas/PairingCode'}
                       code_expires_at: {type: string, format: date-time}
                       rotates_every_s: {type: integer, const: 300}
@@ -367,7 +367,7 @@ paths:
                 type: enrollment
                 data:
                   enrollment_id: 01926f3a-5c1e-7b2d-9a40-3e5f8c7d1b22
-                  enrollment_secret: bes_Q2hhbmdlLW1lLXRoaXMtaXMtYS1zYW1wbGUtc2VjcmV
+                  enrollment_secret: ees_Q2hhbmdlLW1lLXRoaXMtaXMtYS1zYW1wbGUtc2VjcmV
                   pairing_code: 4F9C2A
                   code_expires_at: '2026-09-26T10:05:00.000Z'
                   rotates_every_s: 300
@@ -601,7 +601,7 @@ paths:
       summary: List devices
       description: |
         `scope` defaults to `mine` for a Carbon (devices they paired) and `accessible` for a Silicon (devices it has
-        access to; this is `bridge device ls`). `team` lists other Carbons' team-visible devices, read-only, with
+        access to; this is `extend device ls`). `team` lists other Carbons' team-visible devices, read-only, with
         limited fields.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
@@ -661,13 +661,13 @@ paths:
     get:
       tags: [Devices]
       operationId: getDevice
-      summary: One device, with what a Silicon can do on it (`bridge device show`)
+      summary: One device, with what a Silicon can do on it (`extend device show`)
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
       responses:
         '200':
-          description: Device with capabilities and the Bridge commands they unlock
+          description: Device with capabilities and the Extend commands they unlock
           headers:
             ETag: {schema: {type: string}}
           content:
@@ -881,11 +881,11 @@ paths:
     post:
       tags: [Sessions]
       operationId: startSession
-      summary: Start using a device (`bridge session new`)
+      summary: Start using a device (`extend session new`)
       description: |
         Silicons only; the caller needs access and the device must be online and set up. Takes the device's lock:
         only one Silicon at a time. If another Silicon holds it, 409 `device_in_use` with `details.in_use` naming it,
-        and `hint` giving the `bridge request send` command. The session ends on its own after 300 s without a command.
+        and `hint` giving the `extend request send` command. The session ends on its own after 300 s without a command.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -935,7 +935,7 @@ paths:
     get:
       tags: [Sessions]
       operationId: listSessions
-      summary: The caller's sessions (`bridge session ls`)
+      summary: The caller's sessions (`extend session ls`)
       description: A Silicon sees its own sessions. A Carbon sees sessions on devices they own.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
@@ -970,7 +970,7 @@ paths:
     get:
       tags: [Sessions]
       operationId: getSession
-      summary: One session (used by `bridge session connect` and `status`)
+      summary: One session (used by `extend session connect` and `status`)
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1001,7 +1001,7 @@ paths:
     post:
       tags: [Sessions]
       operationId: endSession
-      summary: Finish and free the device (`bridge session end`)
+      summary: Finish and free the device (`extend session end`)
       description: The Silicon that started it. Ending an ended session returns it unchanged. A command in flight is cancelled.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
@@ -1025,7 +1025,7 @@ paths:
     post:
       tags: [Sessions]
       operationId: startTakeover
-      summary: Pause and hand the device to its Carbon (`bridge takeover`)
+      summary: Pause and hand the device to its Carbon (`extend takeover`)
       description: |
         The session becomes `paused`; commands get 423 `session_paused`. The device and website show the reason and a
         Done button. The idle timer stops for up to 30 minutes.
@@ -1062,7 +1062,7 @@ paths:
     get:
       tags: [Sessions]
       operationId: getTakeover
-      summary: Whether the session is paused for the Carbon (`bridge takeover status`)
+      summary: Whether the session is paused for the Carbon (`extend takeover status`)
       description: The session's Silicon, or the Carbon who owns the device (the website shows the reason and a Done button from this).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
@@ -1081,7 +1081,7 @@ paths:
     delete:
       tags: [Sessions]
       operationId: releaseTakeover
-      summary: Resume the session (`bridge takeover release`, or the Carbon's Done on the website)
+      summary: Resume the session (`extend takeover release`, or the Carbon's Done on the website)
       description: The session's Silicon, or the Carbon who owns the device.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
@@ -1099,14 +1099,14 @@ paths:
       operationId: runCommand
       summary: Run one command on the device
       description: |
-        Every agent-device command Bridge exposes, plus Bridge's additions (`terminal`, `adb`, `display`,
-        `notifications`), goes through here. `command` is the top-level name as typed after `bridge`, and `args` are
+        Every agent-device command Extend exposes, plus Extend's additions (`terminal`, `adb`, `display`,
+        `notifications`), goes through here. `command` is the top-level name as typed after `extend`, and `args` are
         the remaining command-line tokens exactly as agent-device's CLI accepts them, so agent-device's own parser stays
         the authority on arguments. Flags that pick a device or session inside agent-device (`--platform`, `--device`,
-        `--udid`, `--serial`, `--target`, `--session`, `--remote`) are refused: Bridge picks those. `cli.yaml` lists
+        `--udid`, `--serial`, `--target`, `--session`, `--remote`) are refused: Extend picks those. `cli.yaml` lists
         every command and its arguments.
 
-        Before running, Bridge re-checks with IAM that the caller still has access, that the session is theirs and
+        Before running, Extend re-checks with IAM that the caller still has access, that the session is theirs and
         `active`, that the device is online, and that the command is in the device's capabilities. Commands in one
         session run one at a time, in order. Resets the idle timer.
 
@@ -1179,7 +1179,7 @@ paths:
                       kind: screenshot
                       content_type: image/png
                       size_bytes: 184223
-                      url: 'https://briefcase.teamofsilicons.com/org/acme/apps/bridge/private/si:chef/screenshot-a3f-2026-09-26T10-04-12Z.png'
+                      url: 'https://briefcase.teamofsilicons.com/org/acme/apps/extend/private/si:chef/screenshot-a3f-2026-09-26T10-04-12Z.png'
                       self_destruct_at: '2026-09-27T10:04:12.391Z'
                       permanent: false
                   error: null
@@ -1187,7 +1187,7 @@ paths:
                   duration_ms: 390
                   idle_ends_at: '2026-09-26T10:09:12.391Z'
         '403': {description: 'access_removed, not_session_owner', $ref: '#/components/responses/Error'}
-        '404': {description: 'unknown_command (names the Bridge replacement if any), session_not_found', $ref: '#/components/responses/Error'}
+        '404': {description: 'unknown_command (names the Extend replacement if any), session_not_found', $ref: '#/components/responses/Error'}
         '409': {description: session_ended (details.end_reason), $ref: '#/components/responses/Error'}
         '422': {description: 'invalid_input, unsupported_on_device (names the missing capability)', $ref: '#/components/responses/Error'}
         '423': {description: session_paused, $ref: '#/components/responses/Error'}
@@ -1201,7 +1201,7 @@ paths:
     post:
       tags: [Requests]
       operationId: sendRequest
-      summary: Ask the Silicon using the device for it (`bridge request send`)
+      summary: Ask the Silicon using the device for it (`extend request send`)
       description: |
         Silicons with access only, and only while another Silicon is using the device (otherwise 409
         `device_not_in_use` with a hint to start a session). Delivered through Ting to the Silicon using the device,
@@ -1262,7 +1262,7 @@ paths:
     get:
       tags: [Requests]
       operationId: listMyRequests
-      summary: Requests the calling Silicon sent or received (`bridge request ls`)
+      summary: Requests the calling Silicon sent or received (`extend request ls`)
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1389,7 +1389,7 @@ paths:
     post:
       tags: [Files]
       operationId: keepFile
-      summary: Make a file permanent before it self-destructs (`bridge file keep`)
+      summary: Make a file permanent before it self-destructs (`extend file keep`)
       description: |
         The Silicon that made it. Done in Briefcase on the Silicon's behalf. A file already permanent is 409
         `not_self_destructing`; one already gone is 404. Needs a Briefcase OBO endpoint that does not exist yet
@@ -1417,7 +1417,7 @@ paths:
     get:
       tags: [Device app]
       operationId: deviceSelf
-      summary: What the Bridge app shows once paired
+      summary: What the Extend app shows once paired
       security:
         - deviceCredential: []
       responses:
@@ -1466,10 +1466,10 @@ paths:
     get:
       tags: [Device app]
       operationId: deviceSocket
-      summary: The paired device's WebSocket to Bridge
+      summary: The paired device's WebSocket to Extend
       description: |
-        Upgrade to WebSocket with `Authorization: Bridge-Device <device_credential>`. Flat JSON frames
-        `{"type": ..., <fields>}`; every frame and field is in docs/device-protocol.md (Rust: bridge-protocol frames.rs). Ping every 15 s; offline after 45 s
+        Upgrade to WebSocket with `Authorization: Extend-Device <device_credential>`. Flat JSON frames
+        `{"type": ..., <fields>}`; every frame and field is in docs/device-protocol.md (Rust: extend-protocol frames.rs). Ping every 15 s; offline after 45 s
         without a pong. Close codes: 4401 credential invalid or unpaired, 4409 superseded by a newer connection,
         4426 app too old (upgrade required).
       security:
@@ -1484,7 +1484,7 @@ paths:
       operationId: uploadArtifact
       summary: Upload a file a command produced
       description: |
-        `upload_id` comes with the command. Single use, valid until the command's deadline, at most 1 GiB. Bridge
+        `upload_id` comes with the command. Single use, valid until the command's deadline, at most 1 GiB. Extend
         streams it to Briefcase and answers once Briefcase has it.
       security:
         - deviceCredential: []
@@ -1595,7 +1595,7 @@ paths:
       description: |
         Verified with the official IAM client over the exact raw body (1 MiB limit, five-minute timestamp window,
         key version from the header). Test deliveries are routed to their environment after verification.
-        De-duplicated on event id and applied only if newer than the last applied version. Bridge confirms with IAM
+        De-duplicated on event id and applied only if newer than the last applied version. Extend confirms with IAM
         introspection before ending access. The raw body and any `testing_key` are never stored.
         Handled: session revoked or logged out, membership removed, member deleted, application consent revoked,
         test environment cleaned.
@@ -1619,7 +1619,7 @@ paths:
     post:
       tags: [Operations]
       operationId: reportBug
-      summary: Report a bug, optionally with a PR that fixes it (`bridge report`)
+      summary: Report a bug, optionally with a PR that fixes it (`extend report`)
       description: Stored, then emailed through Postmark to the bug list. Simulated in a test environment. 10 reports per member per hour.
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
@@ -1670,12 +1670,12 @@ paths:
       operationId: telemetry
       summary: Forward a telemetry event to Space Station
       description: |
-        So the CLI and apps never hold the Space Station ingest key. `X-Bridge-Telemetry: off` (or the member's
+        So the CLI and apps never hold the Space Station ingest key. `X-Extend-Telemetry: off` (or the member's
         setting) drops it. Never accepts typed text, screen contents, tokens, codes or secrets.
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
         - {$ref: '#/components/parameters/TestingSecret'}
-        - {name: X-Bridge-Telemetry, in: header, schema: {type: string, enum: ['on', 'off']}}
+        - {name: X-Extend-Telemetry, in: header, schema: {type: string, enum: ['on', 'off']}}
       requestBody:
         required: true
         content:
@@ -1709,15 +1709,15 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: Bridge application access token (oat_), from /api/v1/auth/login
+      bearerFormat: Extend application access token (oat_), from /api/v1/auth/login
     enrollmentSecret:
       type: http
       scheme: bearer
-      bearerFormat: 'Enrollment secret (bes_). Sent as "Authorization: Bridge-Enrollment <secret>".'
+      bearerFormat: 'Enrollment secret (ees_). Sent as "Authorization: Extend-Enrollment <secret>".'
     deviceCredential:
       type: http
       scheme: bearer
-      bearerFormat: 'Device credential (bdc_). Sent as "Authorization: Bridge-Device <credential>".'
+      bearerFormat: 'Device credential (edc_). Sent as "Authorization: Extend-Device <credential>".'
     honeycombService:
       type: http
       scheme: bearer
@@ -1804,8 +1804,8 @@ components:
             data:
               code: device_in_use
               message: 'Device 7c1e09ab (Saket''s Pixel) is being used by si:chef in session a3f since 2026-09-26T09:58:00Z. Only one Silicon can use a device at a time.'
-              hint: 'Ask for it with: bridge request send 7c1e09ab --reason "<why, up to 300 characters>"'
-              docs_url: https://docs.bridge.teamofsilicons.com/errors#device_in_use
+              hint: 'Ask for it with: extend request send 7c1e09ab --reason "<why, up to 300 characters>"'
+              docs_url: https://docs.extend.teamofsilicons.com/errors#device_in_use
               request_id: 01926f41-0a1b-7c2d-8e3f-4a5b6c7d8e9f
               details: {in_use: {silicon_id: 'si:chef', session_id: a3f, since: '2026-09-26T09:58:00.000Z'}}
 
@@ -1933,7 +1933,7 @@ components:
           properties:
             state: {const: paired}
             device_id: {$ref: '#/components/schemas/DeviceIdValue'}
-            device_credential: {type: string, pattern: '^bdc_[A-Za-z0-9_-]{43}$', description: Returned once}
+            device_credential: {type: string, pattern: '^edc_[A-Za-z0-9_-]{43}$', description: Returned once}
             environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
 
     AccessGrant:

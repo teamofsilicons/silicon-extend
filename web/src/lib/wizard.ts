@@ -2,7 +2,7 @@
  * The "Add a device" wizard as a pure state machine, so every transition is testable without a
  * browser. The page renders `state.step` and turns clicks and API results into events.
  *
- * Devices with a Bridge app:   kind → guide → code → name → setup → access → done
+ * Devices with an Extend app:   kind → guide → code → name → setup → access → done
  * Devices through a computer:  kind → guide → host → name → setup → access → done
  *
  * The device is created when the name is submitted (the pairing endpoint needs code and name
@@ -29,7 +29,7 @@ export interface WizardState {
   name: string;
   visibility: Visibility;
   ttlDays: number;
-  /** Set once Bridge created the device. */
+  /** Set once Extend created the device. */
   device: Device | null;
   /** True while the pairing or attachment request is in flight. */
   submitting: boolean;

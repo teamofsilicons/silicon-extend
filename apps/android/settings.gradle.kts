@@ -15,7 +15,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "silicon-bridge-android"
+rootProject.name = "silicon-extend-android"
 include(":app")
 include(":libadb")
 project(":libadb").projectDir = file("vendor/libadb")

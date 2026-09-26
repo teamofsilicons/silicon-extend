@@ -2,7 +2,7 @@ import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
 import { ArrowLeft, Check, CircleStop, Pencil, Trash2 } from "lucide-solid";
 import { session } from "../lib/session";
 import { ifMatchValue, toApiError, type ApiError } from "../lib/api";
-import type { AccessGrant, ActivityEntry, BridgeRequest, Device, DeviceDetail, Takeover, Visibility } from "../lib/types";
+import type { AccessGrant, ActivityEntry, ExtendRequest, Device, DeviceDetail, Takeover, Visibility } from "../lib/types";
 import { usePoll } from "../lib/poll";
 import { Link, navigate } from "../lib/router";
 import { OS_LABEL, POLL_MS } from "../config";
@@ -626,7 +626,7 @@ function Activity(props: { device: DeviceDetail }) {
 
 function Requests(props: { device: DeviceDetail }) {
   const s = session();
-  const [items, setItems] = createSignal<BridgeRequest[] | null>(null);
+  const [items, setItems] = createSignal<ExtendRequest[] | null>(null);
   const [next, setNext] = createSignal<string | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   async function load(cursor?: string | null) {
@@ -643,7 +643,7 @@ function Requests(props: { device: DeviceDetail }) {
   return (
     <div class="card" data-testid="requests">
       <h2 class="card-title">Requests between Silicons</h2>
-      <p class="fine">When a Silicon wants the device while another one is using it, it asks with a reason. Bridge delivers it through Ting.</p>
+      <p class="fine">When a Silicon wants the device while another one is using it, it asks with a reason. Extend delivers it through Ting.</p>
       <ErrorNote error={error()} compact />
       <Show when={items()} fallback={<Show when={!error()}><Spinner inline label="Loading requests…" /></Show>}>
         {(list) => (

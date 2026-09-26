@@ -19,13 +19,13 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--helper", type=pathlib.Path, default=ROOT / "target/desktop/macos/Silicon Bridge.app/Contents/MacOS/agent-device-macos-helper")
-parser.add_argument("--bridge", type=pathlib.Path, help="Also exercise the packaged Bridge driver and selector dispatch")
+parser.add_argument("--helper", type=pathlib.Path, default=ROOT / "target/desktop/macos/Silicon Extend.app/Contents/MacOS/agent-device-macos-helper")
+parser.add_argument("--extend", type=pathlib.Path, help="Also exercise the packaged Extend driver and selector dispatch")
 parser.add_argument("--record", action="store_true", help="Also exercise native and packaged screen recording against this fixture")
 parser.add_argument("--record-only", action="store_true", help="Exercise recording of an animated fixture without keyboard or mouse input")
 parser.add_argument("--record-duration-limit", action="store_true", help="Run the real public recording command until its default 30-minute cap")
 parser.add_argument("--record-stress", action="store_true", help="Also verify a reduced file cap and abrupt recorder-owner exit through the GUI app")
-parser.add_argument("--device", help="Run capture through a GUI Bridge app paired to the local test service")
+parser.add_argument("--device", help="Run capture through a GUI Extend app paired to the local test service")
 parser.add_argument("--artifacts", type=pathlib.Path, help="Keep the downloaded recording and a decoded frame for visual verification")
 parser.add_argument("--service-url", default="http://127.0.0.1:8480")
 args = parser.parse_args()
@@ -35,7 +35,7 @@ if args.record_stress or args.record_duration_limit:
     args.record_only = True
 if args.record_only:
     args.record = True
-BUNDLE = f"com.teamofsilicons.bridge.textfixture.{uuid.uuid4().hex}"
+BUNDLE = f"com.teamofsilicons.extend.textfixture.{uuid.uuid4().hex}"
 
 
 def until(check, timeout=5):
@@ -50,14 +50,14 @@ def until(check, timeout=5):
 
 fixture_root = ROOT / "target/desktop"
 fixture_root.mkdir(parents=True, exist_ok=True)
-with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as directory:
+with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as directory:
     work = pathlib.Path(directory)
-    app = work / "Bridge Text Fixture.app/Contents"
+    app = work / "Extend Text Fixture.app/Contents"
     (app / "MacOS").mkdir(parents=True)
     binary = app / "MacOS/fixture"
     subprocess.run(["xcrun", "swiftc", str(ROOT / "apps/desktop/macos/text-fixture.swift"), "-o", str(binary)], check=True)
     with (app / "Info.plist").open("wb") as file:
-        plistlib.dump({"CFBundleIdentifier": BUNDLE, "CFBundleExecutable": "fixture", "CFBundlePackageType": "APPL", "CFBundleName": "Bridge Text Fixture", "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0", "CFBundleInfoDictionaryVersion": "6.0"}, file)
+        plistlib.dump({"CFBundleIdentifier": BUNDLE, "CFBundleExecutable": "fixture", "CFBundlePackageType": "APPL", "CFBundleName": "Extend Text Fixture", "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0", "CFBundleInfoDictionaryVersion": "6.0"}, file)
     register = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
     subprocess.run([register, "-f", "-v", str(app.parent)], check=True)
     state = work / "state.json"
@@ -65,10 +65,10 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
     peer = None
     peer_app = None
     remote_session = None
-    remote_env = {**os.environ, "BRIDGE_API_URL": args.service_url, "SILICON_HOME": str(work / "cli-home"), "BRIDGE_TELEMETRY": "off"}
+    remote_env = {**os.environ, "EXTEND_API_URL": args.service_url, "SILICON_HOME": str(work / "cli-home"), "EXTEND_TELEMETRY": "off"}
 
     def remote_cli(*command):
-        result = subprocess.run([str(ROOT / "target/debug/bridge"), *command], env=remote_env, capture_output=True, text=True, timeout=120)
+        result = subprocess.run([str(ROOT / "target/debug/extend"), *command], env=remote_env, capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, (command, result.stdout, result.stderr)
         return result.stdout
 
@@ -108,11 +108,11 @@ with tempfile.TemporaryDirectory(prefix="bridge-text-e2e-", dir=fixture_root) as
                 time.sleep(.05)
             else:
                 raise AssertionError("fixture window did not settle")
-            send(request("Bridge 👋 café"))
-            until(lambda: values()[0]["value"] == "Bridge 👋 café")
+            send(request("Extend 👋 café"))
+            until(lambda: values()[0]["value"] == "Extend 👋 café")
             assert values()[1]["value"] == "untouched"
             send(request(" + appended", replace=False))
-            until(lambda: values()[0]["value"] == "Bridge 👋 café + appended")
+            until(lambda: values()[0]["value"] == "Extend 👋 café + appended")
             send(request(""))
             until(lambda: values()[0]["value"] == "")
             send(request("  whitespace  "))
@@ -240,13 +240,13 @@ raise RuntimeError('recorder never became ready')
                 print("Service fixture open:", opened.get("output"), "snapshot header:", (observed.get("text") or "").splitlines()[:2], flush=True)
                 assert opened["output"].get("appBundleId") == BUNDLE, opened
                 # Bring another owned app over the target, then capture without reopening it.
-                peer_app = work / "Bridge Focus Peer.app"
+                peer_app = work / "Extend Focus Peer.app"
                 shutil.copytree(app.parent, peer_app)
                 peer_bundle = BUNDLE + ".peer"
                 peer_plist = peer_app / "Contents/Info.plist"
                 metadata = plistlib.loads(peer_plist.read_bytes())
                 metadata["CFBundleIdentifier"] = peer_bundle
-                metadata["CFBundleName"] = "Bridge Focus Peer"
+                metadata["CFBundleName"] = "Extend Focus Peer"
                 peer_plist.write_bytes(plistlib.dumps(metadata))
                 subprocess.run([register, "-f", str(peer_app)], check=True)
                 peer_state = work / "peer.json"
@@ -258,7 +258,7 @@ raise RuntimeError('recorder never became ready')
                 until(frontmost_bundle)
                 bound = remote("snapshot", "-i")
                 serialized = json.dumps(bound)
-                assert BUNDLE in serialized and "bridge-field-0" in serialized, bound
+                assert BUNDLE in serialized and "extend-field-0" in serialized, bound
                 assert "peer-field-0" not in serialized, bound
                 screenshot = work / "bound-app.png"
                 remote("screenshot", "--out", str(screenshot))
@@ -275,7 +275,7 @@ raise RuntimeError('recorder never became ready')
                 started = remote("record", "start", "fixture", "--scope", "app", "--fps", "12", "--hide-touches")
                 print("Service recording start:", started.get("output"), flush=True)
                 if not args.record_only:
-                    remote("fill", "id=bridge-field-0", "recording through the service")
+                    remote("fill", "id=extend-field-0", "recording through the service")
                 time.sleep(1)
                 output = work / "service-recording.mp4"
                 response = remote("record", "stop", "--out", str(output))
@@ -320,11 +320,11 @@ raise RuntimeError('recorder never became ready')
                     print(f"PASS public 30-minute recording cap: {duration}s, {output.stat().st_size} bytes, full decode and download", flush=True)
 
 
-        if args.bridge:
-            home = work / "bridge-home"
-            prefix = [str(args.bridge), "--home", str(home), "exec", "--session", "abc"]
+        if args.extend:
+            home = work / "extend-home"
+            prefix = [str(args.extend), "--home", str(home), "exec", "--session", "abc"]
 
-            def bridge(*command):
+            def extend(*command):
                 result = subprocess.run([*prefix, *command], capture_output=True, text=True, timeout=40)
                 response = json.loads(result.stdout)
                 assert result.returncode == 0 and response.get("ok"), response
@@ -332,30 +332,30 @@ raise RuntimeError('recorder never became ready')
 
             opened = False
             try:
-                bridge("open", "--surface", "frontmost-app")
+                extend("open", "--surface", "frontmost-app")
                 opened = True
-                bridge("snapshot", "-i")
-                bridge("fill", "id=bridge-field-0", "Bridge driver 👋  ")
-                until(lambda: values()[0]["value"] == "Bridge driver 👋  ")
-                bridge("type", "+ appended")
-                until(lambda: values()[0]["value"] == "Bridge driver 👋  + appended")
-                print("PASS packaged Bridge driver: open, snapshot, selector fill and type")
+                extend("snapshot", "-i")
+                extend("fill", "id=extend-field-0", "Extend driver 👋  ")
+                until(lambda: values()[0]["value"] == "Extend driver 👋  ")
+                extend("type", "+ appended")
+                until(lambda: values()[0]["value"] == "Extend driver 👋  + appended")
+                print("PASS packaged Extend driver: open, snapshot, selector fill and type")
                 if args.record:
-                    bridge("record", "start", "fixture", "--scope", "app", "--fps", "12", "--hide-touches")
-                    bridge("fill", "id=bridge-field-0", "recording through Bridge")
+                    extend("record", "start", "fixture", "--scope", "app", "--fps", "12", "--hide-touches")
+                    extend("fill", "id=extend-field-0", "recording through Extend")
                     time.sleep(1)
-                    recorded = bridge("record", "stop")
+                    recorded = extend("record", "stop")
                     videos = [item for item in recorded["files"] if item["kind"] == "recording"]
                     assert len(videos) == 1, recorded
                     video_info(videos[0]["path"])
-                    print("PASS packaged Bridge recording start/stop and playable artifact")
+                    print("PASS packaged Extend recording start/stop and playable artifact")
             finally:
                 try:
                     if opened:
-                        bridge("--end-session", "close")
+                        extend("--end-session", "close")
                 finally:
-                    contents = args.bridge.parent.parent
-                    subprocess.run([str(contents / "Resources/node/bin/node"), str(contents / "Resources/agent-device/bin/agent-device.mjs"), "daemon", "stop", "--state-dir", str(home / ".bridge-agent/agent-device"), "--clean"], check=True, timeout=30)
+                    contents = args.extend.parent.parent
+                    subprocess.run([str(contents / "Resources/node/bin/node"), str(contents / "Resources/agent-device/bin/agent-device.mjs"), "daemon", "stop", "--state-dir", str(home / ".extend-agent/agent-device"), "--clean"], check=True, timeout=30)
     finally:
         try:
             if remote_session:

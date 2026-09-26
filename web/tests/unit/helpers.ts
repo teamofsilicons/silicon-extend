@@ -1,4 +1,4 @@
-import { BridgeClient, type ClientContext, type TokenPair, type TokenStore } from "../../src/lib/api";
+import { ExtendClient, type ClientContext, type TokenPair, type TokenStore } from "../../src/lib/api";
 
 export interface Call {
   url: string;
@@ -66,7 +66,7 @@ export function client(handler: Handler, overrides: Partial<ClientContext> = {})
   const { fetchImpl, calls } = fakeFetch(handler);
   const tokens = (overrides.tokens as ReturnType<typeof memoryStore>) ?? memoryStore(pair());
   let key = 0;
-  const c = new BridgeClient({
+  const c = new ExtendClient({
     baseUrl: "https://api.test",
     tokens,
     worldKey: "production",

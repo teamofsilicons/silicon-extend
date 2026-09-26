@@ -11,12 +11,12 @@ import tarfile
 import tomllib
 
 TARGETS = {
-    'linux-x86_64': ('x86_64-unknown-linux-gnu', 'bridge'),
-    'linux-aarch64': ('aarch64-unknown-linux-gnu', 'bridge'),
-    'windows-x86_64': ('x86_64-pc-windows-msvc', 'bridge.exe'),
-    'windows-aarch64': ('aarch64-pc-windows-msvc', 'bridge.exe'),
-    'macos-x86_64': ('x86_64-apple-darwin', 'bridge'),
-    'macos-aarch64': ('aarch64-apple-darwin', 'bridge'),
+    'linux-x86_64': ('x86_64-unknown-linux-gnu', 'extend'),
+    'linux-aarch64': ('aarch64-unknown-linux-gnu', 'extend'),
+    'windows-x86_64': ('x86_64-pc-windows-msvc', 'extend.exe'),
+    'windows-aarch64': ('aarch64-pc-windows-msvc', 'extend.exe'),
+    'macos-x86_64': ('x86_64-apple-darwin', 'extend'),
+    'macos-aarch64': ('aarch64-apple-darwin', 'extend'),
 }
 
 def verify_binary(path, target):
@@ -44,7 +44,7 @@ def verify_binary(path, target):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--artifacts', type=Path, required=True, help='Directory containing <Honeycomb target>/<bridge or bridge.exe>')
+    parser.add_argument('--artifacts', type=Path, required=True, help='Directory containing <Honeycomb target>/<extend or extend.exe>')
     parser.add_argument('--output', type=Path, default=Path('dist'))
     parser.add_argument('--honeycomb', default='honeycomb')
     args = parser.parse_args()
@@ -63,8 +63,8 @@ def main():
         except (ValueError, struct.error) as error:
             parser.error(str(error))
     args.output.mkdir(parents=True, exist_ok=True)
-    output = (args.output / f'silicon-bridge-{version}.tar.gz').resolve()
-    with tempfile.TemporaryDirectory(prefix='bridge-release-') as temporary:
+    output = (args.output / f'silicon-extend-{version}.tar.gz').resolve()
+    with tempfile.TemporaryDirectory(prefix='extend-release-') as temporary:
         stage = Path(temporary)
         (stage / 'honeycomb.yaml').write_text(manifest)
         for target, (_, binary) in TARGETS.items():

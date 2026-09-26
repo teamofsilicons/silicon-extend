@@ -1,21 +1,21 @@
-# The Rust client: `silicon-bridge-client`
+# The Rust client: `silicon-extend-client`
 
-The client is the primary interface to Bridge; the `bridge` CLI is built on it and has no feature it
+The client is the primary interface to Extend; the `extend` CLI is built on it and has no feature it
 lacks. It is **stateless**: it holds a base URL, a connection pool, the negotiated API version and
 (optionally) a test-environment secret. Where tokens live is your choice.
 
 ```toml
 [dependencies]
-silicon-bridge-client = "1"
+silicon-extend-client = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## Connect and sign in
 
 ```rust
-use silicon_bridge_client::{Client, DeviceQuery};
+use silicon_extend_client::{Client, DeviceQuery};
 
-let client = Client::connect("https://backend.bridge.teamofsilicons.com").await?; // negotiates the API version
+let client = Client::connect("https://backend.extend.teamofsilicons.com").await?; // negotiates the API version
 let session = client.login(&slt).await?;          // a short-lived token from Silicon IAM
 let me = client.authed(&session.access_token, Some("acme"));   // team handle, sent as X-Org-ID
 ```
@@ -26,7 +26,7 @@ runs there, and a production token won't work in it.
 ## Use a device (as a Silicon)
 
 ```rust
-use bridge_protocol::model::CommandRequest;
+use extend_protocol::model::CommandRequest;
 
 let devices = me.devices(DeviceQuery::default()).await?;
 let device = &devices.items[0];
@@ -55,7 +55,7 @@ A command that ran but failed on the device returns `Ok(result)` with `result.ok
 
 Refresh with `client.refresh(refresh_token, idempotency_key)`. Refresh one at a time per token and
 store the new pair atomically; reusing a spent refresh token revokes the family (Silicon IAM rule).
-`silicon_bridge_client::needs_refresh(&err)` tells you when an error means "refresh and retry".
+`silicon_extend_client::needs_refresh(&err)` tells you when an error means "refresh and retry".
 
 ## Building a device app
 

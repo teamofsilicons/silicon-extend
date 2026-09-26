@@ -4,7 +4,7 @@ import { Link, match, navigate, useLocation } from "./lib/router";
 import { session } from "./lib/session";
 import { toApiError, type ApiError } from "./lib/api";
 import { ErrorNote, Toasts } from "./components/ui";
-import { BridgeMark } from "./components/BridgeMark";
+import { ExtendMark } from "./components/ExtendMark";
 import SignIn from "./pages/SignIn";
 import Callback from "./pages/Callback";
 import Devices from "./pages/Devices";
@@ -90,11 +90,11 @@ export default function App() {
       <TestingBanner error={environmentError()} />
       <header class="topbar">
         <div class="topbar-inner">
-          <Link href={signedIn() ? "/devices" : "/"} class="brand" aria-label="Silicon Bridge home">
-            <BridgeMark />
+          <Link href={signedIn() ? "/devices" : "/"} class="brand" aria-label="Silicon Extend home">
+            <ExtendMark />
             <span>
-              Bridge
-              <small>Silicon Bridge</small>
+              Extend
+              <small>Silicon Extend</small>
             </span>
           </Link>
           <nav class="nav" aria-label="Main">
@@ -166,8 +166,8 @@ export default function App() {
         </Switch>
       </main>
       <footer class="footer">
-        <span>Silicon Bridge</span>
-        <a href="https://github.com/teamofsilicons/silicon-bridge" target="_blank" rel="noopener noreferrer">
+        <span>Silicon Extend</span>
+        <a href="https://github.com/teamofsilicons/silicon-extend" target="_blank" rel="noopener noreferrer">
           Source
         </a>
         <Link href="/docs">Docs</Link>
@@ -231,7 +231,7 @@ function TestingBanner(props: { error: ApiError | null }) {
               setLeaving(true);
               await s.exitTesting();
               setLeaving(false);
-              write("session", "bridge.next", "");
+              write("session", "extend.next", "");
               navigate(s.pair() ? "/devices" : "/", { replace: true });
             }}
           >

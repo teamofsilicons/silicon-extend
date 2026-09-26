@@ -34,8 +34,8 @@ describe("errors", () => {
       data: {
         code: "device_in_use",
         message: "Device 7c1e09ab is being used by si:chef.",
-        hint: "Ask for it with: bridge request send 7c1e09ab",
-        docs_url: "https://docs.bridge.teamofsilicons.com/errors#device_in_use",
+        hint: "Ask for it with: extend request send 7c1e09ab",
+        docs_url: "https://docs.extend.teamofsilicons.com/errors#device_in_use",
         request_id: "01926f41",
         details: { in_use: { silicon_id: "si:chef" } },
       },
@@ -47,8 +47,8 @@ describe("errors", () => {
       status: 409,
       code: "device_in_use",
       message: "Device 7c1e09ab is being used by si:chef.",
-      hint: "Ask for it with: bridge request send 7c1e09ab",
-      docsUrl: "https://docs.bridge.teamofsilicons.com/errors#device_in_use",
+      hint: "Ask for it with: extend request send 7c1e09ab",
+      docsUrl: "https://docs.extend.teamofsilicons.com/errors#device_in_use",
       requestId: "01926f41",
       details: { in_use: { silicon_id: "si:chef" } },
     });
@@ -102,9 +102,9 @@ describe("headers", () => {
     expect(call.url).toBe("https://api.test/api/v1/devices?scope=team&limit=20");
     expect(call.headers.Authorization).toBe("Bearer oat_old");
     expect(call.headers["X-Org-ID"]).toBe("acme");
-    expect(call.headers["Silicon-Bridge-API-Version"]).toBe("1");
+    expect(call.headers["Silicon-Extend-API-Version"]).toBe("1");
     expect(call.headers["X-Testing-Application-Secret"]).toBeUndefined();
-    expect(call.headers["X-Bridge-Telemetry"]).toBeUndefined();
+    expect(call.headers["X-Extend-Telemetry"]).toBeUndefined();
   });
 
   it("sends the test app secret on every request in a test environment, including login and refresh", async () => {
@@ -120,12 +120,12 @@ describe("headers", () => {
     for (const call of calls) expect(call.headers["X-Testing-Application-Secret"]).toBe(secret);
   });
 
-  it("sends X-Bridge-Telemetry: off when telemetry is off, and sends no telemetry events", async () => {
+  it("sends X-Extend-Telemetry: off when telemetry is off, and sends no telemetry events", async () => {
     const { client: c, calls } = client(() => json(200, DEVICES), { telemetryOff: () => true });
     await c.listDevices({ scope: "mine" });
     await c.telemetry({ event: "pairing", step: "web.pairing.claim", success: true, duration_ms: 5 });
     expect(calls).toHaveLength(1);
-    expect(calls[0].headers["X-Bridge-Telemetry"]).toBe("off");
+    expect(calls[0].headers["X-Extend-Telemetry"]).toBe("off");
   });
 
   it("sends Idempotency-Key on login and pairing, and If-Match on changes", async () => {
@@ -217,7 +217,7 @@ describe("token refresh", () => {
     };
     const { client: c, calls } = client(() => json(200, DEVICES), { tokens, lock });
     await c.listDevices({ scope: "mine" });
-    expect(names).toEqual(["bridge-refresh:production"]);
+    expect(names).toEqual(["extend-refresh:production"]);
     expect(calls).toHaveLength(1);
     expect(calls[0].headers.Authorization).toBe("Bearer oat_other_tab");
   });

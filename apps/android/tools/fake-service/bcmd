@@ -1,5 +1,5 @@
 #!/bin/sh
-# Send one command to the device through a running fake_bridge.py and print its text (and error).
+# Send one command to the device through a running fake_extend.py and print its text (and error).
 #   tools/fake-service/bcmd snapshot -i
 #   UPLOADS=1 tools/fake-service/bcmd screenshot home.png
 #   PORT=8490 JSON=1 tools/fake-service/bcmd appstate

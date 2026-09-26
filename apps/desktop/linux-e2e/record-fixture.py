@@ -7,12 +7,12 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
 peer = '--peer' in sys.argv
-GLib.set_prgname('bridge-recording-peer' if peer else 'bridge-recording-fixture')
-Gdk.set_program_class('bridge-recording-peer' if peer else 'bridge-recording-fixture')
-if os.environ.get('BRIDGE_RECORD_FIXTURE_PID_FILE') and not peer:
+GLib.set_prgname('extend-recording-peer' if peer else 'extend-recording-fixture')
+Gdk.set_program_class('extend-recording-peer' if peer else 'extend-recording-fixture')
+if os.environ.get('EXTEND_RECORD_FIXTURE_PID_FILE') and not peer:
     from pathlib import Path
-    Path(os.environ['BRIDGE_RECORD_FIXTURE_PID_FILE']).write_text(str(os.getpid()))
-window = Gtk.Window(title='Bridge Recording Peer' if peer else 'Bridge Recording Fixture')
+    Path(os.environ['EXTEND_RECORD_FIXTURE_PID_FILE']).write_text(str(os.getpid()))
+window = Gtk.Window(title='Extend Recording Peer' if peer else 'Extend Recording Fixture')
 window.set_default_size(641, 481)
 image = Gtk.Image()
 window.add(image)

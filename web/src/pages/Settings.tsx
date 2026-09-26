@@ -89,8 +89,8 @@ export default function Settings() {
           <span>Send usage events to help fix problems</span>
         </label>
         <p class="fine">
-          Events say which step ran, whether it worked, how long it took and the error code. Never names, codes, tokens or anything on your screens. When off, the website sends none and tells Bridge with{" "}
-          <code>X-Bridge-Telemetry: off</code> on every request. Saved in this browser.
+          Events say which step ran, whether it worked, how long it took and the error code. Never names, codes, tokens or anything on your screens. When off, the website sends none and tells Extend with{" "}
+          <code>X-Extend-Telemetry: off</code> on every request. Saved in this browser.
         </p>
       </div>
 
@@ -116,7 +116,7 @@ export default function Settings() {
       <div class="card">
         <h2 class="card-title">About</h2>
         <dl class="about">
-          <dt>Bridge service</dt>
+          <dt>Extend service</dt>
           <dd class="mono">{apiBaseUrl() || `${location.origin} (same origin)`}</dd>
           <dt>Website version</dt>
           <dd class="mono">{__APP_VERSION__}</dd>

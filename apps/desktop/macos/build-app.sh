@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds "Silicon Bridge.app": the bridge-agent binary, Bridge's agent-device fork, a Node runtime
+# Builds "Silicon Extend.app": the extend-agent binary, Extend's agent-device fork, a Node runtime
 # and agent-device's macOS helper. Set SIGN_IDENTITY for Developer ID signing.
 #
 #   apps/desktop/macos/build-app.sh            # release build for this Mac's architecture
 #   PROFILE=debug apps/desktop/macos/build-app.sh
 #   SIGN_IDENTITY='Developer ID Application: …' apps/desktop/macos/build-app.sh
-#   NOTARY_PROFILE=bridge-release SIGN_IDENTITY='…' apps/desktop/macos/build-app.sh
+#   NOTARY_PROFILE=extend-release SIGN_IDENTITY='…' apps/desktop/macos/build-app.sh
 #   NODE_TARBALL=/path/node-v22.23.3-darwin-arm64.tar.gz … (offline, checksum still verified)
 #
-# Output: target/desktop/macos/Silicon Bridge.app and Silicon-Bridge-<version>-macos-<arch>.zip
+# Output: target/desktop/macos/Silicon Extend.app and Silicon-Extend-<version>-macos-<arch>.zip
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 PROFILE="${PROFILE:-release}"
@@ -17,7 +17,7 @@ SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 ARCH="$(uname -m)"; [[ "$ARCH" == "x86_64" ]] && NODE_ARCH=x64 || NODE_ARCH=arm64
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT="$ROOT/target/desktop/macos"
-APP="$OUT/Silicon Bridge.app"
+APP="$OUT/Silicon Extend.app"
 CACHE="$ROOT/target/desktop/.cache"
 AD="$ROOT/vendor/agent-device"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
@@ -36,13 +36,13 @@ step "agent-device fork (pnpm install && pnpm build)"
 HELPER="$(find "$AD/apple/macos-helper/.build" -type f -name agent-device-macos-helper -perm -u+x -ipath '*release*' | head -1)"
 [[ -n "$HELPER" ]] || { echo "agent-device-macos-helper didn't build"; exit 1; }
 
-step "bridge-agent ($PROFILE)"
+step "extend-agent ($PROFILE)"
 if [[ "$PROFILE" == "release" ]]; then
-  cargo build --release -p bridge-agent --manifest-path "$ROOT/Cargo.toml"
+  cargo build --release -p extend-agent --manifest-path "$ROOT/Cargo.toml"
 else
-  cargo build -p bridge-agent --manifest-path "$ROOT/Cargo.toml"
+  cargo build -p extend-agent --manifest-path "$ROOT/Cargo.toml"
 fi
-BIN="$TARGET_DIR/$PROFILE/bridge-agent"
+BIN="$TARGET_DIR/$PROFILE/extend-agent"
 
 step "Node $NODE_VERSION for darwin-$NODE_ARCH"
 mkdir -p "$CACHE"
@@ -62,7 +62,7 @@ step "Assemble $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/agent-device" "$APP/Contents/Resources/node"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/apps/desktop/macos/Info.plist.in" > "$APP/Contents/Info.plist"
-cp "$BIN" "$APP/Contents/MacOS/bridge-agent"
+cp "$BIN" "$APP/Contents/MacOS/extend-agent"
 cp "$HELPER" "$APP/Contents/MacOS/agent-device-macos-helper"
 # agent-device: its self-contained dist, plus the Apple sources it builds on first use
 # (the UI testing runner for recording and other runner commands, and the helpers).
@@ -85,14 +85,14 @@ else
 fi
 codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/apps/desktop/macos/node-entitlements.plist" "$APP/Contents/Resources/node/bin/node"
 codesign "${SIGN_ARGS[@]}" "$APP/Contents/MacOS/agent-device-macos-helper"
-codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/apps/desktop/macos/app-entitlements.plist" --identifier com.teamofsilicons.bridge "$APP"
+codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/apps/desktop/macos/app-entitlements.plist" --identifier com.teamofsilicons.extend "$APP"
 codesign --verify --deep --strict "$APP" && echo "signature ok"
 "$APP/Contents/Resources/node/bin/node" -e 'if (new Function("return 42")() !== 42) process.exit(1)'
 
 step "Zip"
-ZIP="$OUT/Silicon-Bridge-$VERSION-macos-$ARCH.zip"
+ZIP="$OUT/Silicon-Extend-$VERSION-macos-$ARCH.zip"
 rm -f "$ZIP"
-(cd "$OUT" && ditto -c -k --keepParent "Silicon Bridge.app" "$ZIP")
+(cd "$OUT" && ditto -c -k --keepParent "Silicon Extend.app" "$ZIP")
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
   step "Notarization"
   RESULT="$OUT/notarization.json"
@@ -102,10 +102,10 @@ if [[ -n "${NOTARY_PROFILE:-}" ]]; then
   xcrun stapler validate "$APP"
   spctl --assess --type execute --verbose "$APP"
   rm -f "$ZIP"
-  (cd "$OUT" && ditto -c -k --keepParent "Silicon Bridge.app" "$ZIP")
+  (cd "$OUT" && ditto -c -k --keepParent "Silicon Extend.app" "$ZIP")
 fi
 du -sh "$APP" "$ZIP"
 echo
 echo "Built $APP"
 if [[ -z "${NOTARY_PROFILE:-}" ]]; then echo "Not notarized; distribution verification is still pending."; fi
-echo "Try it: \"$APP/Contents/MacOS/bridge-agent\" probe"
+echo "Try it: \"$APP/Contents/MacOS/extend-agent\" probe"

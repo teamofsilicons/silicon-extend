@@ -1,12 +1,12 @@
-# Silicon Bridge for Mac, Windows and Linux: packaging and end-to-end runs
+# Silicon Extend for Mac, Windows and Linux: packaging and end-to-end runs
 
-The app is one Rust binary, [`crates/bridge-agent`](../../crates/bridge-agent/README.md). This
+The app is one Rust binary, [`crates/extend-agent`](../../crates/extend-agent/README.md). This
 directory packages it and holds the Linux end-to-end environment. macOS packaging supports
 Developer ID signing and notarization; a successful local build alone does not imply publication.
 
 | Path | What it does |
 |---|---|
-| `macos/build-app.sh`, `macos/Info.plist.in` | Builds `target/desktop/macos/Silicon Bridge.app` and a zip |
+| `macos/build-app.sh`, `macos/Info.plist.in` | Builds `target/desktop/macos/Silicon Extend.app` and a zip |
 | `linux/build-package.sh` | Builds the Linux tarball and `.deb` layout (run it on Linux) |
 | `linux/build-in-docker.sh` | Runs `build-package.sh` in the linux-e2e image, then installs the `.deb` in a container and runs it |
 | `windows/build-zip.ps1` | Builds the Windows zip (run it on Windows) |
@@ -19,13 +19,13 @@ apps/desktop/macos/build-app.sh                 # release
 PROFILE=debug apps/desktop/macos/build-app.sh   # faster, for checking the layout
 SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' apps/desktop/macos/build-app.sh
 # With an existing notarytool Keychain profile, submit, staple and assess before making the final zip:
-SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' NOTARY_PROFILE=bridge-release apps/desktop/macos/build-app.sh
+SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' NOTARY_PROFILE=extend-release apps/desktop/macos/build-app.sh
 ```
 
 ```
-Silicon Bridge.app/Contents/
-  Info.plist                    LSUIElement (menu-bar only), usage descriptions, com.teamofsilicons.bridge
-  MacOS/bridge-agent            the app
+Silicon Extend.app/Contents/
+  Info.plist                    LSUIElement (menu-bar only), usage descriptions, com.teamofsilicons.extend
+  MacOS/extend-agent            the app
   MacOS/agent-device-macos-helper   agent-device's helper, built here and signed with the app
   Resources/agent-device/       the fork's bin/, dist/, package.json and the Apple sources it builds
                                 on first use (Apple device runners and the native helpers)
@@ -44,20 +44,20 @@ Silicon Bridge.app/Contents/
   The digest covers packaged code/assets, the Node platform/version and (on Mac) the native
   helper before signing. Changed code therefore triggers the existing daemon takeover path;
   identical copied artifacts retain the same identity despite paths, mtimes or signing timestamps.
-  The vendor source manifest and Bridge's public version are not changed by packaging.
-- `bridge-agent` finds the bundled agent-device and Node through `../Resources`. Setting
-  `BRIDGE_AGENT_DEVICE` or `BRIDGE_NODE` overrides them.
+  The vendor source manifest and Extend's public version are not changed by packaging.
+- `extend-agent` finds the bundled agent-device and Node through `../Resources`. Setting
+  `EXTEND_AGENT_DEVICE` or `EXTEND_NODE` overrides them.
 - Checked here: the bundle built (176 MB, 52 MB zipped), `plutil -lint` passed, and
-  `codesign --verify --deep --strict` passed. `bridge-agent probe` and `exec apps` ran from the
+  `codesign --verify --deep --strict` passed. `extend-agent probe` and `exec apps` ran from the
   bundle with `PATH=/usr/bin:/bin`, so only the bundled Node was reachable. It found agent-device
   0.21.15 and listed 227 apps.
-- Start at login: `bridge-agent install-autostart` writes a LaunchAgent that points at the
+- Start at login: `extend-agent install-autostart` writes a LaunchAgent that points at the
   bundle's binary.
 
 ### Native Mac input and recording (2026-09-26)
 
 The signed GUI app now uses Accessibility for text entry and ScreenCaptureKit for recording,
-without an XCTest setup prompt. Both grants are enabled for Silicon Bridge. Recording produces
+without an XCTest setup prompt. Both grants are enabled for Silicon Extend. Recording produces
 H.264 MP4, accepts 1–60 fps, and supports the selected app or the main display. App capture chooses
 the display with the largest overlap with its windows; other apps are excluded. Recordings are
 bounded to 30 minutes and 1 GiB, and stop when their owning process exits. Long-duration, file-limit
@@ -77,8 +77,8 @@ to be running; shell-launched helpers can have different Screen Recording permis
 
 ### Initial Mac run before native input and recording (macOS 27, this machine)
 
-These ran through the agent's own driver (`bridge-agent exec …`). The rest ran through the local
-Bridge service on `:8480`: pair, a Silicon session, then commands with uploads.
+These ran through the agent's own driver (`extend-agent exec …`). The rest ran through the local
+Extend service on `:8480`: pair, a Silicon session, then commands with uploads.
 
 - **Worked:**
   - `probe` detected Accessibility ✓ and Screen Recording ✓ (both granted to the terminal
@@ -91,10 +91,10 @@ Bridge service on `:8480`: pair, a Silicon session, then commands with uploads.
   - `terminal run …`, including a non-zero exit, which came back as `command_failed` with
     `exit_code`.
   - A reserved flag was refused, by the agent and by the service.
-  - Stop from `bridge-agent stop` and from the in-use banner's **Stop** button: the service ended
+  - Stop from `extend-agent stop` and from the in-use banner's **Stop** button: the service ended
     the session with `stopped_by_carbon`.
   - The Carbon removing the device made the app return to a new pairing code, and so did
-    `bridge-agent revoke --yes`.
+    `extend-agent revoke --yes`.
   - The tray icon turned orange while in use. The window showed the pairing code, then the paired
     view with the in-use card and "Not available yet". The banner appeared at bottom centre and
     hid when the session ended.
@@ -107,25 +107,25 @@ Bridge service on `:8480`: pair, a Silicon session, then commands with uploads.
   `automationmodetool enable-automationmode-without-authentication` fix. The service turns that
   into `unsupported_on_device` for `type`, naming the reason.
 - The app's own permission prompts (Accessibility, Screen Recording) were already granted to the
-  terminal. The Silicon Bridge.app identity itself hasn't been through TCC yet.
+  terminal. The Silicon Extend.app identity itself hasn't been through TCC yet.
 
 ## Linux
 
 ```
 apps/desktop/linux-e2e/run.sh                                                    # driver run on a real desktop
-BRIDGE_E2E_SERVICE=http://host.docker.internal:8480 apps/desktop/linux-e2e/run.sh    # plus the full agent vs a service
+EXTEND_E2E_SERVICE=http://host.docker.internal:8480 apps/desktop/linux-e2e/run.sh    # plus the full agent vs a service
 RUN_TESTS=0 …                                                                    # skip cargo test in the container
 ```
 
-The image (`silicon-bridge-linux-e2e`, host architecture, arm64 here) is Debian trixie with Xvfb,
+The image (`silicon-extend-linux-e2e`, host architecture, arm64 here) is Debian trixie with Xvfb,
 openbox, D-Bus, at-spi2-core, python3-gi with Atspi, xdotool, ImageMagick, scrot, xclip, wmctrl,
 GNOME Calculator, Node 22 and Rust 1.98. The repository is mounted read-only, and cargo's caches
-live in the named volumes `silicon-bridge-linux-target` and `silicon-bridge-cargo-registry`.
+live in the named volumes `silicon-extend-linux-target` and `silicon-extend-cargo-registry`.
 
 `e2e.sh` does the following:
-1. Builds `bridge-agent` with the tray. This also proves the Linux UI (GTK, WebKitGTK,
+1. Builds `extend-agent` with the tray. This also proves the Linux UI (GTK, WebKitGTK,
    appindicator) compiles.
-2. Runs `cargo test -p bridge-agent`: 107 unit tests and 7 integration tests passed on Linux.
+2. Runs `cargo test -p extend-agent`: 107 unit tests and 7 integration tests passed on Linux.
 3. Checks that a probe with no screen reports `apps.launch`, `replay` and `terminal`.
 4. Starts the desktop, then runs the probe and drives GNOME Calculator with the agent's driver:
    - `open gnome-calculator` and `snapshot -i` (64 nodes, keypad buttons with refs)
@@ -136,11 +136,11 @@ live in the named volumes `silicon-bridge-linux-target` and `silicon-bridge-carg
    - `apps` and `appstate` answer `unsupported_on_device` (agent-device has none on Linux)
    - `terminal run` (stdout, stderr, exit 0), then an exit 5 that comes back as `command_failed`
    - a reserved flag refused, and `close`
-5. With `BRIDGE_E2E_SERVICE`, runs the real agent headless against that service:
+5. With `EXTEND_E2E_SERVICE`, runs the real agent headless against that service:
    - a Carbon pairs it, the device is online and `ready`, and a Silicon session starts
    - `open`, `snapshot`, `click`, and a `screenshot` uploaded with a URL back
    - `terminal`; the headless status line shows "si:chef is using this computer"
-   - `bridge-agent stop` ends the session with `stopped_by_carbon`
+   - `extend-agent stop` ends the session with `stopped_by_carbon`
    - the Carbon removes the device, and the app forgets the credential and shows a new code
 
 Two fork fixes came out of this run, both logged in `vendor/agent-device/FORK.md`:
@@ -152,7 +152,7 @@ only for a window at the top-left. `e2e.sh` moves the calculator there with `wmc
 agent-device/GTK4 limitation, noted for later.
 
 Packaging: `linux/build-in-docker.sh` builds the tarball and `.deb` into `target/desktop/linux/`,
-installs the `.deb` into the container, and runs `bridge-agent probe` and a terminal command from
+installs the `.deb` into the container, and runs `extend-agent probe` and a terminal command from
 `/usr/bin`. It rebuilds the bundled agent-device fork before packaging. Node is pinned to
 22.23.3; both Linux architecture checksums in `linux/node-sha256.txt` come from
 `https://nodejs.org/dist/v22.23.3/SHASUMS256.txt`. Cached and offline archives are verified.
@@ -161,10 +161,10 @@ using `dpkg-shlibdeps` (dpkg-dev). Build on the oldest distro you intend to supp
 built on Debian trixie is not evidence of compatibility with older distributions. Layout:
 
 ```
-bin/bridge-agent
-lib/silicon-bridge/agent-device/{bin,dist,linux,package.json}
-lib/silicon-bridge/node/bin/node
-share/applications/silicon-bridge.desktop
+bin/extend-agent
+lib/silicon-extend/agent-device/{bin,dist,linux,package.json}
+lib/silicon-extend/node/bin/node
+share/applications/silicon-extend.desktop
 ```
 
 - Runtime dependencies include GTK 3, WebKitGTK 4.1, libxdo and their native dependencies,
@@ -176,7 +176,7 @@ To check an installed package against a local development service with local IAM
 `c:alice` and `si:chef`, run from the host (requires the built CLI and ffmpeg):
 
 ```sh
-python3 apps/desktop/linux-e2e/record-service-e2e.py --package target/desktop/linux/silicon-bridge_1.0.0_arm64.deb
+python3 apps/desktop/linux-e2e/record-service-e2e.py --package target/desktop/linux/silicon-extend_1.0.0_arm64.deb
 ```
 
 The lane installs the `.deb` into a disposable container and runs it as an unprivileged user
@@ -189,8 +189,8 @@ This verifies local relay and file storage, not production IAM or Briefcase inte
 
 ## Windows
 
-`windows/build-zip.ps1` (run it on Windows) builds `bridge-agent.exe` and zips it with a README.
-There's no Node and no agent-device: Windows uses Bridge's own driver. The window needs WebView2,
+`windows/build-zip.ps1` (run it on Windows) builds `extend-agent.exe` and zips it with a README.
+There's no Node and no agent-device: Windows uses Extend's own driver. The window needs WebView2,
 which Windows 10 and 11 ship.
 
 **None of the Windows side has run on Windows.** From this Mac it is checked with
@@ -221,12 +221,12 @@ Linux parent-death signaling also stops the encoder if its supervisor is killed.
 Run its manual Linux lane with a rebuilt `linux-e2e` image containing ffmpeg:
 
 ```sh
-docker build -t silicon-bridge-linux-e2e apps/desktop/linux-e2e
+docker build -t silicon-extend-linux-e2e apps/desktop/linux-e2e
 mkdir -p target/desktop/linux-recording
 docker run --rm --init \
   -v "$PWD":/src:ro \
   -v "$PWD/target/desktop/linux-recording":/tmp/out \
-  silicon-bridge-linux-e2e bash /src/apps/desktop/linux-e2e/record-e2e.sh
+  silicon-extend-linux-e2e bash /src/apps/desktop/linux-e2e/record-e2e.sh
 ```
 
 The fixture runs only inside the isolated Xvfb desktop. Each invocation preserves artifacts
@@ -235,7 +235,7 @@ supervisor SIGKILL, window/device dimensions, full decoding, nonblank frames and
 It is a manual lane, not selected by CI.
 
 The public runtime connects this worker for `record start --scope device/system`, including
-fps, quality, hide-touches and daemon-crash recovery. Bridge returns a copied recording artifact
+fps, quality, hide-touches and daemon-crash recovery. Extend returns a copied recording artifact
 and retains its export for retry. App scope binds the active named app to exactly one mapped
 WM_CLASS matching its executable or desktop-file basename. It requires xdotool and libXcomposite.
 XComposite captures the window's off-screen pixels even when another app covers it. Multiple
@@ -249,9 +249,9 @@ changes. These are manual Xvfb lanes, not CI or physical-desktop evidence. Real 
 other desktop/app coverage and Wayland portal/PipeWire support remain open. Wayland deliberately
 refuses this worker, including XWayland displays.
 
-The public daemon and Bridge driver lane is `record-runtime-e2e.py`. Set
+The public daemon and Extend driver lane is `record-runtime-e2e.py`. Set
 `RECORD_LANE=record-runtime-e2e.py` on the container command above to exercise the daemon;
-also mount the built Linux agent and set `BRIDGE_RECORD_DRIVER` to its path to test Bridge's
+also mount the built Linux agent and set `EXTEND_RECORD_DRIVER` to its path to test Extend's
 capability probe and recording artifact handoff. Build agent-device before running this lane.
 It deliberately crashes only its own isolated daemon, verifies the recovered export, then
 stops its daemons using their own state directories.

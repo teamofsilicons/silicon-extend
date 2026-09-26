@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bridge_background">#FF0E1116</color>
-    <color name="bridge_accent">#FF5B8CFF</color>
-    <color name="bridge_icon_bg">#FF0E1116</color>
+    <color name="extend_background">#FF0E1116</color>
+    <color name="extend_accent">#FF5B8CFF</color>
+    <color name="extend_icon_bg">#FF0E1116</color>
 </resources>

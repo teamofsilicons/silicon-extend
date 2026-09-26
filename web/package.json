@@ -1,13 +1,13 @@
 {
-  "name": "@teamofsilicons/bridge-web",
+  "name": "@teamofsilicons/extend-web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Silicon Bridge configuration website (bridge.teamofsilicons.com): pair devices and decide which Silicons can use them.",
+  "description": "Silicon Extend configuration website (extend.teamofsilicons.com): pair devices and decide which Silicons can use them.",
   "scripts": {
     "docs:gen": "node scripts/gen-docs.mjs",
     "dev": "pnpm docs:gen && vite",
-    "dev:mock": "pnpm docs:gen && concurrently -k -n mock,web -c blue,green \"tsx mock/server.ts\" \"BRIDGE_API_PROXY=http://127.0.0.1:8490 vite --port 5190 --strictPort\"",
+    "dev:mock": "pnpm docs:gen && concurrently -k -n mock,web -c blue,green \"tsx mock/server.ts\" \"EXTEND_API_PROXY=http://127.0.0.1:8490 vite --port 5190 --strictPort\"",
     "mock": "tsx mock/server.ts",
     "build": "pnpm docs:gen && tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",

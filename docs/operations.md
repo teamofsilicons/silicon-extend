@@ -24,7 +24,7 @@ A scheduler in the service runs every 2 seconds:
 
 ## Logs and signals
 
-`BRIDGE_LOG_FORMAT=json`, `BRIDGE_LOG=info`. Every response has `X-Request-ID`; errors carry it too,
+`EXTEND_LOG_FORMAT=json`, `EXTEND_LOG=info`. Every response has `X-Request-ID`; errors carry it too,
 so a CLI error message can be traced to its log lines. Telemetry events arrive at
 `/api/v1/telemetry` and are stored per world in `telemetry` and logged under target `telemetry`
 (forwarding to Space Station is the next step: set up the ingest key and exporter — not built yet).
@@ -32,5 +32,5 @@ so a CLI error message can be traced to its log lines. Telemetry events arrive a
 ## Revocation
 
 IAM webhooks at `/webhook/` are verified by the official client, de-duplicated by event id, and
-treated as prompts: Bridge re-checks with IAM before ending access, and re-checks access on every
+treated as prompts: Extend re-checks with IAM before ending access, and re-checks access on every
 command regardless.

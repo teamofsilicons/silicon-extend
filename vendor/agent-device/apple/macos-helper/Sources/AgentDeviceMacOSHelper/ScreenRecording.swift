@@ -52,7 +52,7 @@ struct NativeRecordingOptions {
 
 private final class NativeScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
   private let options: NativeRecordingOptions
-  private let queue = DispatchQueue(label: "com.teamofsilicons.bridge.recording")
+  private let queue = DispatchQueue(label: "com.teamofsilicons.extend.recording")
   private var writer: AVAssetWriter!
   private var input: AVAssetWriterInput!
   private var firstTime: CMTime?
