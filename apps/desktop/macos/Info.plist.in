@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Silicon Bridge</string>
+  <key>CFBundleDisplayName</key>
+  <string>Silicon Bridge</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.teamofsilicons.bridge</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleExecutable</key>
+  <string>bridge-agent</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <!-- A menu-bar app: no Dock icon. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticTermination</key>
+  <false/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Silicon Bridge opens and controls apps on this Mac when a Silicon you gave access to asks it to. You can stop it any time from the menu bar.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Silicon Bridge takes screenshots and recordings for the Silicons you gave access to this Mac. Every file goes to your Briefcase.</string>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>Silicon Bridge reads what is on screen and clicks and types for the Silicons you gave access to this Mac.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Silicon Bridge reaches TVs and an iPhone or iPad on your network that you added through this Mac.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_companion-link._tcp</string>
+    <string>_airplay._tcp</string>
+  </array>
+</dict>
+</plist>

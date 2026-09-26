@@ -228,7 +228,7 @@ holder's Silicon id, session start time and the `bridge request send` command to
 2. The service introspects the token with IAM (cached no longer than 30 s, and dropped immediately
    on a relevant IAM webhook), then checks: the session is the caller's, it is `active`, the caller
    still has access, the device is online, and the command is in the device's capabilities.
-3. The service sends `{"type":"command","id":<command_id>,"deadline":…,"data":{command,input}}`
+3. The service sends `{"type":"command","id":<command_id>,"timeout_ms":…,"command":…,"args":[…],"upload_ids":[…]}`
    down the device's WebSocket and waits for the matching `result`.
 4. The app runs it through agent-device and replies. Files it produced (screenshots, recordings,
    logs, replay scripts) are uploaded to `PUT /api/v1/device/artifacts/{upload_id}` first, using
@@ -345,7 +345,7 @@ boot and reconnects on its own.
 ### Connection protocol (`WSS /api/v1/device/connect`)
 
 - Auth: `Authorization: Bridge-Device <device_credential>` on the upgrade request.
-- Frames are JSON text: `{"type", "id", "data"}`. Files never travel on the socket.
+- Frames are flat JSON text: `{"type": ..., <fields>}` (docs/device-protocol.md). Files never travel on the socket.
 - Heartbeat: the service pings every 15 s; the device is **offline** after 45 s without a pong.
 - Reconnect: exponential backoff from 1 s to 60 s with full jitter.
 - One live connection per device. A new connection replaces the old one, which gets `superseded`.

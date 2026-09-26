@@ -19,10 +19,17 @@ pub enum DeviceFrame {
     SetupProgress { setup: Setup },
     /// The answer to a `command` with the same id.
     Result(CommandOutcome),
-    /// The Carbon tapped Stop.
-    Stop,
-    /// The Carbon tapped Done on a takeover.
-    TakeoverDone,
+    /// The Carbon tapped Stop. `target` names a device this host carries; absent means this device
+    /// (and, on a host, everything it carries).
+    Stop {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<DeviceId>,
+    },
+    /// The Carbon tapped Done on a takeover (on this device, or on the carried device `target`).
+    TakeoverDone {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<DeviceId>,
+    },
     /// A device paired through this host changed state.
     Attached(AttachedStatus),
     Pong { nonce: u64 },
@@ -201,6 +208,9 @@ mod tests {
         assert!(s.starts_with("{\"type\":\"command\""), "{s}");
         assert_eq!(serde_json::from_str::<ServiceFrame>(&s).unwrap(), f);
         let stop: DeviceFrame = serde_json::from_str(r#"{"type":"stop"}"#).unwrap();
-        assert_eq!(stop, DeviceFrame::Stop);
+        assert_eq!(stop, DeviceFrame::Stop { target: None });
+        assert_eq!(serde_json::to_string(&stop).unwrap(), r#"{"type":"stop"}"#);
+        let t: DeviceFrame = serde_json::from_str(r#"{"type":"takeover_done","target":"7c1e09ab"}"#).unwrap();
+        assert_eq!(t, DeviceFrame::TakeoverDone { target: Some("7c1e09ab".parse().unwrap()) });
     }
 }

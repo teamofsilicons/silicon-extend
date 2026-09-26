@@ -25,7 +25,8 @@ import type {
 // ── Limits (matching macOS helper's SnapshotTraversalLimits) ────────────
 const MAX_DESKTOP_APPS = 24;
 const MAX_NODES = 1500;
-const MAX_DEPTH = 12;
+// Silicon Bridge fork: 12 cut off GTK4 apps (GNOME Calculator's buttons sit deeper); nodes stay capped.
+const MAX_DEPTH = 40;
 
 const SCRIPT_NAME = 'atspi-dump.py';
 

@@ -6,8 +6,10 @@ export async function writeCommandOutput(
   renderHuman?: () => string | null | undefined,
 ): Promise<void> {
   if (flags.json) {
-    const { printJson } = await import('../../commands/output/json.ts');
-    printJson({ success: true, data });
+    const { printJson, jsonTextRequested } = await import('../../commands/output/json.ts');
+    // Silicon Bridge fork: optionally include the human text alongside the data.
+    const text = jsonTextRequested() ? renderHuman?.() : undefined;
+    printJson(text ? { success: true, data, text } : { success: true, data });
     return;
   }
   const text = renderHuman?.();

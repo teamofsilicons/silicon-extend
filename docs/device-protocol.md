@@ -98,8 +98,8 @@ for setup-only changes). Capability names are in `crates/bridge-protocol/src/cap
 ```json
 {"type":"result","id":"<same uuid>","ok":true,"output":{…},"text":"Tapped @e2 \"Continue\"","error":null,
  "files":[{"upload_id":"<uuid>","name":"screenshot.png","content_type":"image/png","kind":"screenshot","size_bytes":184223}]}
-{"type":"stop"}
-{"type":"takeover_done"}
+{"type":"stop"}                               (a host adds "target":"<device_id>" to stop a device it carries)
+{"type":"takeover_done"}                      (same optional "target")
 {"type":"pong","nonce":42}
 ```
 

@@ -1468,8 +1468,8 @@ paths:
       operationId: deviceSocket
       summary: The paired device's WebSocket to Bridge
       description: |
-        Upgrade to WebSocket with `Authorization: Bridge-Device <device_credential>`. JSON frames
-        `{"type", "id", "data"}`; frame types are listed in TECHNICAL.md §7. Ping every 15 s; offline after 45 s
+        Upgrade to WebSocket with `Authorization: Bridge-Device <device_credential>`. Flat JSON frames
+        `{"type": ..., <fields>}`; every frame and field is in docs/device-protocol.md (Rust: bridge-protocol frames.rs). Ping every 15 s; offline after 45 s
         without a pong. Close codes: 4401 credential invalid or unpaired, 4409 superseded by a newer connection,
         4426 app too old (upgrade required).
       security:

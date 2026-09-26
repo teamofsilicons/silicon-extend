@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Builds the Linux tarball and .deb for Silicon Bridge. Run it on Linux (or in the linux-e2e
+# container: apps/desktop/linux/build-in-docker.sh). Not published anywhere.
+#
+# Layout (the same inside the tarball and under /usr in the .deb):
+#   bin/bridge-agent
+#   lib/silicon-bridge/agent-device/{bin,dist,linux,package.json}   Bridge's agent-device fork
+#   lib/silicon-bridge/node/bin/node                               Node 22 for agent-device
+#   share/applications/silicon-bridge.desktop
+#   share/doc/silicon-bridge/README
+# bridge-agent finds agent-device and node through ../lib/silicon-bridge next to its own binary.
+#
+#   PROFILE=debug …        use a debug build
+#   BRIDGE_AGENT_BIN=…     package this binary instead of building one
+#   NODE_TARBALL=…         use this Node tarball instead of downloading
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+PROFILE="${PROFILE:-release}"
+NODE_MAJOR="${NODE_MAJOR:-22}"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+OUT="${OUT:-$TARGET_DIR/desktop/linux}"
+AD="$ROOT/vendor/agent-device"
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
+case "$(uname -m)" in x86_64) ARCH=x64; DEB_ARCH=amd64;; aarch64|arm64) ARCH=arm64; DEB_ARCH=arm64;; *) echo "unsupported $(uname -m)"; exit 1;; esac
+[[ -f "$AD/dist/src/internal/bin.js" ]] || { echo "Build agent-device first: (cd vendor/agent-device && pnpm install && pnpm build)"; exit 1; }
+
+if [[ -z "${BRIDGE_AGENT_BIN:-}" ]]; then
+  if [[ "$PROFILE" == "release" ]]; then cargo build --release -p bridge-agent --manifest-path "$ROOT/Cargo.toml"; else cargo build -p bridge-agent --manifest-path "$ROOT/Cargo.toml"; fi
+  BRIDGE_AGENT_BIN="$TARGET_DIR/$PROFILE/bridge-agent"
+fi
+
+mkdir -p "$OUT/.cache"
+if [[ -z "${NODE_TARBALL:-}" ]]; then
+  NAME="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/" | grep -o "node-v${NODE_MAJOR}[.0-9]*-linux-${ARCH}.tar.xz" | head -1)"
+  NODE_TARBALL="$OUT/.cache/$NAME"
+  [[ -f "$NODE_TARBALL" ]] || curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$NAME" -o "$NODE_TARBALL"
+fi
+
+NAME="silicon-bridge-$VERSION-linux-$ARCH"
+STAGE="$OUT/$NAME"
+rm -rf "$STAGE"
+mkdir -p "$STAGE/bin" "$STAGE/lib/silicon-bridge/agent-device" "$STAGE/lib/silicon-bridge/node" "$STAGE/share/applications" "$STAGE/share/doc/silicon-bridge"
+install -m 0755 "$BRIDGE_AGENT_BIN" "$STAGE/bin/bridge-agent"
+tar -C "$AD" -cf - bin dist linux package.json LICENSE | tar -C "$STAGE/lib/silicon-bridge/agent-device" -xf -
+tar -xJf "$NODE_TARBALL" -C "$STAGE/lib/silicon-bridge/node" --strip-components=1 --wildcards '*/bin/node' '*/LICENSE'
+cat > "$STAGE/share/applications/silicon-bridge.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Silicon Bridge
+Comment=Lets the Silicons you choose use this computer
+Exec=bridge-agent run
+Terminal=false
+Categories=Utility;
+EOF
+cat > "$STAGE/share/doc/silicon-bridge/README" <<EOF
+Silicon Bridge $VERSION for Linux
+
+  bridge-agent run                 start it (tray icon; shows the pairing code)
+  bridge-agent run --headless      servers and CI: status on stdout
+  bridge-agent install-autostart   start at login (add --systemd for a user service)
+  bridge-agent status              what it is doing
+  bridge-agent probe               what this computer can do right now
+
+Screen reading needs the AT-SPI bus (at-spi2-core, python3-gi, gir1.2-atspi-2.0); clicking and
+typing need xdotool (X11) or ydotool (Wayland); screenshots need gnome-screenshot, scrot or
+ImageMagick (grim on Wayland); the clipboard needs xclip or xsel (wl-clipboard on Wayland).
+EOF
+
+tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
+echo "tarball: $OUT/$NAME.tar.gz"
+
+if command -v dpkg-deb >/dev/null; then
+  DEB="$OUT/deb/silicon-bridge_${VERSION}_${DEB_ARCH}"
+  rm -rf "$DEB"; mkdir -p "$DEB/DEBIAN" "$DEB/usr"
+  cp -a "$STAGE/." "$DEB/usr/"
+  cat > "$DEB/DEBIAN/control" <<EOF
+Package: silicon-bridge
+Version: $VERSION
+Architecture: $DEB_ARCH
+Maintainer: Team of Silicons <team@teamofsilicons.com>
+Section: utils
+Priority: optional
+Depends: libc6, libssl3 | libssl3t64, libgtk-3-0 | libgtk-3-0t64, libwebkit2gtk-4.1-0, libxdo3, python3, python3-gi, gir1.2-atspi-2.0, at-spi2-core
+Recommends: xdotool, xclip, imagemagick, xdg-utils, libayatana-appindicator3-1
+Description: Silicon Bridge for Linux
+ Lets the Silicons a Carbon chooses use this computer, with an always-visible
+ indicator and a Stop button.
+EOF
+  dpkg-deb --root-owner-group --build "$DEB" "$OUT/silicon-bridge_${VERSION}_${DEB_ARCH}.deb"
+  echo "deb: $OUT/silicon-bridge_${VERSION}_${DEB_ARCH}.deb"
+fi
