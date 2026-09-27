@@ -269,7 +269,7 @@ class RecordingTest {
             val started = commands.run(ServiceFrame.Command("c1", session, command = "record", args = listOf("start", "lost")))
             assertTrue(started.toString(), started.ok)
             assertTrue(extend.adbExecutor.sessionIds().contains(session))
-            commands.connectionLost()
+            commands.connectionLost("")
             // The grace passes while the socket is down; the capture ends on the device.
             val gone = withTimeout(20_000) { while (extend.adbExecutor.sessionIds().contains(session)) delay(100); true }
             assertTrue(gone)

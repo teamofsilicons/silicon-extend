@@ -43,6 +43,15 @@ allowed only for `10.0.2.2`, `localhost` and `127.0.0.1` (`res/xml/network_secur
 
 ## Android versions
 
+`display show --image` waits for the image to decode before reporting success. HTTP errors and
+invalid images fail the command instead of leaving a blank screen marked as shown. URL images
+stream to temporary storage with a 32 MiB limit, including chunked responses; local images have
+the same limit. Decoding runs off the UI thread and downsamples to the screen dimensions and at
+most 2,073,600 pixels (about 8 MiB of bitmap memory). Replacing or clearing the display cancels
+its download and releases the old video/WebView. Image and video readiness wait up to 30 seconds,
+bounded by the command's remaining timeout; slow loads are not acknowledged merely because the
+activity reached the foreground.
+
 Everything that differs by version is decided in pure functions with JVM tests
 (`AndroidVersionsTest`): `adb/DebuggingPath.kt` (debugging path and its words),
 `driver/ScreenshotPath.kt`, `core/SetupReport.build` (steps and capabilities from `SetupSignals`),

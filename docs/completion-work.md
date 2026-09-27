@@ -54,9 +54,10 @@ Remaining from the Carbon's final requests, before the release gates below:
 - iPhone/iPad: first-screenshot attachment is implemented and verified through the real engine on
   an isolated iPad simulator, preserving the current screen without launching an app or a runner.
   Verify it on a physical iPad as well (including disconnect/reconnect and a new session).
-- Finish the TV display failure path and allow a Silicon to display its own Extend files, with
-  correct owner/session authorization and bounded downloads. Verify actual image decode failures
-  are returned as failures.
+- TV image failures now reach the command result; bounded downloads, downsampling and asynchronous
+  readiness are implemented and verified on an isolated Android TV emulator. Verify on the physical
+  TV and finish allowing a Silicon to display its own Extend files, with correct owner/session
+  authorization. Overall TV memory use and debugging reconnect still need the work listed above.
 - Re-run the final feature and requirements audit and integration checks after those fixes;
   reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
   publish/deploy and verify the release. None of this checkpoint updates installed apps.

@@ -32,6 +32,33 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — TV image readiness and memory
+
+Image display now acknowledges decoded content in the foreground, rather than activity startup.
+Corrupt images, HTTP failures and video preparation errors reach the command's failure result.
+Each display request has its own identifier, so an older completion cannot satisfy a newer one.
+Downloads stream to disk with a 32 MiB limit even without Content-Length; decoding runs off the
+main thread and samples to at most 2,073,600 pixels. Replacement, clear, cancellation and activity
+destruction cancel downloads and release video/WebView resources.
+
+- Android unit tests: 234 pass; lint, debug APK and instrumentation APK build pass. Six new JVM
+  tests cover successful download, HTTP rejection, advertised and chunked size limits, sampling,
+  and stale request completion. Log: `/tmp/extend-display-android.log`.
+- Four native `DisplayTest` cases pass on a fresh, dedicated Android TV API 34 emulator
+  (`ExtendDisplayVerification`, port 5640). Actual BitmapFactory decoding rejects a corrupt file;
+  the full `CommandExecutor` returns `action_failed` for it. A delayed local HTTP 404 cannot report
+  success while loading. A valid 3840 × 2160 PNG displays correctly with at most 8,294,400 allocated
+  bitmap bytes. Log: `/tmp/extend-display-native.log`.
+- The instrumentation build caught an older recording test still calling `connectionLost()`
+  without its 1.1 pair identifier. Updated that call to the same empty pair identifier its session
+  uses; the recording runtime lane was not rerun here.
+- The initial command-path test lacked a bound accessibility service after instrumentation
+  restarted the app. The dedicated-emulator test setup now rebinds it and disables UiAutomation's
+  normal suppression of real accessibility services. The final four-case run passes.
+
+These checks do not prove physical TV behavior, overall app memory consumption, debugging
+reconnect, or authenticated display of a Silicon's stored Extend files. Those remain open.
+
 ## 2026-09-28 — iPad first screenshot
 
 The hosted iOS driver now responds to the engine's typed `SESSION_NOT_FOUND` on screenshot or

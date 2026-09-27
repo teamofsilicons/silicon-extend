@@ -1570,16 +1570,29 @@ class CommandExecutor(
                 }
             }
         }
-        val since = SystemClock.elapsedRealtime()
-        withContext(Dispatchers.Main) { a.startActivity(intent) }
-        // Up to Android 11 a start right after Home waits out Android's 5 s app-switch window.
-        val wait = ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 4_000)
-        val shown = DisplayActivity.awaitShown(wait, since)
-        val out = buildJsonObject { put("kind", show.kind); put("shown", shown) }
-        if (!shown) throw CommandFailure(CommandFailure.ACTION_FAILED, "Asked Android to show the display, but it didn't come to the front within ${ForegroundWait.seconds(wait)}.")
-        DisplayActivity.failureSince(since)?.let { throw CommandFailure.unsupported(it) }
-        delay(500) // let the first frame draw before the next command looks at the screen
-        return Outcome(out, "Showing ${show.kind} full screen; it stays until display clear or Back on the remote.")
+        val requestId = run.frame.id.toString()
+        intent.putExtra(DisplayActivity.EXTRA_REQUEST_ID, requestId)
+        DisplayActivity.beginRequest(requestId)
+        try {
+            withContext(Dispatchers.Main) { a.startActivity(intent) }
+            // Media readiness includes decoding/buffering; foreground alone does not prove it loaded.
+            val wait = (if (show.kind in setOf("image", "video")) 30_000L
+                else ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 4_000))
+                .coerceAtMost(run.remainingMs().coerceAtLeast(1))
+            val shown = DisplayActivity.awaitShown(wait, requestId)
+            DisplayActivity.failureFor(requestId)?.let {
+                if (show.kind == "url") throw CommandFailure.unsupported(it)
+                throw CommandFailure(CommandFailure.ACTION_FAILED, it)
+            }
+            if (!shown) throw CommandFailure(CommandFailure.ACTION_FAILED,
+                "The display didn't finish loading ${show.kind} in the foreground within ${ForegroundWait.seconds(wait)}.")
+            delay(500) // let the first frame draw before the next command looks at the screen
+            return Outcome(buildJsonObject { put("kind", show.kind); put("shown", true) },
+                "Showing ${show.kind} full screen; it stays until display clear or Back on the remote.")
+        } catch (e: Exception) {
+            DisplayActivity.cancelRequest(requestId)
+            throw e
+        }
     }
 
     // ───────────── screenshots ─────────────
