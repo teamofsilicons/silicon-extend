@@ -27,10 +27,10 @@ android {
 
     defaultConfig {
         applicationId = "com.teamofsilicons.extend"
-        minSdk = 30
+        minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.0.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -41,6 +41,8 @@ android {
                 storePassword = releaseSigning.getProperty("storePassword")
                 keyAlias = releaseSigning.getProperty("keyAlias")
                 keyPassword = releaseSigning.getProperty("keyPassword")
+                // minSdk 26: Android 8.0/8.1 read only v2 (v3 is Android 9+), so v2 must stay on
+                // beside v3. v1 is left to AGP (not needed from Android 7).
                 enableV2Signing = true
                 enableV3Signing = true
             }
@@ -77,6 +79,16 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+
+    // minSdk 26 reaches TVs, TV boxes and Fire TV sticks on Android 8–10: a call or constant from
+    // a newer API must be guarded (or have a fallback). Fatal, so assembleRelease's lintVitalRelease
+    // refuses to build a release APK with one, not only lintDebug; checkDependencies makes it look
+    // at libadb's code too (checked 2026-09-27 with an unguarded call planted in each module).
+    lint {
+        fatal += setOf("NewApi", "InlinedApi")
+        checkDependencies = true
+        abortOnError = true
     }
 
     packaging {
@@ -127,3 +139,7 @@ val generateAdbFixture by tasks.registering(Exec::class) {
     commandLine("bash", rootProject.file("tools/adb-test-fixture/build.sh"), android.sdkDirectory, output.get().asFile)
 }
 tasks.matching { it.name == "mergeDebugAndroidTestAssets" }.configureEach { dependsOn(generateAdbFixture) }
+// Lint's androidTest model reads the same folder: order it after the fixture when both run
+// (`lintDebug assembleDebugAndroidTest`), without making lint build the fixture.
+tasks.matching { it.name.contains("AndroidTest") && it.name.contains("lint", ignoreCase = true) }
+    .configureEach { mustRunAfter(generateAdbFixture) }

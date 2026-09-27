@@ -39,6 +39,9 @@ class ClipboardActivity : Activity() {
     companion object {
         @Volatile private var pending: CompletableDeferred<Read>? = null
 
+        /** Only Android 10+ keeps the clipboard from apps without focus. */
+        fun needsFocus(sdk: Int): Boolean = sdk >= 29
+
         /** The clipboard's text, or null when it's empty. Started from [context] (the accessibility service). */
         suspend fun read(context: Context): String? {
             val waiter = CompletableDeferred<Read>()
@@ -50,10 +53,12 @@ class ClipboardActivity : Activity() {
                     ),
                 )
             }
-            val read = withTimeoutOrNull(4_000) { waiter.await() } ?: throw CommandFailure(
+            // Android 10 and 11 hold this start for up to 5 s right after Home (ForegroundWait).
+            val wait = ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 4_000)
+            val read = withTimeoutOrNull(wait) { waiter.await() } ?: throw CommandFailure(
                 CommandFailure.ACTION_FAILED,
-                "Couldn't read the clipboard: Android lets only the app in front read it, and Silicon Extend couldn't take focus within 4 s " +
-                    "(the screen may be locked).",
+                "Couldn't read the clipboard: Android lets only the app in front read it, and Silicon Extend couldn't take focus within " +
+                    "${ForegroundWait.seconds(wait)} (the screen may be locked).",
             )
             read.error?.let { throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the clipboard read: $it") }
             return read.text

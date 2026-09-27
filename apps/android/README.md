@@ -1,13 +1,18 @@
 # Silicon Extend for Android (phones, tablets, Android TV, Google TV, Fire OS)
 
-One APK, package `com.teamofsilicons.extend`, minSdk 30 (Android 11), target/compile SDK 36. It
+One APK, package `com.teamofsilicons.extend`, version 1.0.2 (versionCode 3; 1.0.0 had minSdk 30),
+minSdk 26 (Android 8.0), target/compile SDK 36. It
 pairs the device with Extend, keeps it connected, shows who is using it with a Stop button, and runs
 a Silicon's agent-device commands on the device. It speaks exactly `docs/device-protocol.md`.
+Phones, tablets, Android TV, Google TV and Fire OS 7 on Android 8 and later install it; many TVs,
+TV boxes, projectors and Fire TV sticks run Android 8–10 (see "Android versions" below).
 
 - **Phone/tablet** (`os: "android"`): pairing code → setup steps → paired screen; in-use
   notification with **Stop**.
-- **TV** (`os: "android_tv"`, chosen at runtime when `UiModeManager` reports a television, or the
-  device has `leanback`/`television`/`amazon.hardware.fire_tv`): the app is **Silicon Extend TV**
+- **TV** (`os: "android_tv"`, chosen at runtime when `UiModeManager` reports a television, the
+  device has `leanback`/`television`/`amazon.hardware.fire_tv`, or it has no touchscreen and isn't
+  a computer, car, watch or embedded board: TV boxes and projectors often run the phone build of
+  Android behind their maker's launcher, `DeviceInfo.looksLikeTv`): the app is **Silicon Extend TV**
   (the TV launcher entry's label, `res/values-television` for Settings and accessibility, the banner
   and the app's own screens). Very large pairing code, corner badge while a Silicon uses the TV,
   remote buttons, full-screen display. Listed in the TV launcher (`LEANBACK_LAUNCHER`, a vector
@@ -33,6 +38,140 @@ kotlinx.serialization 1.9.
 Service URL: release builds default to `https://backend.extend.teamofsilicons.com`. Debug builds
 default to the same unless built with `-PextendServiceUrl=http://10.0.2.2:8480`. Cleartext HTTP is
 allowed only for `10.0.2.2`, `localhost` and `127.0.0.1` (`res/xml/network_security_config.xml`).
+
+## Android versions
+
+Everything that differs by version is decided in pure functions with JVM tests
+(`AndroidVersionsTest`): `adb/DebuggingPath.kt` (debugging path and its words),
+`driver/ScreenshotPath.kt`, `core/SetupReport.build` (steps and capabilities from `SetupSignals`),
+`core/SettingsTargets.kt` (which settings page each button opens, and the fallbacks).
+
+| | Android 8–10 (API 26–29) | Android 11+ (API 30+) |
+|---|---|---|
+| Android debugging | Network debugging: the app connects to 127.0.0.1:5555 with its RSA key; Android asks "Allow USB debugging?" once. No pairing code, no discovery, no TLS. | Wireless debugging (pairing code, mDNS, TLS); a TV's legacy port also works. |
+| Setup step | `network_debugging` on phones too ("run `adb tcpip 5555` once"); TVs: "Network debugging" / Fire TV "ADB debugging". | `wireless_debugging` (phones), `network_debugging` (TVs). |
+| `screen.capture` | Only with Android debugging connected (`screencap -p`); otherwise missing with the reason. | Accessibility `takeScreenshot`; debugging's `screencap` when accessibility is off. |
+| `input.remote` (TV) | Needs Android debugging (up to Android 12): accessibility has no D-pad there, so the capability stays missing; its reason says so and that `back` and `home` still work. | Accessibility D-pad from Android 13; debugging on any version. |
+| Clipboard read | Read directly (no focus needed before Android 10). | The invisible `ClipboardActivity` takes focus for a moment (Android 10+). |
+| Notifications | No runtime permission step (POST_NOTIFICATIONS is Android 13+). | Step on Android 13+ phones. |
+| Restricted settings note | Not shown (Android 13+ only). | Shown on Android 13+. |
+| Starts after Home | Up to Android 11 Android holds an activity start from the background for 5 s after Home: `display show`, `clipboard read` (10–11) and `open` wait up to 6.5 s for their screen (`driver/ForegroundWait.kt`). | 4 s (`open` 5 s) from Android 12. |
+
+Other version guards: screen bounds from `Display.getRealSize` before `WindowMetrics` (Android 11);
+`AccessibilityNodeInfoCompat.isHeading` (Android 9); notification-access check through
+`NotificationManagerCompat` on Android 8.0; the notification-listener detail page only from Android 11;
+the full-screen display hides system bars through `WindowInsetsControllerCompat`; the TV badge's
+fonts load through `Typeface.Builder` before Android 10 and its span is a small `MetricAffectingSpan`
+(`TypefaceSpan(Typeface)` is Android 9+); recordings are muxed without `MediaExtractor.getSampleSize`
+before Android 9 (the buffer grows until a frame fits); light navigation bar icons from Android 8.1
+(`values-v27`), with an ink navigation bar scrim on 8.0. `java.time` is used only at its API 26
+level, so no core library desugaring is needed. `display show --url` needs a WebView: many Android
+8–10 TV boxes and projectors ship without Android System WebView, so the command checks
+`WebView.getCurrentWebViewPackage()` first and answers `unsupported_on_device` with what works
+instead (`--image`, `--video`, `--text`, `open <url>`); a WebView that fails to load shows that on the
+screen and fails the command the same way. `NewApi` and `InlinedApi` are fatal lint issues in both
+modules and the app's lint checks libadb too (`checkDependencies`), so `lintDebug` and
+`assembleRelease` (through `lintVitalRelease`) both refuse a new unguarded call; planting one in
+each module on 2026-09-27 failed `assembleRelease`. A command that still hits a missing API on some
+maker's build (`LinkageError`), or runs out of memory, answers with an error instead of ending the
+app: before this, four crashes in a few minutes on Android 9 made Android stop restarting the
+foreground service, and the device stayed offline until the Carbon opened the app.
+
+### Setup on Android 8–10
+
+- **TV / TV box / projector**: Settings › Device Preferences › About › select **Build** 7 times
+  (the app's "Open About" button opens that screen), then Developer options › **Network debugging**
+  (on some TVs "ADB debugging" or "USB debugging") › On. In Extend tap **Connect Android debugging**
+  (port 5555; **Use another port** for another) and select **Allow** on "Allow USB debugging?",
+  ticking "Always allow from this computer". Network debugging survives restarts; Extend
+  reconnects by itself.
+- **Fire TV (Fire OS 7)**: Settings › My Fire TV › Developer options › **ADB debugging** › On, then
+  Connect as above.
+- **Phone / tablet**: Developer options › USB debugging › On; connect the phone to a computer by USB
+  once and run `adb tcpip 5555`; then Connect as above. `adb tcpip` lasts until the phone restarts,
+  so after a restart it has to be run again (the card says so).
+- **After updating Extend on Android 8–9**, Android may leave its accessibility service switched on
+  but not running; the step says to restart the device (seen on emulators, see below).
+
+Makers that replace Android's settings with their own menu (Network, Time, Common, Accounts, System
+info…) often hide About, Developer options and Accessibility. Every setup button therefore tries, in
+order: Android TV Settings' own page by explicit component (TVs other than Fire TV, because a
+maker's menu can claim the standard action without the needed entry), the standard `Settings`
+action, the phone Settings app's page by component, then the main settings screen. A route is used
+only when `PackageManager` resolves it to an exported activity, every start is a new task, and one
+that fails to start (`ActivityNotFoundException`, `SecurityException`) is skipped. When nothing
+opens, the step shows which setting and where it usually is. If Accessibility can't be reached but
+Android debugging connects (such boxes often have it on already), the Android debugging card offers
+**Turn on accessibility through debugging**: it adds Extend's own service to
+`enabled_accessibility_services` (keeping the others) through the shell. The Carbon taps it on the
+device; a remote command never does this.
+
+**Can't find it? Other screens on this TV** (1.0.2). A maker's menu can also leave every button
+landing on its own main page: on an Android 9 MediaTek TV (MT9255LL_ZSNIN, firmware MT5862; menu
+Network, Time, Common, Accounts, System info) "Open Accessibility settings" opened the maker's main
+settings. So the steps that need a system screen (Accessibility; Developer options, which lists About
+and Developer options screens; network/USB/Wireless debugging, which lists Developer options and
+debugging screens) have a second button that lists the other screens on this device that may be
+the one (on a TV it sits under the step's button, so the remote's Down reaches it). The button
+judges by what opened, not by the route it took: when the activity that opened is Android's main
+settings class or also answers the main settings action (a maker's menu that claims the
+Accessibility action), it says "That opened this TV's main settings menu…" and the list opens by
+itself, as it does when nothing opened. The screen the button opened goes last in the list, marked
+"The button above opens this". Discovery (`core/SettingsFinderScan.kt`, a thin PackageManager
+adapter, about 0.3–0.6 s for 700 activities on the Android 9 emulator) reads every handler of the
+standard actions (`queryIntentActivities` with `MATCH_ALL | MATCH_DISABLED_COMPONENTS`, disabled
+ones told apart by a second query and only logged) and every installed package's exported
+activities. A scan is reused for a minute unless Developer options were turned on or off since, and
+an open list scans again each time the Carbon comes back to Extend (a settings screen can enable or
+disable its own pages). A scan that fails says "Extend couldn't read this TV's screens" with Look
+again, never that the TV hides the setting. `core/SettingsFinder.kt` (pure, JVM-tested) keeps
+exported, enabled activities a normal app may start (no permission it lacks, not Extend, not
+Android's own dialogs, not a stand-in such as Android 9's toast-only
+`DevelopmentSettingsDisabledActivity` or Android TV's `frameworkpackagestubs.Stubs$SettingsStub`,
+not a test screen, not a licence, legal or managed-device page ("Third Party Source", "Managed
+device info"), not Android TV's page for one accessibility service (it closes at once without the
+service), and never a screen that can reset, wipe, reboot or update the device: a word such
+as factory, reset, recovery, restore, wipe, format, clear, reboot, update, upgrade, OTA, DSU,
+engineer, hotel, shop, demo or setup wizard starting a word of its package, class, label or app's
+name leaves it out, so "System recovery", a maker's factory menu or Android 16's "Select DSU
+Package" is never offered). It ranks them: Android's settings app answering the standard action,
+then Android's own classes (the ones the buttons try; they come before a maker's page that answers
+the action, since the button stops at that page and never reaches Android's), then other
+preinstalled handlers of the action, then names that fit (`accessib|a11y`; `develop|devopt`;
+`deviceinfo|buildnumber|systeminfo`, and inside settings or maker apps `about|status|version`;
+inside settings or maker apps `adb` or debugging named after its switch, `usbdebug`,
+`networkdebug`, `wirelessdebug`, `wifidebug`, `remotedebug`, never `debug` alone, which on Android
+16 matched `DebuggingDataActivity`, a page that crashes Settings), then a settings app's section
+named after the screen, then user-installed apps' handlers, then every main settings screen to look
+in. A step's list is ordered the same way across its screens, so Android's Developer options page
+comes before names that only fit About. Words must start a word of the class name or label
+("Inversion" is not "version", "LoadBalancer" not "adb"); labels count only in preinstalled
+settings and maker apps (Google's "Android Accessibility Suite" is TalkBack), other preinstalled
+apps only by class name, and user-installed apps only as action handlers, whatever their package
+name. Settings apps (`com.android.tv.settings`, `com.android.settings`, any package with "setting")
+come before maker packages (MediaTek, MStar, Realtek, Amlogic, TV brands…) and those before other
+apps, the closest name first; an activity-alias and its target are one entry; at most 8 per step.
+A maker menu that answers the Accessibility action as well as the main one counts as a main
+screen. Each entry is a large focusable button ("Settings · Accessibility", with why it is listed
+in this device's words: Network debugging on a TV, Wireless or USB debugging on a phone; just the
+screen's name when its app has no name of its own), opened by its explicit component (with the
+action it answers) as a new task; a start that fails says so under it. On a TV the remote moves to
+the first entry once the list has screens, only if it is still on the step's buttons. The list says
+what to do on the screen that opens (turn on Silicon Extend; select Build 7 times; turn on Network
+debugging). When nothing is Accessibility, the step says the TV hides it and that Android debugging
+lets Extend turn its own accessibility on ("Turn on accessibility through debugging"); then, when
+Developer options are hidden too, that some TVs keep the build entry under System info, or, when
+an About screen was found, that Developer options are only off and the Developer options step turns
+them on. Checked on an Android 9 emulator with a 1080p TV display (Extend in TV mode, D-pad only):
+the lists, opening Accessibility and About from them, "You are now a developer!" from the About
+entry, then Developer options from the debugging step's list (in phone mode: on the TV the step
+counted as done once the emulator's own ADB was on); the maker-TV case, with Settings' own pages
+disabled through `pm disable` and a stand-in maker menu that answers the main and the Accessibility
+action: the button opened the maker's menu, Extend called it the main settings menu, the list opened
+by itself with focus on its first entry and the maker's menu last; Down from each step's button
+reaches "Can't find it?"; the list rescans on coming back and after Developer options change. The
+lists were also replayed on the JVM from activity dumps of the Android 9, Android TV 14 and Android 16
+emulators. Not checked on the Carbon's TV itself.
 
 ## Install and run
 
@@ -66,7 +205,7 @@ access; the setup help says so.
 
 ## Tests
 
-- **JVM unit tests** (`app/src/test`, 138 tests): every frame example in `docs/device-protocol.md`
+- **JVM unit tests** (`app/src/test`, 181 tests): every frame example in `docs/device-protocol.md`
   decoded/encoded (plus the `{"type","data"}` envelope form and unknown frames), argument parsing for
   every command (and the refusals), selector parsing/matching, snapshot filtering/ref assignment/
   text/JSON/diff, alert detection, `.ad`/batch parsing, reconnect backoff; and for Android
@@ -83,6 +222,30 @@ access; the setup help says so.
   after-restart step, `hello`, setup staying `complete` so the device stays ready, and Disconnect
   offered while debugging is paired but off), `TvRemoteKeysTest` (key codes, `input keyevent`
   lines, power refused, `input.remote`), `TvNameTest` (the TV label, launcher entry and banner).
+  `SettingsFinderTest` (19): the "Can't find it?" lists on fake activity lists shaped like an AOSP
+  phone (Android 9, Developer options off, plus the noise seen on the emulator), Android TV Settings
+  (with an alias), Android TV 14's Settings, a maker TV with odd names (a known class that lost its
+  action, a settings section called `a11y`, "System info", a maker ADB switch, a
+  permission-protected factory page) and a TV where nothing is found: ranking (Android's own pages
+  before a maker's action handler, user-installed apps after preinstalled screens and never by
+  name), the order across a step's screens, word matching (Android 16's `DebuggingDataActivity`
+  pages never offered), de-duplication, the cap, what goes on the intent, readable names (no
+  package name as a title), each step's words and reasons per device, the notes when a TV hides
+  Accessibility and Developer options (and when Developer options are only off), that the button's
+  landing in a maker's menu counts as a main screen and that screen goes last, marked, and that no
+  factory reset, recovery, reboot, update, DSU, engineering, stub, licence or managed-device screen
+  is ever offered.
+  `AndroidVersionsTest` (20): the debugging path per SDK (network debugging on port 5555 before
+  Android 11, the 60 s wait for "Allow USB debugging?" only for a connect the Carbon started), the
+  screenshot path, setup steps and capabilities per SDK for phones and TVs, the settings routes'
+  order (Android TV Settings first on TVs, the standard action first on phones and Fire TV, the main
+  screen last, version-only pages left out), the message when nothing opens, the clipboard focus
+  rule, the enable-accessibility shell command, the "restart to start accessibility" hint on
+  Android 8–9 and the frame buffer growth before Android 9. `TvBoxesAndOlderAndroidTest` (4): a box
+  without a touchscreen counts as a TV (computers, cars and watches don't), the wait for the app's
+  own screens by SDK (6.5 s up to Android 11, past the app-switch window after Home), the
+  `input.remote` reason on an Android 9 TV and Fire TV without debugging (it names what still
+  works), and the `display show --url` refusal without a WebView.
   `vendor/libadb/src/test` (10 tests: `ExtendTransportTest` 7, `AndroidPubkeyTest` 3) covers the
   transport changes against a scripted peer. `app/src/androidTest` has 20 instrumented tests
   (below).
@@ -110,7 +273,7 @@ access; the setup help says so.
    reboot, and needs Wi-Fi. The accessibility tree gives the same element list agent-device's
    Android helper reads (it is itself built on `UiAutomation`), `dispatchGesture` taps/swipes,
    `performGlobalAction` presses back/home/recents/D-pad, and `takeScreenshot` (API 30+) captures
-   the screen. The service is also what Android allows to start activities from the background,
+   the screen (before Android 11, screenshots need Android debugging's `screencap`). The service is also what Android allows to start activities from the background,
    which `open`, `display` and `clipboard read` need.
 2. **agent-device semantics, re-implemented in Kotlin.** The snapshot follows agent-device's Android
    presentation (`ui-hierarchy-inclusion.ts`, `snapshot-lines.ts`): label = text or content
@@ -129,7 +292,9 @@ access; the setup help says so.
    report returns `unsupported_on_device` with the `missing` reason.
 4. **Setup state.** Required steps: accessibility, notifications (phones, API 33+), background use
    (battery optimisation), notification access (phones). Developer options and wireless/network
-   debugging are listed with their real status (`done` or `todo`). Core accessibility control
+   debugging are listed with their real status (`done` or `todo`); before Android 11 the debugging
+   step is `network_debugging` on phones too, and a phone's counts as `done` only once Extend is
+   connected (`adb tcpip` is invisible to apps). Core accessibility control
    remains available without debugging; installation, logs and recording require its connection.
 5. **TV in-use badge** is a `TYPE_ACCESSIBILITY_OVERLAY` window (no "display over other apps"
    permission), not focusable or touchable, left out of snapshots.
@@ -220,9 +385,79 @@ Phone (Android 16 emulator) and TV (Android TV 14 emulator):
 - `clipboard read` briefly takes window focus (Android 10+ only lets the focused app read the
   clipboard), which can close the keyboard or a menu in the app underneath.
 - `close` goes home and ends background processes; force-stop needs Android debugging.
+- Before Android 11, `screenshot` without Android debugging (`unsupported_on_device`, the reason
+  names what to turn on).
+- Up to Android 11 Android holds an activity start from the background for 5 seconds after Home
+  (the app-switch delay), so `open`, `display show` or `clipboard read` right after `home` take
+  about 5 s; they wait up to 6.5 s there instead of failing after 4 s.
+- `display show --url` on a device without Android System WebView (`unsupported_on_device`, the
+  reason says what works instead).
 - Not verified: physical devices, physical Fire TV (`amazon.hardware.fire_tv` detection and the
-  Fire OS settings paths are from documentation), Android 11–12 devices (minSdk 30; D-pad buttons
-  there need Android debugging), video playback in `display`.
+  Fire OS settings paths are from documentation), Android 8–10 on a physical TV, TV box or Fire TV
+  (the first-connect "Allow USB debugging?" prompt, `LocalAdbTest#realLocalDaemon` and `RecordingTest`
+  there), Android 8.1 and 10 (only the 8.0 and 9 emulators were run), a TV box without a touchscreen
+  (the `looksLikeTv` rule is from its JVM test only), Android 11–12 devices (D-pad buttons there need
+  Android debugging), video playback in `display`.
+
+### Checked on Android 8.0 and 9 (API 26 and 28 emulators, 2026-09-27)
+
+The minSdk 26 debug APK installs and runs on the API 26 `default` and API 28 `google_apis` arm64
+emulators. The fake-service phone scenario (`ANDROID_SERIAL=<emulator> PORT=<free port>
+tools/fake-service/run-emulator-test.sh phone`) passed 79 of 84 checks on Android 9 and 74 of 83
+on Android 8.0. The failures are the expected refusals (`screen.capture` missing and three
+`screenshot` commands, each `unsupported_on_device` with the Android 8–10 reason) and checks whose
+selectors match newer Settings layouts (`text="Apps"`; on 8.0 also the `search_action_bar` id and
+the search field they lead to). The runs found and fixed three problems: `clipboard` failed on 8.0
+(`ClipboardManager` created off the main thread needs a Looper before Android 9) and waited for
+focus needlessly before Android 10; and on 8.0, after a key press (Home, Back) left touch mode,
+opening the app gave the first text field focus (Android 8.0/8.1 give a window initial focus, and
+Compose in touch mode can only focus text fields), which opened the keyboard and scrolled away
+from the in-use card: the Android 8–10 debugging card now shows its port field only after "Use
+another port". On both emulators, replacing the APK while the accessibility service was running
+left it switched on but never started again, and turning it off and on through `settings` didn't
+help; a restart did. The accessibility step then says so after 15 seconds on Android 8–9
+("…restart this TV and it starts by itself"). `run-emulator-test.sh` therefore turns accessibility
+off before it reinstalls, and on Android 8.0 (no `cmd notification`) grants notification access
+through the `enabled_notification_listeners` setting (installed that way four times on the two
+emulators in the second pass below; the service was bound again each time). With
+Android debugging connected from the app's Connect button (blank port → 5555) the device reported
+every phone capability, `screenshot` returned a 1080×1920 PNG through `screencap` (also with
+`--scale --overlay-refs`), debugging reconnected by itself after a restart, a refused port showed
+the `adb tcpip` message, and "Turn on accessibility through debugging" bound the service. In TV mode
+(`force_tv`) the About button fell through the missing Android TV Settings components to Android's
+About screen. `LocalAdbTest` (legacy lane) passed 7 of 8 with the shell proof and `adb install`; its
+recording part and `RecordingTest` fail on that emulator only because its H.264 encoder can't record
+(`screenrecord` from a computer fails the same way, "Encoder failed (err=-38)"). The API 28 emulator's
+adbd never listens on TCP (only the emulator pipe), so the lane bridges the guest's port 5555 to the
+emulator's own adb port: `adb -s emulator-5580 tcpip 5555; adb -s emulator-5580 reverse tcp:5555
+tcp:5581` (console port + 1). That adbd doesn't ask "Allow USB debugging?" (`ro.adb.secure=0`), so
+the 60-second approval wait was not exercised on a real prompt.
+
+Second pass on the same emulators (1.0.1, after the verifiers' findings), each paired to a
+scenario-less fake service and driven with `/_test/command`; no entry in either crash buffer:
+
+- Android 9, TV mode, no debugging: `snapshot`, `home`, `back`, `display show --text` right after
+  `home` (answered after 5.2 s instead of failing at 4 s), `display show --url` (2.7 s), `display
+  clear`; `tv-remote` and `screenshot` refused with the Android 9 reasons. Then with debugging
+  connected (the bridge above; the app reconnected by itself): `tv-remote press down/up/menu/back`
+  through `input keyevent`, `screenshot` 1080×1920 through `screencap`, `adb shell getprop`.
+- Android 8.0, TV mode: that image has no WebView provider (`dumpsys webviewupdate`: "Current
+  WebView package is null", although it declares `android.software.webview`), so `display show
+  --url` answered `unsupported_on_device` with the reason and the app kept running; `display show
+  --text` right after `home` answered after 5.0 s.
+- Android 8.0, phone mode: `snapshot`, `click`, `press`, `swipe`, `clipboard write`/`read`, `open
+  Settings` right after `home` (4.6 s), `appstate`, `notifications`; `screenshot` refused with the
+  Android 8 reason; `hello` reported `os: android` (the image has a touchscreen).
+- Toybox `grep -qzF` and `grep -lzxF` (Android debugging's session commands) work on Android 8.0
+  (toybox 0.7.3) and 9 (0.7.6).
+
+On the Android TV 14 emulator the setup buttons, pressed with the D-pad, opened Android TV
+Settings' own pages by component: Accessibility (`oemlink.AccessibilitySettingsActivity`; the older
+`system.AccessibilityActivity` doesn't exist there and was skipped), About (`about.AboutActivity`)
+and Developer options (`system.development.DevelopmentActivity`). On TV Settings,
+`IGNORE_BATTERY_OPTIMIZATION_SETTINGS` resolves to an empty stub and `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+to nothing, which is why a TV shows the background step only when the request resolves. The class
+names for Android 8–10 TV Settings come from AOSP and were not checked on a TV of that age.
 
 ## Android debugging (2026-09-26 follow-up)
 
@@ -283,7 +518,15 @@ Wireless debugging on (`settings put global adb_wifi_enabled 1`) reconnected wit
 the step went back to `done`, `adb` returned and the notification went. Screenshots:
 `build-screens/phone-after-restart-*.png`.
 
-Connected debugging enables `adb`, `install`/`reinstall`, `logs`, and phone `record` commands.
+Android 8–10 have no Wireless debugging: the card has no pairing fields, only Connect (port 5555)
+and "Use another port". A connect the Carbon starts waits up to 60 seconds for them to answer
+"Allow USB debugging?" with the remote; the reconnect loop waits 8 seconds and never asks for
+approval on its own. The same shell proof applies. After-restart handling (above) is for Wireless
+debugging only: network debugging on a TV survives restarts, and a phone's `adb tcpip` needs the
+Carbon's computer again (the card says so).
+
+Connected debugging enables `adb`, `install`/`reinstall`, `logs`, and phone `record` commands, and
+before Android 11 also `screenshot`.
 Accessibility remains the semantic screen/input driver. Capabilities are withdrawn when debugging
 is disconnected.
 
@@ -364,6 +607,9 @@ version on every screen), from `app/src/main/assets/open_source_licences.txt`; r
 with `python3 tools/notices/generate_notices.py` whenever dependencies change (it fails on a
 licence it doesn't know). Release APKs are signed only when `EXTEND_ANDROID_SIGNING_PROPERTIES` names the release key's properties
 (storeFile, storePassword, keyAlias, keyPassword); otherwise they are unsigned, never debug-signed.
+Signing keeps the v2 scheme on beside v3: v3 alone is read only from Android 9, and Android 8.0/8.1
+need v2 (v1 isn't needed from Android 7). Check a signed APK with
+`apksigner verify --min-sdk-version 26 --print-certs -v app-release.apk` (it must list v2 as `true`).
 
 From the CLI, `extend adb` arguments reach the device exactly as typed from the first `adb`
 argument on; Extend's own flags go before it (`extend --json adb shell df -h`,
@@ -395,6 +641,8 @@ Verification commands:
 adb -s emulator-5554 install -r -g app/build/outputs/apk/debug/app-debug.apk
 adb -s emulator-5554 install -r -g app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 # Legacy lane, dedicated emulator only: enable TCP debugging once and approve the app's RSA prompt.
+# Emulators before Android 11 (checked on API 28) never listen on TCP: also run
+# `adb -s <serial> reverse tcp:5555 tcp:<console port + 1>` (see "Checked on Android 8.0 and 9").
 adb -s emulator-5554 tcpip 5555
 adb -s emulator-5554 shell am instrument -w -e class com.teamofsilicons.extend.LocalAdbTest \
   -e local_daemon true com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner

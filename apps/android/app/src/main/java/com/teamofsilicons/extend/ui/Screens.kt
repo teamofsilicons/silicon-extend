@@ -1,6 +1,6 @@
 package com.teamofsilicons.extend.ui
 
-import android.content.Intent
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -48,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -64,12 +66,23 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.teamofsilicons.extend.BuildConfig
 import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.config.DeviceInfo
+import com.teamofsilicons.extend.core.FindHelp
+import com.teamofsilicons.extend.core.FinderResults
 import com.teamofsilicons.extend.core.Link
+import com.teamofsilicons.extend.core.OpenResult
+import com.teamofsilicons.extend.core.OpenedScreen
 import com.teamofsilicons.extend.core.Phase
+import com.teamofsilicons.extend.core.SettingsCandidate
+import com.teamofsilicons.extend.core.SettingsFinder
+import com.teamofsilicons.extend.core.SettingsTarget
 import com.teamofsilicons.extend.core.SetupItem
+import com.teamofsilicons.extend.adb.DebuggingPath
 import com.teamofsilicons.extend.core.UiState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -77,13 +90,23 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+/** What the setup steps' buttons do; MainActivity wires them to this device. */
+class SetupActions(
+    val requestNotifications: () -> Unit,
+    /** Opens a step's settings page: the page itself, only the main settings screen, or nothing (with a message). */
+    val open: (SettingsTarget) -> OpenResult,
+    /** Opens a screen from a step's "Can't find it?" list; the message to show when it didn't open. */
+    val openCandidate: (SettingsCandidate) -> String?,
+    /** Every system screen's candidates on this device, scanned off the main thread ([refresh]: scan again); null when the scan failed. */
+    val findScreens: suspend (refresh: Boolean) -> FinderResults?,
+)
+
 @Composable
 fun AppScreen(
     extend: Extend,
     state: UiState,
     onOpenDeveloperSettings: () -> Unit,
-    onRequestNotifications: () -> Unit,
-    onOpen: (Intent) -> Unit,
+    actions: SetupActions,
     onOpenLicences: () -> Unit = {},
 ) {
     val footer: @Composable () -> Unit = { Footer(state, onOpenDeveloperSettings, onOpenLicences) }
@@ -102,7 +125,7 @@ fun AppScreen(
         when (state.phase) {
             Phase.STARTING -> Starting()
             Phase.UNPAIRED -> PairingScreen(state)
-            Phase.PAIRED -> PairedScreen(extend, state, onRequestNotifications, onOpen)
+            Phase.PAIRED -> PairedScreen(extend, state, actions)
         }
         Gap(32.dp)
         Hairline()
@@ -434,7 +457,7 @@ private fun formatTime(ts: String?): String = ts?.let {
 } ?: ""
 
 @Composable
-private fun PairedScreen(extend: Extend, state: UiState, onRequestNotifications: () -> Unit, onOpen: (Intent) -> Unit) {
+private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) {
     val s = LocalScale.current
     val tv = state.isTv
     val noun = if (tv) "TV" else "device"
@@ -481,12 +504,14 @@ private fun PairedScreen(extend: Extend, state: UiState, onRequestNotifications:
             },
         )
         Gap(14.dp)
-        StepList(required, 1, tv, onRequestNotifications, onOpen)
+        // The finder's notes say more when Developer options are still off.
+        val devOptions = report.items.any { it.step.key == "developer_options" && it.step.status == "done" }
+        StepList(required, 1, tv, devOptions, actions)
         if (optional.isNotEmpty()) {
             Gap(22.dp)
             Eyebrow("Optional")
             Gap(8.dp)
-            StepList(optional, required.size + 1, tv, onRequestNotifications, onOpen)
+            StepList(optional, required.size + 1, tv, devOptions, actions)
         }
         if (report.capabilities.isNotEmpty()) {
             Gap(22.dp)
@@ -494,7 +519,7 @@ private fun PairedScreen(extend: Extend, state: UiState, onRequestNotifications:
         }
     }
 
-    AndroidDebuggingCard(extend)
+    AndroidDebuggingCard(extend, state)
     Gap(28.dp)
     ExtendButton(
         if (revoking) "Revoking…" else "Revoke pair",
@@ -638,17 +663,18 @@ private fun InUseCard(extend: Extend, state: UiState) {
 }
 
 @Composable
-private fun StepList(items: List<SetupItem>, first: Int, tv: Boolean, onRequestNotifications: () -> Unit, onOpen: (Intent) -> Unit) {
+private fun StepList(items: List<SetupItem>, first: Int, tv: Boolean, devOptions: Boolean, actions: SetupActions) {
     Panel(padding = 0.dp) {
         items.forEachIndexed { i, item ->
             if (i > 0) Hairline()
-            StepRow(first + i, item, onRequestNotifications, onOpen)
+            key(item.step.key) { StepRow(first + i, item, tv, devOptions, actions) }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StepRow(index: Int, item: SetupItem, onRequestNotifications: () -> Unit, onOpen: (Intent) -> Unit) {
+private fun StepRow(index: Int, item: SetupItem, tv: Boolean, devOptions: Boolean, actions: SetupActions) {
     val s = LocalScale.current
     val step = item.step
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp)) {
@@ -669,15 +695,197 @@ private fun StepRow(index: Int, item: SetupItem, onRequestNotifications: () -> U
                     Muted(it, color = Tokens.StopDeep)
                 }
                 val label = item.actionLabel
+                val open = item.open
                 if (step.key == "notifications") {
                     Gap(12.dp)
-                    ExtendButton(label ?: "Allow notifications", onRequestNotifications, tone = if (item.required) Tone.Primary else Tone.Secondary)
-                } else if (item.open != null) {
+                    ExtendButton(label ?: "Allow notifications", actions.requestNotifications, tone = if (item.required) Tone.Primary else Tone.Secondary)
+                } else if (open != null) {
                     Gap(12.dp)
+                    val noun = if (tv) "TV" else "device"
                     // An optional step that needs the Carbon (Wireless debugging after a restart) gets the primary button too.
                     val primary = item.required || step.status == "needs_carbon"
-                    ExtendButton(label ?: "Open settings", { onOpen(item.open.invoke()) }, tone = if (primary) Tone.Primary else Tone.Secondary)
+                    // Set when no settings screen opened (a maker's menu can hide Android's pages): which setting, and where it usually is.
+                    var openError by remember(step.key) { mutableStateOf<String?>(null) }
+                    // Set when the button only reached a main settings screen (by what opened: a maker's menu that
+                    // claims the Accessibility action counts), which can leave the entry out.
+                    var mainOnly by remember(step.key) { mutableStateOf(false) }
+                    // What the button opened: the list puts it last and says so, since the Carbon has looked there.
+                    var opened by remember(step.key) { mutableStateOf<OpenedScreen?>(null) }
+                    // "Can't find it?": the other screens on this device that may be the one this step needs.
+                    var showOthers by remember(step.key) { mutableStateOf(false) }
+                    // Whether the remote is on one of the two buttons: the list takes the focus only then.
+                    var openFocused by remember(step.key) { mutableStateOf(false) }
+                    var othersFocused by remember(step.key) { mutableStateOf(false) }
+                    val find = item.find
+                    val buttons: @Composable () -> Unit = {
+                        ExtendButton(
+                            label ?: "Open settings",
+                            {
+                                val r = actions.open(open)
+                                openError = r.message
+                                mainOnly = r.outcome == OpenResult.Outcome.MAIN_SCREEN
+                                opened = r.opened
+                                if (r.offerOthers && find != null) showOthers = true
+                            },
+                            tone = if (primary) Tone.Primary else Tone.Secondary,
+                            modifier = Modifier.onFocusChanged { openFocused = it.hasFocus },
+                        )
+                        if (find != null) {
+                            ExtendButton(
+                                if (showOthers) "Hide other screens" else FindHelp.buttonLabel(tv),
+                                { showOthers = !showOthers },
+                                tone = Tone.Secondary,
+                                modifier = Modifier.onFocusChanged { othersFocused = it.hasFocus },
+                            )
+                        }
+                    }
+                    // On a TV one under the other: side by side, the remote's Down skipped "Can't find it?" (only Right reached it).
+                    if (s.tv) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { buttons() }
+                    } else {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { buttons() }
+                    }
+                    openError?.let {
+                        Gap(8.dp)
+                        Muted(it, color = Tokens.StopDeep, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    }
+                    if (mainOnly && openError == null) {
+                        Gap(8.dp)
+                        Muted(
+                            "That opened this $noun's main settings menu, which may not have ${open.name}. If it doesn't, try the other screens below.",
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                    if (find != null && showOthers) OtherScreens(find, tv, devOptions, opened, { openFocused || othersFocused }, actions)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * A step's "Can't find it?" list: the screens on this device that may be the one the step needs
+ * ([SettingsFinder]), each a button that opens it, with what to do there; the one the step's
+ * button opened ([opened]) last. When the device hides the setting altogether, it says so and
+ * what works instead. On a TV the remote moves to the first screen once the list has screens, if
+ * it is still on the step's buttons ([onStepButtons]).
+ */
+@Composable
+private fun OtherScreens(
+    help: FindHelp,
+    tv: Boolean,
+    devOptions: Boolean,
+    opened: OpenedScreen?,
+    onStepButtons: () -> Boolean,
+    actions: SetupActions,
+) {
+    val s = LocalScale.current
+    val noun = if (tv) "TV" else "device"
+    val sdk = Build.VERSION.SDK_INT
+    val scope = rememberCoroutineScope()
+    var results by remember { mutableStateOf<FinderResults?>(null) }
+    // The scan failed and none worked before: say so, never that the device hides the setting.
+    var scanFailed by remember { mutableStateOf(false) }
+    suspend fun scan(refresh: Boolean) {
+        val r = actions.findScreens(refresh)
+        if (r != null) results = r
+        scanFailed = r == null && results == null
+    }
+    // Scanned when the list opens (a scan under a minute old is reused, unless Developer options
+    // changed since), again once Developer options turn on or off (Android 9 enables its real page
+    // only then)...
+    var scans by remember { mutableIntStateOf(0) }
+    LaunchedEffect(devOptions) {
+        scan(refresh = scans > 0)
+        scans++
+    }
+    // ...and each time the Carbon comes back to Extend: a settings screen can enable or disable its own pages.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        var away = false
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> away = true
+                Lifecycle.Event.ON_RESUME -> if (away) {
+                    away = false
+                    scope.launch { scan(refresh = true) }
+                }
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    // The candidate that didn't open (its component) and what to tell the Carbon.
+    var failed by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val first = remember { FocusRequester() }
+    // The remote is moved to the list at most once: a rescan never pulls it back.
+    var focusOffered by remember { mutableStateOf(false) }
+    Gap(12.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Tokens.Surface, Radius)
+            .border(1.dp, Tokens.Line, Radius)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+    ) {
+        Eyebrow("Other screens on this $noun")
+        Gap(6.dp)
+        val r = results
+        if (r == null) {
+            if (scanFailed) {
+                Muted(
+                    "Extend couldn't read this $noun's screens. Look in the $noun's own settings menu, or try again.",
+                    color = Tokens.StopDeep,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                Gap(8.dp)
+                ExtendButton("Look again", { scope.launch { scan(refresh = true) } }, tone = Tone.Secondary)
+            } else {
+                Muted("Looking for screens on this $noun…", modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            }
+            return@Column
+        }
+        val list = SettingsFinder.forStep(help, r, opened = opened)
+        val notes = SettingsFinder.notes(help, r, tv, sdk, devOptions)
+        if (list.isNotEmpty()) {
+            Muted(help.lookFor, color = Tokens.Ink)
+            list.forEachIndexed { i, c ->
+                Gap(8.dp)
+                ChoiceButton(
+                    c.title,
+                    c.reason(tv, sdk),
+                    { failed = actions.openCandidate(c)?.let { c.component to it } },
+                    modifier = if (i == 0) Modifier.focusRequester(first) else Modifier,
+                )
+                failed?.takeIf { it.first == c.component }?.let { (_, message) ->
+                    Gap(6.dp)
+                    Muted(message, color = Tokens.StopDeep, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+            }
+            if (s.tv) {
+                LaunchedEffect(Unit) {
+                    if (!focusOffered) {
+                        focusOffered = true
+                        // Not if the Carbon moved on while Extend was looking.
+                        if (onStepButtons()) runCatching { first.requestFocus() }
+                    }
+                }
+            }
+        } else {
+            Muted("Extend found no other settings screens on this $noun.")
+        }
+        notes.forEach {
+            Gap(10.dp)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Tokens.Paper, Radius)
+                    .border(1.dp, Tokens.CobaltEdge, Radius)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            ) {
+                Muted(it, color = Tokens.Ink)
             }
         }
     }
@@ -773,7 +981,16 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
  */
 internal object DebuggingCardCopy {
     const val DISCONNECT = "Disconnect Android debugging"
+    const val TURN_ON_ACCESSIBILITY = "Turn on accessibility through debugging"
+    const val ACCESSIBILITY_THROUGH_DEBUGGING =
+        "Accessibility isn't on yet. If this device's settings don't show Android's Accessibility page, Extend can turn it on through Android debugging."
 
+    /** Android 8–10 (no Wireless debugging): network debugging on [port], approved on the screen. */
+    fun text(connected: Boolean, enabled: Boolean, wirelessDebuggingOff: Boolean, sdk: Int, tv: Boolean, fire: Boolean, release: String, port: Int): String =
+        if (DebuggingPath.mode(sdk) == DebuggingPath.Mode.NETWORK) DebuggingPath.legacyCardText(connected, enabled, tv, fire, release, port)
+        else text(connected, enabled, wirelessDebuggingOff)
+
+    /** Android 11+: Wireless debugging, paired with Android's pairing code. */
     fun text(connected: Boolean, enabled: Boolean, wirelessDebuggingOff: Boolean): String = when {
         connected -> "Connected · app installation, device logs and recording are available."
         enabled && wirelessDebuggingOff ->
@@ -790,11 +1007,15 @@ internal object DebuggingCardCopy {
 }
 
 @Composable
-private fun AndroidDebuggingCard(extend: Extend) {
+private fun AndroidDebuggingCard(extend: Extend, state: UiState) {
+    val sdk = Build.VERSION.SDK_INT
+    // Android 8–10: no Wireless debugging, so no pairing; network debugging on port 5555.
+    val legacy = DebuggingPath.mode(sdk) == DebuggingPath.Mode.NETWORK
     val scope = rememberCoroutineScope()
     var pairingPort by remember { mutableStateOf("") }
     var pairingCode by remember { mutableStateOf("") }
     var connectionPort by remember { mutableStateOf("") }
+    var otherPort by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var connected by remember { mutableStateOf(extend.adb.connected) }
@@ -812,7 +1033,7 @@ private fun AndroidDebuggingCard(extend: Extend) {
         busy = true
         scope.launch {
             try { message = action() }
-            catch (e: Exception) { message = e.message ?: "Android debugging failed with no reason given. Check Wireless debugging is on, then try again." }
+            catch (e: Exception) { message = e.message ?: "Android debugging failed with no reason given. Check that debugging is on in Developer options, then try again." }
             finally { busy = false; connected = extend.adb.connected; enabled = extend.adb.enabled; extend.onCapabilitiesMayHaveChanged() }
         }
     }
@@ -826,8 +1047,33 @@ private fun AndroidDebuggingCard(extend: Extend) {
         Gap(6.dp)
         CardTitle("Android debugging")
         Gap(4.dp)
-        Muted(DebuggingCardCopy.text(connected, enabled, wirelessOff))
-        if (!connected) {
+        Muted(
+            DebuggingCardCopy.text(
+                connected, enabled, wirelessOff, sdk, state.isTv, state.isFireTv, Build.VERSION.RELEASE ?: "$sdk",
+                extend.adb.port.takeIf { it != 0 } ?: DebuggingPath.LEGACY_PORT,
+            ),
+        )
+        if (!connected && legacy) {
+            // No text field unless asked for: Android 8.0/8.1 give a window's first focusable
+            // element focus once a key (Home, Back) has left touch mode, and a port field there
+            // would open the keyboard and scroll the page away from who is using the device.
+            if (otherPort) {
+                Gap(12.dp)
+                ExtendTextField(connectionPort, { connectionPort = it }, "Android debugging port (blank: ${DebuggingPath.LEGACY_PORT})", enabled = !busy, keyboardType = KeyboardType.Number)
+            }
+            Gap(12.dp)
+            ExtendButton("Connect Android debugging", {
+                act {
+                    val port = if (connectionPort.isBlank()) DebuggingPath.LEGACY_PORT else connectionPort.toIntOrNull() ?: error("Enter a valid port.")
+                    message = "Connecting to port $port… If Android asks \"Allow USB debugging?\", select Allow (tick \"Always allow from this computer\")."
+                    if (extend.adb.connect(port, startedByCarbon = true)) "Connected." else extend.adb.lastError ?: "Could not connect."
+                }
+            }, enabled = !busy, tone = Tone.Secondary)
+            if (!otherPort) {
+                Gap(8.dp)
+                ExtendButton("Use another port", { otherPort = true }, enabled = !busy, tone = Tone.Quiet)
+            }
+        } else if (!connected) {
             Gap(12.dp)
             ExtendTextField(pairingPort, { pairingPort = it }, "Android pairing port", enabled = !busy, keyboardType = KeyboardType.Number)
             Gap(8.dp)
@@ -850,9 +1096,25 @@ private fun AndroidDebuggingCard(extend: Extend) {
             ExtendButton("Connect Android debugging", {
                 act {
                     val port = if (connectionPort.isBlank()) 0 else connectionPort.toIntOrNull() ?: error("Enter a valid connection port.")
-                    if (extend.adb.connect(port)) "Connected." else extend.adb.lastError ?: "Could not connect."
+                    if (extend.adb.connect(port, startedByCarbon = true)) "Connected." else extend.adb.lastError ?: "Could not connect."
                 }
             }, enabled = !busy, tone = Tone.Secondary)
+        }
+        // A maker's menu can hide Android's Accessibility page; with debugging connected the
+        // Carbon can turn on Extend's own service from here instead (the shell may do that).
+        val a11yOff = state.report?.items?.firstOrNull { it.step.key == "accessibility" }?.step?.status == "needs_carbon"
+        if (connected && a11yOff) {
+            Gap(12.dp)
+            Muted(DebuggingCardCopy.ACCESSIBILITY_THROUGH_DEBUGGING)
+            Gap(10.dp)
+            ExtendButton(DebuggingCardCopy.TURN_ON_ACCESSIBILITY, {
+                act {
+                    val component = com.teamofsilicons.extend.a11y.ExtendAccessibilityService.component(extend.context).flattenToString()
+                    val r = extend.adb.shell(DebuggingPath.enableAccessibilityCommand(component), check = false)
+                    if (r.exitCode == 0) "Asked Android to turn on accessibility for ${DeviceInfo.appName(state.isTv)}. It shows as allowed above within a few seconds."
+                    else "Android didn't turn on accessibility (exit ${r.exitCode}: ${r.text.trim().take(300)}). Try the Accessibility settings button above."
+                }
+            }, enabled = !busy, tone = Tone.Primary)
         }
         if (DebuggingCardCopy.offersDisconnect(connected, enabled)) {
             if (!connected) {
@@ -865,7 +1127,7 @@ private fun AndroidDebuggingCard(extend: Extend) {
                     extend.executor.cancelAdbCommands()
                     extend.adbExecutor.endAll()
                     extend.adb.disconnect()
-                    "Disconnected. You can also forget Silicon Extend in Android's Wireless debugging settings."
+                    DebuggingPath.disconnected(sdk)
                 }
             }, enabled = !busy, tone = Tone.Secondary)
         }

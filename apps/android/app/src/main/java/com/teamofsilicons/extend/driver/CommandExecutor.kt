@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -205,6 +206,18 @@ class CommandExecutor(
                 CommandError("internal_error", "The Android app hit an unexpected error running ${frame.command}: $e"),
                 run.files,
             )
+        } catch (e: LinkageError) {
+            // A call this Android version (or this maker's build of it) doesn't have. Uncaught, it
+            // would end the whole app, accessibility service and connection included; answered, it
+            // costs only this command.
+            Extend.log("command ${frame.command} used an API this Android doesn't have", e)
+            val message = "The Android app used something Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) " +
+                "doesn't have while running ${frame.command} ($e). This is a bug in the Extend app; other commands still work."
+            DeviceFrame.Result(frame.id, false, JsonNull, message, CommandError("internal_error", message), run.files)
+        } catch (e: OutOfMemoryError) {
+            Extend.log("command ${frame.command} ran out of memory", e)
+            val message = "The device ran out of memory running ${frame.command}: the picture or file was too large for this device. Other commands still work."
+            DeviceFrame.Result(frame.id, false, JsonNull, message, CommandError(CommandFailure.ACTION_FAILED, message), run.files)
         } finally {
             run.scratch?.deleteRecursively()
         }
@@ -1081,13 +1094,6 @@ class CommandExecutor(
             (adbProblem?.let { "Android debugging failed while pressing $b ($it), and " } ?: "") +
                 "Silicon Extend's accessibility service isn't running. The Carbon turns it on in Settings › Accessibility › ${com.teamofsilicons.extend.config.DeviceInfo.systemLabel(extend.context)}, or connects Android debugging in the Extend app.",
         )
-        val dpad = mapOf(
-            "up" to AccessibilityService.GLOBAL_ACTION_DPAD_UP,
-            "down" to AccessibilityService.GLOBAL_ACTION_DPAD_DOWN,
-            "left" to AccessibilityService.GLOBAL_ACTION_DPAD_LEFT,
-            "right" to AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT,
-            "select" to AccessibilityService.GLOBAL_ACTION_DPAD_CENTER,
-        )
         fun done(method: String) = Outcome(
             buildJsonObject { put("button", b); put("longpress", cmd.longPress); put("method", method) },
             "${if (cmd.longPress) "Long-pressed" else "Pressed"} $b",
@@ -1105,13 +1111,13 @@ class CommandExecutor(
             )
         }
         when (b) {
-            in dpad -> {
+            in DPAD_BUTTONS -> {
                 if (!ExtendAccessibilityService.dpadSupported) {
                     throw CommandFailure.unsupported(
                         "D-pad buttons need Android debugging on this TV (Android ${android.os.Build.VERSION.RELEASE}; accessibility has D-pad actions only from Android 13). Connect Android debugging in the Extend app's setup.",
                     )
                 }
-                if (!a.global(dpad.getValue(b))) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the $b button.")
+                if (!a.global(dpadAction(b))) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the $b button.")
                 return done("global_action")
             }
             "back" -> return global(AccessibilityService.GLOBAL_ACTION_BACK, "back").let { done("global_action") }
@@ -1138,6 +1144,16 @@ class CommandExecutor(
             )
         }
         throw CommandFailure.invalid("Unknown remote button $b")
+    }
+
+    /** The accessibility D-pad action for a remote button (Android 13+ only). */
+    @androidx.annotation.RequiresApi(33)
+    private fun dpadAction(button: String): Int = when (button) {
+        "up" -> AccessibilityService.GLOBAL_ACTION_DPAD_UP
+        "down" -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN
+        "left" -> AccessibilityService.GLOBAL_ACTION_DPAD_LEFT
+        "right" -> AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT
+        else -> AccessibilityService.GLOBAL_ACTION_DPAD_CENTER
     }
 
     private suspend fun keyboard(cmd: Cmd.Keyboard): Outcome {
@@ -1183,7 +1199,9 @@ class CommandExecutor(
     }
 
     private suspend fun clipboard(cmd: Cmd.Clipboard): Outcome {
-        val cm = context.getSystemService(ClipboardManager::class.java)
+        // Fetched on the main thread: before Android 9 ClipboardManager's constructor creates a
+        // Handler on the calling thread, which fails on a command thread without a Looper.
+        val cm = withContext(Dispatchers.Main) { context.getSystemService(ClipboardManager::class.java) }
         val write = cmd.write
         if (write != null) {
             withContext(Dispatchers.Main) {
@@ -1191,8 +1209,17 @@ class CommandExecutor(
             }
             return Outcome(buildJsonObject { put("chars", write.length) }, "Clipboard set [redacted ${write.length} chars]")
         }
-        // Android 10+ only lets the focused app read the clipboard: take focus for a moment.
-        val text = ClipboardActivity.read(a11y())
+        // Android 10+ only lets the focused app read the clipboard: take focus for a moment. Before
+        // that any app may read it, so it is read directly (starting an activity from the
+        // background there can wait up to 5 s after Home is pressed).
+        val text = if (ClipboardActivity.needsFocus(android.os.Build.VERSION.SDK_INT)) ClipboardActivity.read(a11y())
+        else withContext(Dispatchers.Main) {
+            try {
+                cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+            } catch (e: Exception) {
+                throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the clipboard read: $e")
+            }
+        }
         return Outcome(buildJsonObject { put("text", text?.let { JsonPrimitive(it) } ?: JsonNull) }, text ?: "(clipboard is empty)")
     }
 
@@ -1271,10 +1298,11 @@ class CommandExecutor(
         } catch (e: android.content.ActivityNotFoundException) {
             throw CommandFailure(CommandFailure.APP_NOT_FOUND, "No app on this device can open $url.")
         }
-        // Wait until something new is in front.
+        // Wait until something new is in front (up to Android 11, past the app-switch window after Home).
         val expected = pkg
         var fg: String? = null
-        val until = SystemClock.elapsedRealtime() + 5_000
+        val wait = ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 5_000)
+        val until = SystemClock.elapsedRealtime() + wait
         while (SystemClock.elapsedRealtime() < until) {
             delay(250)
             fg = a.currentForeground()
@@ -1290,7 +1318,7 @@ class CommandExecutor(
         val note = when {
             expected == null || fg == expected -> ""
             fg != before -> " (Android brought back its task, which is showing $fg)"
-            else -> " (asked Android to open it, but $fg is still in front after 5 s)"
+            else -> " (asked Android to open it, but $fg is still in front after ${ForegroundWait.seconds(wait)})"
         }
         return Outcome(out, "Opened $what$note")
     }
@@ -1447,6 +1475,9 @@ class CommandExecutor(
         val intent = Intent(context, DisplayActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
         intent.putExtra(DisplayActivity.EXTRA_KIND, show.kind)
+        // Many TV boxes and projectors on Android 8–10 ship without Android System WebView; a
+        // page can't be shown there, and creating a WebView would throw.
+        if (show.kind == "url" && !DisplayActivity.webViewAvailable()) throw CommandFailure.unsupported(DisplayActivity.NO_WEBVIEW)
         when (show.kind) {
             "url", "text" -> intent.putExtra(DisplayActivity.EXTRA_VALUE, show.value)
             "image", "video" -> {
@@ -1475,9 +1506,12 @@ class CommandExecutor(
         }
         val since = SystemClock.elapsedRealtime()
         withContext(Dispatchers.Main) { a.startActivity(intent) }
-        val shown = DisplayActivity.awaitShown(4_000, since)
+        // Up to Android 11 a start right after Home waits out Android's 5 s app-switch window.
+        val wait = ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 4_000)
+        val shown = DisplayActivity.awaitShown(wait, since)
         val out = buildJsonObject { put("kind", show.kind); put("shown", shown) }
-        if (!shown) throw CommandFailure(CommandFailure.ACTION_FAILED, "Asked Android to show the display, but it didn't come to the front within 4 s.")
+        if (!shown) throw CommandFailure(CommandFailure.ACTION_FAILED, "Asked Android to show the display, but it didn't come to the front within ${ForegroundWait.seconds(wait)}.")
+        DisplayActivity.failureSince(since)?.let { throw CommandFailure.unsupported(it) }
         delay(500) // let the first frame draw before the next command looks at the screen
         return Outcome(out, "Showing ${show.kind} full screen; it stays until display clear or Back on the remote.")
     }
@@ -1485,8 +1519,18 @@ class CommandExecutor(
     // ───────────── screenshots ─────────────
 
     private suspend fun screenshot(cmd: Cmd.Screenshot, run: Run): Outcome {
-        val a = a11y()
-        var bmp = a.screenshot()
+        val a = ExtendAccessibilityService.instance
+        val path = ScreenshotPath.choose(android.os.Build.VERSION.SDK_INT, a != null, extend.adb.connected)
+        var bmp = when (path) {
+            ScreenshotPath.ACCESSIBILITY -> a!!.screenshot()
+            ScreenshotPath.ADB -> adbScreenshot()
+            // checkCapability already refused this with the reason; only a race (debugging or
+            // accessibility went away just now) gets here.
+            ScreenshotPath.NONE -> throw CommandFailure.unsupported(
+                SetupReport.compute(context, extend.config).missing.firstOrNull { it.capability == Capabilities.SCREEN_CAPTURE }?.reason
+                    ?: "Nothing can capture the screen right now: connect Android debugging or turn on accessibility in the Extend app's setup.",
+            )
+        }
         if (cmd.cropOn != null) {
             val cap = capture()
             val n = Selectors.resolveAll(cmd.cropOn, cap.allNodes, cap.screen).firstOrNull()
@@ -1531,6 +1575,36 @@ class CommandExecutor(
             put("size_bytes", bytes.size)
         }
         return Outcome(out, "Screenshot $name (${bmp.width}x${bmp.height}, ${bytes.size / 1024} KB)")
+    }
+
+    /**
+     * The screen through Android debugging's `screencap -p` (Android 10 and older, or while
+     * accessibility is off). The PNG streams to a scratch file past 256 KiB, never all into memory.
+     */
+    private suspend fun adbScreenshot(): Bitmap {
+        val dir = File(context.cacheDir, "screencap-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+        try {
+            val captured = try {
+                extend.adb.shellCapture("screencap -p") { name -> File(dir, name) }
+            } catch (e: java.io.IOException) {
+                throw CommandFailure(
+                    CommandFailure.ACTION_FAILED,
+                    "Android debugging failed while taking the screenshot: ${e.message ?: e.javaClass.simpleName}. If it disconnected, ask the Carbon to reconnect it in the Extend app.",
+                )
+            }
+            if (captured.exitCode != 0) throw CommandFailure(
+                CommandFailure.ACTION_FAILED,
+                "Android's screencap failed (exit ${captured.exitCode}: ${captured.stderr.text.trim().take(500).ifEmpty { "no output" }}).",
+            )
+            val bmp = captured.stdout.file?.let { BitmapFactory.decodeFile(it.absolutePath) }
+                ?: captured.stdout.inline.takeIf { captured.stdout.file == null }?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+            return bmp ?: throw CommandFailure(
+                CommandFailure.ACTION_FAILED,
+                "Android's screencap returned ${captured.stdout.total} bytes that aren't a PNG image. The app on screen may block screenshots (a secure window).",
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     private suspend fun upload(run: Run, bytes: ByteArray, name: String, contentType: String, kind: String): ProducedFile {
@@ -1632,6 +1706,9 @@ class CommandExecutor(
     internal companion object {
         /** Commands that run through Android debugging. */
         private val ADB_COMMANDS = setOf("adb", "install", "reinstall", "record", "logs")
+
+        /** Remote buttons accessibility presses with its D-pad actions (Android 13+). */
+        private val DPAD_BUTTONS = setOf("up", "down", "left", "right", "select")
 
         /** Why a session's captures were discarded when the device gave up on it while offline. */
         val OFFLINE_TOO_LONG = "this device lost contact with Extend for more than ${SessionRetention.GRACE_MS / 60_000} minutes " +

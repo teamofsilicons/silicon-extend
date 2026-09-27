@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Path
+import android.graphics.Point
 import android.graphics.Rect
 import android.os.Build
 import android.provider.Settings
@@ -13,10 +14,14 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.annotation.ChecksSdkIntAtLeast
+import androidx.annotation.RequiresApi
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.driver.Bounds
 import com.teamofsilicons.extend.driver.Capture
 import com.teamofsilicons.extend.driver.CommandFailure
+import com.teamofsilicons.extend.driver.ScreenshotPath
 import com.teamofsilicons.extend.driver.UiNode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,8 +111,15 @@ class ExtendAccessibilityService : AccessibilityService() {
 
     fun screenBounds(): Bounds {
         val wm = getSystemService(android.view.WindowManager::class.java)
-        val b = wm.currentWindowMetrics.bounds
-        return Bounds(b.left, b.top, b.right, b.bottom)
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = wm.currentWindowMetrics.bounds
+            return Bounds(b.left, b.top, b.right, b.bottom)
+        }
+        // Before Android 11: the default display's full size, system bars included (as WindowMetrics gives).
+        val size = Point()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealSize(size)
+        return Bounds(0, 0, size.x, size.y)
     }
 
     /** Every window's tree, bottom window first. Our own overlay badge is left out. */
@@ -203,7 +215,8 @@ class ExtendAccessibilityService : AccessibilityService() {
             scrollable = info.isScrollable,
             visibleToUser = info.isVisibleToUser,
             hintShowing = info.isShowingHintText,
-            heading = info.isHeading,
+            // AccessibilityNodeInfo.isHeading is Android 9+; the compat wrapper reads the same flag before that.
+            heading = AccessibilityNodeInfoCompat.wrap(info).isHeading,
             inputType = info.inputType,
             windowType = windowType,
             windowTitle = windowTitle,
@@ -264,8 +277,15 @@ class ExtendAccessibilityService : AccessibilityService() {
 
     fun global(action: Int): Boolean = performGlobalAction(action)
 
-    /** A screenshot of the default display, or a precise failure. */
+    /**
+     * A screenshot of the default display, or a precise failure. Accessibility screenshots exist
+     * from Android 11; before that the command executor uses Android debugging's screencap
+     * ([com.teamofsilicons.extend.driver.ScreenshotPath]) and never calls this.
+     */
     suspend fun screenshot(): Bitmap {
+        if (Build.VERSION.SDK_INT < ScreenshotPath.ACCESSIBILITY_SDK) throw CommandFailure.unsupported(
+            "Accessibility screenshots need Android 11; this device runs Android ${Build.VERSION.RELEASE}. Connect Android debugging in the Extend app's setup to take screenshots here.",
+        )
         var lastError = 0
         repeat(4) {
             val (bmp, err) = takeOnce()
@@ -279,6 +299,7 @@ class ExtendAccessibilityService : AccessibilityService() {
         throw CommandFailure(CommandFailure.ACTION_FAILED, screenshotError(lastError))
     }
 
+    @RequiresApi(30)
     private fun screenshotError(code: Int): String = when (code) {
         ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR -> "Android failed to take the screenshot (internal error)."
         ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> "Silicon Extend's accessibility access doesn't allow screenshots."
@@ -288,23 +309,13 @@ class ExtendAccessibilityService : AccessibilityService() {
         else -> "Android refused the screenshot (error $code)."
     }
 
-    private suspend fun takeOnce(): Pair<Bitmap?, Int> = suspendCancellableCoroutine { cont ->
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-            override fun onSuccess(screenshot: ScreenshotResult) {
-                val buffer = screenshot.hardwareBuffer
-                val bmp = try {
-                    Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
-                } finally {
-                    buffer.close()
-                }
-                if (cont.isActive) cont.resume(bmp to (if (bmp == null) ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR else 0))
-            }
-
-            override fun onFailure(errorCode: Int) {
-                if (cont.isActive) cont.resume(null to errorCode)
-            }
-        })
-    }
+    /**
+     * The Android 11 screenshot call lives in its own class, so this service's class never refers
+     * to `TakeScreenshotCallback`: Android 8–10 then verify it without falling back to the
+     * interpreter for it.
+     */
+    @RequiresApi(30)
+    private suspend fun takeOnce(): Pair<Bitmap?, Int> = Api30Screenshot.take(this)
 
     companion object {
         private const val MAX_CAPTURE_NODES = 6000
@@ -322,6 +333,30 @@ class ExtendAccessibilityService : AccessibilityService() {
             return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
         }
 
+        /** GLOBAL_ACTION_DPAD_* exist from Android 13. */
+        @get:ChecksSdkIntAtLeast(api = Build.VERSION_CODES.TIRAMISU)
         val dpadSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    }
+}
+
+/** `AccessibilityService.takeScreenshot` (Android 11+), kept out of the service's own class. */
+@RequiresApi(30)
+private object Api30Screenshot {
+    suspend fun take(service: AccessibilityService): Pair<Bitmap?, Int> = suspendCancellableCoroutine { cont ->
+        service.takeScreenshot(Display.DEFAULT_DISPLAY, service.mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
+            override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                val buffer = screenshot.hardwareBuffer
+                val bmp = try {
+                    Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
+                } finally {
+                    buffer.close()
+                }
+                if (cont.isActive) cont.resume(bmp to (if (bmp == null) AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR else 0))
+            }
+
+            override fun onFailure(errorCode: Int) {
+                if (cont.isActive) cont.resume(null to errorCode)
+            }
+        })
     }
 }

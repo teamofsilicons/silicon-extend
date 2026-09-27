@@ -88,15 +88,42 @@ object DeviceInfo {
     fun isTv(context: Context, config: Config): Boolean {
         if (config.forceTv) return true
         val ui = context.getSystemService(UiModeManager::class.java)
-        if (ui?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION) return true
         val pm = context.packageManager
-        return pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
-            pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
-            isFireTv(context)
+        fun has(feature: String) = runCatching { pm.hasSystemFeature(feature) }.getOrDefault(false)
+        return looksLikeTv(
+            uiModeTv = ui?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION,
+            features = NOT_A_TV_FEATURES.plus(TV_FEATURES).plus(PackageManager.FEATURE_TOUCHSCREEN).filter(::has).toSet(),
+        )
+    }
+
+    /** Features only TVs declare (Fire TV's own included). */
+    private val TV_FEATURES = listOf(PackageManager.FEATURE_LEANBACK, PackageManager.FEATURE_TELEVISION, FIRE_TV)
+
+    /**
+     * Devices without a touchscreen that aren't TVs: Chromebooks and other computers running
+     * Android apps, cars, watches and embedded boards. Spelled out: `FEATURE_PC` is Android 8.1+.
+     */
+    private val NOT_A_TV_FEATURES = listOf(
+        "android.hardware.type.pc", "org.chromium.arc", "org.chromium.arc.device_management",
+        "android.hardware.type.automotive", "android.hardware.type.watch", "android.hardware.type.embedded",
+    )
+
+    private const val FIRE_TV = "amazon.hardware.fire_tv"
+
+    /**
+     * Whether a device with these [features] (the ones among [TV_FEATURES], [NOT_A_TV_FEATURES] and
+     * the touchscreen it declares) is a TV. Besides Android TV, Google TV and Fire TV, many TV boxes
+     * and projectors run the phone build of Android behind their maker's launcher, with no TV
+     * feature and a normal UI mode; they have no touchscreen, which no phone or tablet lacks.
+     */
+    fun looksLikeTv(uiModeTv: Boolean, features: Set<String>): Boolean = when {
+        uiModeTv || TV_FEATURES.any { it in features } -> true
+        PackageManager.FEATURE_TOUCHSCREEN in features -> false
+        else -> NOT_A_TV_FEATURES.none { it in features }
     }
 
     fun isFireTv(context: Context): Boolean =
-        context.packageManager.hasSystemFeature("amazon.hardware.fire_tv")
+        context.packageManager.hasSystemFeature(FIRE_TV)
 
     /** `android` or `android_tv`. */
     fun os(context: Context, config: Config): String = if (isTv(context, config)) "android_tv" else "android"

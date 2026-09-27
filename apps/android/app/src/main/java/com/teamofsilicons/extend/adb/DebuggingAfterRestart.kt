@@ -1,9 +1,13 @@
 package com.teamofsilicons.extend.adb
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
+import com.teamofsilicons.extend.config.DeviceInfo
+import com.teamofsilicons.extend.core.SettingsLauncher
+import com.teamofsilicons.extend.core.SettingsPage
+import com.teamofsilicons.extend.core.SettingsRoutes
 
 /**
  * Android turns Wireless debugging off whenever the device restarts. When this device had Android
@@ -49,27 +53,18 @@ object DebuggingAfterRestart {
         wirelessDebuggingOn = !adb.wirelessDebuggingOff,
     )
 
-    /** Settings' own Wireless debugging tile; long-pressing it opens the Wireless debugging page. */
-    private val WIRELESS_DEBUGGING_TILE = ComponentName("com.android.settings", "com.android.settings.development.qstile.DevelopmentTiles\$WirelessDebugging")
-
     /**
      * Opens the Wireless debugging page itself where Settings supports it (Android 11+: the same
-     * intent as long-pressing its quick-settings tile), otherwise Developer options.
+     * intent as long-pressing its quick-settings tile), otherwise Developer options, otherwise the
+     * main settings screen ([SettingsRoutes], first route Android resolves).
      */
     fun wirelessDebuggingIntent(context: Context): Intent {
-        val developer = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
-        val settingsPackage = runCatching { developer.resolveActivity(context.packageManager)?.packageName }.getOrNull()
-        // The page opens only while Developer options are on; before that, Developer options explains.
         val devOptions = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1 }.getOrDefault(false)
-        if (devOptions && settingsPackage == WIRELESS_DEBUGGING_TILE.packageName) {
-            val tile = Intent(ACTION_QS_TILE_PREFERENCES)
-                .setPackage(settingsPackage)
-                .putExtra(Intent.EXTRA_COMPONENT_NAME, WIRELESS_DEBUGGING_TILE)
-            if (runCatching { tile.resolveActivity(context.packageManager) }.getOrNull() != null) return tile
-        }
-        return developer
+        val extend = com.teamofsilicons.extend.Extend.get(context)
+        val target = SettingsRoutes.target(
+            SettingsPage.WIRELESS_DEBUGGING, Build.VERSION.SDK_INT, extend.isTv, DeviceInfo.isFireTv(context), context.packageName,
+            DeviceInfo.systemLabel(context), devOptions = devOptions,
+        )
+        return SettingsLauncher.firstResolvable(context, target) ?: Intent(Settings.ACTION_SETTINGS)
     }
-
-    /** `TileService.ACTION_QS_TILE_PREFERENCES`. */
-    const val ACTION_QS_TILE_PREFERENCES = "android.service.quicksettings.action.QS_TILE_PREFERENCES"
 }

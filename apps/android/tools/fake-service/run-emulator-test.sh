@@ -23,10 +23,14 @@ mkdir -p "$OUT"
 state() { curl -s "http://127.0.0.1:$PORT/_test/state"; }
 field() { python3 -c "import sys,json; v=json.load(sys.stdin).get('$1'); print('' if v is None else v)"; }
 
-echo "== install $APK"
+SDK=$("$ADB" shell getprop ro.build.version.sdk | tr -d '\r')
+echo "== install $APK (API $SDK)"
+# Accessibility off before the app is replaced or stopped: Android 8 and 9 leave a service that was
+# bound when its app was updated or force-stopped switched on but never bound again (until reboot).
+"$ADB" shell settings put secure enabled_accessibility_services null
+sleep 1
 "$ADB" install -r -g "$APK" | tail -1
 "$ADB" shell am force-stop $PKG
-"$ADB" shell settings put secure enabled_accessibility_services null
 for p in com.android.settings com.google.android.settings.intelligence; do "$ADB" shell am force-stop $p || true; done
 
 echo "== fake service on :$PORT (log: $LOG)"
@@ -70,7 +74,14 @@ if [ "$SHOWN" = "$CODE" ]; then echo "PASS pairing screen shows the live code ($
 echo "== grant accessibility, notification access and background use"
 "$ADB" shell settings put secure enabled_accessibility_services $PKG/$PKG.a11y.ExtendAccessibilityService
 "$ADB" shell settings put secure accessibility_enabled 1
-"$ADB" shell cmd notification allow_listener $PKG/$PKG.notif.ExtendNotificationListener >/dev/null 2>&1 || true
+LISTENER=$PKG/$PKG.notif.ExtendNotificationListener
+"$ADB" shell cmd notification allow_listener $LISTENER >/dev/null 2>&1 || true
+# Android 8.0 has no `cmd notification`; before Android 9 the setting itself is what Android reads.
+if ! "$ADB" shell settings get secure enabled_notification_listeners | grep -qF "$LISTENER"; then
+  CUR=$("$ADB" shell settings get secure enabled_notification_listeners | tr -d '\r')
+  case "$CUR" in ""|null) NEW=$LISTENER ;; *) NEW="$CUR:$LISTENER" ;; esac
+  "$ADB" shell settings put secure enabled_notification_listeners "$NEW"
+fi
 "$ADB" shell dumpsys deviceidle whitelist +$PKG >/dev/null
 sleep 4
 

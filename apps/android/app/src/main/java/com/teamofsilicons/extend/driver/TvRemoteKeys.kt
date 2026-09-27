@@ -44,7 +44,9 @@ object TvRemoteKeys {
 
     /**
      * Why `input.remote` is missing right now, or null when remote buttons work: through Android
-     * debugging on any TV, or through accessibility on Android 13+.
+     * debugging on any TV, or through accessibility on Android 13+. Before Android 13 accessibility
+     * has no D-pad, and a remote without one isn't a remote, so the capability stays missing; the
+     * reason says what still works ([debuggingSwitch]: where this TV turns network debugging on).
      */
     fun missingReason(
         dpadSupported: Boolean,
@@ -52,12 +54,14 @@ object TvRemoteKeys {
         adbConnected: Boolean,
         a11yReason: String,
         androidRelease: String,
+        debuggingSwitch: String = "Settings › Developer options › Network debugging › On",
     ): String? = when {
         adbConnected -> null
         dpadSupported && a11yConnected -> null
         !dpadSupported ->
-            "Remote buttons on this TV (Android $androidRelease) need Android debugging: turn on network debugging in Developer options, " +
-                "then connect Android debugging in the Extend app's setup."
+            "Remote buttons on this TV (Android $androidRelease) need Android debugging: accessibility can press the D-pad only from Android 13. " +
+                "Turn on network debugging ($debuggingSwitch), then connect Android debugging in the Extend app's setup." +
+                if (a11yConnected) " Until then the back and home commands work, and open starts apps." else ""
         else -> "$a11yReason Or connect Android debugging in the Extend app's setup."
     }
 }

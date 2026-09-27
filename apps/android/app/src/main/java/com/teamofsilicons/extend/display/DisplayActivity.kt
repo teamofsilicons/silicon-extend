@@ -12,8 +12,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -21,6 +19,9 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.VideoView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.teamofsilicons.extend.Extend
 import kotlinx.coroutines.delay
 import okhttp3.Request
@@ -39,9 +40,10 @@ class DisplayActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         setContentView(root)
-        window.insetsController?.let {
-            it.hide(WindowInsets.Type.systemBars())
-            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        // The compat controller uses system UI flags before Android 11.
+        WindowCompat.getInsetsController(window, window.decorView).let {
+            it.hide(WindowInsetsCompat.Type.systemBars())
+            it.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         current = this
         render(intent)
@@ -74,15 +76,26 @@ class DisplayActivity : Activity() {
         root.contentDescription = "Silicon Extend display: $kind"
         when (kind) {
             "url" -> {
-                val web = WebView(this).apply {
-                    @Suppress("SetJavaScriptEnabled")
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    webViewClient = WebViewClient()
-                    loadUrl(value ?: "about:blank")
+                // Creating a WebView throws when the device has no working WebView provider (common
+                // on Android 8–10 TV boxes); the command checks first, this covers a provider that
+                // is installed but fails to load. The Carbon sees why, and the command reports it.
+                val web = try {
+                    WebView(this).apply {
+                        @Suppress("SetJavaScriptEnabled")
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        webViewClient = WebViewClient()
+                        loadUrl(value ?: "about:blank")
+                    }
+                } catch (e: Throwable) {
+                    Extend.log("display: no WebView", e)
+                    failure = NO_WEBVIEW + " (Android said: ${e.message ?: e.javaClass.simpleName})"
+                    failedAt = SystemClock.elapsedRealtime()
+                    null
                 }
-                root.addView(web, match)
+                if (web != null) root.addView(web, match)
+                else showText("This screen can't show web pages: no web view is installed.\n${value.orEmpty()}", 28f)
             }
             "image" -> {
                 val image = ImageView(this).apply {
@@ -147,6 +160,22 @@ class DisplayActivity : Activity() {
 
         @Volatile private var current: DisplayActivity? = null
         @Volatile private var lastShownAt = 0L
+        @Volatile private var failure: String? = null
+        @Volatile private var failedAt = 0L
+
+        /** Why `display show --url` can't work on this device. */
+        const val NO_WEBVIEW = "This device has no web view (Android System WebView isn't installed or is turned off), so display show --url " +
+            "can't show a page here. Use display show --image, --video or --text, or open <url> to open the link in a browser if the device has one."
+
+        /**
+         * Android has a WebView provider to load (`WebView.getCurrentWebViewPackage`, Android 8+;
+         * it doesn't load WebView). False on devices that ship without Android System WebView. If
+         * Android can't answer, the page is tried: the activity shows the reason if it fails.
+         */
+        fun webViewAvailable(): Boolean = runCatching { WebView.getCurrentWebViewPackage() != null }.getOrDefault(true)
+
+        /** Why the display couldn't show what it was asked to after [sinceElapsed], or null. */
+        fun failureSince(sinceElapsed: Long): String? = failure.takeIf { failedAt >= sinceElapsed }
 
         /** Closes the display; false when nothing was showing. */
         fun clear(): Boolean {
