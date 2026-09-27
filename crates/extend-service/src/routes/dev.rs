@@ -150,6 +150,39 @@ pub async fn tings(State(state): State<Shared>) -> AppResult<Response> {
     Ok(ok("tings", sent))
 }
 
+#[derive(Deserialize)]
+pub struct MissingType {
+    team: String,
+    /// The type's event (`device.wake_requested`) or full name.
+    event: String,
+    #[serde(default = "yes")]
+    missing: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Makes the local Ting answer 404 for one of Extend's types in a Team, as Ting does for a type
+/// nobody registered there (or answer again, with `missing: false`). The CLI e2e uses it.
+pub async fn ting_missing(State(state): State<Shared>, Body(input): Body<MissingType>) -> AppResult<Response> {
+    local(&state)?;
+    let Some(ting) = &state.local_ting else {
+        return Err(AppError::new(
+            ErrorCode::UnknownCommand,
+            "This service sends Tings through the real Ting, not the local stand-in.",
+        ));
+    };
+    let Some(ty) = extend_protocol::ting::find(&input.event) else {
+        return Err(AppError::invalid(format!(
+            "{} isn't one of Extend's Ting types.",
+            input.event
+        )));
+    };
+    ting.set_missing(&input.team, ty.event, input.missing);
+    Ok(no_content())
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

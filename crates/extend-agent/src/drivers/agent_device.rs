@@ -572,7 +572,7 @@ pub fn parse_result(stdout: &str, stderr: &str, exit_ok: bool) -> Output {
         details.insert("hint".into(), h.clone().into());
     }
     if let Some(d) = err.get("details").filter(|d| !d.is_null()) {
-        details.insert("agent_device".into(), d.clone());
+        details.insert("engine_details".into(), d.clone());
     }
     let text = match &hint {
         Some(h) => format!("{message}\nHint: {h}"),
@@ -1235,7 +1235,7 @@ impl AgentDevice {
         if out
             .error
             .as_ref()
-            .is_some_and(|e| e.details["agent_device"]["reason"] == "session_cleanup_incomplete")
+            .is_some_and(|e| e.details["engine_details"]["reason"] == "session_cleanup_incomplete")
         {
             // A failed recording export may still dispose the native recorder. A second close
             // confirms the remaining cleanup and releases the retained claim.
@@ -2369,7 +2369,7 @@ mod tests {
         assert_eq!(e.message, "bad ref");
         assert_eq!(e.details["engine_code"], "INVALID_ARGS");
         assert_eq!(e.details["hint"], "Run snapshot");
-        assert_eq!(e.details["agent_device"]["x"], 1);
+        assert_eq!(e.details["engine_details"]["x"], 1);
         assert_eq!(out.text.as_deref(), Some("bad ref\nHint: Run snapshot"));
         assert_eq!(map_error_code("UNSUPPORTED_OPERATION"), "unsupported_on_device");
         assert_eq!(map_error_code("COMMAND_FAILED"), "command_failed");

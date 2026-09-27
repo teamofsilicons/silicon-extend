@@ -53,7 +53,7 @@ const CONNECT_PROVIDER_ADAPTERS = {
   proxy: {
     resolve: resolveProxyConnectProfile,
     verify: async () => ({
-      service: 'Agent Device Proxy',
+      service: 'the device engine proxy',
       status: 'configured',
       verificationMessage:
         'Proxy configuration saved. Access is checked by the first remote command.',

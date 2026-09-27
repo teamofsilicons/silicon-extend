@@ -15,9 +15,9 @@ const DOCTOR_RESULT = {
   summary: 'No blockers found.',
   checks: [
     {
-      id: 'agent-device',
+      id: 'engine',
       status: 'pass',
-      summary: 'agent-device 0.17.9 using /tmp/agent-device',
+      summary: 'Silicon Extend device engine 0.17.9 using /tmp/extend-engine',
     },
     { id: 'device', status: 'warn', summary: 'No booted device.' },
   ],
@@ -28,7 +28,7 @@ test('doctor prints only the summary when progress already streamed the checks',
     options?.onProgress?.({
       type: 'command',
       status: 'progress',
-      message: '✓ agent-device: agent-device 0.17.9 using /tmp/agent-device',
+      message: '✓ engine: Silicon Extend device engine 0.17.9 using /tmp/extend-engine',
     });
     options?.onProgress?.({
       type: 'command',
@@ -41,10 +41,10 @@ test('doctor prints only the summary when progress already streamed the checks',
   assert.equal(result.code, null);
   assert.match(
     result.stderr,
-    /✓ agent-device: agent-device 0\.17\.9 using \/tmp\/agent-device\n! device: No booted device\.\n/,
+    /✓ engine: Silicon Extend device engine 0\.17\.9 using \/tmp\/extend-engine\n! device: No booted device\.\n/,
   );
   assert.match(result.stdout, /Doctor: pass\nNo blockers found\.\n/);
-  assert.doesNotMatch(result.stdout, /✓ agent-device:/);
+  assert.doesNotMatch(result.stdout, /✓ engine:/);
 });
 
 test('doctor prints the checks when no progress reached stderr', async () => {
@@ -55,6 +55,9 @@ test('doctor prints the checks when no progress reached stderr', async () => {
 
   assert.equal(result.code, null);
   assert.equal(result.stderr, '');
-  assert.match(result.stdout, /✓ agent-device: agent-device 0\.17\.9 using \/tmp\/agent-device/);
+  assert.match(
+    result.stdout,
+    /✓ engine: Silicon Extend device engine 0\.17\.9 using \/tmp\/extend-engine/,
+  );
   assert.match(result.stdout, /! device: No booted device\./);
 });

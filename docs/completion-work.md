@@ -15,7 +15,8 @@ first.*
 ## 1.1.0
 
 1.1.0 (devices belong to the Carbons who paired them, several Carbons per device, waking a device,
-setup retry, the device engine named Silicon Extend) is being built; its design is
+setup retry, the device engine named Silicon Extend) is built and its automated suites pass together
+(`verification.md`, "1.1.0 integration"); its design is
 `extend-publish-drafts/release-1.1.0/design.json` with the Carbon's decisions of 2026-09-27.
 
 ### Needs the Carbon
@@ -30,6 +31,27 @@ setup retry, the device engine named Silicon Extend) is being built; its design 
   `extend.device.requested` in `tos` exists today.
 - **Send the Ting request**, `docs/requests/ting-app-level-types.md`, to the Ting and Honeycomb
   maintainers.
+- **The in-use indicator change** in `UNDERSTANDING.md` (commit `5326b68`: it shows for 10 seconds
+  and then hides, any Carbon can hide it on every device, a setup step asks about the banner, the TV
+  badge sits at the bottom centre) came after the 1.1 design and is not built. Decide whether 1.1.0
+  ships without it.
+- **A Carbon's logout** ends their Silicons' sessions as `access_removed` (the Silicon's hint says the
+  Carbon took access away or signed out); `stopped_by_carbon` was the other choice. Confirm
+  (`TECHNICAL.md` C9).
+
+### Engineering left for 1.1.0
+
+- `e2e/real-iam/realiam.py --ting` doesn't know 1.1 yet: seed Extend's four types in acme and globex,
+  show a third Team reporting them missing, and cover waking, woken, declined and routed requests.
+  It also has to confirm that Ting offers the `types.register` call the service uses to register
+  missing types for a Team's Ting manager (`TingNotifier::register_type`); if not, the service keeps
+  showing the command.
+- `extend click` doesn't reach an Android TV: its capabilities have no pointer or touch, so the TV
+  click fallback is only reached through `find … click`. Allowing it means adding `input.pointer`
+  to Android TV's full capabilities in the protocol crate, which the Android work judged not
+  additive for 1.0 readers.
+- The Simulator's copy of the iPhone helper's runner could show "Silicon Extend" by copying the
+  helper's display name into it before its re-sign (optional; a device runner can't be changed).
 
 ### Release gates
 

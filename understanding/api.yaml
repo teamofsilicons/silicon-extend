@@ -363,7 +363,7 @@ paths:
         `Authorization` when one is sent:
         - A Silicon signing out ends its own running sessions in this world (`silicon_logged_out`).
         - A Carbon signing out (the website or `extend logout`) ends the running sessions of the Silicons that Carbon
-          gave access to: every session through that Carbon's pairs, in every Team, as `stopped_by_carbon` (1.1, the
+          gave access to: every session through that Carbon's pairs, in every Team, as `access_removed` (1.1, the
           Carbon's decision of 2026-09-27). Only that Carbon's side ends; a Silicon another Carbon gave access to keeps
           its session on the same device. Nothing else changes: the devices stay paired and the grants stay.
         If IAM can't be asked, nothing is revoked or ended and the error says so (with IAM's own code, usually

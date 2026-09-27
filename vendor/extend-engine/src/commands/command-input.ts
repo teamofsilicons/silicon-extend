@@ -569,7 +569,7 @@ function elementTargetSchemaVariants(): JsonSchema[] {
       type: 'object',
       properties: {
         kind: { type: 'string', const: 'selector' },
-        selector: { type: 'string', description: 'Agent-device selector expression.' },
+        selector: { type: 'string', description: 'Selector expression.' },
       },
       required: ['kind', 'selector'],
       additionalProperties: false,

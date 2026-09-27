@@ -8,7 +8,8 @@ scripts/perf/.results/
 dist/
 coverage/
 .tmp/
-# Per-project agent-device output: test artifacts, metro and tunnel logs
+# Per-project device engine output: test artifacts, metro and tunnel logs (the fork's old folder too)
+/.silicon-extend/
 /.agent-device/
 .device-evidence/
 .DS_Store

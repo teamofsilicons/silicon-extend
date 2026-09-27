@@ -651,7 +651,7 @@ CDP memory routing:
 Slow-flow investigation:
   Keep one session, open the app first, and snapshot -i before interacting.
   Start React Native slow-flow plans with this ordered scaffold:
-    extend open "Agent Device Tester" --platform android
+    extend open "Example App" --platform android
     extend snapshot -i
     extend react-devtools status
     extend react-devtools wait --connected
@@ -895,7 +895,7 @@ Surfaces:
   --surface menubar        menu bar extras and menu bar-only apps
 
 Menu bar app example:
-  extend open "Agent Device Tester Menu" --platform macos --surface menubar
+  extend open "Example App Menu" --platform macos --surface menubar
   extend snapshot -i --platform macos
 
 Context menu example:

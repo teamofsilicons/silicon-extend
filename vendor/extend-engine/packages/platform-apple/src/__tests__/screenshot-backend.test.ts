@@ -37,10 +37,12 @@ test('routes an internal runner screenshot without changing the default backend'
   });
 
   expect(screenshotIos).toHaveBeenCalledOnce();
+  // Silicon Extend: a screenshot carries the session's bound app when the call names none
+  // (FORK.md, "Bound macOS app capture"); upstream passed undefined here.
   expect(screenshotIos).toHaveBeenCalledWith(
     device,
     '/tmp/default.png',
-    expect.objectContaining({ appBundleId: undefined }),
+    expect.objectContaining({ appBundleId: 'com.example.app' }),
   );
   expect(captureScreenshotViaRunner).toHaveBeenCalledOnce();
   expect(captureScreenshotViaRunner).toHaveBeenCalledWith(

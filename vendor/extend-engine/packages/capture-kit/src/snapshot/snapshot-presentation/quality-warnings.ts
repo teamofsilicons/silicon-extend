@@ -58,7 +58,7 @@ function stateWarning(verdict: SnapshotQualityVerdict): string[] {
     if (verdict.reasonCode === 'deferred' || verdict.reasonCode === 'requested-backend') return [];
     if (verdict.reasonCode === 'presentation-failed') {
       return [
-        `Agent Device could not safely present the captured accessibility tree and fell back to the ${verdict.backend} snapshot backend. This is an Agent Device runner bug, not an app accessibility-tree issue. Use screenshot as visual truth and report snapshotQuality.reason with the screenshot.`,
+        `The device engine could not safely present the captured accessibility tree and fell back to the ${verdict.backend} snapshot backend. This is a device engine bug, not an app accessibility-tree issue. Use screenshot as visual truth and report snapshotQuality.reason with the screenshot.`,
       ];
     }
     return [recoveredSnapshotQualityWarning(verdict.backend)];

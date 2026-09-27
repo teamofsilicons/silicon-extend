@@ -201,6 +201,13 @@ function fixtureHost(
         }),
       }),
       android: Object.freeze({ resolve: async () => ({}) }),
+      // Silicon Extend records Linux desktops too; its facts ask this host first.
+      linux: Object.freeze({
+        availability: async () => ({
+          available: false as const,
+          hint: 'Screen recording is outside this lifecycle fixture.',
+        }),
+      }),
       web: Object.freeze({ resolve: async () => undefined }),
     }),
     audioProbe: Object.freeze({

@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { afterEach, test, vi } from 'vitest';
 
@@ -36,29 +35,6 @@ test('cdp wrapper pins agent-cdp package version', () => {
       'baseline',
       '--gc',
     ],
-  );
-});
-
-test('cdp docs hide the implementation package name', () => {
-  assert.doesNotMatch(fs.readFileSync('website/docs/docs/commands.md', 'utf8'), /agent-cdp/);
-  assert.doesNotMatch(
-    fs.readFileSync('website/docs/docs/debugging-profiling.md', 'utf8'),
-    /agent-cdp/,
-  );
-});
-
-test('cdp workflow docs live in debugging and profiling guide', () => {
-  assert.match(
-    fs.readFileSync('website/docs/docs/commands.md', 'utf8'),
-    /agent-device cdp memory usage sample --label baseline --gc/,
-  );
-  assert.doesNotMatch(
-    fs.readFileSync('website/docs/docs/commands.md', 'utf8'),
-    /React Native JS memory through CDP/,
-  );
-  assert.match(
-    fs.readFileSync('website/docs/docs/debugging-profiling.md', 'utf8'),
-    /React Native JS memory through CDP/,
   );
 });
 

@@ -384,27 +384,29 @@ async fn ask(
             .fetch_one(&mut *tx)
             .await?
         }
-        None => sqlx::query_as(sql!(
+        None => {
+            sqlx::query_as(sql!(
             "INSERT INTO {} (wake_id, device_id, instance_id, team, from_id, to_id, reason, created_at, last_asked_at,
                                  expires_at, wake_detectable, device_notice, ting_delivery, ting_covered_by)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, $11, $12, $13) RETURNING {WAKE_COLUMNS}",
             world.t("wake_requests")
         ))
-        .bind(Uuid::now_v7())
-        .bind(&d.device_id)
-        .bind(d.instance_id)
-        .bind(team)
-        .bind(me)
-        .bind(&d.owner_id)
-        .bind(&reason)
-        .bind(now)
-        .bind(expires)
-        .bind(d.wake_detectable())
-        .bind(notice.as_str())
-        .bind(ting)
-        .bind(cover)
-        .fetch_one(&mut *tx)
-        .await?,
+            .bind(Uuid::now_v7())
+            .bind(&d.device_id)
+            .bind(d.instance_id)
+            .bind(team)
+            .bind(me)
+            .bind(&d.owner_id)
+            .bind(&reason)
+            .bind(now)
+            .bind(expires)
+            .bind(d.wake_detectable())
+            .bind(notice.as_str())
+            .bind(ting)
+            .bind(cover)
+            .fetch_one(&mut *tx)
+            .await?
+        }
     };
     tx.commit().await?;
     let f = wake::frame(state, world, &row, d, alert).await;

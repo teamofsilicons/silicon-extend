@@ -30,6 +30,11 @@ for (const name of AMBIENT_DAEMON_ENV_VARS) {
   delete process.env[name];
 }
 
+// Silicon Extend fork: a developer shell that forces terminal colour (FORCE_COLOR, set by some
+// terminals and tools) makes plain-output assertions see ANSI escapes. CI runs without it; tests
+// that exercise colour set it themselves.
+delete process.env.FORCE_COLOR;
+
 // Provider-backed scenarios intentionally use local device identities so their
 // request path covers enforced-claim ownership. Each Vitest fork, however,
 // mocks the same identities (for example `sim-1`). Keeping claims under the

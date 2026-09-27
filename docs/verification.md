@@ -1,11 +1,11 @@
 # Verification record
 
 What was run to check that Silicon Extend works as `understanding/UNDERSTANDING.md` intends, on what,
-and what has **not** been verified. Newest first: the 2026-09-27 round-2 section, the earlier
-2026-09-27 section, then the 2026-09-26 record, corrected in place where later work showed it wrong
-(marked *Corrected 2026-09-27*). Rerun the automated part with `e2e/run-all.sh`. The device engine
-is named as it is from 1.1 (it lived in another directory when these checks ran). The 1.1.0 build
-has its own section once it is verified; until then nothing below covers 1.1.
+and what has **not** been verified. Newest first: the 1.1.0 integration section, the 2026-09-27
+round-2 section, the earlier 2026-09-27 section, then the 2026-09-26 record, corrected in place where
+later work showed it wrong (marked *Corrected 2026-09-27*). Rerun the automated part with
+`e2e/run-all.sh`. The device engine is named as it is from 1.1 (it lived in another directory when
+the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
 
 ## Where the evidence is
 
@@ -31,6 +31,32 @@ has its own section once it is verified; until then nothing below covers 1.1.
 - Lanes that now write their evidence under `target/`: `apps/desktop/linux-e2e/record-service-e2e.py`
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
+
+## 2026-09-27 — 1.1.0 integration
+
+1.1.0 was built by ten groups, each testing its own part, on top of `8da8e2d`; an integration pass
+then ran every suite together on the whole tree (not committed). Same Mac (macOS 27, arm64),
+PostgreSQL in `silicon-extend-postgres`, the local IAM, Briefcase and Ting stand-ins, and no device,
+emulator or simulator. The service ran as its own instance on `:8580`/`:8581` with its own database.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | clean |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | clean |
+| `cargo test --locked -p silicon-extend-client --test contract_fixtures` and `-p extend-service --test contracts` | 3 and 9 passed, including the frozen `v1/client-1.0.0` replay |
+| `cargo test --workspace --locked` | 550 passed, 4 ignored (a sleeper helper in extend-agent; three extend-hosted tests that need a Simulator or pyatv), 0 failed |
+| `bash e2e/cli-e2e.sh http://127.0.0.1:8581` | all 119 checks |
+| `cd web && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm test:e2e:compat && pnpm build` | 161 unit tests; 57 Playwright tests against the mock; the released 1.0.0 website against the 1.1 mock (1 test); build ok |
+| `pnpm test:e2e:real` (`EXTEND_REAL_URL` at the 1.1 service) | 5 passed |
+| `cd vendor/extend-engine && pnpm typecheck && pnpm lint && pnpm format:check && pnpm build && pnpm test:unit` | 1,398 files: 10,692 tests passed, 1 skipped; no test near the slow-test gate |
+| The same `pnpm test:unit` in the `silicon-extend-linux-e2e` image (Debian, arm64, Node 22, as a non-root user with zip) | 10,640 passed, 53 skipped (platform-specific), 0 failed; no test near the slow-test gate |
+| `node --test apps/desktop/*.test.mjs` | 65 passed |
+| `JAVA_HOME=… ./gradlew --offline --rerun-tasks lint testDebugUnitTest assembleDebug` in `apps/android` | lint 0 errors (73 warnings); 226 app and 10 libadb JVM tests; debug APK built |
+| `OUT=<scratch> apps/desktop/macos/build-app.sh` (ad hoc signed) | `Silicon Extend.app` 1.1.0 with `MacOS/Silicon Extend Helper` (identifier `com.teamofsilicons.extend.macos-helper`) and the engine entry `Resources/engine/bin/extend-engine.mjs`; not installed or launched |
+| `npx @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash` | valid, 12 warnings (the same 12 as 1.0.2) |
+
+Not covered here: anything on a physical device, emulator or Simulator, real IAM and Ting, and the
+release gates in `completion-work.md`.
 
 ## 2026-09-27, round 2 — audit fixes
 

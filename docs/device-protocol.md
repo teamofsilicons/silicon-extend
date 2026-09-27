@@ -245,6 +245,7 @@ A command that is stopped still answers, unless the socket itself is gone:
 | It arrived for a session this device already ended (Mac, Windows and Linux app) | `session_ended`, without running it |
 | Android: the Carbon disconnected Android debugging (only `adb`, `install`, `reinstall`, `record`, `logs`) | `device_not_ready` |
 | A shell command exited non-zero (`terminal`, `adb shell`) | `command_failed`, with `details.exit_code` and the output |
+| The device engine refused or failed it (Mac and Linux app) | the engine's error mapped to Extend's code, with the engine's own code in `details.engine_code` and its own details in `details.engine_details` (1.0 apps sent them as `agent_device_code` and `agent_device`) |
 | A file it made could not be uploaded | `upload_failed` |
 
 The service may already have answered the caller (for example `command_timeout`); a late `result`
@@ -283,6 +284,11 @@ app's own setup screen. The service checks the request and sends:
   caller gets `426 upgrade_required`: "<name> runs Silicon Extend <version>, which can't retry from
   here. Update it to 1.1, or tap Retry on the device."
 - Retries are limited to one per device every 5 seconds (`429 rate_limited`).
+- The Android app's steps that can fail are `wireless_debugging` or `network_debugging` (Android
+  debugging the Carbon connected that the app can't reconnect to) and `accessibility` (turned on
+  but never started by Android). It ignores a `setup_retry`, `wake_request` or `session_started`
+  that carries a `target`, since it carries no devices, never sends `engine_version` (it runs no
+  device engine) and ignores `credential` frames (its pairs are never rotated).
 
 ### Awake (1.1)
 
@@ -440,7 +446,10 @@ ending), whether or not the computer has several Carbons:
 - Mac and Linux: each terminal command runs with `EXTEND_SESSION_MARK=<random 128-bit hex per
   session>`. At session end the app kills every process of this OS user that carries the mark
   (Linux reads `/proc/<pid>/environ`, macOS uses `sysctl KERN_PROCARGS2`), with `SIGKILL` to each
-  match's process group, so `setsid` and `nohup` don't escape.
+  match's process group, so `setsid` and `nohup` don't escape. macOS hides the environment of
+  Apple's own programs (`sleep`, `perl`, the shells) even from the same user, so on a Mac the app
+  also ends each command's process group and the processes forked from it. One case still escapes
+  there: an Apple program that leaves its process group (`setsid`) in the instant its parent exits.
 - Windows: one Job Object per session with kill-on-close and no breakaway. Each command starts
   suspended, joins the job, then resumes; closing the job at session end ends everything in it,
   `start` included.

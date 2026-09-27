@@ -9,6 +9,7 @@ import {
 import type { PlatformRuntimeOperations } from '@agent-device/contracts/platform-runtime-operations';
 import type { ScreenRecordingLiveHandle } from '@agent-device/contracts/screen-recording-runtime';
 import { createDurableResourceEnvelope } from '@agent-device/capture-kit';
+import { hostPlatform } from '@agent-device/host-kit/process';
 import type { DeviceInfo } from '@agent-device/kernel/device';
 import { createTestDeviceInventoryGateways } from '../../__tests__/test-utils/device-inventory-gateways.ts';
 import { unavailableDeploymentSnapshotAndShutdownOperationFacts } from '../../__tests__/test-utils/runtime-operation-facts.ts';
@@ -32,6 +33,13 @@ vi.mock('@agent-device/device-selection/dispatch-resolve', async (importOriginal
 });
 
 vi.mock('../device/device-ready.ts', () => ({ ensureDeviceReady: vi.fn(async () => {}) }));
+
+// Silicon Extend records Linux desktops when the engine runs on one, so whether a Linux session can
+// record depends on the host. The Linux case below pins a host that isn't Linux.
+vi.mock('@agent-device/host-kit/process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agent-device/host-kit/process')>();
+  return { ...actual, hostPlatform: vi.fn(actual.hostPlatform) };
+});
 
 test('fresh default-device recording starts serialize before durable admission', async () => {
   let releaseFirstStart: () => void = () => {};
@@ -68,11 +76,25 @@ test('fresh default-device recording starts serialize before durable admission',
 });
 
 test.each([
-  { platform: 'linux', id: 'linux', name: 'Linux', kind: 'device', target: 'desktop' },
-  { platform: 'vega', id: 'vega', name: 'Vega', kind: 'device', target: 'tv' },
-] satisfies readonly DeviceInfo[])(
-  'record start on $platform routes real unavailable runtime facts into public guidance',
-  async (device) => {
+  {
+    device: { platform: 'linux', id: 'linux', name: 'Linux', kind: 'device', target: 'desktop' },
+    // Upstream has no Linux recording; Silicon Extend's is refused by the host it needs.
+    refusal: {
+      hint: 'Linux recording requires a local Linux host.',
+      details: { reason: 'owner-capability-missing' },
+    },
+  },
+  {
+    device: { platform: 'vega', id: 'vega', name: 'Vega', kind: 'device', target: 'tv' },
+    refusal: {
+      hint: 'Select an Apple, Android, physical HarmonyOS, or web target that supports screen recording.',
+      details: { reason: 'unsupported-platform-leaf' },
+    },
+  },
+] satisfies readonly { device: DeviceInfo; refusal: object }[])(
+  'record start on $device.platform routes real unavailable runtime facts into public guidance',
+  async ({ device, refusal }) => {
+    vi.mocked(hostPlatform).mockReturnValue('darwin');
     const sessionName = `record-${device.platform}-unsupported`;
     const sessionStore = makeSessionStore(`request-router-record-${device.platform}-unsupported-`);
     sessionStore.set(sessionName, {
@@ -111,12 +133,12 @@ test.each([
       error: {
         code: 'UNSUPPORTED_OPERATION',
         message: 'record is not supported on this device',
-        hint: 'Select an Apple, Android, physical HarmonyOS, or web target that supports screen recording.',
-        details: { reason: 'unsupported-platform-leaf' },
+        ...refusal,
       },
     });
     expect(bind).toHaveBeenCalledOnce();
     await gateway.shutdown();
+    vi.mocked(hostPlatform).mockReset();
   },
 );
 

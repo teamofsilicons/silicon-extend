@@ -39,6 +39,14 @@ else
   skip web "pnpm not installed"
 fi
 
+if command -v pnpm >/dev/null && command -v node >/dev/null; then
+  # The device engine's whole unit suite, then the packaging checks against its fresh dist.
+  run engine-unit bash -c "cd vendor/extend-engine && pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build"
+  run desktop-packaging node --test apps/desktop/*.test.mjs
+else
+  skip engine "pnpm or node not installed"
+fi
+
 if [ -x apps/android/gradlew ]; then
   # No system Java on the build Mac: use Homebrew's JDK 17 when JAVA_HOME isn't set (apps/android/README.md).
   : "${JAVA_HOME:=$( [ -d /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ] && echo /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home || /usr/libexec/java_home 2>/dev/null )}"

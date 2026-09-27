@@ -22,7 +22,7 @@ type McpToolConfigFieldSpec = {
 
 const MCP_TOOL_CONFIG_FIELDS = {
   stateDir: {
-    schema: { type: 'string', description: 'Agent-device state directory.' },
+    schema: { type: 'string', description: 'Device engine state directory.' },
     // Selects which daemon state directory (and therefore which daemon and
     // session namespace) a call resolves against: operator infrastructure, not
     // per-call work.

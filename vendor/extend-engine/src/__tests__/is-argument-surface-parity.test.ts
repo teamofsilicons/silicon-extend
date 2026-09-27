@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import { test } from 'vitest';
 import { AppError } from '@agent-device/kernel/errors';
 import {
@@ -151,16 +149,9 @@ test('an unsupported predicate is refused with the same message and hint everywh
   assert.equal(cli.hint, IS_PREDICATE_USAGE_HINT);
 });
 
-test('command docs list every is predicate', () => {
-  const docs = fs.readFileSync(
-    path.resolve(import.meta.dirname, '../..', 'website/docs/docs/commands.md'),
-    'utf8',
-  );
-  const predicateList = docs.match(/Supported predicates are ([^.]+)\./)?.[1] ?? '';
+// Upstream also checked its website's command docs here; Silicon Extend doesn't ship that site.
+test('the is command schema lists every is predicate', () => {
   assert.deepEqual(IS_PREDICATES, EXPECTED_IS_PREDICATES);
-  for (const predicate of EXPECTED_IS_PREDICATES) {
-    assert.match(predicateList, new RegExp(`\\b${predicate}\\b`));
-  }
 
   const metadata = interactionCommandMetadata.find((entry) => entry.name === 'is');
   const predicateSchema = metadata?.inputSchema.properties?.predicate;

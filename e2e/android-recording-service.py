@@ -17,7 +17,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('device')
-parser.add_argument('--serial', default='emulator-5554')
+# No default: the lane must only ever reach the emulator its caller started.
+parser.add_argument('--serial', required=True, help='the serial of the emulator you started, e.g. emulator-5580')
 parser.add_argument('--service-url', default='http://127.0.0.1:8480')
 args = parser.parse_args()
 adb = ['adb', '-s', args.serial]

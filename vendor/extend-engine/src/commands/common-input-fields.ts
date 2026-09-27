@@ -76,7 +76,7 @@ type CommonInputFieldSpec = {
 
 /**
  * The common operator shape: the value comes from the key's own environment
- * variable or its `~/.agent-device/config.json` entry. It covers both kinds of
+ * variable or its `~/.silicon-extend/engine/config.json` entry. It covers both kinds of
  * operator-owned common key — the credential and the endpoint it is sent to
  * (a model-writable `daemonBaseUrl` would redirect the env-resolved
  * `daemonAuthToken` to an arbitrary server), and the build and device-set paths,
@@ -86,7 +86,7 @@ const ENV_OR_OPERATOR_CONFIG = operatorAudience({ operatorConfig: true });
 
 const COMMON_INPUT_FIELDS = {
   session: {
-    schema: { type: 'string', description: 'Agent-device session name.' },
+    schema: { type: 'string', description: 'Device engine session name.' },
     read: (record) => optionalString(record, 'session'),
     flagKey: 'session',
     flagIn: ['input'],

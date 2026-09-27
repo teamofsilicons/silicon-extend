@@ -677,7 +677,7 @@ test('usageForCommand resolves react-native help topic', async () => {
   assert.match(help, /Use help cdp for JS heap usage samples/);
   assert.match(help, /logs clear --restart/);
   assert.match(help, /network dump --include headers/);
-  assert.match(help, /extend open "Agent Device Tester" --platform android/);
+  assert.match(help, /extend open "Example App" --platform android/);
   assert.match(help, /Start React Native slow-flow plans with this ordered scaffold/);
   assert.match(help, /include the open command even when it also describes the current screen/);
   assert.match(help, /extend react-devtools status/);

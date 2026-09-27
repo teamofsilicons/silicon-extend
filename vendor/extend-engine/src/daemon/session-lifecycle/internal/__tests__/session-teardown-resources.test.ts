@@ -93,11 +93,13 @@ test('close surfaces a recording finalization failure through the cleanup-failur
     }),
   ).rejects.toThrow(/recording: .*failed to stop recording/);
 
-  // Cleanup failure is reported, later cleanup still ran, session still deleted.
+  // Cleanup failure is reported and later cleanup still ran. Silicon Extend keeps the session (and
+  // its device claim) so a retried `close` can finish the cleanup (FORK.md, "Retryable session
+  // cleanup"); upstream deleted it here.
   expect(finish).toHaveBeenCalledOnce();
   expect(forceCleanup).toHaveBeenCalledOnce();
   expect(mockReleaseRunnerOnClose).toHaveBeenCalledWith(session.device.id, { retain: false });
-  expect(sessionStore.get(sessionName)).toBeUndefined();
+  expect(sessionStore.get(sessionName)).toBeDefined();
 });
 
 test('daemon resource teardown finalizes recording before lifecycle runner disposal', async () => {

@@ -23,7 +23,10 @@ async fn main() -> anyhow::Result<()> {
             extend_service::db::migrate_global(&pool).await?;
             let test_worlds = extend_service::db::ensure_test_worlds(&pool).await?;
             extend_service::versions::migrate(&pool).await?;
-            println!("migrations applied (production and {} test environments)", test_worlds.len());
+            println!(
+                "migrations applied (production and {} test environments)",
+                test_worlds.len()
+            );
             Ok(())
         }
         Some(other) => anyhow::bail!("unknown command {other:?}; use `serve` or `migrate`"),

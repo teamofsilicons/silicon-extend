@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { afterEach, test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 
@@ -56,14 +55,6 @@ test('react-devtools passthrough pins agent-react-devtools package version', () 
     '--depth',
     '3',
   ]);
-});
-
-test('react-devtools docs mention the pinned package version', () => {
-  const docs = ['website/docs/docs/commands.md'];
-
-  for (const file of docs) {
-    assert.match(fs.readFileSync(file, 'utf8'), new RegExp(AGENT_REACT_DEVTOOLS_PACKAGE));
-  }
 });
 
 function mockRemoteCompanionSuccess(): void {

@@ -241,19 +241,19 @@ commands:
     gives:
       text: |
         Carbon:
-        ID        NAME             OS          ONLINE  AWAKE                     IN USE                        ACCESS  LAST USED  DAYS LEFT
-        7c1e09ab  Saket's Pixel    android     yes     yes                       si:chef (acme)                2       4m ago     14
-        0d44e1f2  Living room TV   android_tv  yes     no (standby)              yes (another Carbon's Silicon) 1      2d ago     9   shared
-        2e7f00d1  Studio Mac       macos       yes     yes                       a carried device (stop it at the computer)  3  1h ago  12
-        51ab93c0  Saket's iPhone   ios         no      — (offline; last seen asleep)  —                      1       5d ago     2
+        ID        NAME                     OS          ONLINE  AWAKE                          IN USE                                      ACCESS  LAST USED  DAYS LEFT
+        7c1e09ab  Saket's Pixel            android     yes     yes                            si:chef (acme, 4m)                          2       4m ago     14
+        0d44e1f2  Living room TV (shared)  android_tv  yes     no (standby)                   yes (another Carbon's Silicon)              1       2d ago     9
+        5e0a11c2  Studio iPad              ipados      yes     yes                            a carried device (stop it at the computer)  3       1h ago     12
+        51ab93c0  Saket's iPhone           ios         no      — (offline; last seen asleep)  —                                           1       5d ago     2
         Silicon:
         ID        NAME             OS          ONLINE  AWAKE          IN USE
         7c1e09ab  Saket's Pixel    android     yes     yes            si:sous
         0d44e1f2  Living room TV   android_tv  yes     no (standby)   in use, asked
-        3a2b0c1d  Family TV        android_tv  yes     no (standby)   in use (same device as 0d44e1f2)
+        3a2b0c1d  Family TV        android_tv  yes     no (standby)   in use, (same device as 0d44e1f2)
         AWAKE is yes, no (screen off | locked | asleep | standby | another account), "— (offline; last seen asleep)", or "—" when Extend can't tell.
-        IN USE names a Silicon only on your own side (Carbon: through your pair; Silicon: your Team and the same Carbon).
-        "shared": another Carbon also paired it. ", asked": you have an open wake request on it.
+        IN USE names a Silicon only on your own side (Carbon: through your pair, with its Team and how long; Silicon: your Team and the same Carbon), and "you (<session>)" for your own session.
+        NAME ends in "(shared)" when another Carbon also paired it. ", asked": you have an open wake request on it.
         (with --removed, ONLINE says "removed" for a removed device and a REMOVED column gives when and why)
       json: '{items: [Device], next_cursor: null | "<cursor where it stopped>"}'
     api: GET /api/v1/devices (include_removed=true with --removed)
@@ -285,7 +285,7 @@ commands:
       --ttl-days: 'Days without activity before the pair ends. 1–30, default 14.'
       --access: 'Silicons to give access now, in your default team (or --team); repeatable. Can be skipped and done later.'
     gives:
-      text: 'Paired 7c1e09ab "Saket''s Pixel". Setup: 2 of 4 steps left on the device. Watch with: extend device setup 7c1e09ab. When another Carbon also paired it: "This device is also paired by another Carbon; your pair is separate (own name, access and lifetime)." and, for a computer, the shared-computer note.'
+      text: 'Paired 7c1e09ab "Saket''s Pixel" (android). Next: finish the device''s own setup — watch it with `extend device setup 7c1e09ab --watch`. When another Carbon also paired it, "This device is also paired by another Carbon; your pair is separate (own name, access and lifetime)." comes before Next, with the shared-computer note for a computer.'
       json: '{Device}'
     errors: 'conflict (exit 6): you already paired this device, named by your own id for it.'
     api: POST /api/v1/pairings
@@ -352,7 +352,7 @@ commands:
   - usage: extend device access grant <device_id> <silicon_id>... [--team <team>]
     who: carbon (owner)
     summary: 'Give one or more Silicons access, in --team (or your default team). 1.1: the Team can be any Team you are a member of whose Extend login you hold; each Silicon must be in it. A Silicon may hold one grant per Team.'
-    gives: {text: 'Gave si:scout access to Living room TV in labs. When Extend''s Ting types are missing in that Team: "Tings to you in labs won''t arrive until a labs Ting manager runs: ting --org labs types register …" (each missing type''s command).'}
+    gives: {text: 'Granted si:scout access to 0d44e1f2 in labs. When Extend''s Ting types are missing in that Team, a warning on stderr first: "Ting doesn''t know one of Extend''s notification types in labs (extend.device.wake_requested), so those Tings won''t arrive there until a Ting manager of labs registers it:" and each missing type''s `ting --org labs types register …` command.'}
     errors: 'not_a_team_member (exit 4): your Extend login doesn''t reach that Team; the hint says to sign in and select it. invalid_input (exit 2): the Silicon isn''t in that Team.'
     api: PUT /api/v1/devices/{device_id}/access/{silicon_id}, GET /api/v1/ting-registration
 
@@ -417,8 +417,8 @@ commands:
     gives:
       text: |
         a3f
-        (stderr) Started session a3f on Saket's Pixel (android). Next: extend session connect a3f. Ends after 5 minutes without a command.
-        (stderr, 1.1, when the device isn't awake) Living room TV isn't awake (standby); commands that need its screen will fail until its Carbon turns it on. Ask: extend --team labs device wake 0d44e1f2 --reason "..."
+        (stderr) Started session a3f on 7c1e09ab. Next: extend --team acme session connect a3f. It ends after 5 minutes without a command; end it with `extend --team acme session end a3f`.
+        (stderr, 1.1, when the device isn't awake) note: Living room TV isn't awake (standby); commands that need its screen will fail until its Carbon turns it on. Ask: extend --team labs device wake 0d44e1f2 --reason "..."
       json: '{Session}'
     errors: [device_in_use, device_offline, device_not_ready, no_access]
     api: POST /api/v1/sessions

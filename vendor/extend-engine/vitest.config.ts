@@ -114,28 +114,13 @@ export default defineConfig({
             'scripts/__tests__/help-conformance-expectation-falsification.test.ts',
             'scripts/__tests__/help-conformance-sample-outputs.test.ts',
             'scripts/__tests__/help-conformance-topic-coverage.test.ts',
-            // Lives here rather than under src/ on purpose: it measures the repository's own
-            // files and git history, which Stryker's sandbox copy cannot answer (the copies are
-            // rewritten, and there is no origin/main). The mutation lane admits only root/package
-            // `src` tests, so this address makes it unreachable there by construction instead of
-            // by a classifier that has to recognise it — see KERNEL_TEST_FILE_RE in
-            // scripts/mutation/modules.ts.
-            'scripts/__tests__/test-file-size-ratchet.test.ts',
-            'scripts/__tests__/eager-closure-budgets.test.ts',
-            'scripts/__tests__/agent-setup-startup-contract.test.ts',
             'scripts/__tests__/npm-skills-exclusion.test.ts',
-            'scripts/__tests__/simulator-skills-contract.test.ts',
             // Parse Swift guards and declarations before deriving the simulator selection.
             'scripts/__tests__/swift-conditional-compilation.test.ts',
             'scripts/__tests__/xctest-declarations.test.ts',
-            'scripts/__tests__/xctest-selection.test.ts',
-            'scripts/__tests__/apple-ci-impact.test.ts',
             // The nightly XCTest lane's reporter/liveness check, which otherwise only ever
             // executes on a macOS runner at 04:30.
             'scripts/__tests__/xctest-run-summary.test.ts',
-            // The Fallow fixture policy is executable configuration: unused exports are exempt,
-            // but fixture modules remain visible to the other analysis families.
-            'scripts/__tests__/fallow-fixture-policy.test.ts',
             // The publishing gate's closure audit against fixture packages: parse-only, and the
             // only place the gate's failure direction is exercised at all (the gate itself needs a
             // real `npm pack`, so CI can only watch a healthy package pass).
@@ -159,21 +144,9 @@ export default defineConfig({
             // The runner build's actor-isolation log scan, over synthetic logs and a fake
             // `xcodebuild` on PATH.
             'scripts/__tests__/runner-isolation-diagnostics.test.ts',
-            // Parse-only guard on the checked-in registry entry: the npm package must declare
-            // the fixed mcp subcommand, or registry-format launchers run the bare CLI.
-            'scripts/__tests__/mcp-metadata.test.ts',
             'scripts/ios-snapshot-benchmark/*.test.ts',
             'scripts/png-crop-benchmark/*.test.ts',
             'scripts/ios-ax-bridge-spike/*.test.ts',
-            // Parses CI configuration only, so this action guard needs no device or subprocess lane.
-            'test/ci/upload-agent-device-artifacts.test.ts',
-            'test/ci/upload-artifact-hidden-paths.test.ts',
-            // The size reporter is preserved across a base checkout; its entrypoint and imported
-            // modules must move as one directory or the Bundle Size lane fails before measuring.
-            'test/ci/size-workflow.test.ts',
-            // #1781 A9: pins the root-doc paths-ignore entries directly against the
-            // real workflow YAML, parse-only like its sibling above.
-            'test/ci/root-docs-paths-ignore.test.ts',
             // The daemon leak oracle's lifecycle/residue rules (#1781 B1): pure
             // decisions over fixture state-dir listings, so they need no daemon,
             // device, or subprocess.

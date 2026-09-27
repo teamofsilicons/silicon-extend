@@ -93,6 +93,7 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/dev/iam/authorize", get(dev::authorize_page).post(dev::authorize_submit))
         .route("/dev/iam/login", get(dev::authorize_page).post(dev::authorize_submit))
         .route("/dev/ting", get(dev::tings))
+        .route("/dev/ting/missing", post(dev::ting_missing))
         .fallback(any(fallback))
         // Test-environment selection for every /api/v{n}/ route (see crate::state).
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::state::selection_layer))

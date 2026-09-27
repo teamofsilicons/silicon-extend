@@ -85,16 +85,15 @@ test('composes focused deployment executors instead of a cross-family deployment
   expect(existsSync(join(directory, 'platform-runtime-app-deployment-host.ts'))).toBe(false);
 });
 
+// Silicon Extend routes the macOS app surface (and an absent one, which reads as app) to the native
+// helper, not the XCTest runner (FORK.md, "Bound macOS app capture"), so upstream's refusal of these
+// two surfaces became forwarding. No surface routes to the runner any more.
 test.each([undefined, 'app'] as const)(
-  'the macOS surface loader refuses a %s surface the owner routes to the runner',
+  'the macOS surface loader forwards a %s surface to the helper as the app surface',
   async (surface) => {
     vi.mocked(captureMacOsSurfaceSnapshot).mockClear();
-    const refusal = loadMacOsSurfaceSnapshot({ surface });
-    await expect(refusal).rejects.toBeInstanceOf(TypeError);
-    await expect(refusal).rejects.toThrow(
-      'Apple surface capture requires a helper-routed macOS surface',
-    );
-    expect(captureMacOsSurfaceSnapshot).not.toHaveBeenCalled();
+    await loadMacOsSurfaceSnapshot({ surface });
+    expect(captureMacOsSurfaceSnapshot).toHaveBeenCalledWith({ surface: 'app' }, undefined);
   },
 );
 

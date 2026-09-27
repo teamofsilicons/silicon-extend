@@ -132,6 +132,7 @@ Always available: `{carbon_token}` (c:alice), `{other_carbon_token}` (c:bob, als
 | `shared_device` | `device`, also paired by c:bob through Pair with another Carbon: a second pair of the same phone, with c:bob's own id, access for si:chef in acme | `{shared_device_id}` (c:bob's pair) |
 | `shared_computer` | `host`, also paired by c:bob the same way, both pairs connected by 1.1 apps | `{shared_host_id}` (c:bob's pair) |
 | `wake_request` | `device`, reporting itself not awake (screen off), with an open wake request from si:chef | `{wake_id}` |
+| `failed_setup` | an Android phone paired by c:alice (si:chef has access), connected by a 1.1.0 app that lists `setup_retry` in its hello, with its `wireless_debugging` step failed | `{device_id}`, `{device_credential}` |
 | `paired` | (device sockets) the device the fixture pairs | `{device_id}`, `{device_credential}`, `{command_id}`, `{upload_id}`, `{attached_id}`, `{wake_id}` |
 
 A fixture that needs a new state fails `every_fixture_is_well_formed` until the state is added to
@@ -145,6 +146,8 @@ cargo test -p extend-service --test contracts        # needs PostgreSQL, EXTEND_
 
 It replays `v{n}/client`, every frozen `v{n}/client-<version>/`, and `v{n}/device` for every major
 the service still serves (not sunset), and `internal/honeycomb` in its `sequence` order.
+`EXTEND_CONTRACTS_DIR` points it at another copy of `contracts/` (for example fixtures taken from a
+release tag).
 
 CI runs both sides in the `rust` job's "Consumer contracts" step, before the workspace tests:
 

@@ -886,7 +886,7 @@ Anything that ends access takes effect on the next command at the latest, and us
 | Device removed or pair revoked | API | Session ends; pair ends (§4). 1.1: that Carbon's pair only |
 | Carbon taps Stop | Device socket or API | Session ends (`stopped_by_carbon`). 1.1: any Carbon who paired the device (§5) |
 | Silicon logs out, or its IAM session is revoked | IAM webhook | Its sessions end (`silicon_logged_out`) |
-| Carbon logs out of Extend (1.1) | `POST /api/v1/auth/logout` | The running sessions of the Silicons that Carbon gave access to end (`stopped_by_carbon`), through that Carbon's pairs, in every Team; another Carbon's Silicons on the same device keep theirs. Devices and grants stay |
+| Carbon logs out of Extend (1.1) | `POST /api/v1/auth/logout` | The running sessions of the Silicons that Carbon gave access to end (`access_removed`), through that Carbon's pairs, in every Team; another Carbon's Silicons on the same device keep theirs. Devices and grants stay |
 | Silicon removed from the team or deleted | IAM webhook | Its sessions end (`left_team`); its access grants are removed. 1.1: in that Team only |
 | Owner Carbon leaves the team | IAM webhook | All the Carbon's devices in that team are unpaired. **1.1:** the grants that Carbon gave in that Team end, on all their pairs, and those sessions end (`left_team`); open wake requests there are withdrawn. The devices stay paired, and grants in their other Teams stay |
 
@@ -1208,7 +1208,8 @@ list is checked against the build before release:
   key), back off, and don't count attempts with no login held; a missing Ting type is shown with its
   register command instead of being retried silently.
 - **No new error code, end reason, capability, visibility or OS value**: 1.0 readers decode those
-  strictly. A Carbon's logout ends sessions as `stopped_by_carbon`.
+  strictly. A Carbon's logout ends sessions as `access_removed`, whose hint to the Silicon says the
+  Carbon took its access away or signed out.
 - **Rollback to 1.0.0 needs a down step** (`deploy/rollback/1.1-to-1.0.sql`, listed in
   `deploy/aws/README.md` and `docs/deployment.md`): it removes grants 1.0.0 would misread, fails routed
   requests still pending, withdraws open wake requests, and deletes waiting "Pair with another Carbon"
@@ -1267,8 +1268,9 @@ unless marked settled. Naming, signing and publishing decisions are in `docs/com
   have Extend return it.
 - **C9. Carbon logout (question 4).** *Settled for 1.1 on 2026-09-27:* a Carbon signing out of the
   website or the CLI ends the running sessions of the Silicons that Carbon gave access to, only on
-  that Carbon's side (§9). The build ends them as `stopped_by_carbon`, since no end reason can be
-  added without breaking 1.0 readers; confirm, or accept a new reason in API v2.
+  that Carbon's side (§9). The build ends them as `access_removed` (the Silicon's hint says the Carbon
+  took its access away or signed out), since no end reason can be added without breaking 1.0
+  readers; confirm, or accept a new reason in API v2.
 
 Settled by round 2: question 13 (downloads go through Extend), question 15 (what `--quality`
 means on computers), the audit's "bind or document" for pairing codes across worlds (bound, as

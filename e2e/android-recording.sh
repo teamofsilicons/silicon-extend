@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Manual instrumentation lane. Requires freshly installed debug + androidTest APKs.
 # RUN_LONG=1 also checks real capture beyond 180 seconds. This lane targets emulators only.
+#
+#   e2e/android-recording.sh <emulator serial>     (for example emulator-5580: the emulator you started)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SERIAL="${1:-emulator-5554}"
+# No default serial: the lane must only ever reach the emulator its caller started.
+SERIAL="${1:?Pass the serial of the emulator you started for this lane, for example emulator-5580.}"
 [[ "$(adb -s "$SERIAL" shell getprop ro.kernel.qemu | tr -d '\r')" == 1 ]] || {
   echo "This lane requires a dedicated Android emulator" >&2; exit 1;
 }

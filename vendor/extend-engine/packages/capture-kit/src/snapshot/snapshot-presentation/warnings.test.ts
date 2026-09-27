@@ -70,7 +70,7 @@ test('presentation failures identify a runner bug and preserve composed warnings
   );
 
   assert.deepEqual(warnings, [
-    'Agent Device could not safely present the captured accessibility tree and fell back to the private-ax snapshot backend. This is an Agent Device runner bug, not an app accessibility-tree issue. Use screenshot as visual truth and report snapshotQuality.reason with the screenshot.',
+    'The device engine could not safely present the captured accessibility tree and fell back to the private-ax snapshot backend. This is a device engine bug, not an app accessibility-tree issue. Use screenshot as visual truth and report snapshotQuality.reason with the screenshot.',
     'Some deeper accessibility nodes were omitted; the accessibility backend capped this tree at depth 56. Navigate so the content you need sits higher in the tree, and use screenshot as visual truth for the rest.',
   ]);
 });

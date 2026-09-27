@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { expect, test } from 'vitest';
 import { usageForCommand } from '../args.ts';
 import { getFlagDefinitions } from '@agent-device/command-registry/flag-registry';
@@ -29,18 +28,4 @@ test('Maestro help covers the supported subset and operational boundaries', asyn
   expect(help).toContain('Focused compatibility request: extend report');
   expect(help).not.toContain(MAESTRO_COMPATIBILITY_ISSUE_URL);
   expect(help).not.toContain('issues/558');
-});
-
-test('Maestro replay docs stay in sync with versioned compatibility help', () => {
-  const docs = fs.readFileSync('website/docs/docs/replay-e2e.md', 'utf8');
-  const plainDocs = docs.replaceAll('`', '');
-  for (const statement of [
-    ...MAESTRO_COMPAT_SUPPORTED_CAPABILITIES,
-    ...MAESTRO_COMPAT_LIMITATIONS,
-  ]) {
-    expect(plainDocs).toContain(statement);
-  }
-  expect(docs).toContain(MAESTRO_COMPATIBILITY_ADR_URL);
-  expect(docs).toContain(MAESTRO_COMPATIBILITY_ISSUE_URL);
-  expect(docs).not.toContain('issues/558');
 });

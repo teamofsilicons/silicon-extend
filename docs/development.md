@@ -58,7 +58,7 @@ own `EXTEND_DATA_DIR`, and point the lane at it (`bash e2e/cli-e2e.sh http://127
 | `apps/android` | See its README (unit tests, emulator runs, the notices generator and dependency verification) |
 | `crates/extend-agent`, `apps/desktop/linux-e2e` | Desktop agent tests; Linux run and recording lanes in Docker (`apps/desktop/README.md`) |
 | `node --test apps/desktop/*.test.mjs` | Packaged runtime stamp and entry, and the packaging checks (stamp errors, dist freshness) |
-| `cd vendor/extend-engine && pnpm typecheck && pnpm exec vitest run --project unit-core <files>` | The device engine (Silicon Extend's fork): CI runs every test file an Extend change touched (the list is in `.github/workflows/ci.yml`); `pnpm test:macos-helper` for the Swift helper |
+| `cd vendor/extend-engine && pnpm typecheck && pnpm lint && pnpm test:unit` | The device engine (Silicon Extend's fork): its whole unit suite (unit-core and fuzz-worker), as CI runs it; `pnpm test:macos-helper` for the Swift helper |
 | `cd apps/android && ./gradlew :app:testDebugUnitTest :libadb:testDebugUnitTest` | The Android app's and libadb's JVM tests (with `JAVA_HOME` at a JDK 17) |
 
 ## Conventions

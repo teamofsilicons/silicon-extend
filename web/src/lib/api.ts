@@ -566,8 +566,8 @@ export class ExtendClient {
   /**
    * Asks the device to run a failed setup step again now (every failed step without `step`). The
    * service changes no step itself: the device reports progress as usual, so keep reading getSetup.
-   * Refusals carry the service's own words: 409 when nothing failed or the device is offline, 426
-   * when its app is older than 1.1, 429 at most once every 5 s.
+   * Refusals carry the service's own words: 400 when the device has no such step, 409 when nothing
+   * failed or the device is offline, 426 when its app is older than 1.1, 429 at most once every 5 s.
    */
   async retrySetup(deviceId: string, step?: string | null): Promise<RetryResult> {
     const res = await this.request<RetryResult>({

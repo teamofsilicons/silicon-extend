@@ -8,7 +8,8 @@
 #   NOTARY_PROFILE=extend-release SIGN_IDENTITY='…' apps/desktop/macos/build-app.sh
 #   NODE_TARBALL=/path/node-v22.23.3-darwin-arm64.tar.gz … (offline, checksum still verified)
 #
-# Output: target/desktop/macos/Silicon Extend.app and one zip whose name says how it was signed:
+# Output: target/desktop/macos/Silicon Extend.app (or $OUT/Silicon Extend.app) and one zip whose
+# name says how it was signed:
 #   Silicon-Extend-<version>-macos-<arch>.zip              Developer ID signed, notarized, stapled
 #   Silicon-Extend-<version>-macos-<arch>-unnotarized.zip  Developer ID signed, no NOTARY_PROFILE
 #   Silicon-Extend-<version>-macos-<arch>-adhoc.zip        ad-hoc signed, no SIGN_IDENTITY (this Mac only)
@@ -20,7 +21,7 @@ NODE_VERSION="22.23.3"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 ARCH="$(uname -m)"; [[ "$ARCH" == "x86_64" ]] && NODE_ARCH=x64 || NODE_ARCH=arm64
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
-OUT="$ROOT/target/desktop/macos"
+OUT="${OUT:-$ROOT/target/desktop/macos}"
 APP="$OUT/Silicon Extend.app"
 CACHE="$ROOT/target/desktop/.cache"
 ENGINE="$ROOT/vendor/extend-engine"
@@ -41,10 +42,11 @@ step "device engine (pnpm install && pnpm build)"
 (cd "$ENGINE" && pnpm install --frozen-lockfile && pnpm build)
 # What this dist was built from, so a later package without pnpm can check it (dist-manifest.mjs).
 node "$ROOT/apps/desktop/dist-manifest.mjs" record "$ENGINE"
-# The macOS helper, built once and shipped signed inside the app so permissions stick to it. The
-# Swift product keeps its upstream name (agent-device-macos-helper) unless the fork renames it.
+# The macOS helper, built once and shipped signed inside the app so permissions stick to it. Its
+# Swift product is silicon-extend-macos-helper; a .build cache from before the rename may still hold
+# the old agent-device-macos-helper, which is never picked.
 (cd "$ENGINE" && pnpm build:macos-helper) >/dev/null
-HELPER="$(find "$ENGINE/apple/macos-helper/.build" -type f \( -name silicon-extend-macos-helper -o -name agent-device-macos-helper \) -perm -u+x -ipath '*release*' | head -1)"
+HELPER="$(find "$ENGINE/apple/macos-helper/.build" -type f -name silicon-extend-macos-helper -perm -u+x -ipath '*release*' | head -1)"
 [[ -n "$HELPER" ]] || die "The macOS helper didn't build: no release executable under $ENGINE/apple/macos-helper/.build. Run (cd vendor/extend-engine && pnpm build:macos-helper) to see the Swift error, fix it and build again."
 
 step "extend-agent ($PROFILE)"

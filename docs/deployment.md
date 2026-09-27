@@ -11,7 +11,8 @@ follows the order in [Releasing 1.1.0](#releasing-110) below; nothing of 1.1.0 i
 - Image: `docker build -t silicon-extend .` (see `Dockerfile`; `extend-service serve`, port 8080,
   healthcheck `/ready`). The image sets `EXTEND_ENVIRONMENT=production` and carries `LICENSE`,
   `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.txt` in `/usr/share/doc/silicon-extend/`. Run `extend-service migrate` once per release, or let `serve` migrate at
-  start (migrations take an advisory lock, so concurrent starts are safe).
+  start (migrations take an advisory lock, so concurrent starts are safe). Both migrate production
+  and every test environment.
 - **Run one instance.** Device sockets and in-flight commands live in the process (see
   [operations.md](operations.md)). Whatever terminates HTTPS in front of it (a load balancer, or
   Caddy on the host as in `deploy/aws/`) needs a WebSocket idle timeout ≥ 60 s (the service pings
@@ -156,8 +157,9 @@ Carbons paired, only the installer's Silicons get the terminal.
 ### Rolling back to 1.0.0
 
 Rolling back needs a down step. With the service stopped, before the 1.0.0 image starts, run
-`deploy/rollback/1.1-to-1.0.sql` for every world schema (`extend` and each `extend_test_*`), and its
-global statement once. It:
+`psql "$EXTEND_DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/rollback/1.1-to-1.0.sql` once. It changes
+every world schema (`extend` and each `extend_test_*`) and the global schema in one transaction, and
+running it twice does no harm. It:
 
 - sets aside the grants 1.0.0 would read wrongly (a grant in another Team than the pair's recorded
   Team), and ends the sessions using them;

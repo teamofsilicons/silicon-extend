@@ -1,0 +1,36 @@
+{
+  "api_version": 1,
+  "call": "Client::testing_environment",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "test_environment"
+  ],
+  "operation": "testing.environment",
+  "request": {
+    "body": null,
+    "headers": {
+      "silicon-extend-api-version": "1",
+      "x-testing-application-secret": "{testing_secret}"
+    },
+    "method": "GET",
+    "path": "/api/v1/testing-environment"
+  },
+  "response": {
+    "non_null": [
+      "/device_limit",
+      "/environment_id",
+      "/name",
+      "/paired_devices",
+      "/state"
+    ],
+    "required": [
+      "/environment_id",
+      "/name",
+      "/state"
+    ],
+    "status": "2xx",
+    "type": "testing_environment"
+  }
+}

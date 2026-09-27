@@ -67,36 +67,12 @@ jobs:
         with: {node-version: 24, cache: pnpm, cache-dependency-path: vendor/extend-engine/pnpm-lock.yaml}
       - run: pnpm install --frozen-lockfile
         working-directory: vendor/extend-engine
-      # Every engine test file an Extend change touched (vendor/extend-engine/FORK.md). The engine's
-      # full suite has failures that predate Extend, so it is not run here.
-      - name: Engine tests Extend changed
+      # The engine's whole unit suite (its `pnpm test:unit`: the unit-core and fuzz-worker projects).
+      # Tests of upstream tooling Silicon Extend doesn't ship were removed (vendor/extend-engine/FORK.md),
+      # so it passes in full; it needs zip and unzip, which the runner has.
+      - name: Engine unit tests
         working-directory: vendor/extend-engine
-        run: >-
-          pnpm exec vitest run --project unit-core
-          src/extend-env.test.ts
-          packages/contracts/src/session-surface.test.ts
-          packages/platform-apple/src/__tests__/interactor-macos-surface.test.ts
-          packages/platform-apple/src/__tests__/interactor-runner-provider.test.ts
-          packages/platform-apple/src/__tests__/runner-requests.test.ts
-          packages/platform-apple/src/core/__tests__/interactions.test.ts
-          packages/platform-apple/src/os/macos/apps.test.ts
-          packages/platform-apple/src/os/macos/helper.test.ts
-          packages/platform-apple/src/recording/recovery.test.ts
-          packages/platform-apple/src/recording/runtime.test.ts
-          packages/platform-apple/src/runtime.test.ts
-          packages/platform-linux/src/__tests__/clipboard.test.ts
-          packages/platform-linux/src/lifecycle.test.ts
-          packages/platform-linux/src/recording/runtime.test.ts
-          packages/platform-linux/src/runtime.test.ts
-          src/daemon/__tests__/macos-text-surface-runner-context.test.ts
-          src/daemon/__tests__/screenshot-crop-target.test.ts
-          src/daemon/interaction/internal/__tests__/find-macos-frontmost-surface.test.ts
-          src/daemon/session-lifecycle/internal/__tests__/session-close-error-precedence.test.ts
-          src/daemon/session-lifecycle/internal/__tests__/session-open-surface.test.ts
-          src/platform-runtime-screen-recording-host.test.ts
-          src/platform-runtime-screen-recording-linux-host.test.ts
-          src/platform-runtime-screen-recording-macos-host.test.ts
-          src/platform-runtime-screen-recording-process-host.test.ts
+        run: pnpm test:unit
       # Built so the packaging tests also check the real dist (they skip that case without one).
       - run: pnpm build
         working-directory: vendor/extend-engine
@@ -109,7 +85,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: 17}
-      # JVM tests only (the app's 138 and libadb's); the instrumented tests need an emulator.
+      # JVM tests only (the app's 226 and libadb's 10); the instrumented tests need an emulator.
       - run: ./gradlew --no-daemon :app:testDebugUnitTest :libadb:testDebugUnitTest
   contracts:
     runs-on: ubuntu-24.04

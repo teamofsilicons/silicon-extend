@@ -174,9 +174,9 @@ test('doctor command opts into progress rows for human output', async () => {
       summary: 'No blockers found.',
       checks: [
         {
-          id: 'agent-device',
+          id: 'engine',
           status: 'pass',
-          summary: 'agent-device 0.17.9 using /tmp/agent-device',
+          summary: 'Silicon Extend device engine 0.17.9 using /tmp/extend-engine',
         },
       ],
     },
@@ -188,7 +188,7 @@ test('doctor command opts into progress rows for human output', async () => {
   assert.equal(result.calls[0]?.meta?.requestProgress, 'command');
   assert.match(
     result.stdout,
-    /✓ engine: Silicon Extend device engine 0\.17\.9 using \/tmp\/agent-device/,
+    /✓ engine: Silicon Extend device engine 0\.17\.9 using \/tmp\/extend-engine/,
   );
 });
 
