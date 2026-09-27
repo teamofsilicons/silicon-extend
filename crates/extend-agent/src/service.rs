@@ -6,7 +6,7 @@ use std::time::Duration;
 use extend_protocol::model::{
     DeviceSelf, DeviceSelfPatch, EnrollmentCreate, EnrollmentCreated, EnrollmentState, InUseIndicator,
 };
-use extend_protocol::{API_VERSION, API_VERSION_HEADER, Envelope};
+use extend_protocol::{API_VERSION, API_VERSION_HEADER, DeviceId, Envelope};
 use rand::Rng as _;
 use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncReadExt as _;
@@ -141,8 +141,21 @@ impl ServiceClient {
     }
 
     pub async fn set_in_use_indicator(&self, credential: &str, value: InUseIndicator) -> ServiceResult<DeviceSelf> {
+        self.set_target_in_use_indicator(credential, None, value).await
+    }
+
+    pub async fn set_target_in_use_indicator(
+        &self,
+        credential: &str,
+        target: Option<&DeviceId>,
+        value: InUseIndicator,
+    ) -> ServiceResult<DeviceSelf> {
+        let path = target.map_or_else(
+            || "api/v1/device".to_owned(),
+            |id| format!("api/v1/device/attachments/{id}"),
+        );
         let resp = self
-            .request(reqwest::Method::PATCH, "api/v1/device")
+            .request(reqwest::Method::PATCH, &path)
             .header("Authorization", device_auth(credential))
             .json(&Envelope::new("device_self", DeviceSelfPatch::in_use_indicator(value)))
             .send()

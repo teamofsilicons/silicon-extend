@@ -57,6 +57,11 @@ enum Seen {
     DeviceSelf {
         auth: String,
     },
+    Indicator {
+        auth: String,
+        target: Option<String>,
+        value: Value,
+    },
     Upload {
         id: String,
         name: String,
@@ -84,6 +89,8 @@ struct Inner {
     credentials: HashMap<String, String>,
     /// `GET /api/v1/device` for each pair.
     selves: HashMap<String, Value>,
+    indicator_fail: bool,
+    indicator_gate: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Default for Inner {
@@ -108,6 +115,8 @@ impl Default for Inner {
             enrollments: 0,
             credentials,
             selves,
+            indicator_fail: false,
+            indicator_gate: None,
         }
     }
 }
@@ -316,6 +325,49 @@ async fn device_self(State(f): State<Fake>, headers: HeaderMap) -> Response {
     Json(json!({"type":"device_self","data":data})).into_response()
 }
 
+async fn patch_self(State(f): State<Fake>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+    patch_indicator(f, headers, None, body).await
+}
+
+async fn patch_attached(
+    State(f): State<Fake>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    patch_indicator(f, headers, Some(id), body).await
+}
+
+async fn patch_indicator(f: Fake, headers: HeaderMap, target: Option<String>, body: Value) -> Response {
+    let Some(pair) = pair_of(&f, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let value = body["data"]["in_use_indicator"].clone();
+    f.push(Seen::Indicator {
+        auth: auth(&headers),
+        target: target.clone(),
+        value: value.clone(),
+    });
+    let gate = f.0.lock().unwrap().indicator_gate.clone();
+    if let Some(gate) = gate {
+        gate.notified().await;
+    }
+    let mut inner = f.0.lock().unwrap();
+    if inner.indicator_fail {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let mut data = if let Some(id) = target {
+        device_self_json(&id, "Carried iPad", "c:bob", true)
+    } else {
+        for own in inner.selves.values_mut() {
+            own["in_use_indicator"] = value.clone();
+        }
+        inner.selves[&pair].clone()
+    };
+    data["in_use_indicator"] = value;
+    Json(json!({"type":"device_self", "data":data})).into_response()
+}
+
 async fn revoke(State(f): State<Fake>, headers: HeaderMap) -> StatusCode {
     f.push(Seen::Revoke { auth: auth(&headers) });
     StatusCode::NO_CONTENT
@@ -361,7 +413,8 @@ async fn start_fake() -> (Fake, SocketAddr) {
             get(get_enrollment).delete(|| async { StatusCode::NO_CONTENT }),
         )
         .route("/api/v1/enrollments/{id}/connect", get(enrollment_socket))
-        .route("/api/v1/device", get(device_self).delete(revoke))
+        .route("/api/v1/device", get(device_self).patch(patch_self).delete(revoke))
+        .route("/api/v1/device/attachments/{id}", axum::routing::patch(patch_attached))
         .route("/api/v1/device/enrollments", post(pair_enrollment))
         .route("/api/v1/device/stop", post(stop))
         .route("/api/v1/device/connect", get(device_socket))
@@ -640,6 +693,210 @@ async fn eventually<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
 
 fn frame_of(fake: &Fake, kind: &str, n: usize) -> Option<Value> {
     fake.frames().into_iter().filter(|f| f["type"] == kind).nth(n)
+}
+
+#[tokio::test]
+async fn offline_banner_choice_survives_restart_and_sync_does_not_block_stop() {
+    use extend_protocol::model::InUseIndicator;
+    let mut h = start(true).await;
+    eventually("device read", || {
+        (h.fake.count(|s| matches!(s, Seen::DeviceSelf { .. })) > 0).then_some(())
+    })
+    .await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut inner = h.fake.0.lock().unwrap();
+        inner.indicator_fail = true;
+        inner.indicator_gate = Some(gate.clone());
+    }
+    h.handle
+        .actions
+        .send(UiAction::SetInUseIndicator { shown: false })
+        .unwrap();
+    eventually("hidden locally while HTTP is waiting", || {
+        let s = h.handle.status.get();
+        (s.in_use_indicator == InUseIndicator::Hidden
+            && s.indicator_sync_pending
+            && h.fake.count(|s| matches!(s, Seen::Indicator { .. })) > 0)
+            .then_some(())
+    })
+    .await;
+    h.handle.actions.send(UiAction::Stop { target: None }).unwrap();
+    eventually("Stop during a stalled settings request", || {
+        frame_of(&h.fake, "stop", 0)
+    })
+    .await;
+    // A failed write cannot overwrite the saved choice with the old server setting.
+    gate.notify_one();
+    h.fake.0.lock().unwrap().indicator_gate = None;
+    h.fake.send(json!({"type":"refresh"}));
+    eventually("refresh read", || {
+        (h.fake.count(|s| matches!(s, Seen::DeviceSelf { .. })) >= 2).then_some(())
+    })
+    .await;
+    assert_eq!(h.handle.status.get().in_use_indicator, InUseIndicator::Hidden);
+
+    h.handle.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(15), &mut h.task)
+        .await
+        .unwrap()
+        .unwrap();
+    let config = Config::for_tests(h._dir.path(), &h.handle.status.get().service_url);
+    let (agent, handle) = Agent::new(AgentDeps {
+        config,
+        local: h.computer.clone(),
+        hosted_factory: Arc::new(|_| Ok(Box::new(Tv))),
+        credentials: h.store.clone(),
+        probe_interval: Duration::from_secs(3600),
+        screen_watch: None,
+        notifier: h.notifier.clone(),
+        display: h.display.clone(),
+    });
+    assert_eq!(
+        handle.status.get().in_use_indicator,
+        InUseIndicator::Hidden,
+        "loaded before any network read"
+    );
+    assert!(handle.status.get().indicator_sync_pending);
+    h.fake.0.lock().unwrap().indicator_fail = false;
+    let task = tokio::spawn(agent.run());
+    eventually("saved preference synchronized after restart", || {
+        (!handle.status.get().indicator_sync_pending).then_some(())
+    })
+    .await;
+    assert_eq!(h.fake.0.lock().unwrap().selves[DEVICE_ID]["in_use_indicator"], "hidden");
+    assert_eq!(handle.status.get().in_use_indicator, InUseIndicator::Hidden);
+    // A subsequent website change is accepted once there is no unsent local choice.
+    h.fake.0.lock().unwrap().selves.get_mut(DEVICE_ID).unwrap()["in_use_indicator"] = json!("shown");
+    h.fake.send_to(DEVICE_ID, json!({"type":"refresh"}));
+    eventually("server preference refreshed", || {
+        (handle.status.get().in_use_indicator == InUseIndicator::Shown).then_some(())
+    })
+    .await;
+    handle.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(15), task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_carried_banner_uses_its_host_pair_and_preserves_the_live_session() {
+    use extend_protocol::model::InUseIndicator;
+    let h = start_shared().await;
+    eventually("both host pairs connected", || {
+        (h.fake.connected(DEVICE_ID) && h.fake.connected(DEVICE_B)).then_some(())
+    })
+    .await;
+    h.fake.send_to(DEVICE_B, json!({"type":"attach","device_id":"0000aaaa","os":"samsung_tv","name":"TV","address":"10.0.0.5","removed":false}));
+    eventually("TV attached", || {
+        (!h.handle.status.get().attached.is_empty()).then_some(())
+    })
+    .await;
+    h.fake.send_to(DEVICE_B, json!({"type":"session_started","target":"0000aaaa","session_id":"a1f","silicon_id":"si:chef","since":expires_in(0)}));
+    eventually("TV session", || h.handle.status.get().attached[0].in_use.clone()).await;
+    h.handle
+        .actions
+        .send(UiAction::SetAttachedInUseIndicator {
+            device_id: "0000aaaa".parse().unwrap(),
+            shown: false,
+        })
+        .unwrap();
+    eventually("carried choice sent through its host pair", || {
+        h.fake.seen().into_iter().find(|s| matches!(s, Seen::Indicator { auth, target: Some(id), value } if auth == &format!("Extend-Device {CREDENTIAL_B}") && id == "0000aaaa" && value == "hidden"))
+    }).await;
+    eventually("carried choice synchronized", || {
+        (!h.handle.status.get().indicator_sync_pending).then_some(())
+    })
+    .await;
+    let status = h.handle.status.get();
+    assert_eq!(status.in_use_indicator, InUseIndicator::Shown);
+    assert_eq!(status.attached[0].in_use_indicator, InUseIndicator::Hidden);
+    assert_eq!(status.attached[0].in_use.as_ref().unwrap().session_id, "a1f");
+    h.handle
+        .actions
+        .send(UiAction::Stop {
+            target: Some("0000aaaa".parse().unwrap()),
+        })
+        .unwrap();
+    eventually("hidden carried session still stoppable", || {
+        h.fake
+            .frames_on(DEVICE_B)
+            .into_iter()
+            .find(|f| f["type"] == "stop" && f["target"] == "0000aaaa")
+    })
+    .await;
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn a_local_carried_choice_applies_to_both_known_pairs_of_one_device() {
+    struct SharedTv;
+    #[async_trait]
+    impl Driver for SharedTv {
+        async fn probe(&self) -> Probe {
+            let mut p = Tv.probe().await;
+            p.hardware_id = Some("shared-hardware".into());
+            p
+        }
+        async fn run(&self, invocation: Invocation<'_>) -> Output {
+            Tv.run(invocation).await
+        }
+    }
+    let h = start_full(
+        &[
+            (DEVICE_ID, CREDENTIAL, Some(true)),
+            (DEVICE_B, CREDENTIAL_B, Some(false)),
+        ],
+        &[],
+        false,
+        Arc::new(|_| Ok(Box::new(SharedTv))),
+    )
+    .await;
+    eventually("both host connections", || {
+        (h.fake.connected(DEVICE_ID) && h.fake.connected(DEVICE_B)).then_some(())
+    })
+    .await;
+    for (host, id) in [(DEVICE_ID, "0000aaaa"), (DEVICE_B, "0000bbbb")] {
+        h.fake.send_to(
+            host,
+            json!({"type":"attach","device_id":id,"os":"samsung_tv","name":"TV","address":"10.0.0.5","removed":false}),
+        );
+        eventually("carried hardware reported", || {
+            h.fake
+                .frames_on(host)
+                .into_iter()
+                .find(|f| f["type"] == "attached" && f["device_id"] == id && f["hardware_key"].is_string())
+        })
+        .await;
+    }
+    let gate = Arc::new(tokio::sync::Notify::new());
+    h.fake.0.lock().unwrap().indicator_gate = Some(gate.clone());
+    h.handle
+        .actions
+        .send(UiAction::SetAttachedInUseIndicator {
+            device_id: "0000bbbb".parse().unwrap(),
+            shown: false,
+        })
+        .unwrap();
+    eventually("both aliases hidden before service responds", || {
+        let s = h.handle.status.get();
+        (s.indicator_sync_pending
+            && s.attached.len() == 2
+            && s.attached
+                .iter()
+                .all(|a| a.in_use_indicator == extend_protocol::model::InUseIndicator::Hidden)
+            && h.fake.count(|s| matches!(s, Seen::Indicator { .. })) == 1)
+            .then_some(())
+    })
+    .await;
+    gate.notify_one();
+    eventually("one physical setting synchronized", || {
+        (!h.handle.status.get().indicator_sync_pending).then_some(())
+    })
+    .await;
+    assert_eq!(h.fake.count(|s| matches!(s, Seen::Indicator { .. })), 1);
+    h.stop().await;
 }
 
 #[tokio::test]

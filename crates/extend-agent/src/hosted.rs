@@ -466,6 +466,33 @@ impl HostedRegistry {
         }
     }
 
+    /// Every carried pair already known to share this physical device's driver.
+    pub fn same_device_ids(&self, id: &DeviceId) -> Vec<DeviceId> {
+        let entries = self.entries.lock().unwrap();
+        let Some(selected) = entries.get(id) else {
+            return vec![];
+        };
+        entries
+            .iter()
+            .filter(|(other_id, e)| {
+                *other_id == id
+                    || match (&selected.driver, &e.driver) {
+                        (Ok(a), Ok(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
+                    }
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Changes only metadata; the live driver, sessions and recordings retain their identity.
+    pub fn set_in_use_indicator(&self, id: &DeviceId, value: extend_protocol::model::InUseIndicator) {
+        if let Some(e) = self.entries.lock().unwrap().get_mut(id) {
+            e.record.in_use_indicator = value;
+        }
+        self.save();
+    }
+
     /// What the tray and window show.
     pub fn infos(&self) -> Vec<AttachedInfo> {
         let now = time::OffsetDateTime::now_utc();
@@ -642,6 +669,11 @@ mod tests {
         reg.attach(record("0000bbbb", DeviceOs::Tvos, "Apple TV", None, Some("7c1e09ab")));
         assert!(reg.driver(&tv).is_ok());
         let before = reg.driver(&tv).unwrap();
+        reg.set_in_use_indicator(&tv, extend_protocol::model::InUseIndicator::Hidden);
+        assert!(
+            Arc::ptr_eq(&before, &reg.driver(&tv).unwrap()),
+            "the local switch must preserve the live driver"
+        );
         let mut changed = record(
             "0000aaaa",
             DeviceOs::SamsungTv,
@@ -759,6 +791,7 @@ mod tests {
         assert_eq!(keys[0], keys[1], "one device, one key");
         // The later one now drives the TV through the first one's driver (and its pairing).
         assert!(Arc::ptr_eq(&reg.driver(&alice).unwrap(), &reg.driver(&bob).unwrap()));
+        assert_eq!(reg.same_device_ids(&alice), vec![alice.clone(), bob.clone()]);
         // Removing one leaves the other's driver in use: nothing to end.
         assert!(reg.remove(&alice).is_none());
         assert!(reg.driver(&bob).is_ok());

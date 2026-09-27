@@ -34,6 +34,7 @@ use crate::display::DisplayKeeper;
 use crate::drivers::screen_lock::{ScreenBlock, ScreenReading};
 use crate::enroll::{self, EnrollOutcome, Purpose, Start, sleep_or_shutdown};
 use crate::hosted::{AttachRecord, DriverFactory, HostedRegistry, WAKE_PROBE_EVERY};
+use crate::indicator::{COMPUTER, Preferences};
 use crate::notify::{Notifier, WakeBook, WakeEntry};
 use crate::service::{ServiceClient, device_auth};
 use crate::status::{
@@ -62,6 +63,8 @@ pub enum UiAction {
     Reprobe,
     /// The Carbon's choice for the in-use banner on this computer.
     SetInUseIndicator { shown: bool },
+    /// The same setting for a device carried by this computer.
+    SetAttachedInUseIndicator { device_id: DeviceId, shown: bool },
 }
 
 /// Reads whether this computer's screen can be used right now, and how long since the last input
@@ -140,6 +143,8 @@ struct Core {
     instances: Mutex<BTreeMap<DeviceId, Uuid>>,
     /// A wake notification is on screen (so an empty list has something to take down).
     notified: std::sync::atomic::AtomicBool,
+    indicators: Mutex<Preferences>,
+    indicators_changed: Notify,
 }
 
 /// One Carbon's pair of this computer.
@@ -263,7 +268,10 @@ impl Agent {
             display,
         } = deps;
         let service = ServiceClient::new(config.service_url.clone());
+        let indicators = Preferences::load(&config);
         let status = StatusHandle::new(AgentStatus {
+            in_use_indicator: indicators.get(COMPUTER).value,
+            indicator_sync_pending: !indicators.pending().is_empty(),
             pid: std::process::id(),
             app_version: APP_VERSION.into(),
             service_url: config.service_url.to_string(),
@@ -314,6 +322,8 @@ impl Agent {
             hosted_probing: std::sync::atomic::AtomicBool::new(false),
             instances: Mutex::new(BTreeMap::new()),
             notified: std::sync::atomic::AtomicBool::new(false),
+            indicators: Mutex::new(indicators),
+            indicators_changed: Notify::new(),
         });
         (Self { core, actions: rx }, handle)
     }
@@ -324,9 +334,15 @@ impl Agent {
         let _ = tokio::fs::remove_dir_all(core.config.work_dir()).await;
         tokio::spawn(crate::status::persist(core.status.clone(), core.config.status_path()));
         core.hosted.restore();
+        for (key, choice) in core.indicators.lock().unwrap().pending() {
+            if let Ok(id) = key.parse() {
+                core.hosted.set_in_use_indicator(&id, choice.value);
+            }
+        }
         tokio::spawn(prober(core.clone()));
         tokio::spawn(watch_screen(core.clone()));
         tokio::spawn(wake_janitor(core.clone()));
+        tokio::spawn(sync_indicators(core.clone()));
         core.sync_attached_status();
 
         let (events_tx, mut events_rx) = mpsc::unbounded_channel::<Event>();
@@ -771,29 +787,60 @@ impl Core {
                 }
                 self.status.update(|s| s.adding_pair = None);
             }
-            UiAction::SetInUseIndicator { shown } => {
-                let Some(link) = self.online_link(None).or_else(|| self.links().into_iter().next()) else {
-                    return;
-                };
-                let value = if shown {
-                    InUseIndicator::Shown
-                } else {
-                    InUseIndicator::Hidden
-                };
-                match self.service.set_in_use_indicator(&link.credential(), value).await {
-                    Ok(d) => self.status.update(|s| {
-                        s.in_use_indicator = d.in_use_indicator;
-                        s.last_error = None;
-                    }),
-                    Err(e) => self.status.update(|s| {
-                        s.last_error = Some(format!(
-                            "Couldn't change the in-use banner: {}. Try again when connected.",
-                            e.message
-                        ))
-                    }),
+            UiAction::SetInUseIndicator { shown } => self.choose_indicator(None, shown),
+            UiAction::SetAttachedInUseIndicator { device_id, shown } => {
+                if self.hosted.driver(&device_id).is_ok()
+                    || self.hosted.infos().iter().any(|a| a.device_id == device_id.as_str())
+                {
+                    self.choose_indicator(Some(device_id), shown);
                 }
             }
             UiAction::Reprobe => self.reprobe.notify_one(),
+        }
+    }
+
+    fn choose_indicator(&self, target: Option<DeviceId>, shown: bool) {
+        let value = if shown {
+            InUseIndicator::Shown
+        } else {
+            InUseIndicator::Hidden
+        };
+        let key = target.as_ref().map_or(COMPUTER, DeviceId::as_str);
+        let aliases = target
+            .as_ref()
+            .map(|id| self.hosted.same_device_ids(id))
+            .unwrap_or_default();
+        let mut choices = self.indicators.lock().unwrap();
+        let result = if aliases.is_empty() {
+            choices.choose(key, value)
+        } else {
+            choices.choose_many(&aliases.iter().map(DeviceId::as_str).collect::<Vec<_>>(), value)
+        };
+        if let Err(e) = result {
+            self.status
+                .update(|s| s.last_error = Some(format!("Couldn't save the in-use banner setting: {e}")));
+            return;
+        }
+        if aliases.is_empty() {
+            self.apply_indicator(target.as_ref(), value);
+        } else {
+            for id in aliases {
+                self.apply_indicator(Some(&id), value);
+            }
+        }
+        self.status.update(|s| {
+            s.indicator_sync_pending = true;
+            s.last_error = None;
+        });
+        self.indicators_changed.notify_one();
+    }
+
+    fn apply_indicator(&self, target: Option<&DeviceId>, value: InUseIndicator) {
+        if let Some(id) = target {
+            self.hosted.set_in_use_indicator(id, value);
+            self.sync_attached_status();
+        } else {
+            self.status.update(|s| s.in_use_indicator = value);
         }
     }
 
@@ -992,6 +1039,7 @@ impl Core {
     /// Re-reads name, owner, environment, and whether the pair is the first. Returns `Unpaired`
     /// if the credential is refused.
     async fn refresh_device(self: &Arc<Self>, link: &Link) -> Option<PairedEnd> {
+        let revision = self.indicators.lock().unwrap().get(COMPUTER).revision;
         match tokio::time::timeout(Duration::from_secs(15), self.service.device_self(&link.credential())).await {
             Err(_) => tracing::info!("GET /api/v1/device timed out"),
             Ok(Err(e)) if e.is_auth() => return Some(PairedEnd::Unpaired("credential refused".into())),
@@ -1025,6 +1073,8 @@ impl Core {
                 }
                 let env = d.environment.as_ref().map(environment_info);
                 let id = link.id.to_string();
+                let mut choices = self.indicators.lock().unwrap();
+                let indicator = choices.observe(COMPUTER, d.in_use_indicator, revision);
                 self.status.update(|s| {
                     if let Some(p) = s.pairs.iter_mut().find(|p| p.device_id == id) {
                         p.name = Some(d.name.clone());
@@ -1033,7 +1083,7 @@ impl Core {
                         p.first_pair = d.first_pair.or(p.first_pair);
                     }
                     s.environment = env;
-                    s.in_use_indicator = d.in_use_indicator;
+                    s.in_use_indicator = indicator;
                     // The service names the session only on the pair it runs through.
                     match &d.in_use {
                         Some(u) => {
@@ -1243,12 +1293,16 @@ impl Core {
                 in_use_indicator,
             } => {
                 if removed {
+                    self.indicators.lock().unwrap().remove(device_id.as_str());
                     tracing::info!("no longer carrying {device_id}");
                     if let Some(d) = self.hosted.remove(&device_id) {
                         tokio::spawn(async move { d.session_ended("").await });
                     }
                     self.sync_attached_status();
                 } else {
+                    let mut choices = self.indicators.lock().unwrap();
+                    let revision = choices.get(device_id.as_str()).revision;
+                    let in_use_indicator = choices.observe(device_id.as_str(), in_use_indicator, revision);
                     tracing::info!("carrying {device_id} ({}) for {}", os.as_str(), link.id);
                     self.hosted.attach(AttachRecord {
                         in_use_indicator,
@@ -1259,6 +1313,7 @@ impl Core {
                         host: Some(link.id.clone()),
                     });
                     self.sync_attached_status();
+                    self.indicators_changed.notify_one();
                     let core = self.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
@@ -1585,6 +1640,7 @@ async fn connection(
             .unwrap_or_else(|| ConnEnd::Dropped("couldn't send hello".into()));
     }
     core.set_pair_phase(&link.id, PairPhase::Online);
+    core.indicators_changed.notify_one();
     core.status.update(|s| s.last_error = None);
     tracing::info!("connected to Extend as device {}", link.id);
     core.hosted.forget_sent_for(&link.id);
@@ -1717,6 +1773,97 @@ where
         None
     };
     tokio::time::timeout(Duration::from_secs(2), wait).await.ok().flatten()
+}
+
+/// Synchronize saved preferences without blocking Stop, pairing, or any other UI action.
+async fn sync_indicators(core: Arc<Core>) {
+    loop {
+        tokio::select! {
+            _ = core.shutdown.cancelled() => return,
+            _ = core.indicators_changed.notified() => {},
+            _ = tokio::time::sleep(Duration::from_secs(15)) => {},
+        }
+        let pending = core.indicators.lock().unwrap().pending();
+        for (key, choice) in pending {
+            let current = core.indicators.lock().unwrap().get(&key);
+            if !current.pending || current.revision != choice.revision {
+                continue;
+            }
+            let target = if key == COMPUTER {
+                None
+            } else {
+                key.parse::<DeviceId>().ok()
+            };
+            if key != COMPUTER && target.is_none() {
+                continue;
+            }
+            let host = target.as_ref().and_then(|id| core.hosted.host_of(id));
+            let Some(link) = core
+                .online_link(host.as_ref())
+                .filter(|l| host.as_ref().is_none_or(|h| h == &l.id))
+            else {
+                continue;
+            };
+            let credential = link.credential();
+            let result = tokio::select! {
+                _ = core.shutdown.cancelled() => return,
+                r = core.service.set_target_in_use_indicator(&credential, target.as_ref(), choice.value) => r,
+            };
+            match result {
+                Ok(d) => {
+                    let mut choices = core.indicators.lock().unwrap();
+                    let acknowledged = choices.acknowledge(&key, choice.revision, d.in_use_indicator);
+                    match acknowledged {
+                        Ok(true) => {
+                            core.apply_indicator(target.as_ref(), d.in_use_indicator);
+                            // The service setting is physical-device-wide. One successful write
+                            // also synchronizes known aliases, including another Carbon's pair.
+                            for id in target
+                                .as_ref()
+                                .map(|id| core.hosted.same_device_ids(id))
+                                .unwrap_or_default()
+                            {
+                                let alias = choices.get(id.as_str());
+                                if alias.value == d.in_use_indicator {
+                                    if let Err(e) = choices.acknowledge(id.as_str(), alias.revision, alias.value) {
+                                        tracing::warn!(
+                                            "couldn't save the synchronized carried-device banner setting: {e:#}"
+                                        );
+                                    }
+                                    core.apply_indicator(Some(&id), alias.value);
+                                }
+                            }
+                        }
+                        Ok(false) => {} // A newer local choice is already waiting.
+                        Err(e) => tracing::warn!("couldn't save the synchronized banner setting: {e:#}"),
+                    }
+                }
+                Err(e) => {
+                    tracing::info!("banner setting saved locally; synchronization pending: {e}");
+                    if !e.is_transient() {
+                        core.status.update(|s| {
+                            s.last_error = Some(format!(
+                                "The banner setting is saved on this computer, but Extend couldn't synchronize it: {}",
+                                e.message
+                            ))
+                        });
+                    }
+                }
+            }
+        }
+        let choices = core.indicators.lock().unwrap();
+        let pending = !choices.pending().is_empty();
+        core.status.update(|s| {
+            s.indicator_sync_pending = pending;
+            if !pending
+                && s.last_error.as_deref().is_some_and(|e| {
+                    e.starts_with("The banner setting is saved on this computer, but Extend couldn't synchronize it:")
+                })
+            {
+                s.last_error = None;
+            }
+        });
+    }
 }
 
 /// Probes this computer: at start, every probe interval (every 5 s while setup needs the

@@ -17,6 +17,17 @@ tools, never against Apple. Nothing has been published.
 | `linux/build-in-docker.sh` | Runs `build-package.sh` in the linux-e2e image, then installs the `.deb` in a container and runs it |
 | `windows/build-zip.ps1` | Builds the Windows zip (run it on Windows) |
 | `linux-e2e/` | A real X11 desktop in Docker (`Dockerfile`, `build-image.sh`, `run.sh`, `e2e.sh`) and the recording lanes |
+| `banner-ui.test.mjs` | Runs the actual desktop WebView page in headless Chromium: carried switches, offline status, Stop, drag, collapse and takeover controls |
+
+The app's in-use banner controls apply immediately, including while disconnected. Choices live
+in the private `.extend-agent/indicators.json`, scoped to the service URL, and synchronize in the
+background when a pair connects. Each carried device has its own switch in the host app. Stop
+and takeover controls remain available when the banner is hidden. Restarting or reconnecting does
+not restart an old session's ten-second announcement; new sessions get a new announcement.
+
+Run `node --test apps/desktop/banner-ui.test.mjs` after installing `web`'s development dependencies
+and Playwright Chromium. This checks rendering and WebView messages; native window movement,
+multi-monitor placement and driver recording continuity still require native verification.
 
 ## macOS app
 

@@ -898,6 +898,7 @@
         <button class="button secondary" id="banner-toggle" data-action="set_banner" data-on="false">Turn off</button>
       </div>
       <p class="fine">Show a banner for 10 seconds when a Silicon starts using this computer. Turn it off to hide the banner and icon change for every Carbon's pair. You can always stop the Silicon here. Requests that need your help still appear.</p>
+      <p class="fine hidden" id="banner-sync">Saved on this computer. Extend will synchronize your banner choices when connected.</p>
     </section>
 
     <section id="startup" class="card hidden">
@@ -1229,7 +1230,7 @@
   });
 
   // ───── Words ─────
-  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
   function clock(iso) {
     var d = new Date(iso);
     if (!iso || isNaN(d)) return '';
@@ -1544,6 +1545,7 @@
     show('banner-choice', paired);
     $('banner-toggle').textContent = s.in_use_indicator === 'hidden' ? 'Turn on' : 'Turn off';
     $('banner-toggle').setAttribute('data-on', s.in_use_indicator === 'hidden' ? 'true' : 'false');
+    show('banner-sync', !!s.indicator_sync_pending);
     $('startup-toggle').textContent = auto.on ? 'Turn off' : 'Turn on';
     $('startup-toggle').setAttribute('data-on', auto.on ? 'false' : 'true');
     $('startup-toggle').className = auto.on ? 'button secondary' : 'button primary';
@@ -1615,6 +1617,10 @@
       if (a.wake_requested && !a.error) line += '<div class="row-sub">A Silicon asked to wake it. Only its Carbon can: turn it on, or unlock it.</div>';
       var todo = a.setup && a.setup.steps ? a.setup.steps.filter(function (x) { return x.status !== 'done'; }) : [];
       if (todo.length && !a.error) line += '<div class="row-sub">Setup: ' + esc(todo[0].title) + (todo[0].help ? '. ' + esc(todo[0].help) : '') + '</div>';
+      line += '<div class="row-sub">In-use banner: ' + (a.in_use_indicator === 'hidden' ? 'off' : '10 seconds') +
+        ' <button class="button secondary" data-action="set_banner"' + target + ' data-on="' + (a.in_use_indicator === 'hidden') +
+        '" aria-label="Turn ' + (a.in_use_indicator === 'hidden' ? 'on' : 'off') + ' in-use banner for ' + esc(a.name) + '">' +
+        (a.in_use_indicator === 'hidden' ? 'Turn on' : 'Turn off') + '</button></div>';
       return '<li><span class="row-dot">' + dot(kind) + '</span><div class="row-main"><div class="row-title">' + esc(a.name) +
         '<span class="os">' + esc(OS_NAME[a.os] || a.os) + '</span></div>' + line + '</div>' + (side ? '<div class="row-side">' + side + '</div>' : '') + '</li>';
     }).join('');

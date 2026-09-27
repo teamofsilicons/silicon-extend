@@ -16,6 +16,7 @@ pub mod display;
 pub mod drivers;
 pub mod enroll;
 pub mod hosted;
+mod indicator;
 pub mod notify;
 pub mod service;
 pub mod status;

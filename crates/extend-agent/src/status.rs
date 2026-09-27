@@ -165,6 +165,8 @@ pub struct AttachedInfo {
 pub struct AgentStatus {
     #[serde(default)]
     pub in_use_indicator: InUseIndicator,
+    #[serde(default)]
+    pub indicator_sync_pending: bool,
     pub pid: u32,
     pub app_version: String,
     pub service_url: String,

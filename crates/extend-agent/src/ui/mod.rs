@@ -239,9 +239,21 @@ impl BannerClock {
                 .any(|b| &(b.target.clone(), b.session_id.clone()) == key)
         });
         for b in sessions {
+            let since = match &b.target {
+                None => s.in_use.as_ref(),
+                Some(id) => s
+                    .attached
+                    .iter()
+                    .find(|a| &a.device_id == id)
+                    .and_then(|a| a.in_use.as_ref()),
+            }
+            .map(|u| u.since.as_str());
+            // Reconnecting or restarting the app does not announce an old session again.
+            // Use wall time only when first observing it, then keep a monotonic deadline.
+            let remaining = banner_remaining(since, time::OffsetDateTime::now_utc());
             self.deadlines
                 .entry((b.target, b.session_id))
-                .or_insert(now + Duration::from_secs(extend_protocol::model::InUseIndicator::AUTO_HIDE_S));
+                .or_insert(now + remaining);
         }
     }
     fn visible(&self, s: &AgentStatus, now: Instant) -> Vec<BannerSession> {
@@ -259,6 +271,15 @@ impl BannerClock {
     fn next_deadline(&self, now: Instant) -> Option<Instant> {
         self.deadlines.values().filter(|end| **end > now).min().copied()
     }
+}
+
+fn banner_remaining(since: Option<&str>, now: time::OffsetDateTime) -> Duration {
+    let timeout = Duration::from_secs(extend_protocol::model::InUseIndicator::AUTO_HIDE_S);
+    let elapsed = since
+        .and_then(|s| time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
+        .map(|start| (now - start).max(time::Duration::ZERO).unsigned_abs())
+        .unwrap_or_default();
+    timeout.saturating_sub(elapsed)
 }
 
 /// The most rows the banner shows at once (a row each for this computer and carried devices).
@@ -796,7 +817,10 @@ impl Ui {
             "reprobe" => self.send(UiAction::Reprobe),
             "set_banner" if !banner => {
                 if let Some(shown) = msg.get("on").and_then(|v| v.as_bool()) {
-                    self.send(UiAction::SetInUseIndicator { shown });
+                    self.send(match device() {
+                        Some(device_id) => UiAction::SetAttachedInUseIndicator { device_id, shown },
+                        None => UiAction::SetInUseIndicator { shown },
+                    });
                 }
             }
             "set_autostart" if !banner => {
@@ -1003,6 +1027,39 @@ fn truncate(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
     use crate::status::{InUseInfo, PairingInfo, TakeoverInfo};
+
+    #[test]
+    fn an_existing_session_does_not_restart_its_banner_after_process_restart() {
+        let wall = time::OffsetDateTime::now_utc();
+        let since = (wall - time::Duration::seconds(20))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        assert_eq!(banner_remaining(Some(&since), wall), Duration::ZERO);
+        let recent = (wall - time::Duration::seconds(4))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        assert_eq!(banner_remaining(Some(&recent), wall), Duration::from_secs(6));
+        let mut s = in_use("a3f");
+        s.in_use.as_mut().unwrap().since = since;
+        let mut carried = carried("aabbccdd", "iPad");
+        carried.in_use = s.in_use.clone();
+        s.attached.push(carried);
+        let now = Instant::now();
+        let mut clock = BannerClock::default();
+        clock.observe(&s, now);
+        assert!(clock.visible(&s, now).is_empty());
+        assert!(s.in_use.is_some());
+        assert!(attached_menu(&s).iter().any(|m| m.id == "stop:aabbccdd"));
+        s.phase = Phase::Reconnecting;
+        clock.observe(&s, now + Duration::from_secs(1));
+        s.phase = Phase::Online;
+        clock.observe(&s, now + Duration::from_secs(2));
+        assert!(clock.visible(&s, now + Duration::from_secs(2)).is_empty());
+        // A genuinely new session still announces itself, even with the same Silicon.
+        s.in_use = in_use("b40").in_use;
+        clock.observe(&s, now + Duration::from_secs(3));
+        assert_eq!(clock.visible(&s, now + Duration::from_secs(3)).len(), 1);
+    }
 
     #[test]
     fn banner_timeout_hiding_and_takeover_keep_stop_available() {

@@ -11,8 +11,12 @@ use serde_json::{Value, json};
 
 /// A call with a device credential and a body.
 async fn device_patch(env: &Env, credential: &str, body: Value) -> (u16, Value) {
+    device_patch_path(env, credential, "/api/v1/device", body).await
+}
+
+async fn device_patch_path(env: &Env, credential: &str, path: &str, body: Value) -> (u16, Value) {
     let resp = reqwest::Client::new()
-        .patch(format!("{}/api/v1/device", env.base))
+        .patch(format!("{}{path}", env.base))
         .header("authorization", format!("Extend-Device {credential}"))
         .json(&body)
         .send()
@@ -20,6 +24,66 @@ async fn device_patch(env: &Env, credential: &str, body: Value) -> (u16, Value) 
         .unwrap();
     let status = resp.status().as_u16();
     (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn host_app_can_only_change_a_device_carried_by_its_authenticated_pair() {
+    let env = start().await;
+    let alice = login(&env, "c:alice").await;
+    let bob = login(&env, "c:bob").await;
+    let (mac, credential) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Mac", &[]).await;
+    let (_, bob_credential) = pair_another(&env, &credential, &bob, Some("acme"), &[]).await;
+    let host = App::connect(&env, &credential, hello(DeviceOs::Macos, "1.1.0")).await;
+    let (s, created) = api(
+        &env,
+        "POST",
+        &format!("/api/v1/devices/{mac}/attachments"),
+        &alice,
+        None,
+        Some(json!({"type":"attachment", "data":{"os":"ipados", "name":"iPad"}})),
+    )
+    .await;
+    assert_eq!(s, 201, "{created}");
+    let ipad = created["data"]["device_id"].as_str().unwrap();
+    let path = format!("/api/v1/device/attachments/{ipad}");
+    host.wait("attach", |f| f["device_id"] == ipad).await;
+    host.clear();
+    let (s, body) = device_patch_path(&env, &credential, &path, banner("hidden")).await;
+    assert_eq!(s, 200, "{body}");
+    assert_eq!(body["data"]["device_id"], ipad);
+    assert_eq!(body["data"]["in_use_indicator"], "hidden");
+    assert_eq!(indicator(&env, &alice, None, ipad).await.0, "hidden");
+    assert_eq!(indicator(&env, &alice, None, &mac).await.0, "shown");
+    assert_eq!(
+        host.wait("attach", |f| f["device_id"] == ipad).await["in_use_indicator"],
+        "hidden"
+    );
+
+    for (credential, path) in [
+        (bob_credential.as_str(), path.as_str()),
+        (credential.as_str(), &format!("/api/v1/device/attachments/{mac}")),
+        (credential.as_str(), "/api/v1/device/attachments/00000000"),
+    ] {
+        let (s, body) = device_patch_path(&env, credential, path, banner("shown")).await;
+        assert_eq!(s, 404, "{body}");
+        assert_eq!(body["data"]["code"], "device_not_found");
+    }
+    let (s, _) = device_patch_path(&env, "edc_not_valid", &path, banner("shown")).await;
+    assert_eq!(s, 401);
+    let (s, _) = device_patch_path(&env, &credential, &path, banner("dimmed")).await;
+    assert_eq!(s, 422);
+    assert_eq!(indicator(&env, &alice, None, ipad).await.0, "hidden");
+    let (_, secret) = open_test_env(&env).await;
+    let test_alice = login_in(&env, &secret, "c:alice").await;
+    let (_, test_credential) = pair_in(&env, &secret, &test_alice, DeviceOs::Macos, "Test Mac")
+        .await
+        .unwrap();
+    let (s, _) = device_patch_path(&env, &test_credential, &path, banner("shown")).await;
+    assert_eq!(s, 404, "test credentials cannot change a production device");
+    let (s, body) = api(&env, "DELETE", &format!("/api/v1/devices/{ipad}"), &alice, None, None).await;
+    assert_eq!(s, 204, "{body}");
+    let (s, _) = device_patch_path(&env, &credential, &path, banner("shown")).await;
+    assert_eq!(s, 404, "removed carried devices stay removed");
 }
 
 fn banner(value: &str) -> Value {

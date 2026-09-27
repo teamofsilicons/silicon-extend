@@ -81,10 +81,14 @@ async fn hardware_salt(state: &AppState, world: &World) -> Option<String> {
 
 pub async fn me(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Response> {
     let d = this_device(&state, &auth).await?;
-    let view = domain::device_view(&state, &auth.world, &d, Viewer::owner(&d), false).await;
+    self_view(&state, &auth.world, &d).await
+}
+
+async fn self_view(state: &Shared, world: &World, d: &DeviceRow) -> AppResult<Response> {
+    let view = domain::device_view(state, world, d, Viewer::owner(d), false).await;
     // Only a session running through this pair: another Carbon's is theirs to show.
     let session = match d.session_here() {
-        Some(s) => domain::load_session(&state, &auth.world, s).await?,
+        Some(s) => domain::load_session(state, world, s).await?,
         None => None,
     };
     let takeover: Option<Takeover> = session
@@ -92,22 +96,22 @@ pub async fn me(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Resp
         .filter(|s| s.state == "paused")
         .and_then(|s| s.takeover.clone())
         .and_then(|t| serde_json::from_value(t).ok());
-    let sel = test_selection(&state, &auth.world).await;
+    let sel = test_selection(state, world).await;
     Ok(ok(
         "device_self",
         DeviceSelf {
             device_id: view.device_id,
             name: d.name.clone(),
-            owner: owner(&d),
+            owner: owner(d),
             team: d.team.clone(),
             os: d.os(),
             in_use: view.in_use.map(|u| InUse { team: None, ..u }),
             takeover,
             setup: d.setup(),
-            environment: env_view(&state, sel.as_ref(), &auth.world).await,
+            environment: env_view(state, sel.as_ref(), world).await,
             instance_id: Some(d.instance_id),
             hardware_salt: if d.is_computer() {
-                hardware_salt(&state, &auth.world).await
+                hardware_salt(state, world).await
             } else {
                 None
             },
@@ -121,6 +125,65 @@ pub async fn me(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Resp
 /// `in_use_indicator`), with any of its pair credentials. The setting belongs to the physical
 /// device, so it changes for every pair of it; answers the device as `GET /api/v1/device` would.
 pub async fn update(State(state): State<Shared>, auth: DeviceAuth, body: Bytes) -> AppResult<Response> {
+    let d = this_device(&state, &auth).await?;
+    update_indicator(&state, &auth.world, &d, body).await?;
+    me(State(state), auth).await
+}
+
+/// A host's native app can change the banner only for a device carried by that exact pair.
+pub async fn update_attached(
+    State(state): State<Shared>,
+    auth: DeviceAuth,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> AppResult<Response> {
+    let host = this_device(&state, &auth).await?;
+    let value = indicator_patch(body)?;
+    let d = domain::load_device(&state, &auth.world, &id)
+        .await?
+        .filter(|d| d.host_device_id.as_deref() == Some(auth.device_id.as_str()))
+        .ok_or_else(|| AppError::new(ErrorCode::DeviceNotFound, "This device is not carried by this pair."))?;
+    // Removal and physical-device relinking take these locks too. Re-check authorization after
+    // taking them, so a request queued behind removal cannot change another pair's device.
+    let mut tx = state.pool.begin().await?;
+    domain::lock_instances(&mut tx, &auth.world, &[host.instance_id, d.instance_id]).await?;
+    let current_host = domain::load_device_in(&mut *tx, &auth.world, &auth.device_id).await?;
+    let current = domain::load_device_in(&mut *tx, &auth.world, &id).await?;
+    if current_host.as_ref().is_none_or(|h| h.instance_id != host.instance_id)
+        || current.as_ref().is_none_or(|c| {
+            c.instance_id != d.instance_id || c.host_device_id.as_deref() != Some(auth.device_id.as_str())
+        })
+    {
+        return Err(AppError::new(
+            ErrorCode::DeviceNotFound,
+            "This device is no longer carried by this pair.",
+        ));
+    }
+    let changed = domain::update_in_use_indicator(&mut tx, &auth.world, d.instance_id, value, None).await?;
+    tx.commit().await?;
+    if changed {
+        domain::notify_in_use_indicator(
+            &state,
+            &auth.world,
+            d.instance_id,
+            value,
+            domain::BannerChangedBy::Device,
+        )
+        .await?;
+    }
+    let d = domain::load_device(&state, &auth.world, &id)
+        .await?
+        .ok_or_else(|| AppError::new(ErrorCode::DeviceNotFound, "This device is no longer paired."))?;
+    self_view(&state, &auth.world, &d).await
+}
+
+async fn update_indicator(state: &Shared, world: &World, d: &DeviceRow, body: Bytes) -> AppResult<()> {
+    let value = indicator_patch(body)?;
+    domain::set_in_use_indicator(state, world, d.instance_id, value, domain::BannerChangedBy::Device).await?;
+    Ok(())
+}
+
+fn indicator_patch(body: Bytes) -> AppResult<InUseIndicator> {
     // The usual envelope `{"type": "device_self", "data": {...}}`, or the bare object.
     let v: serde_json::Value =
         serde_json::from_slice(&body).map_err(|e| AppError::invalid(format!("The body is not valid JSON: {e}")))?;
@@ -131,22 +194,13 @@ pub async fn update(State(state): State<Shared>, auth: DeviceAuth, body: Bytes) 
     };
     let patch: DeviceSelfPatch =
         serde_json::from_value(data).map_err(|e| AppError::invalid(format!("The body's data is not valid: {e}")))?;
-    let d = this_device(&state, &auth).await?;
     let Some(value) = patch.in_use_indicator else {
         return Err(AppError::invalid("Send in_use_indicator: \"shown\" or \"hidden\"."));
     };
     if value == InUseIndicator::Other {
         return Err(AppError::invalid("in_use_indicator is \"shown\" or \"hidden\"."));
     }
-    domain::set_in_use_indicator(
-        &state,
-        &auth.world,
-        d.instance_id,
-        value,
-        domain::BannerChangedBy::Device,
-    )
-    .await?;
-    me(State(state), auth).await
+    Ok(value)
 }
 
 pub async fn revoke(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Response> {

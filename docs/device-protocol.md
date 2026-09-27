@@ -622,6 +622,17 @@ it sends `attach` with the new setting to their hosts. A banner-only refresh mus
 driver and its session/recording state. Carbons can also set it through the existing device PATCH;
 Silicons cannot. Both APIs are covered by the client contract fixtures.
 
+A computer's native app can also PATCH `/api/v1/device/attachments/{device_id}` with the same
+body and its host pair's credential. The target must be carried by that exact host pair in the
+same world; another Carbon's host credential, unrelated targets and removed devices are refused.
+The response is the target's `device_self`. This changes the physical device's shared setting,
+so every pair and host sees the new value. It does not replace an attached live driver.
+
+Desktop choices take effect locally and are saved before the UI reports success. Offline choices
+are retried after a connection returns; delayed responses cannot overwrite a newer local choice.
+Choices are scoped to the service URL, and carried aliases of the same physical device update
+together. The settings request runs independently so it cannot block Stop.
+
 Android and desktop banner timers use a 10-second deadline without ending the session or the
 screen hold. Hidden suppresses in-use announcements and desktop icon changes. Takeover requests
 still show until answered; Stop remains in the app and website. The Android TV badge is positioned
