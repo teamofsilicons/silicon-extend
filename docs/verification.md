@@ -32,6 +32,20 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — actual 1.0 website source upgraded against service 1.1
+
+`e2e/web-upgrade-rehearsal.mjs` builds the v1.0.0 tag's website and the current website in owned
+exports, drives them against an isolated current service/database, and changes the bundle on the
+same origin/browser storage. Thirteen checks passed: legacy login, cross-Team own-device lists,
+other-Carbon privacy, empty Team tab, additive detail decoding, deprecated visibility, grants and
+revocation, sessions, takeover Done and Stop. The current bundle retained the legacy login and
+repeated the flows, including the shared banner control. No page errors or external browser
+requests occurred. Source metadata, report, screenshots and logs: `target/web-upgrade-rehearsal-pass/`.
+
+The source bundles use the local build toolchain. IAM/file/Ting providers and the WebSocket device
+are synthetic; this does not prove native device execution, production consent or CDN caching.
+Owned service/preview/browser processes stopped and the exact database was removed.
+
 ## 2026-09-28 — deployment runtime controls
 
 The final audit found all five documented 1.1 tuning variables missing from the AWS environment

@@ -105,8 +105,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   identity/grant/credential preservation checks. Take a fresh production snapshot before deployment;
   the schema-only rehearsal does not prove restoring actual production data from a full backup.
 - The released 1.0 CLI/current CLI rehearsal passes, including shared saved logins and sessions,
-  mixed-version takeover/Stop and all 119 current CLI checks. Still rehearse the 1.0 website,
-  Android app and desktop agent against 1.1, then each upgraded, including two Carbons on one Android TV and on
+  mixed-version takeover/Stop and all 119 current CLI checks. The actual 1.0 website-source/current
+  website rehearsal also passes 13 checks on one origin with the login retained. Still rehearse
+  the 1.0 Android app and desktop agent against 1.1, then each upgraded, including two Carbons on one Android TV and on
   one Mac (credential rotation, carried-device linking, the remote-stop rule, the terminal rule).
 
 ### Physical devices
