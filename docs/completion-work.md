@@ -46,7 +46,11 @@ was accepted by Apple. The permanent Android key exists under `~/.silicon-releas
 Preserve those identities for update compatibility. Honeycomb, Ting, GitHub and Vercel sessions
 are authenticated, and the published backend and GitHub assets remain 1.0.0. The Carbon renewed
 AWS profile `silicon-production`; STS access and the existing production stack were verified.
-Historical signing and "nothing published" entries below are not current blockers. No 1.1 CI or publication has run.
+Historical signing and "nothing published" entries below are not current blockers. The 1.1 Mac
+candidate passed real Apple notarization, stapling and Gatekeeper, and the six CLI targets plus
+Linux/Windows desktop packages built successfully in release workflow `36357336309`. The first
+1.1 CI run exposed consumer-contract setup races and a misplaced browser test; fixes and a green
+rerun are required. No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
 
@@ -105,9 +109,12 @@ Remaining from the Carbon's final requests, before the release gates below:
   the schema-only rehearsal does not prove restoring actual production data from a full backup.
 - The released 1.0 CLI/current CLI rehearsal passes, including shared saved logins and sessions,
   mixed-version takeover/Stop and all 119 current CLI checks. The actual 1.0 website-source/current
-  website rehearsal also passes 13 checks on one origin with the login retained. Still rehearse
-  the 1.0 Android app and desktop agent against 1.1, then each upgraded, including two Carbons on one Android TV and on
-  one Mac (credential rotation, carried-device linking, the remote-stop rule, the terminal rule).
+  website rehearsal also passes 13 checks on one origin with the login retained. The actual Mac
+  1.0 native agent/current agent rehearsal passes seven groups: saved identity/credential/session,
+  native Stop and two-Carbon terminal rules, using an isolated headless file-store fixture.
+  The signed Android upgrade and native two-Carbon TV-emulator lane passed; its final evidence is
+  being recorded. These do not close physical TV, installed Mac UI/Keychain upgrade, credential
+  rotation or carried-device linking checks.
 
 ### Physical devices
 

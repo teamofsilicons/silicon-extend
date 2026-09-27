@@ -32,6 +32,43 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — released Mac agent upgrade and signed candidate
+
+`e2e/released-agent-compat.py` passed seven groups using the GitHub-checksummed 1.0 Mac
+binary and the current 1.1 native binary against an owned current service/database. The same
+private home retained the exact credential digest, device identity and active terminal session
+through both a 1.0 reconnect and the 1.1 upgrade. The single credential object became an array;
+a synthetic legacy engine-state marker moved to the new directory. Native Stop cancelled an
+owned terminal command in 34 ms. Both Carbon pairs reconnected, the second pair could not use
+terminal, and Stop ended either pair. The user's LaunchAgent bytes and timestamp were unchanged.
+The exact database and owned processes were removed. Evidence:
+`target/desktop-agent-upgrade-release-1/report.json` (source `ae9dbdd`).
+
+This is headless native-agent proof with local synthetic IAM. The engine was disabled, the file
+credential store was explicit, and no UI, Keychain, TCC or installed app was changed. The second
+pair was claimed through the API and loaded into the owned credential file while stopped.
+Carried-device linking, real screen capture and native sharing UI are not proved by this lane.
+
+Separately, `apps/desktop/macos/build-app.sh` produced a Developer ID signed 1.1.0 arm64 candidate
+from clean `ae9dbdde211732df9f2bc55920e679b3a459a212`. All 5,063 tracked source hashes matched
+before/after. Apple accepted submission `acd8fceb-efb9-4f5b-bd0a-5621e24809d4` with zero issues;
+stapling and Gatekeeper passed. An independently extracted final ZIP matched all 781 packaged
+file hashes; app/helper/Node signatures, hardened runtime, entitlements and runtime stamp passed.
+ZIP SHA256: `f09490c3261af845e771143b533efdbb089062d7a4ca0c8405c5ed0b7ec1f8de` (45,539,205 bytes).
+Manifests and logs are in `target/release-candidate/macos-ae9dbdde211732df9f2bc55920e679b3a459a212/`.
+The app was not launched or published by this check.
+
+Release workflow [36357336309](https://github.com/teamofsilicons/silicon-extend/actions/runs/36357336309)
+passed all 11 jobs at that source: six CLI targets, the Honeycomb archive, and Linux/Windows
+desktop packages for x64/arm64. Linux packages installed and Windows packaged agents ran
+`--version` on their native runners. Interactive desktop behavior remains a separate gate.
+
+CI [36357303979](https://github.com/teamofsilicons/silicon-extend/actions/runs/36357303979) passed
+Android, web and contract lint but exposed two failures. The packaging job lacked the browser
+dependencies needed by the banner test; that test now runs in the web job after Chromium install.
+Local verification passed 65 packaging tests and both banner browser tests. The consumer-contract
+setup races are under repair; this record does not claim full CI success.
+
 ## 2026-09-28 — production wake-type registration
 
 The authenticated app-owning Team manager registered `extend.device.wake_requested`,
