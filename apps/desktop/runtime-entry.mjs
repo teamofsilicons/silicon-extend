@@ -24,6 +24,14 @@
 //
 // Flags are read the way agent-device's parser reads them (src/cli/parser/args.ts): only before a
 // `--`, after which every token is text (`type -- --state-dir=~/notes` types those words).
+//
+// It also sets two defaults for a daemon agent-device starts from here (a value already in the
+// environment wins), so an iPhone or iPad doesn't keep showing "Automation Running" once nothing
+// uses it: a runner kept warm after a Simulator session closes stops after 30 seconds instead of 5
+// minutes (AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS), and a daemon that exits stops its runners instead
+// of handing them to the next daemon, where a physical device's runner would keep running for up to
+// a day (AGENT_DEVICE_IOS_RUNNER_DETACH=0). Extend's iOS driver (crates/extend-hosted/src/ios.rs,
+// DAEMON_ENV_DEFAULTS) gives agent-device the same two.
 import { spawnSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import os from 'node:os';
@@ -31,6 +39,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RECORD = 'extend-runtime-root.json';
+// Defaults for a daemon started from here; see the note above.
+const DAEMON_ENV_DEFAULTS = Object.freeze({
+  AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS: '30000',
+  AGENT_DEVICE_IOS_RUNNER_DETACH: '0',
+});
 // What extend-agent allows `daemon stop` (crates/extend-agent/src/drivers/agent_device.rs).
 const STOP_TIMEOUT_MS = 45_000;
 // A lock older than this belongs to a command that died while holding it.
@@ -211,6 +224,10 @@ function prepare(args, env) {
     // is this location's, so that is recorded now, before agent-device runs.
     record(dir, root, version, saved, running);
   }
+}
+
+for (const [name, value] of Object.entries(DAEMON_ENV_DEFAULTS)) {
+  if (process.env[name] === undefined) process.env[name] = value;
 }
 
 try {

@@ -8,20 +8,25 @@
 //! Developer Mode, and Extend then puts agent-device's XCTest runner (the "helper") on it with
 //! `prepare ios-runner`. Readiness comes from `xcrun devicectl`.
 //!
+//! While the runner runs, iOS shows "Automation Running" on the device, so the runner runs only
+//! while a Silicon is working on the device: setup closes the session `prepare` ran in, every session
+//! end closes the session's agent-device session and makes sure the runner is gone, and a runner no
+//! command has used for a minute is stopped, inside a live session too (see "The runner" below).
+//!
 //! Development only: with `EXTEND_HOSTED_ALLOW_SIMULATOR=1`, a Simulator UDID is accepted in place
 //! of a physical device, so the command path can be exercised without an iPhone.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use extend_driver::{Driver, Invocation, LocalFile, Output, Probe};
 use extend_protocol::capability::{RESERVED_FLAGS, not_exposed};
 use extend_protocol::model::{CommandError, FileKind, MissingCapability, Setup, StepStatus};
-use extend_protocol::{DeviceOs, ErrorCode};
+use extend_protocol::{DeviceOs, ErrorCode, OFFLINE_AFTER_S, SESSION_IDLE_S, SESSION_OFFLINE_GRACE_S, TAKEOVER_MAX_S};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -34,6 +39,48 @@ pub(crate) const SIMULATOR_ENV: &str = "EXTEND_HOSTED_ALLOW_SIMULATOR";
 const DEFAULT_RUNNER_BUNDLE: &str = "com.callstack.agentdevice.runner";
 const DEVICECTL_TIMEOUT: Duration = Duration::from_secs(20);
 const PREPARE_TIMEOUT_MS: u64 = 600_000;
+/// The agent-device session the helper is installed in.
+const SETUP_SESSION: &str = "extend-setup";
+/// Bounds Extend's own `close` (agent-device stops a runner within 25 s).
+const CLOSE_LIMIT: Duration = Duration::from_secs(60);
+/// How long agent-device's close gets to stop an iPhone's runner before Extend stops it.
+const RUNNER_EXIT_WAIT: Duration = Duration::from_secs(10);
+/// How long a runner gets to exit after SIGTERM before SIGKILL.
+const RUNNER_TERM_GRACE: Duration = Duration::from_secs(5);
+/// A runner no command has used for this long is stopped, inside a live session too, so
+/// "Automation Running" leaves the device soon after a Silicon's last action. The next command that
+/// needs it starts it again (a few seconds on a Simulator, about 15 on an iPhone); agent-device keeps
+/// the session's app and refs.
+const RUNNER_IDLE_STOP: Duration = Duration::from_secs(60);
+/// How often each driver looks after its device's runner and sessions, connected or not.
+const TEND_EVERY: Duration = Duration::from_secs(20);
+/// A runner process younger than this may still be starting: agent-device may be about to connect
+/// to it (a runner stopped then makes agent-device build and start another, with no session left
+/// to close it).
+const RUNNER_SETTLE: Duration = Duration::from_secs(30);
+/// A runner process older than this is past any start (agent-device waits 45 s for a runner).
+const RUNNER_STARTUP_MAX: Duration = Duration::from_secs(120);
+/// No live session goes this long without a command, a takeover starting or a takeover ending: the
+/// service ends a session after `SESSION_IDLE_S` without a command, a takeover pauses that for up to
+/// `TAKEOVER_MAX_S` (its start and end are noted like a command), and a Mac out of touch keeps it
+/// for `OFFLINE_AFTER_S` + `SESSION_OFFLINE_GRACE_S` more. Five minutes spare.
+const STALE_SESSION_AFTER: Duration =
+    Duration::from_secs((SESSION_IDLE_S + TAKEOVER_MAX_S + SESSION_OFFLINE_GRACE_S) as u64 + OFFLINE_AFTER_S + 300);
+/// A session's last use is written down at most this often.
+const SESSION_NOTE_EVERY: Duration = Duration::from_secs(60);
+/// How long a sighting of the helper on the device counts before `devicectl` is asked again.
+const HELPER_RECHECK: Duration = Duration::from_secs(600);
+/// How long a failed helper install is shown before it is tried again.
+const PREPARE_RETRY_AFTER: Duration = Duration::from_secs(60);
+/// Given to agent-device, for a daemon it starts: a runner kept warm after a Simulator session's
+/// close stops after 30 s (not 5 minutes), and a daemon that exits stops its runners instead of
+/// handing them to the next daemon (a handed-over runner keeps running, and the banner showing,
+/// for up to a day). An iPhone's runner stops at its session's close either way. A value already in
+/// the environment wins.
+pub(crate) const DAEMON_ENV_DEFAULTS: [(&str, &str); 2] = [
+    ("AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS", "30000"),
+    ("AGENT_DEVICE_IOS_RUNNER_DETACH", "0"),
+];
 
 pub(crate) fn driver(device: HostedDevice) -> Result<Box<dyn Driver>, String> {
     if !cfg!(target_os = "macos") {
@@ -547,21 +594,26 @@ pub(crate) struct StaleOwner {
 }
 
 /// A `DEVICE_IN_USE` refusal whose owner is another Extend session (never our own, never a
-/// session someone started outside Extend).
+/// session someone started outside Extend). That includes the setup session a helper install left
+/// open when Extend stopped in the middle of it: a command holds the device's guard, so no install
+/// is running when it sees the refusal.
 pub(crate) fn stale_owner(out: &Output, ours: &str) -> Option<StaleOwner> {
     let details = &out.error.as_ref()?.details;
     if details.get("agent_device_code").and_then(Value::as_str) != Some("DEVICE_IN_USE") {
         return None;
     }
-    let owner = details.pointer("/error/details/owner")?;
-    let session = owner.get("session").and_then(Value::as_str)?;
-    if !session.starts_with("extend-") || session == ours || session == "extend-setup" {
+    let refusal = details.pointer("/error/details")?;
+    // Another daemon's claim names its `owner`; a session of the same daemon is named directly.
+    let owner = refusal.get("owner");
+    let session = owner.unwrap_or(refusal).get("session").and_then(Value::as_str)?;
+    if !session.starts_with("extend-") || session == ours {
         return None;
     }
+    let owner_says = |k: &str| owner.and_then(|o| o.get(k)).and_then(Value::as_str).map(str::to_owned);
     Some(StaleOwner {
         session: session.to_owned(),
-        state_dir: owner.get("stateDir").and_then(Value::as_str).map(str::to_owned),
-        workspace: owner.get("workspace").and_then(Value::as_str).map(str::to_owned),
+        state_dir: owner_says("stateDir"),
+        workspace: owner_says("workspace"),
     })
 }
 
@@ -774,28 +826,559 @@ pub(crate) fn to_output(command: &str, stdout: &str, stderr: &str, exit_ok: bool
     }
 }
 
+// ───────────── The runner, and "Automation Running" ─────────────
+//
+// While agent-device's XCTest runner runs on an iPhone or iPad, iOS shows "Automation Running" on
+// it. Apple draws that for every XCTest UI automation, and nothing may hide it, so Extend keeps
+// the runner to the time a Silicon is working on the device: setup stops the runner `prepare`
+// starts, every session end closes the session's agent-device session (which stops the runner) and
+// makes sure the runner is gone, and every driver looks after its device every 20 s, connected or
+// not: a runner no command has used for a minute is stopped (inside a live session too), as is any
+// runner with no session live. A runner agent-device is still starting is never stopped: agent-device
+// would take that for a failed start and build and start another, with no session to close it.
+
+/// How a command uses agent-device's XCTest runner on an iPhone or iPad.
+///
+/// From the fork's physical-device (CoreDevice) paths: the app list, app state, installs, logs
+/// and plain screenshots go through `devicectl` (`device info apps`, `device process`,
+/// `device install app`, the device console, `device capture screenshot`); `open <app>` launches
+/// through `devicectl` and agent-device starts the runner in the background, since the next
+/// command nearly always reads the screen; reading the screen's elements and touching it go through
+/// the runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunnerUse {
+    /// Served without the runner.
+    Free,
+    /// Served without the runner, which agent-device then starts in the background.
+    Warms,
+    /// Needs the runner.
+    Needs,
+}
+
+pub(crate) fn runner_use(command: &str, args: &[String]) -> RunnerUse {
+    let flags = || args.iter().take_while(|a| *a != "--").map(|a| flag_name(a));
+    let flagged = |f: &str| flags().any(|a| a == f);
+    match command {
+        "apps" | "appstate" | "install" | "reinstall" | "uninstall" | "logs" | "close" => RunnerUse::Free,
+        // `--overlay-refs` and `--crop-on` read the screen's elements for the picture.
+        "screenshot" if !flagged("--overlay-refs") && !flagged("--crop-on") => RunnerUse::Free,
+        "diff" if args.first().map(String::as_str) == Some("screenshot") && !flagged("--overlay-refs") => {
+            RunnerUse::Free
+        }
+        // A bare `open` only binds the session to the device.
+        "open" if args.iter().all(|a| a.starts_with('-')) && !flagged("--relaunch") => RunnerUse::Free,
+        "open" => RunnerUse::Warms,
+        _ => RunnerUse::Needs,
+    }
+}
+
+/// One process, from `ps -ww -Ao pid=,ppid=,etime=,command=`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Proc {
+    pub pid: u32,
+    pub ppid: u32,
+    /// How long it has run (`etime`), when `ps` said.
+    pub age: Option<Duration>,
+    pub command: String,
+}
+
+/// `ps`'s `etime`: `[[dd-]hh:]mm:ss`.
+pub(crate) fn parse_etime(s: &str) -> Option<Duration> {
+    let (days, clock) = match s.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, s),
+    };
+    let mut secs = 0u64;
+    let parts: Vec<&str> = clock.split(':').collect();
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+    for part in &parts {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(Duration::from_secs(days * 86_400 + secs))
+}
+
+pub(crate) fn parse_ps(text: &str) -> Vec<Proc> {
+    text.lines()
+        .filter_map(|line| {
+            let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+            let (ppid, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+            let (etime, command) = rest.trim_start().split_once(char::is_whitespace)?;
+            Some(Proc {
+                pid: pid.parse().ok()?,
+                ppid: ppid.parse().ok()?,
+                age: parse_etime(etime),
+                command: command.trim().to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Whether `command` names this device by `id=<udid>`, the UDID matched whole (so another device,
+/// or one whose UDID only starts like this one's, never does).
+fn names_device(command: &str, udid: &str) -> bool {
+    if udid.is_empty() {
+        return false;
+    }
+    let needle = format!("id={udid}");
+    command.match_indices(&needle).any(|(i, _)| {
+        let before = command[..i].chars().next_back();
+        let after = command[i + needle.len()..].chars().next();
+        matches!(before, Some(',' | ' ' | '{')) && !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Whether a command line is agent-device's runner for this device:
+/// `xcodebuild test-without-building … -xctestrun …/AgentDeviceRunner….xctestrun … -destination
+/// platform=iOS[ Simulator],id=<udid>`.
+pub(crate) fn is_runner_for(command: &str, udid: &str) -> bool {
+    command.contains("xcodebuild")
+        && command.contains("test-without-building")
+        && command.contains("AgentDeviceRunner")
+        && names_device(command, udid)
+}
+
+/// Whether a command line is agent-device building its runner for this Simulator (the first step of
+/// a start; an iPhone's build names no device).
+pub(crate) fn is_runner_build_for(command: &str, udid: &str) -> bool {
+    command.contains("xcodebuild")
+        && command.contains("build-for-testing")
+        && command.contains("AgentDeviceRunner")
+        && names_device(command, udid)
+}
+
+/// Whether a command line is the runner app XCTest launched inside this Simulator
+/// (`…/CoreSimulator/Devices/<udid>/data/Containers/Bundle/Application/…/AgentDeviceRunnerUITests-Runner.app/…`).
+/// It runs under the Simulator's launchd, not under the runner's `xcodebuild`, so stopping only
+/// `xcodebuild` would leave it up for most of a minute.
+pub(crate) fn is_simulator_runner_app_for(command: &str, udid: &str) -> bool {
+    !udid.is_empty()
+        && !command.contains("xcodebuild")
+        && command.contains(&format!("/Devices/{udid}/"))
+        && command.contains("AgentDeviceRunner")
+}
+
+/// What agent-device's runner lease for a device (`apple-runner/leases/<udid>.json`) says.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RunnerLease {
+    pub runner_pid: Option<u32>,
+    /// The agent-device session that started the runner (its log is `sessions/<name>/runner.log`).
+    pub session: Option<String>,
+    /// The runner's log.
+    pub log: Option<PathBuf>,
+    /// The port this start of the runner listens on.
+    pub port: Option<u16>,
+}
+
+pub(crate) fn parse_lease(v: &Value) -> RunnerLease {
+    let log = v.get("runnerLogPath").and_then(Value::as_str).map(PathBuf::from);
+    RunnerLease {
+        runner_pid: v
+            .get("runnerPid")
+            .and_then(Value::as_u64)
+            .and_then(|p| u32::try_from(p).ok()),
+        session: log
+            .as_deref()
+            .and_then(|p| p.parent()?.file_name())
+            .map(|n| n.to_string_lossy().into_owned()),
+        log,
+        port: v
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|p| u16::try_from(p).ok()),
+    }
+}
+
+/// What a runner's log says about its start on `port`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RunnerLog {
+    /// The runner said it listens (`AGENT_DEVICE_RUNNER_PORT=<port>`).
+    pub listening: bool,
+    /// And it has answered a command since, so agent-device has connected to it.
+    pub answered: bool,
+}
+
+/// Reads [`RunnerLog`] from a runner's log (every start of a session's runner writes to the same
+/// log; the last one on `port` counts).
+pub(crate) fn runner_log_state(log: &str, port: u16) -> RunnerLog {
+    let needle = format!("AGENT_DEVICE_RUNNER_PORT={port}");
+    let at = log
+        .match_indices(&needle)
+        .filter(|(i, _)| !log[i + needle.len()..].starts_with(|c: char| c.is_ascii_digit()))
+        .map(|(i, _)| i)
+        .last();
+    match at {
+        None => RunnerLog::default(),
+        Some(i) => RunnerLog {
+            listening: true,
+            answered: log[i..].contains("AGENT_DEVICE_RUNNER_COMMAND_COMPLETED"),
+        },
+    }
+}
+
+/// The runner processes for this device that Extend may stop: each runner `xcodebuild`, what runs
+/// under it, and (on a Simulator) the runner app. A runner the lease says a session outside Extend
+/// started is left alone, and so is its app.
+pub(crate) fn runner_processes(procs: &[Proc], udid: &str, lease: Option<&RunnerLease>) -> Vec<u32> {
+    let foreign = |pid: u32| {
+        lease.is_some_and(|l| {
+            l.runner_pid == Some(pid) && l.session.as_deref().is_some_and(|s| !s.starts_with("extend-"))
+        })
+    };
+    let runners: Vec<&Proc> = procs.iter().filter(|p| is_runner_for(&p.command, udid)).collect();
+    let someone_elses = runners.iter().any(|p| foreign(p.pid));
+    let mut out: Vec<u32> = runners.iter().filter(|p| !foreign(p.pid)).map(|p| p.pid).collect();
+    if !someone_elses {
+        out.extend(
+            procs
+                .iter()
+                .filter(|p| is_simulator_runner_app_for(&p.command, udid))
+                .map(|p| p.pid),
+        );
+    }
+    let mut i = 0;
+    while i < out.len() {
+        let parent = out[i];
+        for p in procs {
+            if p.ppid == parent && !out.contains(&p.pid) {
+                out.push(p.pid);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// A device's runner, right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RunnerNow {
+    /// None runs (none Extend may stop).
+    Gone,
+    /// agent-device is still starting it (building it, launching it, or about to connect to it).
+    Starting,
+    /// Up and past its start (or left behind): these processes may be stopped.
+    Up(Vec<u32>),
+}
+
+/// Whether this device's runner may be stopped now. `log` is what the lease's runner log says, when
+/// the lease names a runner that runs.
+pub(crate) fn classify_runner(
+    procs: &[Proc],
+    udid: &str,
+    lease: Option<&RunnerLease>,
+    log: Option<RunnerLog>,
+) -> RunnerNow {
+    if procs.iter().any(|p| is_runner_build_for(&p.command, udid)) {
+        return RunnerNow::Starting;
+    }
+    let pids = runner_processes(procs, udid, lease);
+    if pids.is_empty() {
+        return RunnerNow::Gone;
+    }
+    for p in procs
+        .iter()
+        .filter(|p| pids.contains(&p.pid) && is_runner_for(&p.command, udid))
+    {
+        let leased = lease.is_some_and(|l| l.runner_pid == Some(p.pid));
+        let log = if leased { log } else { None };
+        let settled = match (p.age, log) {
+            (Some(age), _) if age >= RUNNER_STARTUP_MAX => true,
+            // agent-device has connected to it.
+            (_, Some(RunnerLog { answered: true, .. })) => true,
+            (Some(age), Some(RunnerLog { listening: true, .. })) => age >= RUNNER_SETTLE,
+            (None, Some(RunnerLog { listening, .. })) => listening,
+            // It hasn't said it listens yet.
+            (_, Some(_)) => false,
+            // No lease names it: left behind by an earlier daemon or start.
+            (Some(age), None) => age >= RUNNER_SETTLE,
+            (None, None) => true,
+        };
+        if !settled {
+            return RunnerNow::Starting;
+        }
+    }
+    RunnerNow::Up(pids)
+}
+
+/// agent-device's runner leases: `AGENT_DEVICE_IOS_RUNNER_LEASE_DIR`, else
+/// `~/.agent-device/apple-runner/leases` (shared by every agent-device daemon on this Mac).
+fn lease_dir() -> Option<PathBuf> {
+    match std::env::var("AGENT_DEVICE_IOS_RUNNER_LEASE_DIR") {
+        Ok(d) if !d.trim().is_empty() => Some(PathBuf::from(d.trim())),
+        _ => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".agent-device/apple-runner/leases")),
+    }
+}
+
+fn read_lease(udid: &str) -> Option<RunnerLease> {
+    let bytes = std::fs::read(lease_dir()?.join(format!("{udid}.json"))).ok()?;
+    Some(parse_lease(&serde_json::from_slice(&bytes).ok()?))
+}
+
+/// The end of a runner's log (the part that can hold the current start's lines).
+fn read_log_tail(path: &Path) -> Option<String> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    const TAIL: u64 = 8 << 20;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn processes() -> Option<Vec<Proc>> {
+    let out = Command::new("ps")
+        .args(["-ww", "-Ao", "pid=,ppid=,etime=,command="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .ok()?;
+    out.status
+        .success()
+        .then(|| parse_ps(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// This device's runner right now (see [`classify_runner`]).
+pub(crate) async fn runner_now(udid: &str) -> RunnerNow {
+    let Some(procs) = processes().await else {
+        return RunnerNow::Gone;
+    };
+    let lease = read_lease(udid);
+    let log = lease.as_ref().and_then(|l| {
+        let pid = l.runner_pid?;
+        if !procs.iter().any(|p| p.pid == pid) {
+            return None;
+        }
+        Some(runner_log_state(&read_log_tail(l.log.as_deref()?)?, l.port?))
+    });
+    classify_runner(&procs, udid, lease.as_ref(), log)
+}
+
+/// The runner processes for this device running now, starting or not (see [`runner_processes`]).
+pub(crate) async fn runner_pids(udid: &str) -> Vec<u32> {
+    match processes().await {
+        Some(procs) => runner_processes(&procs, udid, read_lease(udid).as_ref()),
+        None => vec![],
+    }
+}
+
+async fn signal(pids: &[u32], signal: &str) {
+    if pids.is_empty() {
+        return;
+    }
+    let _ = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .args(pids.iter().map(u32::to_string))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+}
+
+/// What [`stop_runner`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RunnerStop {
+    /// No runner was up, or it went by itself.
+    Gone,
+    /// agent-device is still starting one; it was left alone (the next look stops it once started).
+    LeftStarting,
+    /// These processes were stopped.
+    Stopped(Vec<u32>),
+}
+
+/// Makes sure agent-device's runner for this device is gone: waits up to `wait` for agent-device's
+/// own close to stop it, then stops exactly this device's runner (SIGTERM, which ends the XCTest
+/// run the way agent-device does, then SIGKILL). A runner agent-device is still starting is left
+/// alone.
+pub(crate) async fn stop_runner(udid: &str, wait: Duration) -> RunnerStop {
+    let deadline = Instant::now() + wait;
+    let mut now = runner_now(udid).await;
+    while now != RunnerNow::Gone && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        now = runner_now(udid).await;
+    }
+    let pids = match now {
+        RunnerNow::Gone => return RunnerStop::Gone,
+        RunnerNow::Starting => {
+            tracing::debug!(udid, "agent-device is still starting the runner; it is stopped later");
+            return RunnerStop::LeftStarting;
+        }
+        RunnerNow::Up(pids) => pids,
+    };
+    tracing::info!(udid, ?pids, "stopping agent-device's runner, which nothing is using");
+    signal(&pids, "TERM").await;
+    let deadline = Instant::now() + RUNNER_TERM_GRACE;
+    loop {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let left: Vec<u32> = runner_pids(udid)
+            .await
+            .into_iter()
+            .filter(|p| pids.contains(p))
+            .collect();
+        if left.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            signal(&left, "KILL").await;
+            break;
+        }
+    }
+    RunnerStop::Stopped(pids)
+}
+
+/// Simulator UDIDs are UUIDs; an iPhone's or iPad's never is.
+fn is_simulator_udid(udid: &str) -> bool {
+    uuid::Uuid::parse_str(udid).is_ok()
+}
+
+/// What every driver built for one device shares (the service attaches a device again on every
+/// reconnect, and each attach builds a new driver).
+#[derive(Default)]
+struct DeviceShared {
+    /// A command holds it while it runs, and a session's end, the helper's install and the
+    /// driver's look after the device hold it while they close sessions or stop runners, so a
+    /// runner is never stopped under a running command.
+    guard: Arc<tokio::sync::Mutex<()>>,
+    /// When the last command on the device finished (none yet in this run of Extend: `None`).
+    last_command: Mutex<Option<Instant>>,
+    /// Recording path per session, from `record start` to `record stop`. The runner records, so
+    /// it keeps running while a recording does.
+    recordings: Mutex<HashMap<String, PathBuf>>,
+}
+
+impl DeviceShared {
+    fn used_now(&self) {
+        *self.last_command.lock().unwrap() = Some(Instant::now());
+    }
+
+    /// How long no command has used the device (`None`: none has in this run of Extend).
+    fn unused_for(&self) -> Option<Duration> {
+        self.last_command.lock().unwrap().map(|t| t.elapsed())
+    }
+
+    fn recording(&self) -> bool {
+        !self.recordings.lock().unwrap().is_empty()
+    }
+}
+
+fn shared(udid: &str) -> Arc<DeviceShared> {
+    static DEVICES: LazyLock<Mutex<HashMap<String, Arc<DeviceShared>>>> = LazyLock::new(Default::default);
+    DEVICES.lock().unwrap().entry(udid.to_owned()).or_default().clone()
+}
+
+/// Whether the driver's look after the device stops its runner (once started): with no session
+/// live any runner is left over; within one, a runner no command has used for
+/// [`RUNNER_IDLE_STOP`] goes, unless it is recording.
+pub(crate) fn runner_should_stop(live: bool, unused_for: Option<Duration>, recording: bool) -> bool {
+    !recording && (!live || unused_for.is_none_or(|d| d >= RUNNER_IDLE_STOP))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// The agent-device calls that put the helper on the device: `prepare ios-runner` inside a setup
+/// session of its own, closed right after. `prepare` starts the runner to prove the install; the
+/// close stops it (agent-device never keeps an iPhone's or iPad's runner past its session's close).
+pub(crate) fn helper_install_calls() -> Vec<(&'static str, Vec<String>)> {
+    vec![
+        // A setup session a crash left open would refuse the `open` below.
+        ("close", vec![]),
+        // Binds the setup session to the device; on an iPhone this launches nothing and starts
+        // no runner.
+        ("open", vec![]),
+        (
+            "prepare",
+            vec!["ios-runner".into(), "--timeout".into(), PREPARE_TIMEOUT_MS.to_string()],
+        ),
+        ("close", vec![]),
+    ]
+}
+
+/// What the `helper` setup step does after looking for the helper on the device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HelperNext {
+    /// It's there (or was, and the device didn't answer this time).
+    Done,
+    /// `prepare` is running.
+    Installing,
+    /// The last install failed a moment ago: show why, then try again.
+    ShowFailure(String),
+    /// Missing while a Silicon's session may still be live: installed once it ends.
+    AfterSession,
+    /// The device answered without it: install it. The only way setup starts the runner.
+    Install,
+    /// The device didn't answer and the helper was never seen: show why, install nothing.
+    Unchecked(String),
+}
+
+/// `listed`: whether `devicectl device info apps` lists the helper, or why it couldn't tell.
+/// `verified`: the helper was seen before. `live`: a Silicon's session may still be live.
+pub(crate) fn helper_next(listed: &Result<bool, String>, prepare: &Prepare, verified: bool, live: bool) -> HelperNext {
+    match (listed, prepare) {
+        (Ok(true), _) => HelperNext::Done,
+        (_, Prepare::Running) => HelperNext::Installing,
+        (Ok(false), Prepare::Failed(e, at)) if at.elapsed() < PREPARE_RETRY_AFTER => HelperNext::ShowFailure(e.clone()),
+        (Ok(false), _) if live => HelperNext::AfterSession,
+        (Ok(false), _) => HelperNext::Install,
+        (Err(_), _) if verified => HelperNext::Done,
+        (Err(e), _) => HelperNext::Unchecked(e.clone()),
+    }
+}
+
 // ───────────── Driver ─────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Saved {
     #[serde(default)]
     udid: Option<String>,
+    /// The helper was seen on the device, or `prepare` put it there. A check that fails later (a
+    /// locked device) never installs it again; only a device that answers without it does.
+    #[serde(default)]
+    helper_verified: bool,
+    /// agent-device sessions this driver has run commands in and not closed yet (an entry goes only
+    /// once agent-device has answered its `close`).
+    #[serde(default)]
+    sessions: BTreeMap<String, OpenSession>,
+    /// The helper install opened its setup session and hasn't closed it yet. Set while the install
+    /// runs; still set afterwards only if Extend stopped in the middle of it, and then the driver's
+    /// look after the device closes the session (it claims the device and keeps the daemon up).
+    #[serde(default)]
+    setup_open: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct OpenSession {
+    /// When a command last ran in it (ms since the epoch).
+    last_used_ms: u64,
+    /// A command in it used (or warmed) the runner.
+    #[serde(default)]
+    runner: bool,
 }
 
 #[derive(Debug, Clone)]
-enum Prepare {
+pub(crate) enum Prepare {
     Idle,
     Running,
     Done,
-    Failed(String),
+    Failed(String, Instant),
 }
+
+/// ios.json is changed by read, change, write; drivers built for the same device (and the
+/// background tasks they start) take turns.
+static STATE_LOCK: Mutex<()> = Mutex::new(());
 
 struct Inner {
     device: HostedDevice,
     saved: Mutex<Saved>,
     prepare: Mutex<Prepare>,
-    /// Recording path per session, from `record start` to `record stop`.
-    recordings: Mutex<HashMap<String, PathBuf>>,
     version: Mutex<Option<String>>,
     runner_seen: Mutex<Option<Instant>>,
 }
@@ -805,18 +1388,29 @@ pub struct IosDriver {
 }
 
 impl IosDriver {
+    /// Built inside a tokio runtime (as the agent builds it), the driver also looks after its
+    /// device every [`TEND_EVERY`] until it is dropped, whether or not the Mac is connected to
+    /// Extend (see [`Inner::tend`]).
     pub(crate) fn new(device: HostedDevice) -> Self {
         let saved = load_json(&device.state_dir, STATE_FILE).unwrap_or_default();
-        Self {
-            inner: Arc::new(Inner {
-                device,
-                saved: Mutex::new(saved),
-                prepare: Mutex::new(Prepare::Idle),
-                recordings: Mutex::new(HashMap::new()),
-                version: Mutex::new(None),
-                runner_seen: Mutex::new(None),
-            }),
+        let inner = Arc::new(Inner {
+            device,
+            saved: Mutex::new(saved),
+            prepare: Mutex::new(Prepare::Idle),
+            version: Mutex::new(None),
+            runner_seen: Mutex::new(None),
+        });
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let me = Arc::downgrade(&inner);
+            rt.spawn(async move {
+                loop {
+                    tokio::time::sleep(TEND_EVERY).await;
+                    let Some(me) = me.upgrade() else { return };
+                    me.tend().await;
+                }
+            });
         }
+        Self { inner }
     }
 }
 
@@ -841,9 +1435,75 @@ impl Inner {
         self.device.state_dir.join("recordings").join(session_name(session_id))
     }
 
+    /// Changes ios.json starting from what is on disk, since another driver for this device may
+    /// have written it, and saves it.
+    fn update_saved<R>(&self, change: impl FnOnce(&mut Saved) -> R) -> R {
+        let _turn = STATE_LOCK.lock().unwrap();
+        let mut saved =
+            load_json(&self.device.state_dir, STATE_FILE).unwrap_or_else(|| self.saved.lock().unwrap().clone());
+        let r = change(&mut saved);
+        if let Err(e) = save_json(&self.device.state_dir, STATE_FILE, &saved) {
+            tracing::warn!(error = %e, "couldn't save the iPhone's state");
+        }
+        *self.saved.lock().unwrap() = saved;
+        r
+    }
+
+    fn read_saved(&self) -> Saved {
+        let _turn = STATE_LOCK.lock().unwrap();
+        load_json(&self.device.state_dir, STATE_FILE).unwrap_or_else(|| self.saved.lock().unwrap().clone())
+    }
+
+    /// Notes that a command is about to run in `session`, so the session is closed when it ends
+    /// (or, if its end never reaches this Mac, once it has certainly ended).
+    fn note_session(&self, session: &str, runner: bool) {
+        let now = now_ms();
+        let fresh = self.saved.lock().unwrap().sessions.get(session).is_some_and(|s| {
+            (s.runner || !runner) && now.saturating_sub(s.last_used_ms) < SESSION_NOTE_EVERY.as_millis() as u64
+        });
+        if fresh {
+            return;
+        }
+        self.update_saved(|s| {
+            let open = s.sessions.entry(session.to_owned()).or_default();
+            open.last_used_ms = now;
+            open.runner |= runner;
+        });
+    }
+
+    /// Notes that `session` is still live though no command ran (a takeover started or ended), so
+    /// the backstop in [`Self::tend`] never closes it under a run of takeovers. A session with no
+    /// agent-device session yet has nothing to keep.
+    fn keep_session(&self, session: &str) {
+        if !self.read_saved().sessions.contains_key(session) {
+            return;
+        }
+        let now = now_ms();
+        self.update_saved(|s| {
+            if let Some(open) = s.sessions.get_mut(session) {
+                open.last_used_ms = open.last_used_ms.max(now);
+            }
+        });
+    }
+
+    /// Whether a Silicon's session may still be using the device.
+    fn has_live_sessions(&self) -> bool {
+        let now = now_ms();
+        self.read_saved()
+            .sessions
+            .values()
+            .any(|s| now.saturating_sub(s.last_used_ms) <= STALE_SESSION_AFTER.as_millis() as u64)
+    }
+
     fn base_command(&self) -> Command {
         let mut cmd = Command::new(&self.device.agent_device[0]);
         cmd.args(&self.device.agent_device[1..]);
+        // Read by a daemon this command starts (a running daemon keeps its own).
+        for (name, value) in DAEMON_ENV_DEFAULTS {
+            if std::env::var_os(name).is_none() {
+                cmd.env(name, value);
+            }
+        }
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -910,6 +1570,24 @@ impl Inner {
         ))
     }
 
+    /// [`Self::agent_device`] for Extend's own calls (setup, session ends), bounded by `limit`.
+    async fn agent_device_within(
+        &self,
+        udid: &str,
+        session: &str,
+        command: &str,
+        args: &[String],
+        limit: Duration,
+    ) -> Result<(String, String, bool), String> {
+        match tokio::time::timeout(limit, self.agent_device(udid, session, command, args, None)).await {
+            Ok(r) => r,
+            Err(_) => Err(format!(
+                "agent-device didn't finish `{command}` within {} s",
+                limit.as_secs()
+            )),
+        }
+    }
+
     /// Closes an abandoned agent-device session that still claims this device.
     async fn close_stale(&self, udid: &str, owner: &StaleOwner) {
         tracing::info!(session = %owner.session, "closing an abandoned agent-device session on this device");
@@ -933,6 +1611,164 @@ impl Inner {
         let _ = tokio::time::timeout(Duration::from_secs(60), cmd.output()).await;
     }
 
+    /// Closes one agent-device session of this device and, once agent-device has answered, forgets
+    /// it in ios.json (a close Extend couldn't finish, as when the app quits in the middle of it,
+    /// is tried again later: at the next reconnect, or by the backstop in [`Self::tend`]).
+    async fn close_session(&self, udid: &str, name: &str) -> bool {
+        let answered = match self.agent_device_within(udid, name, "close", &[], CLOSE_LIMIT).await {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(session = %name, "couldn't close the agent-device session: {e}");
+                false
+            }
+        };
+        let _ = std::fs::remove_dir_all(self.device.state_dir.join("recordings").join(name));
+        if answered {
+            self.update_saved(|s| {
+                s.sessions.remove(name);
+            });
+        }
+        answered
+    }
+
+    /// Ends Extend sessions on this device: `session_id`'s, or, when it is empty, every one this
+    /// driver has open (the device is no longer carried, or the service has no session on it).
+    /// Closes their agent-device sessions (which finishes a running recording first and, on an
+    /// iPhone or iPad, stops the runner) and makes sure the runner is gone. The caller holds the
+    /// device's guard.
+    async fn end_sessions(&self, udid: &str, session_id: &str) {
+        let saved = self.read_saved();
+        let names: Vec<String> = if session_id.is_empty() {
+            saved.sessions.keys().cloned().collect()
+        } else {
+            vec![session_name(session_id)]
+        };
+        let used_runner = names.iter().any(|n| saved.sessions.get(n).is_some_and(|o| o.runner));
+        {
+            let dev = shared(udid);
+            let mut recordings = dev.recordings.lock().unwrap();
+            if session_id.is_empty() {
+                recordings.clear();
+            } else {
+                recordings.remove(session_id);
+            }
+        }
+        for name in &names {
+            self.close_session(udid, name).await;
+        }
+        // The device is no longer carried (or has no session): a setup session an interrupted
+        // install left open goes too, since no later look after the device may come.
+        if session_id.is_empty()
+            && self.read_saved().setup_open
+            && self
+                .agent_device_within(udid, SETUP_SESSION, "close", &[], CLOSE_LIMIT)
+                .await
+                .is_ok()
+        {
+            self.update_saved(|s| s.setup_open = false);
+        }
+        // agent-device's close already stopped an iPhone's runner; a Simulator's it keeps warm on
+        // purpose, and here it goes too, as on the device, unless it is still starting (then the
+        // next look after the device stops it).
+        let wait = if used_runner && !is_simulator_udid(udid) {
+            RUNNER_EXIT_WAIT
+        } else {
+            Duration::ZERO
+        };
+        stop_runner(udid, wait).await;
+    }
+
+    /// Looks after the device, every [`TEND_EVERY`] whether or not the Mac is connected, and only
+    /// while nothing else uses the device (no command, session end or helper install):
+    ///
+    /// - a setup session a helper install left open when Extend stopped in the middle of it is
+    ///   closed (it claims the device, so every Silicon command would be refused);
+    /// - backstop for a session whose end never reached this Mac: once no command, takeover start
+    ///   or takeover end has come for longer than any live session can go without one, it is
+    ///   closed;
+    /// - the runner (once agent-device has finished starting it) is stopped when no session is
+    ///   live, or when no command has used it for [`RUNNER_IDLE_STOP`] and it isn't recording.
+    async fn tend(&self) {
+        let Some(udid) = self.udid() else { return };
+        let dev = shared(&udid);
+        let Ok(_held) = dev.guard.try_lock() else { return };
+        let saved = self.read_saved();
+        if saved.setup_open {
+            tracing::info!("closing the setup session an interrupted helper install left open");
+            if self
+                .agent_device_within(&udid, SETUP_SESSION, "close", &[], CLOSE_LIMIT)
+                .await
+                .is_ok()
+            {
+                self.update_saved(|s| s.setup_open = false);
+            }
+        }
+        let now = now_ms();
+        for (name, _) in saved
+            .sessions
+            .iter()
+            .filter(|(_, s)| now.saturating_sub(s.last_used_ms) > STALE_SESSION_AFTER.as_millis() as u64)
+        {
+            tracing::info!(session = %name, "closing an agent-device session no command has used for a long time");
+            self.close_session(&udid, name).await;
+        }
+        let live = !self.read_saved().sessions.is_empty();
+        if runner_should_stop(live, dev.unused_for(), dev.recording()) {
+            stop_runner(&udid, Duration::ZERO).await;
+        }
+    }
+
+    /// Puts the helper on the device (see [`helper_install_calls`]) and makes sure the runner that
+    /// proved it is gone afterwards.
+    async fn install_helper(&self, udid: &str) -> Result<(), String> {
+        let dev = shared(udid);
+        let _held = dev.guard.lock().await;
+        // Another driver for this device (the service attached it again meanwhile) may have
+        // installed it while this one waited; the helper step clears this before asking again.
+        if self.read_saved().helper_verified {
+            return Ok(());
+        }
+        let mut result = Err("prepare didn't run".to_owned());
+        let mut closed = false;
+        for (command, args) in helper_install_calls() {
+            if command == "open" {
+                self.update_saved(|s| s.setup_open = true);
+            }
+            let limit = if command == "prepare" {
+                Duration::from_millis(PREPARE_TIMEOUT_MS) + CLOSE_LIMIT
+            } else {
+                CLOSE_LIMIT
+            };
+            let out = self
+                .agent_device_within(udid, SETUP_SESSION, command, &args, limit)
+                .await;
+            match command {
+                "prepare" => {
+                    result = out.and_then(|(stdout, stderr, ok)| {
+                        let out = to_output("prepare", &stdout, &stderr, ok);
+                        if out.ok {
+                            Ok(())
+                        } else {
+                            Err(out.error.map(|e| e.message).unwrap_or_else(|| "prepare failed".into()))
+                        }
+                    })
+                }
+                "close" => closed = out.is_ok(),
+                _ => {}
+            }
+        }
+        if closed {
+            self.update_saved(|s| s.setup_open = false);
+        }
+        let wait = if is_simulator_udid(udid) {
+            Duration::ZERO
+        } else {
+            RUNNER_EXIT_WAIT
+        };
+        stop_runner(udid, wait).await;
+        result
+    }
+
     fn start_prepare(self: &Arc<Self>, udid: String) {
         {
             let mut p = self.prepare.lock().unwrap();
@@ -943,26 +1779,82 @@ impl Inner {
         }
         let me = Arc::clone(self);
         tokio::spawn(async move {
-            let args = vec![
-                "ios-runner".to_owned(),
-                "--timeout".to_owned(),
-                PREPARE_TIMEOUT_MS.to_string(),
-            ];
-            let result = me.agent_device(&udid, "extend-setup", "prepare", &args, None).await;
-            let next = match result {
-                Ok((stdout, stderr, ok)) => {
-                    let out = to_output("prepare", &stdout, &stderr, ok);
-                    if out.ok {
-                        *me.runner_seen.lock().unwrap() = Some(Instant::now());
-                        Prepare::Done
-                    } else {
-                        Prepare::Failed(out.error.map(|e| e.message).unwrap_or_else(|| "prepare failed".into()))
-                    }
+            let next = match me.install_helper(&udid).await {
+                Ok(()) => {
+                    *me.runner_seen.lock().unwrap() = Some(Instant::now());
+                    me.update_saved(|s| s.helper_verified = true);
+                    Prepare::Done
                 }
-                Err(e) => Prepare::Failed(e),
+                Err(e) => Prepare::Failed(e, Instant::now()),
             };
             *me.prepare.lock().unwrap() = next;
         });
+    }
+
+    /// The `helper` setup step. Only a device that answers without the helper gets it (again);
+    /// a check that fails (a locked device) reports the step instead.
+    async fn helper_step(self: &Arc<Self>, udid: &str, title: &str) -> extend_protocol::model::SetupStep {
+        let kind = self.kind();
+        let recently_seen = self
+            .runner_seen
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed() < HELPER_RECHECK);
+        let listed: Result<bool, String> = if recently_seen {
+            Ok(true)
+        } else {
+            let prefix = std::env::var("AGENT_DEVICE_IOS_BUNDLE_ID").unwrap_or_else(|_| DEFAULT_RUNNER_BUNDLE.into());
+            devicectl(&["device", "info", "apps", "--device", udid, "--timeout", "15"])
+                .await
+                .map(|v| runner_installed(&v, &prefix))
+        };
+        let prepare = self.prepare.lock().unwrap().clone();
+        let verified = self.saved.lock().unwrap().helper_verified;
+        let live = listed == Ok(false) && self.has_live_sessions();
+        let installing = format!(
+            "Extend is putting its helper on the {kind}. Keep it unlocked and connected; the first time takes a few minutes."
+        );
+        match helper_next(&listed, &prepare, verified, live) {
+            HelperNext::Done => {
+                if listed == Ok(true) {
+                    *self.runner_seen.lock().unwrap() = Some(Instant::now());
+                    if !verified {
+                        self.update_saved(|s| s.helper_verified = true);
+                    }
+                }
+                step("helper", title, StepStatus::Done)
+            }
+            HelperNext::Installing => step_help("helper", title, StepStatus::InProgress, &installing),
+            HelperNext::ShowFailure(e) => step_error(
+                "helper",
+                title,
+                StepStatus::Failed,
+                Some(
+                    "The helper must be signed: set AGENT_DEVICE_IOS_TEAM_ID (and AGENT_DEVICE_IOS_BUNDLE_ID) for the Extend app, or sign in to Xcode with an Apple ID. Extend tries again shortly.",
+                ),
+                e,
+            ),
+            HelperNext::AfterSession => step_help(
+                "helper",
+                title,
+                StepStatus::Todo,
+                &format!("Extend puts its helper back on the {kind} once the Silicon's session there ends."),
+            ),
+            HelperNext::Install => {
+                self.update_saved(|s| s.helper_verified = false);
+                self.start_prepare(udid.to_owned());
+                step_help("helper", title, StepStatus::InProgress, &installing)
+            }
+            HelperNext::Unchecked(e) => step_error(
+                "helper",
+                title,
+                StepStatus::Todo,
+                Some(&format!(
+                    "Keep the {kind} unlocked and connected to this Mac; Extend looks for its helper again shortly."
+                )),
+                e,
+            ),
+        }
     }
 
     async fn probe_physical(
@@ -1013,9 +1905,7 @@ impl Inner {
                     .or(if mine.len() == 1 { mine.first() } else { None })
                     .copied();
                 if let Some(d) = pick {
-                    let mut s = self.saved.lock().unwrap();
-                    s.udid = Some(d.udid.clone());
-                    let _ = save_json(&self.device.state_dir, STATE_FILE, &*s);
+                    self.update_saved(|s| s.udid = Some(d.udid.clone()));
                 }
                 pick
             }
@@ -1078,49 +1968,7 @@ impl Inner {
         let helper = if devmode != Some(true) {
             step("helper", helper_title, StepStatus::Todo)
         } else {
-            let recently_seen = self
-                .runner_seen
-                .lock()
-                .unwrap()
-                .is_some_and(|t| t.elapsed() < Duration::from_secs(600));
-            let installed = recently_seen || {
-                let prefix =
-                    std::env::var("AGENT_DEVICE_IOS_BUNDLE_ID").unwrap_or_else(|_| DEFAULT_RUNNER_BUNDLE.into());
-                let apps = devicectl(&["device", "info", "apps", "--device", &udid, "--timeout", "15"]).await;
-                let yes = apps.as_ref().is_ok_and(|v| runner_installed(v, &prefix));
-                if yes {
-                    *self.runner_seen.lock().unwrap() = Some(Instant::now());
-                }
-                yes
-            };
-            let state = self.prepare.lock().unwrap().clone();
-            match (installed, state) {
-                (true, _) => step("helper", helper_title, StepStatus::Done),
-                (false, Prepare::Running) => step_help(
-                    "helper",
-                    helper_title,
-                    StepStatus::InProgress,
-                    &format!(
-                        "Extend is putting its helper on the {kind}. Keep it unlocked and connected; the first time takes a few minutes."
-                    ),
-                ),
-                (false, Prepare::Failed(e)) => {
-                    *self.prepare.lock().unwrap() = Prepare::Idle;
-                    step_error(
-                        "helper",
-                        helper_title,
-                        StepStatus::Failed,
-                        Some(
-                            "The helper must be signed: set AGENT_DEVICE_IOS_TEAM_ID (and AGENT_DEVICE_IOS_BUNDLE_ID) for the Extend app, or sign in to Xcode with an Apple ID. Extend tries again shortly.",
-                        ),
-                        e,
-                    )
-                }
-                (false, Prepare::Idle | Prepare::Done) => {
-                    self.start_prepare(udid.clone());
-                    step("helper", helper_title, StepStatus::InProgress)
-                }
-            }
+            self.helper_step(&udid, helper_title).await
         };
         (online, os_version, model, vec![connect, devmode_step, helper])
     }
@@ -1214,12 +2062,36 @@ impl Driver for IosDriver {
             }
             Err(e) => return invalid(e),
         };
+        let dev = shared(&udid);
+        let _held = tokio::select! {
+            held = dev.guard.clone().lock_owned() => held,
+            _ = inv.cancel.cancelled() => {
+                return crate::common::failed(format!("`{}` was cancelled", inv.command));
+            }
+            _ = tokio::time::sleep(inv.timeout) => {
+                return Output::fail(
+                    ErrorCode::CommandTimeout.as_str().as_str(),
+                    format!("The {} was still busy (Extend was setting it up, ending a session or stopping its idle runner) after {} ms", me.kind(), inv.timeout.as_millis()),
+                );
+            }
+        };
+        // The device counts as used until the command is over, however it ends (the runner's idle
+        // stop counts from there).
+        struct Using(Arc<DeviceShared>);
+        impl Drop for Using {
+            fn drop(&mut self) {
+                self.0.used_now();
+            }
+        }
+        dev.used_now();
+        let _using = Using(Arc::clone(&dev));
         if plan.record_to.is_some() || inv.args.iter().any(|a| flag_name(a) == "--save-script") {
             let _ = std::fs::create_dir_all(&record_dir);
         }
         let _ = std::fs::create_dir_all(inv.workdir);
         let before = list_files(inv.workdir);
         let session = session_name(inv.session_id);
+        me.note_session(&session, runner_use(inv.command, inv.args) != RunnerUse::Free);
         let mut out = Output::fail(ErrorCode::CommandFailed.as_str().as_str(), "not run");
         for attempt in 0..2 {
             let (stdout, stderr, ok) = match me
@@ -1247,13 +2119,13 @@ impl Driver for IosDriver {
         if out.ok
             && let Some(path) = &plan.record_to
         {
-            me.recordings
+            dev.recordings
                 .lock()
                 .unwrap()
                 .insert(inv.session_id.to_owned(), path.clone());
         }
         if plan.record_stop
-            && let Some(src) = me.recordings.lock().unwrap().remove(inv.session_id)
+            && let Some(src) = dev.recordings.lock().unwrap().remove(inv.session_id)
         {
             move_recording(&src, inv.workdir);
         }
@@ -1280,17 +2152,22 @@ impl Driver for IosDriver {
         out
     }
 
+    /// A session ended (an empty id: every session on the device, which is no longer carried or
+    /// has no session live). Its agent-device session is closed and the runner is made sure to be
+    /// gone, so "Automation Running" leaves the device with the session.
     async fn session_ended(&self, session_id: &str) {
         let me = &self.inner;
         let Some(udid) = me.udid() else { return };
-        let session = session_name(session_id);
-        if me.recordings.lock().unwrap().remove(session_id).is_some() {
-            let _ = me
-                .agent_device(&udid, &session, "record", &["stop".to_owned()], None)
-                .await;
-        }
-        let _ = me.agent_device(&udid, &session, "close", &[], None).await;
-        let _ = std::fs::remove_dir_all(me.record_dir(session_id));
+        let dev = shared(&udid);
+        let _held = dev.guard.lock().await;
+        me.end_sessions(&udid, session_id).await;
+    }
+
+    /// A takeover started or ended: the session is live though no command runs, so the backstop
+    /// never closes its agent-device session (the runner still stops once idle, so "Automation
+    /// Running" isn't up while the Carbon uses the device).
+    async fn session_active(&self, session_id: &str) {
+        self.inner.keep_session(&session_name(session_id));
     }
 }
 
@@ -1509,6 +2386,27 @@ mod tests {
         );
         assert_eq!(stale_owner(&busy("extend-new"), "extend-new"), None);
         assert_eq!(stale_owner(&busy("someone-else"), "extend-new"), None);
+        // A setup session an interrupted helper install left open is recovered too.
+        assert_eq!(
+            stale_owner(&busy(SETUP_SESSION), "extend-new").map(|o| o.session),
+            Some(SETUP_SESSION.to_owned())
+        );
+        // A session of the same daemon is named in the refusal itself (as agent-device prints it).
+        let same_daemon = |session: &str| {
+            let body = json!({"success": false, "error": {"code": "DEVICE_IN_USE",
+                "message": format!("Device is already in use by session \"{session}\"."),
+                "details": {"session": session, "deviceId": SIM, "deviceName": "iPhone 16e"}}});
+            to_output("open", &body.to_string(), "", false)
+        };
+        assert_eq!(
+            stale_owner(&same_daemon("extend-rl44515"), "extend-new"),
+            Some(StaleOwner {
+                session: "extend-rl44515".into(),
+                state_dir: None,
+                workspace: None
+            })
+        );
+        assert_eq!(stale_owner(&same_daemon("default"), "extend-new"), None);
         assert_eq!(
             stale_owner(
                 &to_output("open", r#"{"success":true,"data":{}}"#, "", true),
@@ -1540,7 +2438,7 @@ mod tests {
 
     /// Drives a real iOS Simulator through agent-device: open Settings, snapshot, click, screenshot.
     /// Run with:
-    /// `EXTEND_HOSTED_ALLOW_SIMULATOR=1 EXTEND_HOSTED_SIM_UDID=<udid> cargo test -p extend-hosted -- --ignored --nocapture simulator`
+    /// `EXTEND_HOSTED_ALLOW_SIMULATOR=1 EXTEND_HOSTED_SIM_UDID=<udid> cargo test -p extend-hosted -- --ignored --nocapture simulator_end_to_end`
     /// (agent-device must be built in `vendor/agent-device`; `EXTEND_HOSTED_AGENT_DEVICE` overrides
     /// the command, space-separated).
     #[tokio::test]
@@ -1611,17 +2509,27 @@ mod tests {
         let work = state.path().join("work");
         let out = run("open", s(&["com.apple.Preferences", "--relaunch"]), work.join("1")).await;
         assert!(out.ok, "{out:?}");
-        let out = run("snapshot", s(&["-i"]), work.join("2")).await;
+        let mut out = run("snapshot", s(&["-i"]), work.join("2")).await;
         assert!(out.ok, "{out:?}");
-        let general = out.output["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["label"] == "General")
-            .and_then(|n| n["ref"].as_str())
-            .expect("a General row in Settings")
-            .to_owned();
-        let out = run("click", vec![format!("@{general}")], work.join("3")).await;
+        let general = |out: &Output, kind: &str| {
+            out.output["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["label"] == "General" && n["type"] == kind)
+                .and_then(|n| n["ref"].as_str())
+                .map(|r| format!("@{r}"))
+        };
+        if general(&out, "Cell").is_none() {
+            // Settings reopened on the page an earlier run left it on.
+            assert!(run("back", s(&[]), work.join("2b")).await.ok);
+            out = run("snapshot", s(&["-i"]), work.join("2c")).await;
+            assert!(out.ok, "{out:?}");
+        }
+        // agent-device refuses the row's own ref (its child controls cover its touch point), and on
+        // some models the row and its button both carry the label: the button's ref, else the label.
+        let target = general(&out, "Button").unwrap_or_else(|| "label=\"General\"".into());
+        let out = run("click", vec![target], work.join("3")).await;
         assert!(out.ok, "{out:?}");
         let out = run("screenshot", s(&["general"]), work.join("4")).await;
         assert!(out.ok, "{out:?}");
@@ -1661,6 +2569,774 @@ mod tests {
         let out = run("devices", s(&[]), work.join("6")).await;
         assert_eq!(out.error.unwrap().code, "unknown_command");
         d.session_ended(&session).await;
+    }
+
+    #[test]
+    fn knows_which_commands_need_the_runner() {
+        use RunnerUse::{Free, Needs, Warms};
+        // Served over CoreDevice on an iPhone: no runner, no "Automation Running".
+        for (command, args) in [
+            ("apps", vec![]),
+            ("appstate", vec![]),
+            ("install", vec!["attachment:app.ipa"]),
+            ("reinstall", vec!["com.example", "attachment:app.ipa"]),
+            ("logs", vec!["path"]),
+            ("close", vec![]),
+            ("close", vec!["Settings"]),
+            ("screenshot", vec![]),
+            ("screenshot", vec!["home", "--fullscreen"]),
+            ("diff", vec!["screenshot", "--baseline", "base.png"]),
+            ("open", vec![]),
+        ] {
+            assert_eq!(runner_use(command, &s(&args)), Free, "{command} {args:?}");
+        }
+        // Launched over CoreDevice; agent-device warms the runner for the next read.
+        assert_eq!(runner_use("open", &s(&["Settings"])), Warms);
+        assert_eq!(runner_use("open", &s(&["https://example.com"])), Warms);
+        assert_eq!(runner_use("open", &s(&["--relaunch"])), Warms);
+        // Reading the screen's elements or touching it needs the runner.
+        for (command, args) in [
+            ("snapshot", vec!["-i"]),
+            ("screenshot", vec!["--overlay-refs"]),
+            ("screenshot", vec!["--crop-on", "label=\"General\""]),
+            ("diff", vec!["snapshot"]),
+            ("diff", vec!["screenshot", "--baseline", "b.png", "--overlay-refs"]),
+            ("click", vec!["@e9"]),
+            ("fill", vec!["@e3", "hello"]),
+            ("type", vec!["--", "--overlay-refs"]),
+            ("press", vec!["@e2"]),
+            ("longpress", vec!["100", "200"]),
+            ("scroll", vec!["down"]),
+            ("swipe", vec!["up"]),
+            ("back", vec![]),
+            ("home", vec![]),
+            ("get", vec!["text", "@e1"]),
+            ("find", vec!["Continue", "click"]),
+            ("is", vec!["visible", "@e1"]),
+            ("wait", vec!["text", "Done"]),
+            ("alert", vec!["accept"]),
+            ("keyboard", vec!["dismiss"]),
+            ("record", vec!["start"]),
+            ("replay", vec!["flow.ad"]),
+            ("batch", vec!["--steps", "[]"]),
+        ] {
+            assert_eq!(runner_use(command, &s(&args)), Needs, "{command} {args:?}");
+        }
+    }
+
+    const PHONE: &str = "00008110-001E0DAC02C2401E";
+    const PAD: &str = "00008132-000A18A22E9A401C";
+    const SIM: &str = "50F5AD4C-4D26-445D-A2CA-9D04D9FFD768";
+
+    fn runner_line(pid: u32, etime: &str, dest: &str, udid: &str) -> String {
+        format!(
+            "{pid:>6}     1 {etime:>11} /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test-without-building -only-testing AgentDeviceRunnerUITests/RunnerTests/testCommand -parallel-testing-enabled NO -xctestrun /Users/c/.agent-device/apple-runner/derived/ios-device/cache-1/Build/Products/AgentDeviceRunner.env.session-{udid}-owner-5807-f552a997-61133.xctestrun -destination {dest},id={udid} -derivedDataPath /Users/c/.agent-device/apple-runner/derived/ios-device/cache-1"
+        )
+    }
+
+    /// The Simulator's runner app, as `ps` shows it (under the Simulator's launchd, pid 900).
+    fn sim_app_line(pid: u32, udid: &str) -> String {
+        format!(
+            "{pid:>6}   900       00:40 /Users/c/Library/Developer/CoreSimulator/Devices/{udid}/data/Containers/Bundle/Application/B9F78B83-10BB-4540-B86D-FE735B35BA5C/AgentDeviceRunnerUITests-Runner.app/AgentDeviceRunnerUITests-Runner"
+        )
+    }
+
+    fn ps_listing() -> String {
+        [
+            runner_line(101, "01:10", "platform=iOS", PHONE),
+            format!("  102   101       01:09 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild-helper --for {PHONE}"),
+            runner_line(201, "1-02:03:04", "platform=iOS", PAD),
+            runner_line(301, "00:41", "platform=iOS Simulator", SIM),
+            sim_app_line(302, SIM),
+            format!("   900     1    01:00:00 launchd_sim /Users/c/Library/Developer/CoreSimulator/Devices/{SIM}/data/var/run/launchd_bootstrap.plist"),
+            // Someone's own tests on the iPhone, and a UDID that only starts like the iPhone's.
+            format!("  401     1       00:05 /usr/bin/xcodebuild test-without-building -scheme MyApp -destination platform=iOS,id={PHONE}"),
+            runner_line(501, "00:05", "platform=iOS", &format!("{PHONE}0")),
+            format!("  601     1       00:05 /usr/bin/vim notes-id={PHONE}.txt"),
+            "garbage line".to_owned(),
+        ]
+        .join("\n")
+    }
+
+    fn lease(pid: u32, session: &str) -> RunnerLease {
+        RunnerLease {
+            runner_pid: Some(pid),
+            session: Some(session.into()),
+            log: Some(PathBuf::from(format!(
+                "/Users/c/.agent-device/sessions/{session}/runner.log"
+            ))),
+            port: Some(61133),
+        }
+    }
+
+    #[test]
+    fn finds_exactly_this_devices_runner() {
+        let procs = parse_ps(&ps_listing());
+        assert_eq!(procs.len(), 9);
+        assert_eq!((procs[1].pid, procs[1].ppid), (102, 101));
+        assert_eq!(procs[0].age, Some(Duration::from_secs(70)));
+        assert_eq!(procs[2].age, Some(Duration::from_secs(86_400 + 2 * 3600 + 3 * 60 + 4)));
+        assert!(procs[0].command.starts_with("/Applications/Xcode.app"));
+        // The runner's xcodebuild and what runs under it (and a Simulator's runner app, which runs
+        // under the Simulator's launchd); never another device's runner or a project's own tests.
+        assert_eq!(runner_processes(&procs, PHONE, None), vec![101, 102]);
+        assert_eq!(runner_processes(&procs, PAD, None), vec![201]);
+        assert_eq!(runner_processes(&procs, SIM, None), vec![301, 302]);
+        assert!(runner_processes(&procs, "00008110-000000000000FA4E", None).is_empty());
+        assert!(runner_processes(&procs, "", None).is_empty());
+        // agent-device's lease says who started the runner: an Extend session's is Extend's to
+        // stop, one started outside Extend is left alone (its app too), and one the lease no
+        // longer names is an orphan.
+        assert_eq!(
+            runner_processes(&procs, PHONE, Some(&lease(101, "extend-setup"))),
+            vec![101, 102]
+        );
+        assert!(runner_processes(&procs, PHONE, Some(&lease(101, "default"))).is_empty());
+        assert!(runner_processes(&procs, SIM, Some(&lease(301, "default"))).is_empty());
+        assert_eq!(
+            runner_processes(&procs, PHONE, Some(&lease(999, "default"))),
+            vec![101, 102]
+        );
+        // A runner app whose xcodebuild is gone is still this Simulator's runner.
+        let orphan = parse_ps(&sim_app_line(302, SIM));
+        assert_eq!(runner_processes(&orphan, SIM, None), vec![302]);
+        assert_eq!(
+            parse_lease(&json!({"runnerPid": 13206, "port": 61133,
+                "runnerLogPath": "/Users/c/.agent-device/sessions/extend-setup/runner.log"})),
+            RunnerLease {
+                runner_pid: Some(13206),
+                ..lease(0, "extend-setup")
+            }
+        );
+        assert_eq!(parse_lease(&json!({})), RunnerLease::default());
+        assert!(is_simulator_udid(SIM) && !is_simulator_udid(PHONE) && !is_simulator_udid(PAD));
+        assert_eq!(parse_etime("05"), Some(Duration::from_secs(5)));
+        assert_eq!(parse_etime("12:34:56"), Some(Duration::from_secs(45_296)));
+        assert_eq!(parse_etime("x:1"), None);
+    }
+
+    #[test]
+    fn never_stops_a_runner_agent_device_is_still_starting() {
+        use RunnerNow::{Gone, Starting, Up};
+        let at = |etime: &str| parse_ps(&runner_line(101, etime, "platform=iOS", PHONE));
+        let ours = lease(101, "extend-a1");
+        let log = |listening, answered| Some(RunnerLog { listening, answered });
+        // Just launched: agent-device may be about to connect to it.
+        assert_eq!(
+            classify_runner(&at("00:05"), PHONE, Some(&ours), log(false, false)),
+            Starting
+        );
+        assert_eq!(
+            classify_runner(&at("00:05"), PHONE, Some(&ours), log(true, false)),
+            Starting
+        );
+        assert_eq!(classify_runner(&at("00:05"), PHONE, None, None), Starting);
+        // It answered a command, so agent-device has connected to it.
+        assert_eq!(
+            classify_runner(&at("00:05"), PHONE, Some(&ours), log(true, true)),
+            Up(vec![101])
+        );
+        // It has listened for a while (a start whose runner no command has asked yet).
+        assert_eq!(
+            classify_runner(&at("00:45"), PHONE, Some(&ours), log(true, false)),
+            Up(vec![101])
+        );
+        // Not listening yet, but still within agent-device's wait for it.
+        assert_eq!(
+            classify_runner(&at("00:45"), PHONE, Some(&ours), log(false, false)),
+            Starting
+        );
+        // Long past any start, or left behind with no lease naming it.
+        assert_eq!(
+            classify_runner(&at("03:00"), PHONE, Some(&ours), log(false, false)),
+            Up(vec![101])
+        );
+        assert_eq!(classify_runner(&at("00:45"), PHONE, None, None), Up(vec![101]));
+        // A lease for another runner says nothing about this one.
+        assert_eq!(
+            classify_runner(&at("00:45"), PHONE, Some(&lease(999, "extend-a1")), log(false, false)),
+            Up(vec![101])
+        );
+        assert_eq!(classify_runner(&[], PHONE, Some(&ours), None), Gone);
+        // agent-device building a Simulator's runner is a start under way, whatever else runs.
+        let mut building = parse_ps(&sim_app_line(302, SIM));
+        building.extend(parse_ps(&format!(
+            "  700  1  00:20 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /x/AgentDeviceRunner.xcodeproj -scheme AgentDeviceRunner -destination platform=iOS Simulator,id={SIM} -derivedDataPath /x"
+        )));
+        assert_eq!(classify_runner(&building, SIM, None, None), Starting);
+        assert_eq!(classify_runner(&building[..1], SIM, None, None), Up(vec![302]));
+
+        // The runner's log: the last start on the lease's port, matched whole.
+        let text = "AGENT_DEVICE_RUNNER_PORT=6113\nAGENT_DEVICE_RUNNER_COMMAND_COMPLETED command=tap\n** BUILD INTERRUPTED **\nAGENT_DEVICE_RUNNER_PORT=61133\n";
+        assert_eq!(
+            runner_log_state(text, 61133),
+            RunnerLog {
+                listening: true,
+                answered: false
+            }
+        );
+        let text = format!("{text}AGENT_DEVICE_RUNNER_COMMAND_COMPLETED command=snapshot ok=1\n");
+        assert_eq!(
+            runner_log_state(&text, 61133),
+            RunnerLog {
+                listening: true,
+                answered: true
+            }
+        );
+        assert!(runner_log_state(&text, 6113).listening);
+        assert_eq!(runner_log_state(&text, 611), RunnerLog::default());
+    }
+
+    #[test]
+    fn stops_a_runner_nothing_uses() {
+        let secs = |s| Some(Duration::from_secs(s));
+        // No session live: any runner is left over.
+        assert!(runner_should_stop(false, secs(1), false));
+        assert!(runner_should_stop(false, None, false));
+        // Inside a live session: once no command has used it for a minute.
+        assert!(!runner_should_stop(true, secs(10), false));
+        assert!(runner_should_stop(true, secs(60), false));
+        // Nothing has used it since Extend started (a runner from before).
+        assert!(runner_should_stop(true, None, false));
+        // Never while it records the screen.
+        assert!(!runner_should_stop(true, secs(600), true));
+    }
+
+    #[test]
+    fn setup_only_installs_on_a_device_that_answered_without_the_helper() {
+        let idle = Prepare::Idle;
+        let locked: Result<bool, String> = Err("The device is locked.".into());
+        // A check that fails (locked, out of reach) never starts `prepare`, which starts the runner.
+        assert_eq!(helper_next(&locked, &idle, true, false), HelperNext::Done);
+        assert_eq!(
+            helper_next(&locked, &idle, false, false),
+            HelperNext::Unchecked("The device is locked.".into())
+        );
+        assert_eq!(helper_next(&Ok(true), &idle, false, false), HelperNext::Done);
+        assert_eq!(helper_next(&Ok(false), &idle, true, false), HelperNext::Install);
+        assert_eq!(
+            helper_next(&Ok(false), &Prepare::Done, true, false),
+            HelperNext::Install
+        );
+        // Never under a Silicon's live session, and never twice at once.
+        assert_eq!(helper_next(&Ok(false), &idle, true, true), HelperNext::AfterSession);
+        assert_eq!(
+            helper_next(&Ok(false), &Prepare::Running, false, false),
+            HelperNext::Installing
+        );
+        assert_eq!(
+            helper_next(&locked, &Prepare::Running, false, false),
+            HelperNext::Installing
+        );
+        // A failed install is shown for a while, then tried again.
+        let failed = Prepare::Failed("no signing".into(), Instant::now());
+        assert_eq!(
+            helper_next(&Ok(false), &failed, false, false),
+            HelperNext::ShowFailure("no signing".into())
+        );
+        if let Some(earlier) = Instant::now().checked_sub(PREPARE_RETRY_AFTER + Duration::from_secs(1)) {
+            let failed = Prepare::Failed("no signing".into(), earlier);
+            assert_eq!(helper_next(&Ok(false), &failed, false, false), HelperNext::Install);
+        }
+        // `prepare` runs in a setup session of its own that is closed right after it.
+        let calls: Vec<&str> = helper_install_calls().iter().map(|(c, _)| *c).collect();
+        assert_eq!(calls, ["close", "open", "prepare", "close"]);
+        assert_eq!(
+            helper_install_calls()[1].1,
+            Vec::<String>::new(),
+            "a bare open starts no runner"
+        );
+        assert_eq!(helper_install_calls()[2].1[0], "ios-runner");
+    }
+
+    /// A stand-in for agent-device that logs each call (with the runner settings it was started
+    /// with) and answers success. While its `held` file exists it plays a daemon whose device the
+    /// setup session still claims: everything but a `close` is refused `DEVICE_IN_USE`, as
+    /// agent-device refuses a session of the same daemon, until that session is closed.
+    #[cfg(unix)]
+    struct FakeAgentDevice {
+        dir: tempfile::TempDir,
+        driver: IosDriver,
+        /// Each fake its own device, since the device guard is shared by every driver in the process.
+        udid: String,
+    }
+
+    #[cfg(unix)]
+    impl FakeAgentDevice {
+        fn new() -> Self {
+            Self::build(false, false)
+        }
+
+        fn with_setup_held(held: bool) -> Self {
+            Self::build(held, false)
+        }
+
+        /// `prepare` never finishes (a first install takes minutes).
+        fn with_slow_prepare() -> Self {
+            Self::build(false, true)
+        }
+
+        fn build(held: bool, slow_prepare: bool) -> Self {
+            static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+            let udid = format!(
+                "00008110-0000FA4E{:08X}",
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("calls.log");
+            let held_file = dir.path().join("held");
+            if held {
+                std::fs::write(&held_file, "").unwrap();
+            }
+            let refusal = json!({"success": false, "error": {"code": "DEVICE_IN_USE",
+                "message": format!("Device is already in use by session \"{SETUP_SESSION}\"."),
+                "details": {"session": SETUP_SESSION, "deviceId": udid}}});
+            let script = dir.path().join("agent-device.sh");
+            std::fs::write(
+                &script,
+                format!(
+                    r#"#!/bin/sh
+printf '%s|%s|%s\n' "$AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS" "$AGENT_DEVICE_IOS_RUNNER_DETACH" "$*" >> '{log}'
+if [ "$1" = prepare ] && [ {slow} = 1 ]; then sleep 60; fi
+if [ -f '{held}' ]; then
+  case "$*" in
+    "close "*"--session {setup}"*) rm -f '{held}' ;;
+    "close "*) ;;
+    *) echo '{refusal}'; exit 1 ;;
+  esac
+fi
+echo '{{"success":true,"data":{{"message":"ok"}}}}'
+"#,
+                    log = log.display(),
+                    held = held_file.display(),
+                    setup = SETUP_SESSION,
+                    slow = u8::from(slow_prepare),
+                ),
+            )
+            .unwrap();
+            let driver = IosDriver::new(HostedDevice {
+                device_id: "dev_phone".into(),
+                os: DeviceOs::Ios,
+                name: "Test iPhone".into(),
+                address: Some(udid.clone()),
+                state_dir: dir.path().join("state"),
+                agent_device: vec!["/bin/sh".into(), script.to_string_lossy().into_owned()],
+            });
+            Self { dir, driver, udid }
+        }
+
+        /// Each call as `(command, --session value)`, checking the runner settings it carried.
+        fn calls(&self) -> Vec<(String, String)> {
+            let expect = |name: &str, default: &str| std::env::var(name).unwrap_or_else(|_| default.into());
+            let settings = format!(
+                "{}|{}|",
+                expect("AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS", "30000"),
+                expect("AGENT_DEVICE_IOS_RUNNER_DETACH", "0")
+            );
+            std::fs::read_to_string(self.dir.path().join("calls.log"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| {
+                    let argv = line
+                        .strip_prefix(&settings)
+                        .unwrap_or_else(|| panic!("{line:?} lacks {settings:?}"));
+                    let words: Vec<&str> = argv.split(' ').collect();
+                    let session = words
+                        .iter()
+                        .position(|w| *w == "--session")
+                        .map(|i| words[i + 1].to_owned())
+                        .unwrap_or_default();
+                    assert!(argv.contains(&format!("--platform ios --udid {}", self.udid)), "{argv}");
+                    (words[0].to_owned(), session)
+                })
+                .collect()
+        }
+
+        fn open_sessions(&self) -> BTreeMap<String, OpenSession> {
+            self.driver.inner.read_saved().sessions
+        }
+
+        async fn run(&self, session: &str, command: &'static str, args: &[&str]) -> Output {
+            let work = self
+                .dir
+                .path()
+                .join("work")
+                .join(uuid::Uuid::new_v4().simple().to_string());
+            let args = s(args);
+            self.driver
+                .run(Invocation {
+                    id: uuid::Uuid::new_v4(),
+                    session_id: session,
+                    command,
+                    args: &args,
+                    attachments: &[],
+                    workdir: &work,
+                    timeout: Duration::from_secs(30),
+                    cancel: extend_driver::cancel::CancelToken::new(),
+                })
+                .await
+        }
+    }
+
+    #[cfg(unix)]
+    fn call(command: &str, session: &str) -> (String, String) {
+        (command.to_owned(), session.to_owned())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_end_closes_its_agent_device_session() {
+        let fake = FakeAgentDevice::new();
+        assert!(fake.run("a1", "open", &["Settings"]).await.ok);
+        assert!(fake.run("a1", "snapshot", &["-i"]).await.ok);
+        assert!(fake.run("b2", "apps", &[]).await.ok);
+        let open = fake.open_sessions();
+        assert_eq!(open.keys().collect::<Vec<_>>(), ["extend-a1", "extend-b2"]);
+        assert!(open["extend-a1"].runner && !open["extend-b2"].runner);
+
+        fake.driver.session_ended("a1").await;
+        assert_eq!(fake.calls().last(), Some(&call("close", "extend-a1")));
+        assert_eq!(fake.open_sessions().keys().collect::<Vec<_>>(), ["extend-b2"]);
+
+        // The device is no longer carried (or the service has no session on it): every session
+        // this driver has open is closed.
+        assert!(fake.run("c3", "screenshot", &[]).await.ok);
+        fake.driver.session_ended("").await;
+        let calls = fake.calls();
+        let closes: Vec<_> = calls[calls.len() - 2..].to_vec();
+        assert_eq!(closes, [call("close", "extend-b2"), call("close", "extend-c3")]);
+        assert!(fake.open_sessions().is_empty());
+
+        // A session that ran nothing is still closed when it ends.
+        fake.driver.session_ended("d4").await;
+        assert_eq!(fake.calls().last(), Some(&call("close", "extend-d4")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_closes_the_session_prepare_ran_in() {
+        let fake = FakeAgentDevice::new();
+        fake.driver.inner.install_helper(&fake.udid).await.unwrap();
+        assert_eq!(
+            fake.calls(),
+            [
+                call("close", SETUP_SESSION),
+                call("open", SETUP_SESSION),
+                call("prepare", SETUP_SESSION),
+                call("close", SETUP_SESSION)
+            ]
+        );
+        // Setup leaves no session open, and none a Silicon's would have to wait for.
+        assert!(fake.open_sessions().is_empty());
+        assert!(!fake.driver.inner.read_saved().setup_open);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_whose_end_never_arrived_is_closed_once_it_has_certainly_ended() {
+        let fake = FakeAgentDevice::new();
+        assert!(fake.run("old", "snapshot", &[]).await.ok);
+        assert!(fake.run("new", "snapshot", &[]).await.ok);
+        let long_ago = now_ms() - STALE_SESSION_AFTER.as_millis() as u64 - 1_000;
+        fake.driver
+            .inner
+            .update_saved(|s| s.sessions.get_mut("extend-old").unwrap().last_used_ms = long_ago);
+        fake.driver.inner.tend().await;
+        assert_eq!(fake.calls().last(), Some(&call("close", "extend-old")));
+        assert_eq!(fake.open_sessions().keys().collect::<Vec<_>>(), ["extend-new"]);
+        // A live session is never closed by the backstop.
+        let before = fake.calls().len();
+        fake.driver.inner.tend().await;
+        assert_eq!(fake.calls().len(), before);
+        // A takeover starting or ending keeps a session no command has used from the backstop.
+        fake.driver
+            .inner
+            .update_saved(|s| s.sessions.get_mut("extend-new").unwrap().last_used_ms = long_ago);
+        fake.driver.session_active("new").await;
+        fake.driver.inner.tend().await;
+        assert_eq!(fake.calls().len(), before);
+        assert_eq!(fake.open_sessions().keys().collect::<Vec<_>>(), ["extend-new"]);
+        // …and never makes up a session that ran nothing.
+        fake.driver.session_active("never").await;
+        assert_eq!(fake.open_sessions().keys().collect::<Vec<_>>(), ["extend-new"]);
+    }
+
+    /// Extend stopped between the helper install's `open` and its final `close` (the Carbon quit
+    /// during a first install that takes minutes): the setup session still claims the device in
+    /// agent-device's daemon, which refuses every other session `DEVICE_IN_USE` and never idles out.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_setup_session_left_open_is_recovered() {
+        // A Silicon's command finds the device claimed by it: the setup session is closed and the
+        // command runs.
+        let fake = FakeAgentDevice::with_setup_held(true);
+        let out = fake.run("s1", "open", &["com.apple.Preferences"]).await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(
+            fake.calls(),
+            [
+                call("open", "extend-s1"),
+                call("close", SETUP_SESSION),
+                call("open", "extend-s1")
+            ]
+        );
+
+        // Extend stops in the middle of an install: the setup session is noted as open.
+        let fake = FakeAgentDevice::with_slow_prepare();
+        let install = fake.driver.inner.install_helper(&fake.udid);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), install).await.is_err(),
+            "prepare still running"
+        );
+        assert_eq!(
+            fake.calls(),
+            [
+                call("close", SETUP_SESSION),
+                call("open", SETUP_SESSION),
+                call("prepare", SETUP_SESSION)
+            ]
+        );
+        assert!(fake.driver.inner.read_saved().setup_open);
+
+        // Found before any command (the next launch, say): the look after the device closes it.
+        let fake = FakeAgentDevice::with_setup_held(true);
+        fake.driver.inner.update_saved(|s| s.setup_open = true);
+        fake.driver.inner.tend().await;
+        assert_eq!(fake.calls(), [call("close", SETUP_SESSION)]);
+        assert!(!fake.driver.inner.read_saved().setup_open);
+        assert!(fake.run("s2", "snapshot", &[]).await.ok);
+        // Closed once: the next look has nothing to close.
+        let before = fake.calls().len();
+        fake.driver.inner.tend().await;
+        assert_eq!(fake.calls().len(), before);
+    }
+
+    /// "Automation Running" leaves the device soon after the Silicon's last action, on a real iOS
+    /// Simulator: the runner runs while a session reads and touches the screen; the driver's own
+    /// look after the device (in the background, as in the app; no probe) stops it once no command
+    /// has used it for a minute, and the session's next command starts it again with the session's
+    /// app still bound; a session's end stops it at once; runner-free commands start none; a session
+    /// that ends while agent-device is still starting the runner (an `open` and nothing else) leaves
+    /// none behind and none comes back; installing the helper leaves none. A monitor prints every
+    /// change of this Simulator's runner processes (`build` = agent-device building the runner,
+    /// `xcodebuild` = the runner, `app` = the runner app inside the Simulator). Run it with an
+    /// agent-device state of its own, so it never shares a daemon with the Extend app:
+    /// `EXTEND_HOSTED_ALLOW_SIMULATOR=1 EXTEND_HOSTED_SIM_UDID=<udid> AGENT_DEVICE_STATE_DIR=<dir>
+    /// AGENT_DEVICE_IOS_RUNNER_LEASE_DIR=<dir>/leases AGENT_DEVICE_CLAIMS_DIR=<dir>/claims
+    /// cargo test -p extend-hosted -- --ignored --nocapture simulator_runner` (about 7 minutes).
+    #[tokio::test]
+    #[ignore = "needs an iOS Simulator and a built agent-device"]
+    async fn simulator_runner_lifecycle() {
+        use extend_driver::cancel::CancelToken;
+        let udid = std::env::var("EXTEND_HOSTED_SIM_UDID").expect("set EXTEND_HOSTED_SIM_UDID");
+        assert!(simulators_allowed(), "set {SIMULATOR_ENV}=1");
+        assert!(
+            std::env::var_os("AGENT_DEVICE_STATE_DIR").is_some(),
+            "set AGENT_DEVICE_STATE_DIR so the test has a daemon of its own"
+        );
+        let agent_device: Vec<String> = match std::env::var("EXTEND_HOSTED_AGENT_DEVICE") {
+            Ok(v) => v.split_whitespace().map(str::to_owned).collect(),
+            Err(_) => vec![
+                "node".into(),
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../vendor/agent-device/bin/agent-device.mjs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        };
+        let t0 = Instant::now();
+        let at = move || format!("+{:.1}s", t0.elapsed().as_secs_f64());
+        // Every change of this Simulator's runner processes, and when the last one was seen.
+        let last_seen: Arc<Mutex<Option<Instant>>> = Arc::default();
+        {
+            let (udid, last_seen) = (udid.clone(), last_seen.clone());
+            tokio::spawn(async move {
+                let mut last = String::from("?");
+                loop {
+                    let procs = processes().await.unwrap_or_default();
+                    let mut now: Vec<String> = procs
+                        .iter()
+                        .filter_map(|p| {
+                            let kind = if is_runner_build_for(&p.command, &udid) {
+                                "build"
+                            } else if is_runner_for(&p.command, &udid) {
+                                "xcodebuild"
+                            } else if is_simulator_runner_app_for(&p.command, &udid) {
+                                "app"
+                            } else {
+                                return None;
+                            };
+                            Some(format!("{kind} {}", p.pid))
+                        })
+                        .collect();
+                    now.sort();
+                    let now = now.join(", ");
+                    if !now.is_empty() {
+                        *last_seen.lock().unwrap() = Some(Instant::now());
+                    }
+                    if now != last {
+                        println!("[monitor {}] {}", at(), if now.is_empty() { "none" } else { &now });
+                        last = now;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            });
+        }
+        let state = tempfile::tempdir().unwrap();
+        let d = IosDriver::new(HostedDevice {
+            device_id: "dev_sim".into(),
+            os: DeviceOs::Ios,
+            name: "Simulator".into(),
+            address: Some(udid.clone()),
+            state_dir: state.path().to_path_buf(),
+            agent_device,
+        });
+        let p = d.probe().await;
+        assert!(
+            p.online && p.setup.state == extend_protocol::model::SetupState::Complete,
+            "{p:?}"
+        );
+        let work = state.path().join("work");
+        let run = |session: String, command: &'static str, args: Vec<String>| {
+            let d = &d;
+            let work = work.join(uuid::Uuid::new_v4().simple().to_string());
+            async move {
+                std::fs::create_dir_all(&work).unwrap();
+                let t = Instant::now();
+                let out = d
+                    .run(Invocation {
+                        id: uuid::Uuid::new_v4(),
+                        session_id: &session,
+                        command,
+                        args: &args,
+                        attachments: &[],
+                        workdir: &work,
+                        timeout: Duration::from_secs(600),
+                        cancel: CancelToken::new(),
+                    })
+                    .await;
+                println!(
+                    "[{}] $ {command} {}  ({} ms, ok={}) {}",
+                    at(),
+                    args.join(" "),
+                    t.elapsed().as_millis(),
+                    out.ok,
+                    out.text.clone().unwrap_or_default().lines().next().unwrap_or_default()
+                );
+                out
+            }
+        };
+        let runners = || async { runner_pids(&udid).await.len() };
+        // Waits up to `limit` for no runner; returns how long that took.
+        let gone_within = |limit: Duration| {
+            let udid = udid.clone();
+            async move {
+                let t = Instant::now();
+                while !runner_pids(&udid).await.is_empty() {
+                    if t.elapsed() > limit {
+                        return None;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                Some(t.elapsed())
+            }
+        };
+        // Whatever an earlier run left goes first (the driver's look after the device).
+        assert!(
+            gone_within(Duration::from_secs(150)).await.is_some(),
+            "a runner an earlier run left is stopped"
+        );
+        println!("[{}] no runner to start with", at());
+
+        // 1. A session that reads and touches the screen runs the runner.
+        let a = format!("rl{}", std::process::id());
+        assert!(
+            run(a.clone(), "open", s(&["com.apple.Preferences", "--relaunch"]))
+                .await
+                .ok
+        );
+        assert!(run(a.clone(), "snapshot", s(&["-i"])).await.ok);
+        // A touch (Settings reopens on whatever page it was left on; a scroll works on any).
+        assert!(run(a.clone(), "scroll", s(&["down"])).await.ok);
+        assert!(run(a.clone(), "snapshot", s(&["-i"])).await.ok);
+        println!("[{}] during the session: {} runner process(es)", at(), runners().await);
+        assert!(runners().await > 0, "the session's runner runs");
+
+        // 2. No command for a minute: the runner goes though the session is live, and the session's
+        // next command starts it again, with its app still bound.
+        let idle = gone_within(RUNNER_IDLE_STOP + TEND_EVERY + Duration::from_secs(15)).await;
+        println!("[{}] runner gone {idle:?} after the last command", at());
+        let idle = idle.expect("the runner stops once no command has used it for a minute");
+        assert!(idle >= RUNNER_IDLE_STOP - Duration::from_secs(1), "{idle:?}");
+        assert!(d.inner.read_saved().sessions.contains_key(&session_name(&a)));
+        let out = run(a.clone(), "scroll", s(&["up"])).await;
+        assert!(out.ok, "{out:?}");
+        let out = run(a.clone(), "snapshot", s(&["-i"])).await;
+        assert!(out.ok, "{out:?}");
+        assert!(
+            out.text.unwrap_or_default().contains("App: com.apple.Preferences"),
+            "the session kept its app"
+        );
+
+        // 3. Its end closes the agent-device session, and the runner goes with it.
+        let t = Instant::now();
+        d.session_ended(&a).await;
+        println!("[{}] session_ended took {} ms", at(), t.elapsed().as_millis());
+        assert_eq!(runners().await, 0, "no runner once the session ended");
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(runners().await, 0, "and none comes back");
+
+        // 4. Runner-free commands start none. (`screenshot` needs an agent-device session; a bare
+        // `open` makes one without launching anything.)
+        let b = format!("rf{}", std::process::id());
+        for (command, args) in [("apps", s(&[])), ("open", s(&[])), ("screenshot", s(&["home"]))] {
+            assert_eq!(runner_use(command, &args), RunnerUse::Free);
+            assert!(run(b.clone(), command, args).await.ok);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(runners().await, 0, "runner-free commands start no runner");
+        d.session_ended(&b).await;
+
+        // 5. A session that opens an app and ends at once, while agent-device is still starting the
+        // runner the `open` warms: the start is never cut short (agent-device would build and start
+        // another with no session), the runner goes once started, and none comes back.
+        let c = format!("qe{}", std::process::id());
+        assert!(run(c.clone(), "open", s(&["com.apple.Preferences"])).await.ok);
+        let t = Instant::now();
+        d.session_ended(&c).await;
+        println!(
+            "[{}] quick session ended ({} ms): {} runner process(es)",
+            at(),
+            t.elapsed().as_millis(),
+            runners().await
+        );
+        let ended = Instant::now();
+        tokio::time::sleep(Duration::from_secs(150)).await;
+        let last = (*last_seen.lock().unwrap()).filter(|t| *t > ended);
+        let last = last.map(|t| t.duration_since(ended));
+        println!(
+            "[{}] after the quick session: runner last seen {last:?} after its end",
+            at()
+        );
+        assert_eq!(runners().await, 0, "no runner is left behind");
+        assert!(
+            last.is_none_or(|l| l < Duration::from_secs(90)),
+            "the runner goes within 90 s of the end, and none comes back: {last:?}"
+        );
+
+        // 6. Installing the helper proves it with the runner, then leaves none.
+        let t = Instant::now();
+        let installed = d.inner.install_helper(&udid).await;
+        println!(
+            "[{}] helper install: {installed:?} ({} ms)",
+            at(),
+            t.elapsed().as_millis()
+        );
+        assert!(installed.is_ok(), "{installed:?}");
+        let gone = gone_within(Duration::from_secs(60)).await;
+        println!("[{}] runner gone {gone:?} after the helper install", at());
+        assert!(gone.is_some(), "the helper install leaves no runner");
+        assert!(!d.inner.read_saved().setup_open);
     }
 
     #[test]

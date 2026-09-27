@@ -108,6 +108,8 @@ pub trait Driver: Send + Sync {
     /// agent-device session, stop a recording that was left running).
     async fn session_started(&self, _session_id: &str) {}
     async fn session_ended(&self, _session_id: &str) {}
+    /// The session is still live though no command runs: a takeover started or ended.
+    async fn session_active(&self, _session_id: &str) {}
 
     /// A code the Carbon entered on the website during setup (Apple TV).
     async fn setup_code(&self, _code: &str) -> Result<(), String> {

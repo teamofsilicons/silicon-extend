@@ -399,6 +399,10 @@ async fn start_with(paired: bool, closes: &[u16]) -> Harness {
 }
 
 async fn start_inner(paired: bool, closes: &[u16], held: bool) -> Harness {
+    start_hosting(paired, closes, held, Arc::new(|_d| Ok(Box::new(Tv) as Box<dyn Driver>))).await
+}
+
+async fn start_hosting(paired: bool, closes: &[u16], held: bool, factory: DriverFactory) -> Harness {
     let (fake, addr) = start_fake().await;
     fake.0.lock().unwrap().next_device_close.extend(closes.iter().copied());
     let dir = tempfile::tempdir().unwrap();
@@ -416,7 +420,6 @@ async fn start_inner(paired: bool, closes: &[u16], held: bool) -> Harness {
     }
     let computer = Arc::new(FakeComputer::default());
     computer.held.store(held, std::sync::atomic::Ordering::SeqCst);
-    let factory: DriverFactory = Arc::new(|_d| Ok(Box::new(Tv) as Box<dyn Driver>));
     let (agent, handle) = Agent::new(AgentDeps {
         config,
         local: computer.clone(),
@@ -984,4 +987,139 @@ async fn locking_and_unlocking_the_screen_is_reported_at_once() {
     );
     h.handle.shutdown.cancel();
     let _ = h.task.await;
+}
+
+/// A carried TV that notes each session end it is told about, by device (and each note that a
+/// session is live though no command runs).
+struct EndsTv {
+    device: String,
+    ends: Arc<Mutex<Vec<(String, String)>>>,
+    actives: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+#[async_trait]
+impl Driver for EndsTv {
+    async fn probe(&self) -> Probe {
+        Tv.probe().await
+    }
+    async fn run(&self, inv: Invocation<'_>) -> Output {
+        Tv.run(inv).await
+    }
+    async fn session_ended(&self, session_id: &str) {
+        self.ends
+            .lock()
+            .unwrap()
+            .push((self.device.clone(), session_id.to_owned()));
+    }
+    async fn session_active(&self, session_id: &str) {
+        self.actives
+            .lock()
+            .unwrap()
+            .push((self.device.clone(), session_id.to_owned()));
+    }
+}
+
+#[tokio::test]
+async fn sessions_that_ended_while_away_are_ended_on_the_devices_carried() {
+    let ends: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let actives: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let (log, active_log) = (ends.clone(), actives.clone());
+    let factory: DriverFactory = Arc::new(move |d| {
+        Ok(Box::new(EndsTv {
+            device: d.device_id.clone(),
+            ends: log.clone(),
+            actives: active_log.clone(),
+        }) as Box<dyn Driver>)
+    });
+    let h = start_hosting(true, &[], false, factory).await;
+    let fake = h.fake.clone();
+    let ended = |device: &str| -> Vec<String> {
+        ends.lock()
+            .unwrap()
+            .iter()
+            .filter(|(d, _)| d == device)
+            .map(|(_, s)| s.clone())
+            .collect()
+    };
+    let in_use = |device: &str| -> Option<String> {
+        h.handle
+            .status
+            .get()
+            .attached
+            .iter()
+            .find(|a| a.device_id == device)
+            .and_then(|a| a.in_use.as_ref().map(|u| u.session_id.clone()))
+    };
+    // The service's greeting: two carried TVs, each with a live session, then its first ping.
+    let greet = |sessions: &[(&str, &str)]| {
+        for d in ["0000aaaa", "0000bbbb"] {
+            fake.send(json!({"type":"attach","device_id":d,"os":"samsung_tv","name":d,"address":"10.0.0.5"}));
+            for (device, session) in sessions {
+                if *device == d {
+                    fake.send(json!({"type":"session_started","target":d,"session_id":session,"silicon_id":"si:chef","since":"2026-09-27T10:00:00Z"}));
+                }
+            }
+        }
+        fake.send(json!({"type":"ping","nonce":1}));
+    };
+    eventually("hello", || frame_of(&fake, "hello", 0)).await;
+    greet(&[("0000aaaa", "a1f"), ("0000bbbb", "b2e")]);
+    eventually("both in use", || {
+        (in_use("0000aaaa").is_some() && in_use("0000bbbb").is_some()).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(ends.lock().unwrap().is_empty(), "announced sessions are left alone");
+
+    // Away for a while: the service ended a1f meanwhile, so its greeting announces only b2e.
+    fake.send(json!("__drop"));
+    eventually("reconnected", || frame_of(&fake, "hello", 1)).await;
+    eventually("socket", || {
+        (fake.count(|s| matches!(s, Seen::DeviceSocket { .. })) == 2).then_some(())
+    })
+    .await;
+    greet(&[("0000bbbb", "b2e")]);
+    eventually("a1f ended on its TV", || {
+        (ended("0000aaaa") == ["a1f", ""]).then_some(())
+    })
+    .await;
+    assert_eq!(in_use("0000aaaa"), None);
+    assert_eq!(in_use("0000bbbb").as_deref(), Some("b2e"));
+    assert!(ended("0000bbbb").is_empty());
+
+    // A takeover's start and end tell the device's driver its session is still live.
+    fake.send(json!({"type":"takeover","target":"0000bbbb","session_id":"b2e","reason":"Face ID","expires_at":"2026-09-27T10:30:00Z"}));
+    fake.send(json!({"type":"takeover_ended","target":"0000bbbb","session_id":"b2e"}));
+    eventually("takeover noted", || (actives.lock().unwrap().len() == 2).then_some(())).await;
+    assert_eq!(
+        *actives.lock().unwrap(),
+        [
+            ("0000bbbb".to_owned(), "b2e".to_owned()),
+            ("0000bbbb".to_owned(), "b2e".to_owned())
+        ]
+    );
+
+    // A greeting that attaches no device (the service couldn't read them) ends nothing.
+    fake.send(json!("__drop"));
+    eventually("reconnected again", || frame_of(&fake, "hello", 2)).await;
+    eventually("third socket", || {
+        (fake.count(|s| matches!(s, Seen::DeviceSocket { .. })) == 3).then_some(())
+    })
+    .await;
+    let pongs = || fake.count(|s| matches!(s, Seen::Frame(f) if f["type"] == "pong"));
+    let before = pongs();
+    fake.send(json!({"type":"ping","nonce":1}));
+    fake.send(json!({"type":"ping","nonce":2}));
+    eventually("pongs", || (pongs() >= before + 2).then_some(())).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(ended("0000bbbb").is_empty());
+    assert_eq!(in_use("0000bbbb").as_deref(), Some("b2e"));
+
+    // Quitting closes the carried device's live session too.
+    h.handle.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(15), h.task)
+        .await
+        .expect("agent stops")
+        .unwrap();
+    assert_eq!(ended("0000bbbb"), ["b2e"]);
 }

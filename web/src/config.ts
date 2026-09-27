@@ -266,7 +266,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo:
       "Open any app, see the screen, tap, type, swipe, scroll, and take screenshots and recordings.",
     goodToKnow:
-      "The iPhone must be near its Mac (same Wi-Fi or plugged in), awake and unlocked. A Silicon can't approve payments or Face ID.",
+      "The iPhone must be near its Mac (same Wi-Fi or plugged in), awake and unlocked. A Silicon can't approve payments or Face ID. The iPhone shows “Automation Running” while Extend sets it up and while a Silicon is working on it (Apple shows that on every automated iPhone). It goes away when the Silicon's session ends, or about a minute after its last action.",
   },
   {
     id: "ipad",
@@ -289,7 +289,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo:
       "Open any app, see the screen, tap, type, swipe, scroll, and take screenshots and recordings.",
     goodToKnow:
-      "The iPad must be near its Mac (same Wi-Fi or plugged in), awake and unlocked. A Silicon can't approve payments or Face ID.",
+      "The iPad must be near its Mac (same Wi-Fi or plugged in), awake and unlocked. A Silicon can't approve payments or Face ID. The iPad shows “Automation Running” while Extend sets it up and while a Silicon is working on it (Apple shows that on every automated iPad). It goes away when the Silicon's session ends, or about a minute after its last action.",
   },
   {
     id: "apple_tv",

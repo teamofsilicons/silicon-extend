@@ -713,14 +713,19 @@ impl Ui {
 
     fn quit(&mut self, control_flow: &mut ControlFlow) {
         self.handle.shutdown.cancel();
+        // Gone from the screen at once; then the agent gets the time it gives its cleanups
+        // (closing the agent-device sessions still open: an iPhone keeps showing "Automation
+        // Running" until its session is closed), and its runtime a moment to wind down.
+        self.tray = None;
+        for (window, _) in self.main.iter().chain(self.banner.iter()) {
+            window.set_visible(false);
+        }
         if let Some(t) = self.agent_thread.take() {
-            // Give the agent a moment to close its socket and agent-device sessions.
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + crate::agent::QUIT_CLEANUP_LIMIT + Duration::from_secs(4);
             while !t.is_finished() && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        self.tray = None;
         *control_flow = ControlFlow::Exit;
     }
 }

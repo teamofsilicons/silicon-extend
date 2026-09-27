@@ -1,6 +1,7 @@
 //! The agent: pairs the computer, keeps its device socket open, runs commands, and keeps the
 //! status the tray, window and `status` command show (`docs/device-protocol.md`).
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -48,6 +49,10 @@ pub type ScreenWatch = Arc<dyn Fn() -> Option<ScreenBlock> + Send + Sync>;
 /// How often the agent asks [`ScreenWatch`] whether the screen was locked or unlocked.
 pub const SCREEN_WATCH_EVERY: Duration = Duration::from_secs(3);
 
+/// How long the agent gives its cleanups when it stops (closing the sessions still open, an
+/// iPhone's included). The UI waits a little longer than this before the app exits.
+pub const QUIT_CLEANUP_LIMIT: Duration = Duration::from_secs(10);
+
 pub struct AgentDeps {
     pub config: Config,
     pub local: Arc<dyn Driver>,
@@ -86,6 +91,15 @@ pub struct Agent {
     /// the screen was locked or unlocked).
     reprobe: Arc<tokio::sync::Notify>,
     screen_watch: Option<ScreenWatch>,
+}
+
+/// What the service's greeting of a connection said about the devices this computer carries.
+#[derive(Default)]
+struct Greeting {
+    /// Devices it attached again.
+    attached: HashSet<DeviceId>,
+    /// Devices it announced a live session for.
+    announced: HashSet<DeviceId>,
 }
 
 /// How a paired stretch ended.
@@ -273,16 +287,12 @@ impl Agent {
             }
         }
         // Leave the computer tidy: stop what is still running, then close agent-device sessions
-        // that were open, each after its device's running command has wound down.
-        let known: Vec<(Option<DeviceId>, String)> = self
-            .status
-            .get()
-            .in_use
-            .map(|u| (None, u.session_id))
-            .into_iter()
-            .collect();
+        // that were open (this computer's and those of the devices it carries: an iPhone shows
+        // "Automation Running" until its session is closed), each after its device's running
+        // command has wound down.
+        let known = self.sessions_in_use();
         let cleanups = self.dispatcher.close_all(&known);
-        let _ = tokio::time::timeout(Duration::from_secs(10), futures::future::join_all(cleanups)).await;
+        let _ = tokio::time::timeout(QUIT_CLEANUP_LIMIT, futures::future::join_all(cleanups)).await;
     }
 
     /// Waits for `Reconnect`, `d`, or shutdown. True on shutdown.
@@ -370,14 +380,8 @@ impl Agent {
         }
     }
 
-    async fn forget_pair(&mut self) {
-        if let Err(e) = self.credentials.clear() {
-            tracing::error!("couldn't remove the device credential: {e:#}");
-        }
-        *self.credential.write().unwrap() = None;
-        // Every Silicon's access ends now: running and queued commands are cancelled, and each
-        // session is cleaned up on its device's queue after its command has wound down (the
-        // service's own `session_ended` frames may never be read on this path).
+    /// The sessions the service last said are live: this computer's and each carried device's.
+    fn sessions_in_use(&self) -> Vec<(Option<DeviceId>, String)> {
         let mut known: Vec<(Option<DeviceId>, String)> = self
             .status
             .get()
@@ -390,6 +394,49 @@ impl Agent {
                 known.push((Some(id), u.session_id));
             }
         }
+        known
+    }
+
+    /// The service greets every connection with the devices this computer carries (an `attach`
+    /// each) and each one's live session (a `session_started` right after its `attach`). A device
+    /// the greeting attached again without a session has none: a session this computer still
+    /// counts was ended while it was away (its `session_ended` never came), and the device's
+    /// driver is told to end whatever it still has open. A carried device the greeting didn't
+    /// attach again says nothing (the service may have failed to read its devices), so it is left
+    /// as it is.
+    fn end_sessions_not_announced(&self, greeting: &Greeting) {
+        for info in self.hosted.infos() {
+            let Ok(id) = info.device_id.parse::<DeviceId>() else {
+                continue;
+            };
+            if !greeting.attached.contains(&id) || greeting.announced.contains(&id) {
+                continue;
+            }
+            if let Some(u) = &info.in_use {
+                tracing::info!(
+                    "session {} on {} ended while this computer was away",
+                    u.session_id,
+                    info.device_id
+                );
+                let _ = self.dispatcher.session_closed(Some(&id), &u.session_id);
+                self.hosted.set_in_use(&id, None);
+            }
+            if self.hosted.driver(&id).is_ok() {
+                let _ = self.dispatcher.no_session_on(&id);
+            }
+        }
+        self.sync_attached_status();
+    }
+
+    async fn forget_pair(&mut self) {
+        if let Err(e) = self.credentials.clear() {
+            tracing::error!("couldn't remove the device credential: {e:#}");
+        }
+        *self.credential.write().unwrap() = None;
+        // Every Silicon's access ends now: running and queued commands are cancelled, and each
+        // session is cleaned up on its device's queue after its command has wound down (the
+        // service's own `session_ended` frames may never be read on this path).
+        let known = self.sessions_in_use();
         let _ = self.dispatcher.close_all(&known);
         for id in self.hosted.ids() {
             self.hosted.remove(&id);
@@ -541,6 +588,8 @@ impl Agent {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let idle = Duration::from_secs(extend_protocol::OFFLINE_AFTER_S + 15);
         let mut last_heard = Instant::now();
+        // What the service's greeting has said about the carried devices, until it ends.
+        let mut greeting: Option<Greeting> = Some(Greeting::default());
 
         loop {
             let deadline = last_heard + idle;
@@ -555,6 +604,22 @@ impl Agent {
                     match msg {
                         Message::Text(text) => match serde_json::from_str::<ServiceFrame>(&text) {
                             Ok(frame) => {
+                                // The greeting is over at the first ping, which the service sends
+                                // only once it has announced every carried device's live session.
+                                match (&frame, greeting.as_mut()) {
+                                    (ServiceFrame::Attach { device_id, removed: false, .. }, Some(g)) => {
+                                        g.attached.insert(device_id.clone());
+                                    }
+                                    (ServiceFrame::SessionStarted { target: Some(id), .. }, Some(g)) => {
+                                        g.announced.insert(id.clone());
+                                    }
+                                    (ServiceFrame::Ping { .. }, Some(_)) => {
+                                        if let Some(g) = greeting.take() {
+                                            self.end_sessions_not_announced(&g);
+                                        }
+                                    }
+                                    _ => {}
+                                }
                                 if let Some(end) = self.handle_frame(frame, &tx, stored).await {
                                     let _ = sink.send(Message::Close(None)).await;
                                     return ConnEnd::Paired(end);
@@ -733,14 +798,16 @@ impl Agent {
                     Some(id) => {
                         self.hosted.set_takeover(&id, Some(info));
                         self.sync_attached_status();
+                        self.session_active(&id, session_id.as_str());
                     }
                 }
             }
-            ServiceFrame::TakeoverEnded { target, .. } => match target {
+            ServiceFrame::TakeoverEnded { target, session_id } => match target {
                 None => self.status.update(|s| s.takeover = None),
                 Some(id) => {
                     self.hosted.set_takeover(&id, None);
                     self.sync_attached_status();
+                    self.session_active(&id, session_id.as_str());
                 }
             },
             ServiceFrame::Refresh => {
@@ -800,6 +867,15 @@ impl Agent {
             }
         }
         None
+    }
+
+    /// Tells a carried device's driver its session is live though no command runs (a takeover
+    /// started or ended), so it doesn't take the session for one whose end never arrived.
+    fn session_active(&self, target: &DeviceId, session_id: &str) {
+        if let Ok(driver) = self.hosted.driver(target) {
+            let session_id = session_id.to_owned();
+            tokio::spawn(async move { driver.session_active(&session_id).await });
+        }
     }
 
     /// Checks this computer again once a session's setup or cleanup has run. Releasing this

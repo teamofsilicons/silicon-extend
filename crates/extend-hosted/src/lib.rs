@@ -48,7 +48,8 @@ pub struct HostedDevice {
 /// Builds the driver for a hosted device. Errors say exactly why (wrong host OS, missing helper).
 ///
 /// Construction does no I/O and needs no async runtime; drivers connect lazily on the first
-/// `probe` or `run`.
+/// `probe` or `run`. Built inside a tokio runtime, an iPhone's or iPad's driver also starts looking
+/// after its device's XCTest runner every 20 s until it is dropped.
 pub fn driver_for(device: HostedDevice) -> Result<Box<dyn Driver>, String> {
     match device.os {
         DeviceOs::Ios | DeviceOs::Ipados => ios::driver(device),

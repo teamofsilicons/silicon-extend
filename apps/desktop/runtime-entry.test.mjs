@@ -32,7 +32,9 @@ const given = at === -1 ? process.env.AGENT_DEVICE_STATE_DIR : flags[at + 1];
 // Like agent-device, ~ is the home directory (else "~/x" would be created under the working directory).
 const dir = given.startsWith('~/') ? path.join(os.homedir(), given.slice(2)) : given;
 mkdirSync(dir, { recursive: true });
-appendFileSync(path.join(dir, 'calls.log'), JSON.stringify({ root, args }) + '\n');
+// And the runner settings this call would start a daemon with.
+const runner = { idleStopMs: process.env.AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS ?? null, detach: process.env.AGENT_DEVICE_IOS_RUNNER_DETACH ?? null };
+appendFileSync(path.join(dir, 'calls.log'), JSON.stringify({ root, args, runner }) + '\n');
 const infoPath = path.join(dir, 'daemon.json');
 const release = (v) => v.split('+')[0].split('.').map(Number);
 const newer = (a, b) => { const x = release(a), y = release(b); for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
@@ -337,6 +339,21 @@ for (const [label, args] of [
     assert.equal(recorded(state), realpathSync(root));
   });
 }
+
+test('agent-device gets the runner defaults, and a value already in the environment wins', (t) => {
+  const { root, state } = install(t);
+  ok(run(root, ['snapshot', '--json'], { state }));
+  ok(run(root, ['snapshot', '--json'], { state, viaStdin: true }));
+  ok(run(root, ['snapshot', '--json'], {
+    state,
+    env: { AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS: '0', AGENT_DEVICE_IOS_RUNNER_DETACH: '1' },
+  }));
+  assert.deepEqual(calls(state).map((call) => call.runner), [
+    { idleStopMs: '30000', detach: '0' },
+    { idleStopMs: '30000', detach: '0' },
+    { idleStopMs: '0', detach: '1' },
+  ]);
+});
 
 test('a runtime whose manifest has no version is handed to agent-device unchecked', (t) => {
   const { root, state } = install(t);

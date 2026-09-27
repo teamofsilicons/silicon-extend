@@ -344,6 +344,13 @@ impl Dispatcher {
         done
     }
 
+    /// Tells a device's driver that no session is live on it (`session_ended` with an empty id), in
+    /// order after whatever that device's queue holds: the service had no session there when this
+    /// computer came back, so any session the driver still has open ended while it was away.
+    pub fn no_session_on(&self, target: &DeviceId) -> Option<oneshot::Receiver<()>> {
+        self.queue_lifecycle(Some(target), "", false)
+    }
+
     fn queue_lifecycle(
         &self,
         target: Option<&DeviceId>,
