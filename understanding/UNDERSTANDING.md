@@ -67,14 +67,16 @@ The Carbon signs in at `extend.teamofsilicons.com` with Silicon IAm. Devices bel
 2. Open the app, which shows a pairing code.
 3. Enter the pairing code on the website.
 4. Name the device.
-5. Finish the device's own setup (turning on debugging, allowing permissions), with each step explained.
-6. Choose which Silicons get access. This can be skipped and done later.
+5. Choose whether the device shows a banner while a Silicon is using it. It is on by default, can be turned off here, and can be changed later.
+6. Finish the device's own setup (turning on debugging, allowing permissions), with each step explained.
+7. Choose which Silicons get access. This can be skipped and done later.
 
 **A device's page:**
 
 - rename the device
 - see which Silicons have access, give access to more (from any org the Carbon is a member of), or take it away
 - see which Silicon is using it right now and since when, and stop it
+- show or hide what the device itself shows while a Silicon is using it (badge, banner, notification or icon)
 - set how long the device stays paired without activity, from 1 to 30 days (14 by default)
 - see the activity log: every action, which Silicon did it, and when
 - see the requests Silicons have sent each other for this device, and the requests to wake it, with their reasons
@@ -85,9 +87,9 @@ The Carbon signs in at `extend.teamofsilicons.com` with Silicon IAm. Devices bel
 Every Extend app works the same way, whatever the device:
 
 1. **Before pairing** it shows a pairing code, and never asks the Carbon to log in.
-2. **During setup** it walks the Carbon through what that device needs, one step at a time.
+2. **During setup** it walks the Carbon through what that device needs, one step at a time, and asks whether to show a banner while a Silicon is using the device (on by default).
 3. **Once paired** it shows the device's name, the Carbons it is paired to, and whether a Silicon is using it right now.
-4. **While a Silicon is using the device** it shows which Silicon it is, with a button to stop it.
+4. **While a Silicon is using the device** it shows which Silicon it is, with a button to stop it, and a switch to hide everything else the device shows while a Silicon uses it.
 5. **When a Silicon asks to wake the device** it shows a notification with the Silicon's name and reason, wherever the device can show one.
 6. **Pair with another Carbon** shows a new pairing code, so another Carbon can pair the same device to their own account.
 7. **Revoke pair** is the only other option. It is chosen for one Carbon at a time: it removes the device from that Carbon's account and ends access for that Carbon's Silicons. (Danger action, prompt for confirmation)
@@ -159,6 +161,8 @@ Devices that can't run the Extend app (iPhone, iPad, Apple TV and other smart TV
 
 While a Silicon is using a device, the device shows which Silicon it is, and the Carbon can stop it with one tap, on the device or on the website. Stopping ends the session straight away. When several Carbons have paired the device, any of them can stop the Silicon using it, because it is their device too.
 
+On the device this is a small badge, banner, notification or icon, kept out of the way. On every kind of device it shows for 10 seconds when a Silicon starts using the device, then hides by itself; only a small icon change, where the device has one, stays for the whole session. When a Silicon is waiting for the Carbon, it stays until the Carbon answers. Any Carbon who paired a device can hide it entirely, on every kind of device, in the device's Extend app or on the website, and show it again the same way. Hidden, the device shows nothing while a Silicon uses it: no badge, banner, in-use notification or icon change. The Extend app and the website still show which Silicon is using the device, with Stop. Two things stay because the device's maker requires them: on Android phones, the quiet notification Android shows for any app that keeps running (it doesn't name the Silicon), and on iPhones and iPads, Apple's "Automation Running" banner while the Silicon is working.
+
 Every action is logged, and each Carbon can see the log of their own Silicons on their devices on the website.
 
 ### Files
@@ -184,7 +188,7 @@ The `extend` CLI gives the Silicon the Briefcase link to each file it makes.
 
 **How it works:** the app keeps the device connected to Extend. When a Silicon sends a command, the app carries it out on the device through Android debugging. The first time a Silicon uses the device, Silicon Extend's small helper apps for reading the screen and typing are installed on it.
 
-**While in use:** a notification says which Silicon is using the device, with a Stop button.
+**While in use:** a notification says which Silicon is using the device, with a Stop button, for 10 seconds, unless a Carbon hid it.
 
 **A Silicon can:** open any app, see the screen, tap, type, scroll, swipe, press back, home and recent apps, read notifications, install apps, take screenshots and recordings, read device logs, and use Android debugging.
 
@@ -206,7 +210,7 @@ This also covers Fire TVs that run Fire OS.
 
 **Showing things on the TV:** the app has a full screen display. A Silicon can put a link, an image, a video or text on it. It stays on screen until the Silicon clears it or someone presses back on the remote.
 
-**While in use:** a small badge in the corner of the screen says which Silicon is using the TV. It can be stopped from the Extend TV app or from the website.
+**While in use:** a small badge at the bottom centre of the screen says which Silicon is using the TV, unless a Carbon hid it. Like on every device, it shows for 10 seconds, then hides by itself. The Silicon can be stopped from the Extend TV app or from the website.
 
 **A Silicon can:** open any app, press any remote button, see the screen, install apps, take screenshots, read device logs, use Android debugging, and show anything on the screen.
 
@@ -221,7 +225,7 @@ This also covers Fire TVs that run Fire OS.
 
 **How it works:** the app keeps the Mac connected to Extend and carries out a Silicon's commands on the Mac.
 
-**While in use:** the menu bar icon changes and a banner says which Silicon is using the Mac, with a Stop button in the menu.
+**While in use:** a banner says which Silicon is using the Mac for 10 seconds, and the menu bar icon stays changed for the whole session, with a Stop button in the menu. A Carbon can hide both.
 
 **A Silicon can:** open any app, see and use any window, menus and the menu bar, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.
 
@@ -238,7 +242,7 @@ This also covers Fire TVs that run Fire OS.
 
 **How it works:** the same as the Mac.
 
-**While in use:** the tray icon changes and a banner says which Silicon is using the computer, with a Stop button.
+**While in use:** a banner says which Silicon is using the computer for 10 seconds, and the tray icon stays changed for the whole session, with a Stop button. A Carbon can hide both.
 
 **A Silicon can:** open any app, see and use any window, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.
 
@@ -255,7 +259,7 @@ This also covers Fire TVs that run Fire OS.
 
 **How it works:** the same as the Mac.
 
-**While in use:** a banner says which Silicon is using the computer, with a Stop button.
+**While in use:** a banner says which Silicon is using the computer for 10 seconds, unless a Carbon hid it, with a Stop button in the app.
 
 **A Silicon can:** open any app, see and use any window, click, type, scroll, take screenshots and recordings, and use the terminal.
 
