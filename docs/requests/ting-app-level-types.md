@@ -12,8 +12,8 @@ registers it through the supported CLI. In each used context, Extend needs these
 - `extend.device.woken`
 - `extend.device.wake_declined`
 
-Production currently has only the first. Register the remaining three in the owning Team `tos`
-before the 1.1 release, as described in [operations](../operations.md). Do not register duplicates
+All four production types were registered and listed in the owning Team `tos` on 2026-09-28,
+as described in [operations](../operations.md). Do not register duplicates
 in every Team receiving a notification. Test contexts need their own supported setup; this does
 not imply registrations survive a context clean.
 

@@ -30,11 +30,10 @@ setup retry, the device engine named Silicon Extend) is built and its automated 
   Technical questions 16–20 introduce no new product decision: accepted first-pair terminal and
   routed-request behavior is retained, the Ting premise is corrected, and iOS awake-state evidence
   remains a physical verification task. Transferring terminal ownership would be a separate change.
-- **Ting types.** Production currently has only `extend.device.requested` for app `extend` in
-  `tos`. Register the three wake types through the owning Team's manager in each used context.
-  Real Ting 0.1.9 resolves type names by context and app across delivery Teams; the earlier demand
-  for duplicate registration in every delivery Team was incorrect. Its published OBO catalog has
-  no `types.register`; use the supported manager CLI and retain the visible fallback.
+- Production Ting registration is complete: the owning Team's manager registered the three wake
+  types and listing confirmed all four Extend types. Each separate test context needs its own
+  supported setup. Delivery Teams do not need duplicate registrations; no OBO `types.register`
+  exists. No notification was sent as part of the production registration.
 - The obsolete Ting request is now marked superseded in `docs/requests/ting-app-level-types.md`.
   No maintainer message was sent; the unsupported per-Team premise is not a release dependency.
 - **A Carbon's logout** uses the accepted `access_removed` behavior (`TECHNICAL.md` C9 and the

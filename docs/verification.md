@@ -32,6 +32,14 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — production wake-type registration
+
+The authenticated app-owning Team manager registered `extend.device.wake_requested`,
+`extend.device.woken` and `extend.device.wake_declined` in `tos`. A subsequent production list
+confirmed all four Extend types with their intended descriptions/defaults. This is a production
+catalog preparation step, not a service/app release or a notification send. The live service and
+installed apps remain unchanged. Evidence: `target/release-production-check/production-ting-registration.json`.
+
 ## 2026-09-28 — final local suite pass and legacy banner guidance
 
 The full workspace pass completed with 580 Rust tests passing, zero failures and six opt-in tests
@@ -191,7 +199,7 @@ closes the real-service/native-emulator handoff gate, not the physical-TV or pro
 - Evidence: `target/realiam-1.1-verification/pre-guidance/` (combined run) and `final/` (fresh run),
   including report JSON, service logs and focused check logs. Briefcase's unseen-recipient
   projection remains a recorded dependency gap; the native-TV stored-file handoff is a separate
-  check. Production `tos` still needs the three wake types registered by its app manager.
+  check. Production `tos` subsequently registered the three wake types, as recorded above.
 
 ## 2026-09-28 — desktop carried banners and offline choices
 
