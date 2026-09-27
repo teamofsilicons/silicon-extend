@@ -246,9 +246,9 @@ Resources:
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref InstanceProfile
       DisableApiTermination: true
-      # Refuses stop/start, which would change the auto-assigned public IP (and the DNS target).
-      # It also makes CloudFormation fail instead of stop/starting on a UserData change.
-      DisableApiStop: true
+      # Stop protection (a stop/start changes the auto-assigned public IP, and the DNS target with it)
+      # isn't a CloudFormation property; the first deploy sets it with
+      # `aws ec2 modify-instance-attribute --instance-id <InstanceId> --disable-api-stop` (README.md).
       EbsOptimized: true
       NetworkInterfaces:
         - DeviceIndex: '0'
@@ -268,7 +268,7 @@ Resources:
         Fn::Base64: !Sub
           - |
             #!/bin/bash
-            # First boot only. Never change this after the first deploy (see DisableApiStop). Every
+            # First boot only. Never change this after the first deploy: an update would stop/start the host. Every
             # release is installed later with /usr/local/sbin/extend-release through SSM.
             set -Eeuo pipefail
             exec > >(tee -a /var/log/extend-bootstrap.log | logger -t extend-bootstrap -s 2>/dev/console) 2>&1

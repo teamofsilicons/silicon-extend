@@ -24,11 +24,12 @@ On the host:
 ## First deploy
 
 1. Create the stack with `AllowMasterSecretRead=true` and `InstanceType=t4g.medium`.
-2. Add the DNS `A` record `backend.extend` → the `PublicIp` output (TTL 300). Caddy needs it to get its certificate.
-3. Put the runtime secret. `extend-render-env` lists the required keys.
-4. Push the image and record its digest in the SSM parameter.
-5. Over SSM, run `extend-db-bootstrap`, then `extend-release`.
-6. Lock the stack down:
+2. Turn on stop protection, which CloudFormation can't set: `aws ec2 modify-instance-attribute --instance-id <InstanceId output> --disable-api-stop`. A stop/start would change the public IP.
+3. Add the DNS `A` record `backend.extend` → the `PublicIp` output (TTL 300). Caddy needs it to get its certificate.
+4. Put the runtime secret. `extend-render-env` lists the required keys.
+5. Push the image and record its digest in the SSM parameter.
+6. Over SSM, run `extend-db-bootstrap`, then `extend-release`.
+7. Lock the stack down:
    - Deploy again with `AllowMasterSecretRead=false PinnedImageId=<ImageId output> InstanceType=t4g.medium`.
    - Review the change set first. It must not replace `Instance`, because a new instance gets a new public IP.
 
