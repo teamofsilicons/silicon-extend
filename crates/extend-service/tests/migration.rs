@@ -537,6 +537,107 @@ async fn concurrent_roll_forward_serializes_the_grant_stash_restore() {
     }).await;
 }
 
+/// Opt-in because its input must be an independently captured 1.0 schema, not a schema rebuilt
+/// from this checkout. The runner imports it with psql before this test and owns all cleanup.
+#[tokio::test]
+#[ignore = "run deploy/rollback/rehearse-schema.py with a captured schema and its SHA-256"]
+async fn copied_production_schema_rolls_backward_and_forward() {
+    let url = std::env::var("EXTEND_MIGRATION_SCHEMA_DATABASE_URL").expect("use the owned-container rehearsal runner");
+    let parsed = url::Url::parse(&url).unwrap();
+    assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+    let name = parsed.path().trim_start_matches('/');
+    assert!(name.starts_with("extend_copy_") && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
+    let pool = db::connect(&url).await.unwrap();
+    let result = std::panic::AssertUnwindSafe(async {
+        assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, 3);
+        assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.devices").await, 0, "schema copy contains no device data");
+        assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend_global.test_environments").await, 0);
+        assert!(one::<Option<String>>(&pool, "SELECT to_regclass('extend.device_instances')::text").await.is_none());
+
+        // These are synthetic records written through 1.0's columns before any current migration.
+        exec(&pool, r#"
+            INSERT INTO extend.devices (device_id, team, owner_id, name, os, visibility, state, credential_digest) VALUES
+                ('cafe0001', 'acme', 'c:alice', 'Synthetic TV', 'android_tv', 'team', 'ready', 'synthetic-confirmed-tv'),
+                ('cafe0002', 'acme', 'c:alice', 'Synthetic Mac', 'macos', 'personal', 'ready', 'synthetic-confirmed-mac');
+            INSERT INTO extend.device_access (device_id, silicon_id, granted_by, granted_at) VALUES
+                ('cafe0001', 'si:chef', 'c:alice', '2026-09-01T00:00:00Z'),
+                ('cafe0002', 'si:chef', 'c:alice', '2026-09-01T00:00:00Z');
+            INSERT INTO extend.session_ids VALUES ('f01');
+            INSERT INTO extend.sessions (session_id, device_id, silicon_id, team, state) VALUES ('f01', 'cafe0001', 'si:chef', 'acme', 'active');
+            INSERT INTO extend.device_locks (device_id, session_id) VALUES ('cafe0001', 'f01');
+        "#).await;
+        db::migrate_global(&pool).await.unwrap();
+        assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, 5);
+        assert_eq!(one::<i64>(&pool, "SELECT count(DISTINCT instance_id) FROM extend.devices").await, 2);
+        assert!(one::<bool>(&pool, "SELECT bool_and(visibility = 'personal' AND first_pair) FROM extend.devices").await);
+        assert!(one::<bool>(&pool, "SELECT bool_and(in_use_indicator = 'shown' AND length(side_salt) = 64) FROM extend.device_instances").await);
+        assert!(one::<bool>(&pool, "SELECT bool_and(team = 'acme' AND granted_at = '2026-09-01T00:00:00Z') FROM extend.device_access").await);
+        assert!(one::<bool>(&pool, "SELECT l.instance_id = d.instance_id FROM extend.device_locks l JOIN extend.devices d USING (device_id)").await);
+        assert_eq!(one::<String>(&pool, "SELECT credential_digest FROM extend.devices WHERE device_id = 'cafe0001'").await, "synthetic-confirmed-tv");
+        assert_eq!(one::<String>(&pool, "SELECT credential_digest FROM extend.devices WHERE device_id = 'cafe0002'").await, "synthetic-confirmed-mac");
+        eprintln!("Copied production schema: version 3 -> 5 with original synthetic 1.0 credentials, grants, sessions and locks retained");
+
+        // Add 1.1's second Carbon pair and cross-Team grants, then choose a hidden indicator.
+        exec(&pool, r#"
+            INSERT INTO extend.devices (device_id, team, owner_id, name, os, state, instance_id, first_pair, credential_digest)
+                SELECT 'cafe0003', 'acme', 'c:bob', name, os, state, instance_id, false, 'synthetic-confirmed-alias'
+                FROM extend.devices WHERE device_id = 'cafe0002';
+            UPDATE extend.device_instances SET in_use_indicator = 'hidden'
+                WHERE instance_id = (SELECT instance_id FROM extend.devices WHERE device_id = 'cafe0002');
+            INSERT INTO extend.device_access (device_id, team, silicon_id, granted_by, granted_at, last_used_at, wake_muted) VALUES
+                ('cafe0002', 'globex', 'si:chef', 'c:alice', '2026-09-01T00:00:00Z', NULL, false),
+                ('cafe0002', 'globex', 'si:scout', 'c:alice', '2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z', true);
+            INSERT INTO extend.session_ids VALUES ('f02');
+            INSERT INTO extend.sessions (session_id, device_id, silicon_id, team, state) VALUES ('f02', 'cafe0002', 'si:scout', 'globex', 'active');
+            INSERT INTO extend.device_locks (device_id, session_id) VALUES ('cafe0002', 'f02');
+        "#).await;
+        let identity_sql = "SELECT jsonb_agg(jsonb_build_array(d.device_id, d.instance_id, d.first_pair, d.credential_digest, i.side_salt, i.in_use_indicator) ORDER BY d.device_id) FROM extend.devices d JOIN extend.device_instances i USING (instance_id) WHERE d.device_id LIKE 'cafe%'";
+        let identities: Value = one(&pool, identity_sql).await;
+        let hardware_salt: String = one(&pool, "SELECT value FROM extend.world_settings WHERE name = 'hardware_salt'").await;
+        for cycle in 0..3 {
+            exec(&pool, "UPDATE extend.devices SET next_credential_digest = 'synthetic-unconfirmed' WHERE device_id = 'cafe0002'").await;
+            exec(&pool, include_str!("../../../deploy/rollback/1.1-to-1.0.sql")).await;
+            exec(&pool, include_str!("../../../deploy/rollback/1.1-to-1.0.sql")).await;
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.rollback_1_1_grants").await, if cycle == 0 { 2 } else { 1 });
+            assert_eq!(one::<Value>(&pool, identity_sql).await, identities);
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.devices WHERE next_credential_digest IS NOT NULL").await, 0);
+            assert_eq!(one::<String>(&pool, "SELECT state FROM extend.sessions WHERE session_id = 'f01'").await, "active");
+            assert_eq!(one::<String>(&pool, "SELECT state FROM extend.sessions WHERE session_id = 'f02'").await, "ended");
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.device_locks WHERE session_id = 'f01'").await, 1);
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.device_locks WHERE session_id = 'f02'").await, 0);
+            assert!(!v1_0::access_of(&pool, "extend", "cafe0002", "si:scout").await);
+            if cycle == 0 {
+                v1_0::revoke(&pool, "extend", "cafe0002", "si:chef").await;
+            }
+            let new = format!("beef000{cycle}");
+            exec(&pool, &format!(r#"
+                INSERT INTO extend.devices (device_id, team, owner_id, name, os, visibility, credential_digest)
+                    VALUES ('{new}', 'acme', 'c:alice', 'Synthetic 1.0 insert', 'android', 'team', 'synthetic-rollback-{cycle}');
+                INSERT INTO extend.device_access (device_id, silicon_id, granted_by) VALUES ('{new}', 'si:chef', 'c:alice') ON CONFLICT DO NOTHING;
+                INSERT INTO extend.device_access (device_id, silicon_id, granted_by) VALUES ('{new}', 'si:chef', 'c:alice') ON CONFLICT DO NOTHING;
+            "#)).await;
+            assert!(one::<bool>(&pool, &format!("SELECT d.visibility = 'personal' AND d.first_pair AND i.in_use_indicator = 'shown' FROM extend.devices d JOIN extend.device_instances i USING (instance_id) WHERE d.device_id = '{new}'")).await);
+            assert!(v1_0::access_of(&pool, "extend", &new, "si:chef").await);
+
+            db::migrate_global(&pool).await.unwrap();
+            db::migrate_global(&pool).await.unwrap();
+            assert_eq!(one::<Value>(&pool, identity_sql).await, identities);
+            assert_eq!(one::<String>(&pool, "SELECT value FROM extend.world_settings WHERE name = 'hardware_salt'").await, hardware_salt);
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.device_access WHERE team = 'globex'").await, 1);
+            assert!(!v1_0::access_of(&pool, "extend", "cafe0002", "si:chef").await, "revoked grants never resurrect");
+            assert!(one::<bool>(&pool, "SELECT wake_muted AND granted_at = '2026-09-01T00:00:00Z' AND last_used_at = '2026-09-02T00:00:00Z' FROM extend.device_access WHERE device_id = 'cafe0002' AND silicon_id = 'si:scout'").await);
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.activity WHERE details->>'restored_after_rollback' = 'true'").await, cycle + 1);
+            assert!(one::<Option<String>>(&pool, "SELECT to_regclass('extend.rollback_1_1_grants')::text").await.is_none());
+            assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, 5);
+            eprintln!("Copied production schema: cycle {} passed (down twice, forward twice, exact grants/credentials/instances/salts/indicator retained)", cycle + 1);
+        }
+    }).catch_unwind().await;
+    pool.close().await;
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 async fn wait_for_restore_waiters(pool: &PgPool, count: i64) -> bool {
     for _ in 0..150 {
         let waiting = one::<i64>(

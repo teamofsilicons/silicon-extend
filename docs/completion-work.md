@@ -101,7 +101,9 @@ Remaining from the Carbon's final requests, before the release gates below:
 - The real-service fixture gates passed: a Silicon reads its granting Carbon's directory entry
   (200, then 404 after removal), and Ting accepts a self-addressed notification (202). Re-run against
   the final release candidate and verify production configuration after deployment.
-- The rollback down step rehearsed on a copy of the production schema, and the roll-forward.
+- The production-schema-copy upgrade/down/forward rehearsal passes with synthetic data and exact
+  identity/grant/credential preservation checks. Take a fresh production snapshot before deployment;
+  the schema-only rehearsal does not prove restoring actual production data from a full backup.
 - The released 1.0 CLI/current CLI rehearsal passes, including shared saved logins and sessions,
   mixed-version takeover/Stop and all 119 current CLI checks. Still rehearse the 1.0 website,
   Android app and desktop agent against 1.1, then each upgraded, including two Carbons on one Android TV and on

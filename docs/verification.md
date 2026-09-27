@@ -32,6 +32,22 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — copied production schema rollback rehearsal
+
+After AWS SSO renewal, a read-only export captured the live schema plus only its migration-version
+rows; it contains no account/device data. The exact 19,592-byte dump (SHA256
+`f391e09887a14a1dfe5a3c9c7b58c890276924d042852705c359e04ecd9dd628`) imported unchanged into an owned
+PostgreSQL 17.11 container; the source was 17.9. `deploy/rollback/rehearse-schema.py` verified schema
+3→5 with synthetic 1.0 records, followed by three cycles of the actual down script twice and current
+migrations twice. Confirmed credentials, instance identities, first-pair flags, salts, hidden
+indicators and grant metadata survived. 1.0 writes worked and revoked grants stayed revoked.
+
+The opt-in copied-schema test and four standard migration tests passed. The report records input,
+code and image hashes and confirms deletion of every owned database/container. Service formatting,
+migration Clippy and diff checks passed. Evidence: `target/rollback-verification/production-copy/final/`.
+This closes the production-schema-copy rehearsal. It is not a full production-data backup restore;
+the release still takes a fresh database snapshot before changing the live service.
+
 ## 2026-09-28 — native Mac banner and focus preservation
 
 The isolated `apps/desktop/macos/banner-native-e2e.py` fixture runs the production UI with a fake
