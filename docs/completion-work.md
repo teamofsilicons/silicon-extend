@@ -49,8 +49,9 @@ AWS profile `silicon-production`; STS access and the existing production stack w
 Historical signing and "nothing published" entries below are not current blockers. The 1.1 Mac
 candidate passed real Apple notarization, stapling and Gatekeeper, and the six CLI targets plus
 Linux/Windows desktop packages built successfully in release workflow `36357336309`. The first
-1.1 CI run exposed consumer-contract setup races and a misplaced browser test; fixes and a green
-rerun are required. No 1.1 publication or deployment has run.
+1.1 CI run exposed consumer-contract setup races and a misplaced browser test. Both are fixed;
+CI `36358256243` passed all five jobs at `b891822`. The subsequent native Linux banner and wake
+notification fixes need final CI and refreshed packages. No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
 

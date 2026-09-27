@@ -161,7 +161,9 @@ harness now waits for persisted device readiness and individual setup steps inst
 sleep or an already-offline state. Two PostgreSQL row-lock regressions fail with the original
 timing assumptions and pass with the fix; the full contract suite passes 11/11, including frozen
 1.0 fixtures, and strict test-target Clippy passes. No production code changed. A fresh GitHub
-CI run is still required.
+CI run [36358256243](https://github.com/teamofsilicons/silicon-extend/actions/runs/36358256243)
+subsequently passed all five jobs at `b891822`. The later native Linux fixes are verified in
+their own entries and still require a final CI/package run.
 
 ## 2026-09-28 — production wake-type registration
 
