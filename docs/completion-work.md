@@ -64,7 +64,8 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Finish remaining native banner verification. Mac native collapse/restore, position retention,
   edge clamping, ten-second hiding, Stop and focus preservation now pass. Physical dragging is
   unverified because CUA cannot move a standard native title bar either. Verify human dragging,
-  multi-monitor movement, Windows/Linux native behavior and TV bottom-centre placement.
+  multi-monitor movement and Windows/Linux native behavior. TV bottom-centre placement and
+  ten-second hiding pass on the owned API 34 emulator; physical TV verification remains.
   Carried-device controls, durable offline choices, shared aliases and restart timing are built;
   a metadata-only attach preserves the live driver, but still needs a real-recording check.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
@@ -112,8 +113,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   website rehearsal also passes 13 checks on one origin with the login retained. The actual Mac
   1.0 native agent/current agent rehearsal passes seven groups: saved identity/credential/session,
   native Stop and two-Carbon terminal rules, using an isolated headless file-store fixture.
-  The signed Android upgrade and native two-Carbon TV-emulator lane passed; its final evidence is
-  being recorded. These do not close physical TV, installed Mac UI/Keychain upgrade, credential
+  The signed Android upgrade and native two-Carbon TV-emulator lane passed twelve checks, with
+  pairing/credential/session continuity and the native sharing/Stop/removal behavior recorded.
+  These do not close physical TV, installed Mac UI/Keychain upgrade, credential
   rotation or carried-device linking checks.
 
 ### Physical devices

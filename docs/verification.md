@@ -32,6 +32,32 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — signed Android upgrade and two-Carbon TV checks
+
+Twelve checks passed on the owned Android TV API 34 emulator `ExtendReconnectVerification`
+(`emulator-5640`). The actual published 1.0 APK checksum and release certificate matched;
+`adb install -r` of the permanently signed 1.1 APK reconnected automatically in 1.827 seconds,
+preserving the exact device/instance/owner/pair timestamp and credential digest. A native snapshot
+still worked in the session opened before the upgrade. Native Stop ended that session.
+
+The TV badge was bottom-centre at `[646,912–1273,1000]` on 1920×1080, non-focusable and
+non-touchable, and hid after 10.126 seconds. It is an automatic badge; desktop movement and
+collapse controls are a separate feature. The actual Android sharing UI added a second Carbon
+to the same instance with correct first-pair flags. Concurrent access was refused without leaking
+the other Carbon/Silicon identity; either Carbon could stop the device. Removing the first pair
+left the second pair connected with its native snapshot session working.
+
+Evidence: `target/android-upgrade-verification/{report.json,facts.json,credential-retention.json,
+cleanup.json}`, signature logs, native screenshots and window dumps. The APK copy and manifest
+are in `target/release-candidate/android-0b4e2ab3d47b33090473e95b784a826dfd2b2991/`;
+SHA256 `2cca9a42909d45bf787fec249095396008fa542954e9f59fdf7182a5bb85ea9f`.
+The owned service/database/reverse were removed and the original proxy setting restored. The
+emulator is back on the debug app, unpaired against fake service 8498 with its setup restored.
+
+This used synthetic local IAM and an emulator, not a physical TV or Fire OS. The old app had no
+saved Android-debugging identity, so migration of that separate identity was not exercised.
+No production writes or product changes were needed by this lane.
+
 ## 2026-09-28 — released Mac agent upgrade and signed candidate
 
 `e2e/released-agent-compat.py` passed seven groups using the GitHub-checksummed 1.0 Mac
