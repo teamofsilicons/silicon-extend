@@ -83,6 +83,10 @@ object Capabilities {
         "display" to listOf(DISPLAY),
     )
 
+    /** A TV can activate an accessibility element without claiming mouse or gesture support. */
+    fun forCommand(command: String, tv: Boolean): List<String>? =
+        if (tv && command == "click") listOf(SCREEN_READ) else COMMAND_CAPABILITIES[command]
+
     // Why a debugging capability is missing depends on the Android version: adb.DebuggingPath.missingReason.
 
     /** Debugging was connected, then the device restarted and Android turned Wireless debugging off. */

@@ -1074,10 +1074,10 @@ pub async fn command(
     }
     let wake_hint = crate::wake::hint(&d, online, &s.team);
     let caps = d.capabilities();
-    if !spec.any_of.iter().any(|c| caps.contains(c)) {
+    let required = d.command_requirements(spec);
+    if !required.iter().any(|c| caps.contains(c)) {
         let missing = d.missing();
-        let why: Vec<String> = spec
-            .any_of
+        let why: Vec<String> = required
             .iter()
             .map(|c| {
                 missing.iter().find(|m| m.capability == *c).map_or_else(
@@ -1103,7 +1103,7 @@ pub async fn command(
             ),
         )
         .hint(hint)
-        .details(serde_json::json!({"needs_any_of": spec.any_of, "missing": missing})));
+        .details(serde_json::json!({"needs_any_of": required, "missing": missing})));
     }
     let timeout_ms = req.timeout_ms.unwrap_or(COMMAND_TIMEOUT_DEFAULT_MS);
     if !(COMMAND_TIMEOUT_MIN_MS..=COMMAND_TIMEOUT_MAX_MS).contains(&timeout_ms) {

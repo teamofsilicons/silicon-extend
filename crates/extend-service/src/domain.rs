@@ -23,7 +23,7 @@
 //! Every change that ends access takes the instance row first, so it serialises with a session
 //! start's re-check, and the two can't deadlock.
 
-use extend_protocol::capability::{DeviceKind, commands_for};
+use extend_protocol::capability::DeviceKind;
 use extend_protocol::frames::ServiceFrame;
 use extend_protocol::model::{
     Device, DeviceState, EndReason, InUse, InUseIndicator, Member, MemberKind, MissingCapability, Session,
@@ -129,6 +129,20 @@ pub struct OpenWake {
 impl DeviceRow {
     pub fn os(&self) -> DeviceOs {
         serde_json::from_value(serde_json::Value::String(self.os.clone())).unwrap_or(DeviceOs::Linux)
+    }
+    /// TV element clicks need the app's 1.1 accessibility command gate. Earlier apps still use
+    /// the pointer/touch gate, so never offer them a command they would refuse locally.
+    pub fn command_requirements(&self, spec: &extend_protocol::CommandSpec) -> &'static [Capability] {
+        if self.os() == DeviceOs::AndroidTv
+            && !self
+                .app_version
+                .as_deref()
+                .is_some_and(|v| crate::routes::enroll::version_at_least(v, "1.1.0"))
+        {
+            spec.any_of
+        } else {
+            spec.any_of_for(self.os())
+        }
     }
     pub fn key(&self, world: &World) -> (String, String) {
         (world.schema.clone(), self.device_id.clone())
@@ -748,7 +762,13 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
             }
             m
         }),
-        commands: detail.then(|| commands_for(&caps).into_iter().map(str::to_owned).collect()),
+        commands: detail.then(|| {
+            extend_protocol::COMMANDS
+                .iter()
+                .filter(|spec| d.command_requirements(spec).iter().any(|c| caps.contains(c)))
+                .map(|spec| spec.name.to_owned())
+                .collect()
+        }),
         removed_at: d.removed_at,
         removed_reason: d.removed_reason(),
         engine_version: d.engine_version.clone(),

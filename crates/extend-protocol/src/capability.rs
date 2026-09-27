@@ -287,6 +287,20 @@ pub struct CommandSpec {
     pub redact_text: bool,
 }
 
+impl CommandSpec {
+    /// Capabilities needed on this operating system. Android TV's accessibility tree can activate
+    /// an element without providing a mouse or touch screen, just as `find … click` already does.
+    /// This does not enable hover, scrolling or gestures. Services must retain `any_of` for Android
+    /// TV apps older than 1.1, whose local command gate does not yet accept this path.
+    pub fn any_of_for(&self, os: DeviceOs) -> &'static [Capability] {
+        if self.name == "click" && os == DeviceOs::AndroidTv {
+            &[Capability::ScreenRead]
+        } else {
+            self.any_of
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
     /// A command of the device engine. (The variant keeps its 1.0 name; nobody sees it.)
@@ -676,6 +690,34 @@ mod tests {
         assert!(!mac.contains(&"tv-remote"));
         let phone = commands_for(DeviceOs::Android.full_capabilities());
         assert!(phone.contains(&"adb"));
+    }
+
+    #[test]
+    fn android_tv_element_click_does_not_advertise_pointer_or_touch() {
+        let tv = DeviceOs::AndroidTv;
+        let caps = tv.full_capabilities();
+        let click = command("click").unwrap();
+        assert_eq!(click.any_of_for(tv), &[Capability::ScreenRead]);
+        assert!(click.any_of_for(tv).iter().any(|c| caps.contains(c)));
+        assert!(!caps.contains(&Capability::InputPointer));
+        assert!(!caps.contains(&Capability::InputTouch));
+        for name in ["hover", "press", "scroll", "swipe", "gesture", "longpress"] {
+            assert!(
+                !command(name).unwrap().any_of_for(tv).iter().any(|c| caps.contains(c)),
+                "{name} must not be enabled by TV element clicking"
+            );
+        }
+        // Screen-reading alone must not enable clicks on any other platform.
+        for os in [
+            DeviceOs::Macos,
+            DeviceOs::Android,
+            DeviceOs::Ios,
+            DeviceOs::Tvos,
+            DeviceOs::SamsungTv,
+            DeviceOs::LgTv,
+        ] {
+            assert_eq!(click.any_of_for(os), click.any_of);
+        }
     }
 
     #[test]

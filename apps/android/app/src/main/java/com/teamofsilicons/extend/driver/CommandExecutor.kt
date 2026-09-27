@@ -290,7 +290,7 @@ class CommandExecutor(
     }
 
     private fun checkCapability(command: String) {
-        val needed = Capabilities.COMMAND_CAPABILITIES[command] ?: return
+        val needed = Capabilities.forCommand(command, extend.isTv) ?: return
         val report = SetupReport.compute(context, extend.config)
         if (needed.any { it in report.capabilities }) return
         val reason = report.missing.firstOrNull { it.capability in needed }?.reason

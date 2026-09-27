@@ -259,6 +259,25 @@ class AndroidVersionsTest {
         assertTrue(on.missing.isEmpty())
     }
 
+    @Test fun tvElementClickNeedsAccessibilityWithoutAdvertisingMouseOrGestures() {
+        for (sdk in listOf(26, 28, 29, 34, 36)) {
+            for (adb in listOf(false, true)) {
+                val report = SetupReport.build(signals(sdk, tv = true, adb = adb))
+                val required = C.forCommand("click", tv = true)!!
+                assertEquals(listOf(C.SCREEN_READ), required)
+                assertTrue("API $sdk, ADB $adb: element click", required.any { it in report.capabilities })
+                assertFalse(C.INPUT_POINTER in report.capabilities)
+                assertFalse(C.INPUT_TOUCH in report.capabilities)
+                for (command in listOf("hover", "press", "scroll", "swipe", "gesture", "longpress")) {
+                    assertFalse(command, C.forCommand(command, tv = true)!!.any { it in report.capabilities })
+                }
+                val disconnected = SetupReport.build(signals(sdk, tv = true, a11y = false, adb = adb))
+                assertFalse("ADB alone cannot resolve elements", required.any { it in disconnected.capabilities })
+            }
+        }
+        assertEquals(listOf(C.INPUT_POINTER, C.INPUT_TOUCH), C.forCommand("click", tv = false))
+    }
+
     @Test fun capabilitiesPerAndroidVersionOnAPhoneWithAccessibilityAndNotificationAccess() {
         for (sdk in listOf(26, 27, 28, 29)) {
             val r = SetupReport.build(signals(sdk))

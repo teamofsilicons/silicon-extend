@@ -32,6 +32,24 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — direct Android TV element clicks
+
+Android TV apps 1.1+ can receive direct `click` through their existing `screen.read` accessibility
+capability. The service's command list and command gate, Android's local gate and CLI help now
+agree. The TV's advertised capabilities are unchanged: pointer/touch/hover/gesture support is not
+implied. Apps 1.0.0/1.0.2 retain their prior direct-click refusal and `find … click` fallback.
+
+- Two HTTP/WebSocket tests pass, including decoding the actual response with frozen 1.0 models,
+  refusing old TV apps and withdrawing click when accessibility disappears during a session.
+- Protocol 32 tests, CLI 28 existing tests plus one help regression, and 50 focused Android tests
+  passed; scoped Clippy with warnings denied passed. The subsequent full Android app suite has
+  235 passing tests, with lint and APK build passing.
+- Native Android TV 14 emulator-5640: `click @e8` opened Device Preferences using
+  `accessibility_click`; the next snapshot confirmed the destination. Hover, gesture and scroll
+  remained refused. Coordinate, repeated and held clicks still depend on gesture injection;
+  the native proof here is an element click, not those variants or a physical-TV check.
+- Evidence: `target/tv-click-verification/{native-click.json,service-tests.log,android-tests.log,android-final-build.log}`.
+
 ## 2026-09-28 — lower screenshot memory on Android TVs
 
 Plain ADB screenshots now stream Android's original PNG from disk, reading only the dimensions

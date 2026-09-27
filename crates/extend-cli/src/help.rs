@@ -624,7 +624,7 @@ fn not_available(c: &CommandSpec, on: &Connected) -> Option<String> {
     if on.commands.iter().any(|x| x == c.name) {
         return None;
     }
-    let caps: Vec<&str> = c.any_of.iter().map(|x| x.as_str()).collect();
+    let caps = help_capabilities(c, Some(on));
     let reasons: Vec<String> = on
         .missing
         .iter()
@@ -651,9 +651,18 @@ fn not_available(c: &CommandSpec, on: &Connected) -> Option<String> {
     ))
 }
 
+fn help_capabilities(c: &CommandSpec, connected: Option<&Connected>) -> Vec<&'static str> {
+    let required = if connected.is_some_and(|on| on.os == "android_tv") {
+        c.any_of_for(extend_protocol::DeviceOs::AndroidTv)
+    } else {
+        c.any_of
+    };
+    required.iter().map(|x| x.as_str()).collect()
+}
+
 pub fn render_device_command(name: &str, connected: Option<&Connected>) -> Option<String> {
     let c = COMMANDS.iter().find(|c| c.name == name)?;
-    let caps: Vec<&str> = c.any_of.iter().map(|x| x.as_str()).collect();
+    let caps = help_capabilities(c, connected);
     let origin = match c.origin {
         Origin::AgentDevice => "a command of the device engine, run on the session's device through Extend",
         Origin::Extend => "a command Extend adds around the device engine",
@@ -666,6 +675,7 @@ pub fn render_device_command(name: &str, connected: Option<&Connected>) -> Optio
         }
     };
     let more = match (name, c.origin) {
+        ("click", _) => format!("\nOn Android TV, element clicks need the Extend app 1.1 or newer and Accessibility. They use the element's click action, then remote selection or Android debugging where available; they do not require a mouse or touch screen. Older TV apps can use `find <text> click`. Coordinate, repeated and held clicks still depend on Android accepting gesture injection.\nArgument details: {DOCS}/cli\n"),
         ("display", _) => "\nFor --image and --video, pass a local file, a public media URL, or file:<file_id> (the bare UUID and the stored Extend/Briefcase link also work). Extend reads stored files as you: only your unexpired files in this Team are allowed. Stored and local files share the command's 8-file, 8-MiB attachment limit.\nExample: extend display show --image file:<file_id>\n".into(),
         (_, Origin::AgentDevice) => format!("\nArgument details: {DOCS}/cli\n"),
         (_, Origin::Extend) => String::new(),
@@ -789,6 +799,34 @@ Commands (extend <command> --help goes deeper)\n",
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tv_click_help_uses_element_requirements_without_offering_gestures() {
+        let commands = vec!["snapshot".to_owned(), "click".to_owned()];
+        let on = Connected {
+            session_id: "a3f",
+            device: "TV",
+            os: "android_tv",
+            commands: &commands,
+            missing: &[],
+            refreshed_at: 0,
+        };
+        let help = render_device_command("click", Some(&on)).unwrap();
+        assert!(help.contains("a device with: screen.read."), "{help}");
+        assert!(!help.contains("Not available"));
+        assert!(help.contains("app 1.1 or newer"));
+        assert!(help.contains("Older TV apps can use `find <text> click`"));
+        assert!(
+            render_device_command("hover", Some(&on))
+                .unwrap()
+                .contains("Not available")
+        );
+        assert!(
+            render_device_command("click", None)
+                .unwrap()
+                .contains("input.pointer or input.touch")
+        );
+    }
 
     #[test]
     fn install_help_matches_the_contract() {
