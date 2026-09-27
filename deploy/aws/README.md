@@ -40,7 +40,7 @@ On the host:
 3. Record the new digest in the SSM parameter.
 4. Over SSM, run `/usr/local/sbin/extend-release`.
 
-The outage lasts a few seconds, and devices reconnect by themselves. Pass `PinnedImageId` and `InstanceType` on every stack update.
+The outage lasts a few seconds, and devices reconnect by themselves. Pass `PinnedImageId`, `InstanceType` and `--tags Service=silicon-extend Environment=production` on every stack update (leaving the tags out strips them from every resource), and read the change set first: `Instance` must never show a replacement.
 
 ## Rollback
 
