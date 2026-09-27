@@ -827,6 +827,12 @@ images need `adb -s <serial> reverse tcp:5555 tcp:<console-port-plus-one>` befor
 `--legacy-emulator-bridge` so the lane restores that test route after adbd restart. This is a
 destructive process-lifecycle test for a dedicated AVD; it is not a physical-device lane.
 
+Screenshot memory: a plain ADB capture uploads the original PNG from a scratch file without
+decoding a full frame. Cropped, scaled and annotated images encode directly to disk, recycle
+temporary bitmaps before uploading, and stream the file with its checksum. Accessibility captures
+release the hardware wrapper after copying. Default resolution and the returned file metadata
+are unchanged; cancellation and failed commands clean the screenshot scratch directory.
+
 ### In-use banner choice (1.1 follow-up)
 
 The paired/setup screen lets the Carbon hide in-use announcements entirely. The choice is saved

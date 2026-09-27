@@ -32,6 +32,36 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — lower screenshot memory on Android TVs
+
+Plain ADB screenshots now stream Android's original PNG from disk, reading only the dimensions
+instead of decoding and recompressing the full TV frame. Cropping, scaling and reference overlays
+still render at the requested resolution; each replaced bitmap is recycled, and the final image
+is encoded to disk and recycled before upload. Uploads use the existing cancellable file stream,
+so PNG compression no longer creates a growing byte buffer plus a second full byte array. The
+accessibility capture releases its hardware bitmap wrapper after copying and recycles screenshots
+that arrive after command cancellation. Allocation failures on Android's callback thread are
+forwarded to the command's error handler. Screenshot scratch directories are deleted in `finally`.
+
+- Android TV 14 emulator-5640, five sequential 1920x1080 screenshots through the fake service:
+  sampled PSS before the change ranged 54,648–64,949 KiB, after 56,143–58,827 KiB. Both measurements
+  began after a background-only app restart. This is one emulator debug-build workload, not a
+  physical-TV baseline or a claim about all app memory. The actual captured resolution remained
+  1920x1080 even with a logical 3840x2160 `wm` override.
+- Real ADB PNG uploads and accessibility plain, 0.5-scale and annotated 0.5-scale uploads all
+  succeed and decode completely with ffmpeg. A missing crop selector still returns
+  `element_not_found`. No screenshot scratch directories remain after success or that failure.
+  Android 9 emulator-5642 also passed real ADB plain and 0.5-scale captures and complete PNG decoding.
+- Android app unit tests, lint and debug build pass. The final accessibility-wrapper change was
+  checked again with native plain, scaled and annotated captures. Final app unit total: 235.
+  Review also corrected reference-overlay coordinates after cropping. The native 74x38 crop of
+  Settings' About label at screen position (1328,210) contains zero annotation-colour pixels without
+  overlays and 2,149 with overlays, proving the reference is drawn within the cropped image.
+- Evidence: `target/adb-reconnect-verification/screenshot-{before,after,variants,final-native,legacy-native,crop-native}.json`,
+  `screenshot-final-build.log` and the PNGs under `service/`. Existing file-upload tests cover the
+  streamed checksum/bytes and cancellation behavior. Further TV memory profiling and physical
+  device verification remain open; no screenshot resolution was reduced by default.
+
 ## 2026-09-28 — Android debugging recovery after process death
 
 The existing reconnect implementation passed on two fresh, isolated emulators. After the one-time

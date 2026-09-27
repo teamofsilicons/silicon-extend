@@ -49,7 +49,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -1600,93 +1599,115 @@ class CommandExecutor(
     private suspend fun screenshot(cmd: Cmd.Screenshot, run: Run): Outcome {
         val a = ExtendAccessibilityService.instance
         val path = ScreenshotPath.choose(android.os.Build.VERSION.SDK_INT, a != null, extend.adb.connected)
-        var bmp = when (path) {
-            ScreenshotPath.ACCESSIBILITY -> a!!.screenshot()
-            ScreenshotPath.ADB -> adbScreenshot()
-            // checkCapability already refused this with the reason; only a race (debugging or
-            // accessibility went away just now) gets here.
-            ScreenshotPath.NONE -> throw CommandFailure.unsupported(
-                SetupReport.compute(context, extend.config).missing.firstOrNull { it.capability == Capabilities.SCREEN_CAPTURE }?.reason
-                    ?: "Nothing can capture the screen right now: connect Android debugging or turn on accessibility in the Extend app's setup.",
-            )
-        }
-        if (cmd.cropOn != null) {
-            val cap = capture()
-            val n = Selectors.resolveAll(cmd.cropOn, cap.allNodes, cap.screen).firstOrNull()
-                ?: throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on ${cmd.cropOn.raw} matches nothing on screen.")
-            val b = n.bounds.intersect(Bounds(0, 0, bmp.width, bmp.height))
-            if (b.isEmpty) throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on element is off screen.")
-            bmp = Bitmap.createBitmap(bmp, b.left, b.top, b.width, b.height)
-        }
-        if (cmd.overlayRefs) {
-            val snap = run.session.last ?: SnapshotEngine.build(capture(), SnapshotOptions(interactive = true)).also { run.session.last = it }
-            bmp = bmp.copy(Bitmap.Config.ARGB_8888, true)
-            val canvas = Canvas(bmp)
-            val stroke = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.rgb(255, 64, 129) }
-            val fill = Paint().apply { color = Color.rgb(255, 64, 129) }
-            val text = Paint().apply { color = Color.WHITE; textSize = 30f; isAntiAlias = true }
-            for (n in snap.nodes) {
-                val r = n.node.bounds
-                if (r.isEmpty) continue
-                canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), stroke)
-                val label = "@" + n.ref
-                val w = text.measureText(label) + 12
-                canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.left + w, r.top + 36f, fill)
-                canvas.drawText(label, r.left + 6f, r.top + 28f, text)
-            }
-        }
-        if (cmd.scale != null && cmd.scale < 1f) {
-            bmp = Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * cmd.scale).roundToInt()), max(1, (bmp.height * cmd.scale).roundToInt()), true)
-        }
-        val bytes = ByteArrayOutputStream().use { out ->
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.toByteArray()
-        }
+        if (path == ScreenshotPath.NONE) throw CommandFailure.unsupported(
+            SetupReport.compute(context, extend.config).missing.firstOrNull { it.capability == Capabilities.SCREEN_CAPTURE }?.reason
+                ?: "Nothing can capture the screen right now: connect Android debugging or turn on accessibility in the Extend app's setup.",
+        )
         val name = (cmd.name?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "screenshot").let {
             if (it.lowercase().endsWith(".png")) it else "$it.png"
         }
-        val file = upload(run, bytes, name, "image/png", "screenshot")
-        val out = buildJsonObject {
-            put("files", JsonArray(listOf(JsonPrimitive(file.uploadId))))
-            put("name", name)
-            put("width", bmp.width)
-            put("height", bmp.height)
-            put("size_bytes", bytes.size)
-        }
-        return Outcome(out, "Screenshot $name (${bmp.width}x${bmp.height}, ${bytes.size / 1024} KB)")
-    }
-
-    /**
-     * The screen through Android debugging's `screencap -p` (Android 10 and older, or while
-     * accessibility is off). The PNG streams to a scratch file past 256 KiB, never all into memory.
-     */
-    private suspend fun adbScreenshot(): Bitmap {
-        val dir = File(context.cacheDir, "screencap-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+        val dir = File(context.cacheDir, "screenshot-" + java.util.UUID.randomUUID()).apply { mkdirs() }
         try {
-            val captured = try {
-                extend.adb.shellCapture("screencap -p") { name -> File(dir, name) }
-            } catch (e: java.io.IOException) {
-                throw CommandFailure(
-                    CommandFailure.ACTION_FAILED,
-                    "Android debugging failed while taking the screenshot: ${e.message ?: e.javaClass.simpleName}. If it disconnected, ask the Carbon to reconnect it in the Extend app.",
-                )
+            val source = if (path == ScreenshotPath.ADB) adbScreenshotFile(dir) else null
+            val file = File(dir, name)
+            val width: Int
+            val height: Int
+            if (source != null && cmd.cropOn == null && !cmd.overlayRefs && (cmd.scale == null || cmd.scale == 1f)) {
+                // screencap already produced a PNG. Read its dimensions without allocating pixels,
+                // and stream the original image rather than decode/re-encode a full TV frame.
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(source.absolutePath, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw invalidScreenshot(source.length())
+                width = bounds.outWidth
+                height = bounds.outHeight
+                source.copyTo(file, overwrite = true)
+            } else {
+                var bmp = if (source == null) a!!.screenshot()
+                    else BitmapFactory.decodeFile(source.absolutePath) ?: throw invalidScreenshot(source.length())
+                fun replace(next: Bitmap) {
+                    if (next !== bmp) { bmp.recycle(); bmp = next }
+                }
+                try {
+                    var originX = 0
+                    var originY = 0
+                    if (cmd.cropOn != null) {
+                        val cap = capture()
+                        val n = Selectors.resolveAll(cmd.cropOn, cap.allNodes, cap.screen).firstOrNull()
+                            ?: throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on ${cmd.cropOn.raw} matches nothing on screen.")
+                        val b = n.bounds.intersect(Bounds(0, 0, bmp.width, bmp.height))
+                        if (b.isEmpty) throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on element is off screen.")
+                        replace(Bitmap.createBitmap(bmp, b.left, b.top, b.width, b.height))
+                        originX = b.left
+                        originY = b.top
+                    }
+                    if (cmd.overlayRefs) {
+                        val snap = run.session.last ?: SnapshotEngine.build(capture(), SnapshotOptions(interactive = true)).also { run.session.last = it }
+                        if (!bmp.isMutable) replace(bmp.copy(Bitmap.Config.ARGB_8888, true))
+                        val canvas = Canvas(bmp)
+                        val stroke = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.rgb(255, 64, 129) }
+                        val fill = Paint().apply { color = Color.rgb(255, 64, 129) }
+                        val text = Paint().apply { color = Color.WHITE; textSize = 30f; isAntiAlias = true }
+                        for (n in snap.nodes) {
+                            val bounds = n.node.bounds
+                            val r = Bounds(bounds.left - originX, bounds.top - originY, bounds.right - originX, bounds.bottom - originY)
+                            if (r.isEmpty) continue
+                            canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), stroke)
+                            val label = "@" + n.ref
+                            val w = text.measureText(label) + 12
+                            canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.left + w, r.top + 36f, fill)
+                            canvas.drawText(label, r.left + 6f, r.top + 28f, text)
+                        }
+                    }
+                    if (cmd.scale != null && cmd.scale < 1f) {
+                        replace(Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * cmd.scale).roundToInt()), max(1, (bmp.height * cmd.scale).roundToInt()), true))
+                    }
+                    width = bmp.width
+                    height = bmp.height
+                    file.outputStream().buffered().use { output ->
+                        if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                            throw CommandFailure(CommandFailure.ACTION_FAILED, "Android couldn't encode the screenshot as PNG.")
+                        }
+                    }
+                } finally { bmp.recycle() }
             }
-            if (captured.exitCode != 0) throw CommandFailure(
-                CommandFailure.ACTION_FAILED,
-                "Android's screencap failed (exit ${captured.exitCode}: ${captured.stderr.text.trim().take(500).ifEmpty { "no output" }}).",
-            )
-            val bmp = captured.stdout.file?.let { BitmapFactory.decodeFile(it.absolutePath) }
-                ?: captured.stdout.inline.takeIf { captured.stdout.file == null }?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-            return bmp ?: throw CommandFailure(
-                CommandFailure.ACTION_FAILED,
-                "Android's screencap returned ${captured.stdout.total} bytes that aren't a PNG image. The app on screen may block screenshots (a secure window).",
-            )
-        } finally {
-            dir.deleteRecursively()
-        }
+            // Bitmap storage is released before networking, including a slow or cancelled upload.
+            val produced = uploadScreenshot(run, file)
+            val size = file.length()
+            val out = buildJsonObject {
+                put("files", JsonArray(listOf(JsonPrimitive(produced.uploadId))))
+                put("name", name)
+                put("width", width)
+                put("height", height)
+                put("size_bytes", size)
+            }
+            return Outcome(out, "Screenshot $name (${width}x${height}, ${size / 1024} KB)")
+        } finally { dir.deleteRecursively() }
     }
 
-    private suspend fun upload(run: Run, bytes: ByteArray, name: String, contentType: String, kind: String): ProducedFile {
+    /** Capture to disk; AdbWire bounds inline data at 256 KiB and spills larger PNGs. */
+    private suspend fun adbScreenshotFile(dir: File): File {
+        val captured = try {
+            extend.adb.shellCapture("screencap -p") { name -> File(dir, name) }
+        } catch (e: java.io.IOException) {
+            throw CommandFailure(
+                CommandFailure.ACTION_FAILED,
+                "Android debugging failed while taking the screenshot: ${e.message ?: e.javaClass.simpleName}. If it disconnected, ask the Carbon to reconnect it in the Extend app.",
+            )
+        }
+        if (captured.exitCode != 0) throw CommandFailure(
+            CommandFailure.ACTION_FAILED,
+            "Android's screencap failed (exit ${captured.exitCode}: ${captured.stderr.text.trim().take(500).ifEmpty { "no output" }}).",
+        )
+        return captured.stdout.file ?: File(dir, "capture.raw").apply { writeBytes(captured.stdout.inline) }
+    }
+
+    private fun invalidScreenshot(size: Long) = CommandFailure(
+        CommandFailure.ACTION_FAILED,
+        "Android's screencap returned $size bytes that aren't a PNG image. The app on screen may block screenshots (a secure window).",
+    )
+
+    private suspend fun uploadScreenshot(run: Run, file: File): ProducedFile {
+        val name = file.name
         val id = run.frame.uploadIds.getOrNull(run.uploadCursor) ?: throw CommandFailure(
             CommandFailure.UPLOAD_FAILED,
             "The command came with ${run.frame.uploadIds.size} upload id(s), all used, so $name can't be uploaded.",
@@ -1695,13 +1716,13 @@ class CommandExecutor(
         val cred = extend.connection.credentialFor(run.pairId)
             ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired through this session's Carbon, so $name can't be uploaded. Start a new session.")
         try {
-            extend.api.upload(cred, id, bytes, contentType, name)
+            extend.api.uploadFile(cred, id, file, "image/png")
         } catch (e: ApiException) {
             throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Uploading $name failed: HTTP ${e.status} ${e.message}")
         } catch (e: java.io.IOException) {
             throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Uploading $name failed: ${e.message}")
         }
-        return ProducedFile(id, name, contentType, kind, bytes.size.toLong()).also { run.files += it }
+        return ProducedFile(id, name, "image/png", "screenshot", file.length()).also { run.files += it }
     }
 
     // ───────────── several steps ─────────────

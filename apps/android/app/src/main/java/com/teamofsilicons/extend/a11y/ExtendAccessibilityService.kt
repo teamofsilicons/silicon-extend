@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * How the Extend app sees and acts on the screen. This is the Android app's deliberate
@@ -389,11 +390,25 @@ private object Api30Screenshot {
             override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
                 val buffer = screenshot.hardwareBuffer
                 val bmp = try {
-                    Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
+                    val wrapped = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
+                    try { wrapped?.copy(Bitmap.Config.ARGB_8888, false) }
+                    finally { wrapped?.recycle() }
+                } catch (error: OutOfMemoryError) {
+                    // Allocation happens on Android's callback thread. Deliver failure to the
+                    // command coroutine so its OOM handler can answer without crashing the app.
+                    if (cont.isActive) cont.resumeWithException(error)
+                    return
+                } catch (error: Exception) {
+                    if (cont.isActive) cont.resumeWithException(error)
+                    return
                 } finally {
                     buffer.close()
                 }
-                if (cont.isActive) cont.resume(bmp to (if (bmp == null) AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR else 0))
+                if (cont.isActive) {
+                    cont.resume(bmp to (if (bmp == null) AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR else 0)) { _, unclaimed, _ ->
+                        unclaimed.first?.recycle()
+                    }
+                } else bmp?.recycle()
             }
 
             override fun onFailure(errorCode: Int) {
