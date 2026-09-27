@@ -2137,13 +2137,31 @@ mod tests {
     fn screenshots_land_in_the_workdir() {
         let e = Env::new();
         let p = e.plan("screenshot", &[]).unwrap();
-        assert_eq!(p.argv, s(&["screenshot", "/w/cmd/screenshot.png"]));
+        assert_eq!(
+            p.argv,
+            s(&["screenshot", &e.work.join("screenshot.png").to_string_lossy()])
+        );
         assert_eq!(p.expect[0].kind, FileKind::Screenshot);
         let p = e.plan("screenshot", &["--scale", "0.5", "../../etc/page"]).unwrap();
-        assert_eq!(p.argv, s(&["screenshot", "--scale", "0.5", "/w/cmd/page.png"]));
+        assert_eq!(
+            p.argv,
+            s(&[
+                "screenshot",
+                "--scale",
+                "0.5",
+                &e.work.join("page.png").to_string_lossy()
+            ])
+        );
         assert_eq!(p.expect[0].name, "page.png");
         let p = e.plan("screenshot", &["home.png", "--overlay-refs"]).unwrap();
-        assert_eq!(p.argv, s(&["screenshot", "/w/cmd/home.png", "--overlay-refs"]));
+        assert_eq!(
+            p.argv,
+            s(&[
+                "screenshot",
+                &e.work.join("home.png").to_string_lossy(),
+                "--overlay-refs"
+            ])
+        );
     }
 
     #[test]
@@ -2160,7 +2178,7 @@ mod tests {
                 "--baseline",
                 "/w/cmd/attachments/base.png",
                 "--out",
-                "/w/cmd/diff.png"
+                &e.work.join("diff.png").to_string_lossy()
             ])
         );
         assert_eq!(p.expect[0].kind, FileKind::Diff);
@@ -2174,19 +2192,21 @@ mod tests {
     #[test]
     fn recordings_live_in_the_session() {
         let e = Env::new();
+        let recordings = e.session.join("recordings");
+        let recording = recordings.join("recording.mp4");
         let p = e.plan("record", &["start"]).unwrap();
-        assert_eq!(
-            p.argv,
-            s(&["record", "start", "/w/sessions/a3f/recordings/recording.mp4"])
-        );
-        assert_eq!(
-            p.after,
-            After::RecordingStarted(PathBuf::from("/w/sessions/a3f/recordings/recording.mp4"))
-        );
+        assert_eq!(p.argv, s(&["record", "start", &recording.to_string_lossy()]));
+        assert_eq!(p.after, After::RecordingStarted(recording.clone()));
         let p = e.plan("record", &["start", "demo", "--fps", "30"]).unwrap();
         assert_eq!(
             p.argv,
-            s(&["record", "start", "/w/sessions/a3f/recordings/demo.mp4", "--fps", "30"])
+            s(&[
+                "record",
+                "start",
+                &recordings.join("demo.mp4").to_string_lossy(),
+                "--fps",
+                "30"
+            ])
         );
         let p = e.plan("record", &["stop"]).unwrap();
         assert_eq!(p.after, After::RecordingStopped);
@@ -2204,7 +2224,7 @@ mod tests {
                 "{given:?} became {:?}",
                 p.argv
             );
-            assert!(p.argv.contains(&"/w/sessions/a3f/recordings/recording.mp4".to_owned()));
+            assert!(p.argv.contains(&recording.to_string_lossy().into_owned()));
         }
         let p = e
             .plan("record", &["start", "clip", "--quality", "normal", "--scope", "device"])
@@ -2214,7 +2234,7 @@ mod tests {
             s(&[
                 "record",
                 "start",
-                "/w/sessions/a3f/recordings/clip.mp4",
+                &recordings.join("clip.mp4").to_string_lossy(),
                 "--quality",
                 "medium",
                 "--scope",
@@ -2246,7 +2266,10 @@ mod tests {
             s(&[
                 "open",
                 "com.example.Editor",
-                "--save-script=/w/sessions/a3f/scripts/session.ad"
+                &format!(
+                    "--save-script={}",
+                    e.session.join("scripts").join("session.ad").display()
+                )
             ])
         );
         assert!(matches!(p.after, After::ScriptArmed(_)));
@@ -2266,21 +2289,42 @@ mod tests {
         let p = e.plan("open", &["TextEdit", "--save-script"]).unwrap();
         assert_eq!(
             p.argv,
-            s(&["open", "TextEdit", "--save-script=/w/sessions/a3f/scripts/session.ad"])
+            s(&[
+                "open",
+                "TextEdit",
+                &format!(
+                    "--save-script={}",
+                    e.session.join("scripts").join("session.ad").display()
+                )
+            ])
         );
         let p = e
             .plan("open", &["TextEdit", "--save-script", "./flows/login.ad"])
             .unwrap();
         assert_eq!(
             p.argv,
-            s(&["open", "TextEdit", "--save-script=/w/sessions/a3f/scripts/login.ad"])
+            s(&[
+                "open",
+                "TextEdit",
+                &format!("--save-script={}", e.session.join("scripts").join("login.ad").display())
+            ])
         );
         let p = e.plan("close", &["--save-script", "/tmp/x.ad"]).unwrap();
-        assert_eq!(p.argv, s(&["close", "--save-script=/w/cmd/x.ad"]));
+        assert_eq!(
+            p.argv,
+            s(&["close", &format!("--save-script={}", e.work.join("x.ad").display())])
+        );
         assert_eq!(p.expect[0].kind, FileKind::ReplayScript);
         // `--save-script Notes` doesn't consume "Notes" (not a path), exactly like the device engine.
         let p = e.plan("close", &["--save-script", "Notes"]).unwrap();
-        assert_eq!(p.argv, s(&["close", "Notes", "--save-script=/w/cmd/session.ad"]));
+        assert_eq!(
+            p.argv,
+            s(&[
+                "close",
+                "Notes",
+                &format!("--save-script={}", e.work.join("session.ad").display())
+            ])
+        );
         let mut armed = Env::new();
         armed.facts.armed_script = Some(PathBuf::from("/w/sessions/a3f/scripts/login.ad"));
         let p = armed.plan("close", &[]).unwrap();
@@ -2307,7 +2351,10 @@ mod tests {
         let p = e
             .plan("record", &["contact-sheet", "x.mp4", "--out", "/etc/sheet.png"])
             .unwrap();
-        assert!(p.argv.contains(&"/w/cmd/sheet.png".to_string()));
+        assert!(
+            p.argv
+                .contains(&e.work.join("sheet.png").to_string_lossy().into_owned())
+        );
         assert_eq!(p.expect[0].name, "sheet.png");
     }
 
@@ -2351,7 +2398,10 @@ mod tests {
         );
         tidy_text(&mut out, Path::new("/w/cmd"));
         assert_eq!(out.text.as_deref(), Some("Opened: TextEdit"));
-        let mut out = Output::ok(serde_json::Value::Null, "/w/cmd/e2e.png (864x559)");
+        let mut out = Output::ok(
+            serde_json::Value::Null,
+            format!("{} (864x559)", Path::new("/w/cmd").join("e2e.png").display()),
+        );
         tidy_text(&mut out, Path::new("/w/cmd"));
         assert_eq!(out.text.as_deref(), Some("e2e.png (864x559)"));
     }

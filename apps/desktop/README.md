@@ -328,6 +328,13 @@ The 1.1 release workflow built x64 and arm64 packages on native Windows runners 
 packaged agent's `--version` successfully. The driver's pure logic is unit-tested; interactive
 window, input, recording, sleep and lock behavior still require native verification.
 
+The release workflow also runs `windows/verify-native.ps1` on its disposable x64/arm64 Windows
+runners. It runs native agent unit/fake-service tests, then explicitly opts into the owned-window
+and terminal-process fixtures in `tests/windows_native.rs`. Those fixtures are ignored in ordinary
+test runs and require the runner opt-in. The captured PNG covers the full disposable runner
+desktop; this lane does not establish physical sleep/lock, UAC, multi-monitor or banner behavior.
+Its logs, runner metadata and owned-fixture evidence upload even when the checks fail.
+
 ### Packaged daemon update verification
 
 ```sh

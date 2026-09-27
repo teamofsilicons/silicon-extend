@@ -56,7 +56,7 @@ jobs:
             dist/*.tar.gz
             dist/*.tar.gz.sha256
           if-no-files-found: error
-  # The desktop app for Linux and Windows. Build only: no secrets, nothing published from here.
+  # Build and verify Linux/Windows desktop apps: no secrets, nothing published from here.
   desktop-linux:
     strategy:
       fail-fast: false
@@ -114,6 +114,16 @@ jobs:
         run: |
           & "target/desktop/windows/Silicon Extend/extend-agent.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "extend-agent --version failed" }
+      - name: Verify native agent and owned Windows fixtures
+        shell: pwsh
+        timeout-minutes: 15
+        run: ./apps/desktop/windows/verify-native.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-verification-${{ matrix.arch }}
+          path: target/windows-native-verification/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows-${{ matrix.arch }}
