@@ -1218,9 +1218,14 @@ mod tests {
         h.dispatcher.submit(c);
         let r = next_result(&mut h.rx).await;
         let args: Vec<String> = serde_json::from_value(r.output).unwrap();
-        assert!(args[1].ends_with("/attachments/flow.ad"), "{args:?}");
         assert!(
-            args[2].starts_with("--steps-file=") && args[2].ends_with("/attachments/steps.json"),
+            Path::new(&args[1]).ends_with(Path::new("attachments").join("flow.ad")),
+            "{args:?}"
+        );
+        assert!(
+            args[2]
+                .strip_prefix("--steps-file=")
+                .is_some_and(|path| Path::new(path).ends_with(Path::new("attachments").join("steps.json"))),
             "{args:?}"
         );
         assert_eq!(args[3], "plain");
