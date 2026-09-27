@@ -50,8 +50,12 @@ Historical signing and "nothing published" entries below are not current blocker
 candidate passed real Apple notarization, stapling and Gatekeeper, and the six CLI targets plus
 Linux/Windows desktop packages built successfully in release workflow `36357336309`. The first
 1.1 CI run exposed consumer-contract setup races and a misplaced browser test. Both are fixed;
-CI `36358256243` passed all five jobs at `b891822`. The subsequent native Linux banner and wake
-notification fixes need final CI and refreshed packages. No 1.1 publication or deployment has run.
+CI `36358256243` passed all five jobs at `b891822`. At `0159b7a`, refreshed Mac signing/notarization
+and Linux static/native package checks pass, including the banner and wake-notification fixes.
+Final CI `36359411111` passed all five jobs. Release workflow `36359407414` built all six CLI targets,
+Honeycomb and both Linux packages; its Windows verification stopped on a Unix-only test-path
+assertion before reaching native input tests. That assertion is corrected and Windows
+verification remains open. No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
 
@@ -82,6 +86,8 @@ Remaining from the Carbon's final requests, before the release gates below:
 - iPhone/iPad: first-screenshot attachment is implemented and verified through the real engine on
   an isolated iPad simulator, preserving the current screen without launching an app or a runner.
   Verify it on a physical iPad as well (including disconnect/reconnect and a new session).
+  A locked physical iPhone completed attachment and cleanup, but Apple returned an all-black PNG;
+  readable capture still needs an unlocked phone and does not substitute for the iPad checks.
 - TV image failures now reach the command result; bounded downloads, downsampling and asynchronous
   readiness are implemented and verified on an isolated Android TV emulator. Verify on the physical
   TV. Stored Extend images/videos now resolve to ordinary device attachments with Silicon/Team,

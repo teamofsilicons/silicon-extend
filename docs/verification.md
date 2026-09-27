@@ -32,6 +32,60 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — final Mac and Linux packages at 0159b7a
+
+CI workflow `36359411111` passed all five jobs at this commit: Rust (including consumer contracts
+and CLI end-to-end), the engine/packaging checks, Android, website/browser and contract lint.
+The six CLI archives and Honeycomb package from release workflow `36359407414` passed ten
+additional static checks, including GitHub digests, architecture, executable modes, licenses and
+exact CLI bytes inside the Honeycomb archive. Its two Windows desktop jobs each passed 176 unit
+tests and failed the same remaining Unix-only attachment-path assertion. Native input and
+process fixtures were not reached, and neither Windows desktop ZIP was uploaded. The assertion
+now compares native path components; the wrapper collects unit/integration and native fixture
+results before failing if either lane fails or the desktop is non-interactive. Mac's affected
+test, both Windows cross-checks, strict Clippy and formatting pass; Windows runtime rerun remains
+required. No Windows product defect was established by that assertion failure.
+
+The Mac candidate was rebuilt from clean commit `0159b7a16d3fbf890be3f87beb9024969be6651e`.
+All 5,068 tracked file hashes were unchanged before and after signing. Apple accepted notary
+submission `3694027e-f5bf-4ec6-9533-189c24c590a6`; thirteen independent checks of a fresh ZIP
+extraction passed, including Developer ID signatures, hardened runtime, entitlements, stapling,
+Gatekeeper, arm64 architecture and the engine runtime stamp. The ZIP is 45,539,198 bytes with
+SHA256 `1b0f7e0ea8a0bcce248aa98f78529dc7c2d9319e94cc3346a886086b6acf44de`.
+Evidence: `target/release-candidate/macos-0159b7a16d3fbf890be3f87beb9024969be6651e/`.
+No installed app, helper, TCC grant or Keychain credential was changed by this build.
+
+The fresh Linux packages from workflow `36359407414` passed four static audit groups: GitHub
+archive digests and CRCs, both ELF architectures, engine runtime stamps, and exact `.deb`/tarball
+equivalence for 601 files including modes. The arm64 `.deb` SHA256 is
+`eb821293fbd9c6ee12721de5afe5669fb7aac8a50e8ea1448abca82e28ca7c06`; x64 is
+`224ca2f6d836dc3c433933c79c9fe13a14e308a6278521510b9e5603677363dc`.
+
+`e2e/linux-release-rehearsal.py` then passed all six groups using that arm64 `.deb` directly,
+without an agent override. The packaged banner measured 420×52, collapsed to 250×44 and restored;
+real dragging and metadata updates preserved its position. The normal announcement expired,
+app/full-screen recordings survived banner/name changes, and collapsed Stop killed the detached
+`setsid` descendant. The exact owned container, database, service and listener were removed.
+Evidence: `target/release-candidate/ci-0159b7a16d3fbf890be3f87beb9024969be6651e/` under
+`linux-audit-report.json`, `LINUX-SHA256SUMS`, `linux-native-rehearsal/` and
+`linux-cleanup-verification.json`. This closes inclusion of the Linux fixes in the package.
+The native fixture remains a Docker X11 arm64 desktop with synthetic providers; physical Linux,
+Wayland and carried-device recording are not established. No package was published.
+
+## 2026-09-28 — physical iPhone capture while locked
+
+The existing opt-in first-screenshot test was run with an explicit physical iPhone 13 mini UDID
+on iOS 27.0 and isolated engine state, claims and leases. Despite its
+`simulator_first_screenshot` test name, this invocation used the physical CoreDevice backend.
+The event trace shows screenshot → `SESSION_NOT_FOUND` → targetless open → screenshot → close.
+No XCTest runner appeared in the device's process list before or after, and the owned daemon
+and listener were stopped. Evidence: `target/ios-physical-first-capture/`.
+
+CoreDevice reported `passcodeRequired: true` before and after. The returned 1125×2436 PNG is
+visually all black: this proves attachment and cleanup on a locked physical phone, not readable
+screen capture or preservation of a visible app. An unlocked-phone check is pending; physical
+iPad capture, reconnection and helper installation remain separate gates.
+
 ## 2026-09-28 — retractable Linux wake notifications
 
 The Linux `notify-send` fallback posted a notification without retaining an ID, so later
