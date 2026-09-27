@@ -1,8 +1,8 @@
-import { Show } from "solid-js";
-import { DOWNLOADS, type Platform } from "../config";
+import { For, Show } from "solid-js";
+import { CHECKSUMS, DOWNLOADS, RELEASES_URL, releaseAsset, type Platform } from "../config";
 import { Link } from "../lib/router";
 
-/** Placeholder until the Extend apps are published; links are configured in src/config.ts. */
+/** The files for one platform from the latest release; configured in src/config.ts. */
 export default function Download(props: { platform: string }) {
   const download = () => DOWNLOADS[props.platform as Platform];
   return (
@@ -24,15 +24,38 @@ export default function Download(props: { platform: string }) {
             <p class="eyebrow">Download</p>
             <h1 class="page-title">{d().app}.</h1>
             <p class="lead">{d().note}</p>
-            <div class="notice">
-              <p>
-                This download isn't published yet. When it is, this page gives you the file. Until then, follow the Extend repository for releases:{" "}
-                <a href="https://github.com/teamofsilicons/silicon-extend" target="_blank" rel="noopener noreferrer">
-                  github.com/teamofsilicons/silicon-extend
-                </a>
-                .
-              </p>
-            </div>
+            <Show
+              when={d().files}
+              fallback={
+                <div class="notice">
+                  <p>
+                    This download isn't published yet. When it is, this page gives you the file. Until then, follow the Extend repository for releases:{" "}
+                    <a href="https://github.com/teamofsilicons/silicon-extend" target="_blank" rel="noopener noreferrer">
+                      github.com/teamofsilicons/silicon-extend
+                    </a>
+                    .
+                  </p>
+                </div>
+              }
+            >
+              {(files) => (
+                <>
+                  <div class="download-files" data-testid="download-files">
+                    <For each={files()}>
+                      {(f) => (
+                        <a class="button primary" href={releaseAsset(f.name)} data-testid="download-file">
+                          {f.label}
+                        </a>
+                      )}
+                    </For>
+                  </div>
+                  <p class="fine">
+                    From the <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer">latest release</a>. Check a file against its{" "}
+                    <a href={CHECKSUMS}>SHA-256 checksum</a> with <code>shasum -a 256</code>.
+                  </p>
+                </>
+              )}
+            </Show>
             <p>
               <Link href="/devices/new">Back to adding a device</Link>
             </p>

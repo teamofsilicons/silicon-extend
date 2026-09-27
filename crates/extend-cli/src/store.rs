@@ -267,8 +267,10 @@ pub fn save_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
     }
 }
 
-/// A simple lock so two CLI processes don't refresh the same token at once.
-pub struct Lock(PathBuf);
+/// A simple lock so two CLI processes don't refresh the same token at once. After 10 s the caller
+/// goes on without it: the refresh carries an idempotency key derived from the refresh token, so two
+/// refreshes of one token get the same answer. Only a lock this process created is removed.
+pub struct Lock(Option<PathBuf>);
 
 impl Lock {
     pub fn acquire(name: &str) -> Self {
@@ -276,7 +278,7 @@ impl Lock {
         let _ = fs::create_dir_all(root());
         for _ in 0..200 {
             match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Self(path),
+                Ok(_) => return Self(Some(path)),
                 Err(_) => {
                     // A lock older than 30 s belongs to a process that died.
                     let stale = fs::metadata(&path)
@@ -291,13 +293,15 @@ impl Lock {
                 }
             }
         }
-        Self(path)
+        Self(None)
     }
 }
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        if let Some(path) = &self.0 {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Every `cargo … -p <package>` in the release and CI workflows, the Dockerfile and the desktop build
-//! scripts names a package this workspace has. A wrong name only fails when that job runs (a tagged
-//! release built `-p silicon-extend-cli`, a package that never existed, instead of `extend-cli`).
+//! scripts names a package this workspace has. A wrong name only fails when that job runs: once a
+//! release workflow named a package the workspace didn't have yet, and nothing failed until a tag.
 
 use std::path::{Path, PathBuf};
 
@@ -68,7 +68,7 @@ fn named_packages(file: &Path) -> Vec<(String, String)> {
 #[test]
 fn build_scripts_name_only_workspace_packages() {
     let packages = workspace_packages();
-    assert!(packages.iter().any(|p| p == "extend-cli"), "{packages:?}");
+    assert!(packages.iter().any(|p| p == "silicon-extend-cli"), "{packages:?}");
     let mut seen = 0;
     for file in build_files() {
         for (at, name) in named_packages(&file) {

@@ -1,11 +1,15 @@
 [package]
-name = "extend-protocol"
+name = "silicon-extend-protocol"
 description = "Wire types shared by the Silicon Extend service, client, CLI and device agents"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://extend.teamofsilicons.com"
+readme = "README.md"
+keywords = ["silicon", "extend", "protocol"]
+categories = ["api-bindings"]
 
 [dependencies]
 base64.workspace = true

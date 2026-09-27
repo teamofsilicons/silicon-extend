@@ -362,7 +362,8 @@ from spake2-android 2.2.1 (LGPL-3.0, from JitPack), Conscrypt 2.5.3 and BouncyCa
 app shows every component's notice and licence text under **Open-source licences** (below the
 version on every screen), from `app/src/main/assets/open_source_licences.txt`; regenerate it
 with `python3 tools/notices/generate_notices.py` whenever dependencies change (it fails on a
-licence it doesn't know). APKs remain development-signed; release signing is a separate gate.
+licence it doesn't know). Release APKs are signed only when `EXTEND_ANDROID_SIGNING_PROPERTIES` names the release key's properties
+(storeFile, storePassword, keyAlias, keyPassword); otherwise they are unsigned, never debug-signed.
 
 From the CLI, `extend adb` arguments reach the device exactly as typed from the first `adb`
 argument on; Extend's own flags go before it (`extend --json adb shell df -h`,

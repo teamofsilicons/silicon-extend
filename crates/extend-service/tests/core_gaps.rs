@@ -904,6 +904,40 @@ async fn an_expired_token_that_is_refreshed_keeps_the_session() {
     );
 }
 
+#[tokio::test]
+async fn a_silicon_that_turned_telemetry_off_leaves_no_command_events() {
+    let env = start().await;
+    let token = login(&env.client, "si:chef").await;
+    let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
+        .await
+        .run(&env.base);
+    let on = env.client.authed(&token, Some("acme"));
+    let sid = on
+        .start_session(&device.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    let count = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.telemetry WHERE event->>'event' = 'command'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap()
+    };
+    assert!(on.run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
+    assert_eq!(count().await, 1, "telemetry on: the command is recorded");
+    let quiet = Client::builder(&env.base).telemetry(false).connect().await.unwrap();
+    assert!(
+        quiet
+            .authed(&token, Some("acme"))
+            .run(&sid, &cmd("snapshot", &[]))
+            .await
+            .unwrap()
+            .ok
+    );
+    assert_eq!(count().await, 1, "telemetry off: nothing more is recorded");
+}
+
 // ───────────────────────────── Ting ─────────────────────────────
 
 #[tokio::test]

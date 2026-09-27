@@ -2,8 +2,9 @@
  * Everything the website needs to know that is not fetched from Extend: where the API is,
  * where the Extend apps download from, and how each kind of device is added.
  *
- * Download links are placeholders under `/download/<platform>` until the apps are published.
- * Change them here and nowhere else.
+ * The Extend apps link to `/download/<platform>` (extend-agent's config.rs does too), and each
+ * page offers the files of the latest GitHub release under stable names. A platform whose `files`
+ * is null isn't published yet. Change them here and nowhere else.
  */
 import type { DeviceOs } from "./lib/types";
 
@@ -24,7 +25,7 @@ export const IAM_LOGIN_URL_OVERRIDE = import.meta.env.VITE_IAM_LOGIN_URL || "";
 export const LINKS = {
   repository: "https://github.com/teamofsilicons/silicon-extend",
   crate: "https://crates.io/crates/silicon-extend-client",
-  docs: "https://docs.extend.teamofsilicons.com",
+  docs: "https://extend.teamofsilicons.com/docs",
   website: "https://extend.teamofsilicons.com",
   api: PRODUCTION_API,
   install: "honeycomb install 'extend'",
@@ -37,12 +38,27 @@ export type Platform =
   | "windows"
   | "linux";
 
+/** Assets of the latest GitHub release, by stable name. release.yml builds versioned artifacts; the release
+ * procedure copies them to these names and writes SHA256SUMS when it creates the GitHub release. */
+export const RELEASES_URL = "https://github.com/teamofsilicons/silicon-extend/releases/latest";
+export const releaseAsset = (name: string) => `${RELEASES_URL}/download/${name}`;
+export const CHECKSUMS = releaseAsset("SHA256SUMS");
+
+export interface DownloadFile {
+  label: string;
+  name: string;
+}
+
 export interface Download {
   platform: Platform;
   app: string;
   href: string;
   note: string;
+  /** null: not published yet. */
+  files: DownloadFile[] | null;
 }
+
+const ANDROID_APK: DownloadFile[] = [{ label: "Android app (.apk)", name: "Silicon-Extend-android.apk" }];
 
 export const DOWNLOADS: Record<Platform, Download> = {
   android: {
@@ -50,30 +66,43 @@ export const DOWNLOADS: Record<Platform, Download> = {
     app: "Silicon Extend for Android",
     href: "/download/android",
     note: "Install the .apk on the phone or tablet. Android asks once to allow installs from your browser.",
+    files: ANDROID_APK,
   },
   "android-tv": {
     platform: "android-tv",
     app: "Silicon Extend TV",
     href: "/download/android-tv",
-    note: "For Android TV, Google TV and Fire TV. Install it on the TV itself.",
+    note: "For Android TV, Google TV and Fire TV. The same .apk as for phones: install it on the TV itself.",
+    files: ANDROID_APK,
   },
   mac: {
     platform: "mac",
     app: "Silicon Extend for Mac",
     href: "/download/mac",
-    note: "A menu bar app for macOS. Open the .dmg and drag it to Applications.",
+    note: "A menu bar app for Macs with Apple silicon. Unzip it and move Silicon Extend to Applications.",
+    files: [{ label: "Mac, Apple silicon (.zip)", name: "Silicon-Extend-macos-arm64.zip" }],
   },
   windows: {
     platform: "windows",
     app: "Silicon Extend for Windows",
     href: "/download/windows",
-    note: "A system tray app. Run the installer and allow it when Windows asks.",
+    note: "A system tray app. Unzip it and run extend-agent.exe. This is a preview: it isn't signed yet, so Windows SmartScreen warns before it runs.",
+    files: [
+      { label: "Windows x64 (.zip)", name: "Silicon-Extend-windows-x64.zip" },
+      { label: "Windows on Arm (.zip)", name: "Silicon-Extend-windows-arm64.zip" },
+    ],
   },
   linux: {
     platform: "linux",
     app: "Silicon Extend for Linux",
     href: "/download/linux",
-    note: "Packages for common distributions.",
+    note: "A .deb for Ubuntu 24.04, Debian 13 and newer, or a tarball for other distributions with glibc 2.39 or later.",
+    files: [
+      { label: "Debian/Ubuntu x64 (.deb)", name: "silicon-extend_amd64.deb" },
+      { label: "Debian/Ubuntu arm64 (.deb)", name: "silicon-extend_arm64.deb" },
+      { label: "Linux x64 (.tar.gz)", name: "silicon-extend-linux-x64.tar.gz" },
+      { label: "Linux arm64 (.tar.gz)", name: "silicon-extend-linux-arm64.tar.gz" },
+    ],
   },
 };
 
@@ -185,7 +214,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     download: "windows",
     icon: "monitor",
     guide: [
-      "Download Silicon Extend for Windows and run the installer.",
+      "Download Silicon Extend for Windows, unzip it and run extend-agent.exe.",
       "Open it from the system tray. It shows a pairing code.",
       "Enter that code below.",
     ],

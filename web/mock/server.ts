@@ -1569,7 +1569,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
           code: error.code,
           message: error.message,
           hint: error.hint,
-          docs_url: `https://docs.extend.teamofsilicons.com/errors#${error.code}`,
+          docs_url: `https://extend.teamofsilicons.com/docs/cli#error-${error.code}`,
           request_id: requestId,
           details: error.details,
         },

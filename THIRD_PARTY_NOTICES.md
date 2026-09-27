@@ -11,12 +11,12 @@ What ships where:
 | Artifact | Third-party parts it carries | Where its notices are |
 |---|---|---|
 | `extend` CLI (Honeycomb archive, six targets) | Rust crates | `licences/` in every target of the archive (`targets/<target>/licences/`): `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
-| Extend service (container image) | Rust crates, the vendored `silicon-iam-client` | `/usr/share/doc/silicon-extend/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt` |
+| Extend service (container image) | Rust crates, including `silicon-iam-client` | `/usr/share/doc/silicon-extend/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt` |
 | Mac app (`Silicon Extend.app`) | Rust crates, the agent-device fork and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`, `agent-device/LICENSE`, `node/LICENSE` |
 | Linux tarball and `.deb` | Rust crates, the agent-device fork (including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `share/doc/silicon-extend/` (`LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`), `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE` |
 | Windows zip | Rust crates, fonts inlined in the window (no Node.js, no agent-device) | `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt` beside the executable |
 | Android APK | libadb-android, spake2-android, Conscrypt/BoringSSL, Bouncy Castle, AndroidX/Compose, Kotlin, OkHttp/Okio, fonts | The app's **Open-source licences** screen: `apps/android/app/src/main/assets/open_source_licences.txt`, with the full licence texts |
-| Configuration website | SolidJS, Lucide icons, fonts | This file (the built site does not carry the licence texts yet) |
+| Configuration website | SolidJS, Lucide icons, fonts | [`/licences.txt`](https://extend.teamofsilicons.com/licences.txt): Extend's licence and the full text of each package the site ships (`web/scripts/gen-licences.mjs`, run by every build) |
 
 ## Forked and vendored components
 
@@ -98,12 +98,11 @@ What ships where:
   in `apps/android/gradle/verification-metadata.xml`. Whether this approach is sufficient is
   listed for the Carbon's confirmation in `docs/completion-work.md`.
 
-### silicon-iam-client 4.0.0 (vendored, Extend service)
+### silicon-iam-client 4.0.0 (Extend service)
 
 - Team of Silicons' own Silicon IAM client crate (https://github.com/teamofsilicons/silicon-iam),
-  vendored as a packaged snapshot in [`vendor/silicon-iam-client`](vendor/silicon-iam-client)
-  (see its `VENDORED.md`).
-- Licence: **Apache-2.0**, text in [`vendor/silicon-iam-client/LICENSE`](vendor/silicon-iam-client/LICENSE).
+  used from crates.io (https://crates.io/crates/silicon-iam-client).
+- Licence: **Apache-2.0**; its text is in `THIRD_PARTY_LICENSES.txt`.
 
 ## Fonts
 
@@ -116,8 +115,8 @@ unmodified (the website and the desktop window use latin subsets).
 | Source Serif 4 | Copyright 2014 - 2023 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source' | Website (`@fontsource/source-serif-4` 5.3.0), desktop window (inlined), Android (`source_serif_4_regular.ttf`) |
 
 The OFL 1.1 text is in the Android notices file (`apps/android/app/src/main/assets/open_source_licences.txt`)
-and at https://openfontlicense.org. The website and the desktop window do not yet ship the licence
-text next to the fonts (open gate in `docs/completion-work.md`).
+and at https://openfontlicense.org. The website ships it in `/licences.txt`. The desktop window does
+not yet ship the licence text next to the fonts (open gate in `docs/completion-work.md`).
 
 ## Android dependencies
 
@@ -148,11 +147,11 @@ Everything else in `web/package.json` is a build or test tool and is not shipped
 ## Rust crates
 
 The crates below are reachable through normal or build dependencies from the workspace crates
-(`extend-cli`, `extend-service`, `extend-agent`, `extend-hosted`, `extend-driver`,
-`extend-protocol`, `silicon-extend-client`, and the vendored `silicon-iam-client`) on any
-platform: 581 crates. It is an over-approximation
+(`silicon-extend-cli`, `extend-service`, `extend-agent`, `extend-hosted`, `extend-driver`,
+`silicon-extend-protocol` and `silicon-extend-client`) on any
+platform: 582 crates. It is an over-approximation
 of any one binary: it includes Windows-, macOS- and Linux-only crates and build-time crates (such as
-`cc` and `cmake`) that are not linked in. Per binary: `extend-cli` 220, `extend-service` 333,
+`cc` and `cmake`) that are not linked in. Per binary: `extend` (the CLI) 220, `extend-service` 334,
 `extend-agent` 527. Where a crate offers a choice (`A OR B`), Extend uses it under the permissive
 option (MIT or Apache-2.0 where offered).
 
@@ -183,7 +182,7 @@ By licence expression (as `cargo metadata` reports it, with `A/B` spelled `A OR 
 
 **MPL-2.0** (5): cssparser 0.37.0, cssparser-macros 0.7.1, dtoa-short 0.3.5, option-ext 0.2.0, selectors 0.38.0.
 
-**Apache-2.0** (4): gethostname 1.1.0, openssl 0.10.81, sync_wrapper 1.0.2, tao 0.37.0.
+**Apache-2.0** (5): gethostname 1.1.0, openssl 0.10.81, silicon-iam-client 4.0.0, sync_wrapper 1.0.2, tao 0.37.0.
 
 **BSD-3-Clause** (4): curve25519-dalek 4.1.3, ed25519-dalek 2.2.0, subtle 2.6.1, x25519-dalek 2.0.1.
 

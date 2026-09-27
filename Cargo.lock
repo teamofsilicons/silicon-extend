@@ -1265,7 +1265,6 @@ dependencies = [
  "clap",
  "extend-driver",
  "extend-hosted",
- "extend-protocol",
  "futures",
  "gethostname",
  "http",
@@ -1278,6 +1277,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "silicon-extend-protocol",
  "tao",
  "tempfile",
  "thiserror 2.0.21",
@@ -1295,27 +1295,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "extend-cli"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "extend-protocol",
- "serde",
- "serde_json",
- "silicon-extend-client",
- "time",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "extend-driver"
 version = "1.0.0"
 dependencies = [
  "async-trait",
- "extend-protocol",
  "serde_json",
+ "silicon-extend-protocol",
  "tokio",
  "uuid",
 ]
@@ -1329,7 +1314,6 @@ dependencies = [
  "chacha20poly1305",
  "ed25519-dalek",
  "extend-driver",
- "extend-protocol",
  "futures-util",
  "hex",
  "hkdf 0.12.4",
@@ -1342,6 +1326,7 @@ dependencies = [
  "serde_json",
  "sha1 0.10.7",
  "sha2 0.10.9",
+ "silicon-extend-protocol",
  "tempfile",
  "tokio",
  "tokio-native-tls",
@@ -1353,20 +1338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extend-protocol"
-version = "1.0.0"
-dependencies = [
- "base64 0.22.1",
- "rand 0.9.5",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.21",
- "time",
- "uuid",
-]
-
-[[package]]
 name = "extend-service"
 version = "1.0.0"
 dependencies = [
@@ -1375,7 +1346,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
- "extend-protocol",
  "futures",
  "hex",
  "hmac 0.12.1",
@@ -1387,6 +1357,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "silicon-extend-client",
+ "silicon-extend-protocol",
  "silicon-iam-client",
  "space-station",
  "sqlx",
@@ -4215,14 +4186,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "silicon-extend-cli"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "silicon-extend-client",
+ "silicon-extend-protocol",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "silicon-extend-client"
 version = "1.0.0"
 dependencies = [
- "extend-protocol",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "silicon-extend-protocol",
  "thiserror 2.0.21",
  "time",
  "tokio",
@@ -4231,8 +4217,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "silicon-extend-protocol"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "silicon-iam-client"
 version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1668b04888a69dc8923b4f179a6641416226a01c9d095d66dead59c68476c79"
 dependencies = [
  "base64 0.22.1",
  "hex",

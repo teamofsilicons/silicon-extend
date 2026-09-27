@@ -699,8 +699,11 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
 - **Files** (all `0600`, directory `0700`):
   `auth.json` (tokens, team), `config.toml`, `sessions/current`, `sessions/{session_id}.json`
   (device, capabilities), `test/{environment_id}.json` (test app secret and that world's tokens).
-- **Token refresh** is serialised with an advisory file lock on `auth.json`, and the replacement
-  pair is written atomically (write temporary, `fsync`, rename), as IAM's client docs require.
+- **Token refresh** is serialised with a lock file, `refresh.lock` (created exclusively; one older
+  than 30 s is taken as left by a dead process). A process that can't get it within 10 s refreshes
+  anyway: the refresh sends an idempotency key derived from the refresh token, so two refreshes of
+  one token get the same answer. A process only removes a lock it created. The replacement pair is
+  written atomically (write temporary, `fsync`, rename), as IAM's client docs require.
 - **No daemon** is needed: each command is one HTTPS request. See Open question 7.
 - **Session selection**, first match wins: `--session <id>`, then `EXTEND_SESSION`, then the
   connected session.
@@ -724,10 +727,12 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
 ## 12. Telemetry, reports, logs
 
 - Telemetry goes to Space Station, on by default, off with `extend config set telemetry off` or the
-  website's settings. The CLI posts events to `POST /api/v1/telemetry` so no ingest key ships in
-  the CLI. Each event carries source (`cli`, `client`, `app`, `service`, `web`), step, outcome,
-  duration, command name, device OS, and the session and command ids. Never typed text, clipboard
-  contents, screen contents, tokens, codes or secrets.
+  website's settings. Off sends `X-Extend-Telemetry: off` on every request: the service then drops
+  the caller's own events and records nothing about that caller's commands. The CLI posts events to
+  `POST /api/v1/telemetry` so no ingest key ships in the CLI. Every event carries its source (`cli`,
+  `client`, `app`, `service`, `web`), step, outcome and duration. The service's command events also
+  carry the command name, device OS and the session and command ids; the CLI's carry the command
+  name. Never typed text, clipboard contents, screen contents, tokens, codes or secrets.
 - `extend report "<message>" [--pr <url>]` stores the report and emails it through Postmark to the
   three addresses in `UNDERSTANDING.md`. In a test environment the email is simulated. As built
   (2026-09-27) the default list (`EXTEND_REPORT_RECIPIENTS`) sends to `shubhastro2@gmail.com`, where

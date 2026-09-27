@@ -8,6 +8,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::db::World;
 use crate::state::AppState;
 
+/// True when the caller turned telemetry off (`X-Extend-Telemetry: off`, which the CLI, the
+/// client's `telemetry(false)` and the website's setting send): nothing about that request is kept.
+pub fn opted_out(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-extend-telemetry")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("off"))
+}
+
 /// Records a service-side event. Never fails the caller.
 pub async fn record(state: &AppState, world: &World, member: Option<&str>, event: serde_json::Value) {
     let _ = sqlx::query(sql!(

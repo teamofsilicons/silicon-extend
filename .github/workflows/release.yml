@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: rustup target add ${{ matrix.target }}
-      - run: cargo build --locked --release -p extend-cli --target ${{ matrix.target }}
+      - run: cargo build --locked --release -p silicon-extend-cli --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}

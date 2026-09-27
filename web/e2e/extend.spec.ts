@@ -627,7 +627,13 @@ test.describe("settings and docs", () => {
     await page.goto("/docs/devices");
     await expect(page.getByTestId("docs-page")).toContainText("Apple TV");
     await page.goto("/download/android");
-    await expect(page.getByTestId("download-page")).toContainText("isn't published yet");
+    await expect(page.getByTestId("download-file")).toHaveAttribute(
+      "href",
+      "https://github.com/teamofsilicons/silicon-extend/releases/latest/download/Silicon-Extend-android.apk",
+    );
+    await page.goto("/download/linux");
+    await expect(page.getByTestId("download-file")).toHaveCount(4);
+    await expect(page.getByTestId("download-page")).toContainText("SHA-256 checksum");
   });
 });
 

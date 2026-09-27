@@ -35,7 +35,7 @@ describe("errors", () => {
         code: "device_in_use",
         message: "Device 7c1e09ab is being used by si:chef.",
         hint: "Ask for it with: extend request send 7c1e09ab",
-        docs_url: "https://docs.extend.teamofsilicons.com/errors#device_in_use",
+        docs_url: "https://extend.teamofsilicons.com/docs/cli#error-device_in_use",
         request_id: "01926f41",
         details: { in_use: { silicon_id: "si:chef" } },
       },
@@ -48,7 +48,7 @@ describe("errors", () => {
       code: "device_in_use",
       message: "Device 7c1e09ab is being used by si:chef.",
       hint: "Ask for it with: extend request send 7c1e09ab",
-      docsUrl: "https://docs.extend.teamofsilicons.com/errors#device_in_use",
+      docsUrl: "https://extend.teamofsilicons.com/docs/cli#error-device_in_use",
       requestId: "01926f41",
       details: { in_use: { silicon_id: "si:chef" } },
     });

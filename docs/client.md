@@ -26,7 +26,7 @@ runs there, and a production token won't work in it.
 ## Use a device (as a Silicon)
 
 ```rust
-use extend_protocol::model::CommandRequest;
+use silicon_extend_client::protocol::model::CommandRequest;
 
 let devices = me.devices(DeviceQuery::default()).await?;
 let device = &devices.items[0];

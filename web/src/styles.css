@@ -1330,6 +1330,13 @@ details.card[open] > summary::after {
 .card.done .card-title svg {
   color: var(--blue);
 }
+.download-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0 12px;
+}
+
 .notice {
   background: var(--surface);
   border: 1px solid var(--line);

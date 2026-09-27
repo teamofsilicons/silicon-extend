@@ -144,7 +144,7 @@ impl ApiError {
             message: message.into(),
             hint: None,
             docs_url: Some(format!(
-                "https://docs.extend.teamofsilicons.com/errors#{}",
+                "https://extend.teamofsilicons.com/docs/cli#error-{}",
                 code.as_str()
             )),
             request_id: String::new(),

@@ -14,7 +14,7 @@ summary: Let a Silicon use the devices a Carbon has paired, and let the Carbon m
 install: honeycomb install 'extend'
 links:
   repository: https://github.com/teamofsilicons/silicon-extend
-  docs: https://docs.extend.teamofsilicons.com
+  docs: https://extend.teamofsilicons.com/docs
   website: https://extend.teamofsilicons.com
   client_crate: https://crates.io/crates/silicon-extend-client
   api: https://backend.extend.teamofsilicons.com
@@ -125,7 +125,16 @@ errors:
   api_version_unsupported: [13, 'No API version in common. Update with `honeycomb install ''extend''`.']
   api_version_sunset: [13, 'This API version was retired. Update the CLI.']
   service_unavailable: [14, 'Extend or a service it depends on is down; the message names which.']
-
+  command_failed: [1, 'The device ran the command and it failed; the message is the device''s own error.']
+  unauthorized: [3, 'The credential was refused: a missing, malformed or revoked token, device credential or enrollment secret.']
+  request_not_found: [5, 'No request with that id is visible to you.']
+  enrollment_not_found: [5, 'The pairing attempt is gone: it expired, was used, or belongs to another environment. Open the app again for a new code.']
+  conflict: [6, 'The request clashes with the current state (for example an Idempotency-Key reused with a different body). The message says which.']
+  not_self_destructing: [6, 'The file is already permanent, so there is nothing to cancel.']
+  api_version_mismatch: [13, 'The API version in the header differs from the one in the path. Update the CLI or client.']
+  upgrade_required: [13, 'This Extend app is older than the oldest the service supports. Download the latest from extend.teamofsilicons.com.']
+  payload_too_large: [2, 'The upload or request body is over the limit the message names.']
+  internal: [14, 'Extend failed unexpectedly. Retry; if it keeps happening, run `extend report`.']
 commands:
 
   # ───────────────────────────── Getting started ─────────────────────────────

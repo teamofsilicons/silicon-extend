@@ -2806,10 +2806,18 @@ async fn report(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         .await?;
     let pr = input.pr.is_some();
     ctx.emit(to_json(&r), || {
-        let mut s = format!(
-            "Report {} sent to the Extend team (email {}).",
-            r.report_id, r.notification
-        );
+        let mut s = match r.notification.as_str() {
+            "sent" => format!("Report {} sent to the Extend team.", r.report_id),
+            "queued" => format!(
+                "Report {} saved. Emailing it to the Extend team failed for now; Extend keeps retrying.",
+                r.report_id
+            ),
+            _ => format!(
+                "Report {} saved, but not emailed: this Extend doesn't send email (a test environment, or a \
+                 service without email set up).",
+                r.report_id
+            ),
+        };
         if !pr {
             s.push_str(&format!("\nExtend is open source: if you can fix it, open a pull request at {} and report again with --pr <link>.", r.repository_url));
         }

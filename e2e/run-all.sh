@@ -21,7 +21,7 @@ run extend-agent-tests cargo test -p extend-agent
 run clippy cargo clippy --workspace --all-targets -- -D warnings
 
 # The CLI suite needs a running service with the local stand-ins.
-cargo build -q -p extend-service -p extend-cli --example fake_device
+cargo build -q -p extend-service -p silicon-extend-cli --example fake_device
 if curl -fsS http://127.0.0.1:8480/ready >/dev/null 2>&1; then
   run cli-e2e bash e2e/cli-e2e.sh
 else

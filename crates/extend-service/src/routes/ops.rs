@@ -149,7 +149,7 @@ pub async fn telemetry(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> AppResult<Response> {
-    if headers.get("x-extend-telemetry").and_then(|v| v.to_str().ok()) == Some("off") {
+    if crate::telemetry::opted_out(&headers) {
         return Ok(no_content());
     }
     let data: serde_json::Value = super::parse_envelope(&body)?;

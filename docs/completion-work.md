@@ -12,28 +12,10 @@ physical-device or production gate. What was run, and on what, is in
 
 ### 1. The name and the GitHub repository
 
-Checked read-only with `gh` on 2026-09-27; nothing was pushed, created or changed.
-
-- **`teamofsilicons/silicon-extend` already exists and is a different product.** Private, created
-  2026-07-24, described as "Our own tool integration layer": a Python tool layer for Silicons
-  (`pip install silicon-extend`, a `silicon-extend` command, connected to Glass or standalone),
-  Apache-2.0, releases v0.1.0 to v0.1.4, last pushed 2026-08-03. This product was renamed from
-  Silicon Bridge to Silicon Extend on 2026-09-26, so the two now share a name, and
-  `Cargo.toml`'s `repository` field points at the other product's repository.
-- **`teamofsilicons/silicon-bridge` is a different, older product line.** Private, created
-  2026-08-21; `main` has one commit, `cb3257e` "Initial commit" (2026-08-24), holding its own
-  `UNDERSTANDING.md` (6,983 bytes: "silicon-bridge is to bridge stemcell and interface", a Rust
-  relay over NATS core and JetStream between Silicons and Interface) and `interface-api-ref.html`
-  (6.5 MB). No workflows, no tags; branch protection is not available on the current GitHub plan.
-- This checkout has **no remote** and a different root commit. Putting it into either repository is
-  a Carbon decision, not a git step: which name this product keeps, which repository it lives in,
-  and what happens to the other product's `UNDERSTANDING.md` (two `UNDERSTANDING.md` files for two
-  products must not end up side by side, and agents may edit neither). Until then: no push, never a
-  force-push to any `main`, and treat `Cargo.toml`'s `repository` value as unsettled. The website's
-  download page and `extend report` link to that repository too.
-- Names that may collide the same way and were not checked: the crates.io names
-  (`silicon-extend-client`, `extend-protocol`), the Honeycomb app `extend`, and the `extend`
-  command on a Silicon's `PATH`.
+Settled on 2026-09-27. The Carbon deleted the unrelated repository that held the name, and Extend
+now lives at `teamofsilicons/silicon-extend`. The crates are `silicon-extend-protocol`,
+`silicon-extend-client` and `silicon-extend-cli`; the Honeycomb app is `extend`.
+`teamofsilicons/silicon-bridge` is an unrelated older product and is left alone.
 
 ### 2. Signing and notarization
 
@@ -58,8 +40,9 @@ infrastructure must be checked before anything is changed:
   and its first-deploy and release steps; it has not been deployed.
 - The configuration website at `extend.teamofsilicons.com` (Vercel), and DNS for both.
 - The CLI: tag, `release.yml`, `honeycomb releases upload` from a Carbon session.
-- Downloads of the Mac, Linux, Windows and Android apps (every download link on the website is a
-  placeholder page today).
+- Downloads of the Mac, Linux, Windows and Android apps. The website's download pages link to the
+  latest GitHub release under stable names (`web/src/config.ts`), so they return 404 until that
+  release is published.
 - Silicon IAM registration of Extend's OBO catalog, including Briefcase's approval of
   `invitations.create` (critical), and of the webhook endpoint with its signing secret (production
   now refuses to start without `EXTEND_IAM_WEBHOOK_SECRET`).
@@ -159,9 +142,9 @@ verifiers and not fixed.
     reports again.
   - There is no route for a host computer to revoke a device it carries (the desktop window sends
     the Carbon to the website instead).
-- **Service: identity.** `silicon-iam-client` 4.0.0 is a vendored path copy (identical `src/` to the
-  crates.io release), and Extend parses IAM 4 events itself where the SDK rejects a non-UUID
-  aggregate id; depend on crates.io and drop the parser once an SDK release accepts them.
+- **Service: identity.** Extend uses `silicon-iam-client` 4.0.0 from crates.io, and parses IAM 4
+  events itself where the SDK rejects a non-UUID aggregate id; drop that parser once an SDK
+  release accepts them.
 - **Test infrastructure.** The service suites leave one throwaway database per test
   (`extend_e2e_*`, `extend_core_*`, `extend_gaps_*`, `extend_contracts_*`); nothing drops them
   automatically, so run `e2e/clean-test-dbs.sh` (which drops all four) after a run. On 2026-09-27 the
@@ -179,8 +162,7 @@ verifiers and not fixed.
   service returns only when the app is opened. APKs above the 8 MiB attachment limit install only
   through the parts recipe. The apps don't dump their own frames for the contract fixtures yet
   (`contracts/v1/device` is derived by hand).
-- **Website.** Sign-up guesses IAM's `/signup` address (Carbon decision C8); the built site doesn't
-  carry its fonts' and libraries' licence texts.
+- **Website.** Sign-up guesses IAM's `/signup` address (Carbon decision C8).
 
 ## Done in round 2 (2026-09-27)
 

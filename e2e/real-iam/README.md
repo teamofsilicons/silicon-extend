@@ -6,7 +6,7 @@ device and raw HTTP. Unlike `e2e/cli-e2e.sh` and `cargo test`, which use the loc
 every login, refresh, revocation, directory read, removal and webhook here goes through IAM.
 
 ```sh
-cargo build -p extend-service -p extend-cli --bins --examples   # the shared target/ (CARGO_TARGET_DIR is honoured)
+cargo build -p extend-service -p silicon-extend-cli --bins --examples   # the shared target/ (CARGO_TARGET_DIR is honoured)
 python3 e2e/real-iam/realiam.py all          # up, check, down; exit 0 only if every check passed
 python3 e2e/real-iam/realiam.py all --keep   # leave everything running to poke at it
 python3 e2e/real-iam/realiam.py up | check | down | restart-extend

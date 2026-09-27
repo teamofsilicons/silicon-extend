@@ -32,7 +32,7 @@ jobs:
       - run: cargo test --workspace --locked
       - name: CLI end-to-end
         run: |
-          cargo build --locked -p extend-cli -p extend-service --bins --example fake_device
+          cargo build --locked -p silicon-extend-cli -p extend-service --bins --example fake_device
           set -a; . e2e/dev.env; set +a
           ./target/debug/extend-service &
           for _ in $(seq 60); do curl -fsS http://127.0.0.1:8480/ready >/dev/null && break; sleep 1; done

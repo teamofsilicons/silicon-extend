@@ -331,7 +331,7 @@ Resources:
             aws secretsmanager get-secret-value --region "$REGION" --secret-id "$RUNTIME_SECRET_ARN" \
               --query SecretString --output text > /etc/extend/runtime.json
             python3 - <<'PY'
-            import json, os, pathlib
+            import json, os, pathlib, re
             stack = dict(l.split('=', 1) for l in pathlib.Path('/etc/extend/stack.env').read_text().splitlines() if '=' in l)
             source = json.loads(pathlib.Path('/etc/extend/runtime.json').read_text())
             required = ('EXTEND_DATABASE_URL', 'EXTEND_IAM_APP_ID', 'EXTEND_IAM_APP_SECRET',
@@ -349,6 +349,12 @@ Resources:
                 return value
             values = {k: clean(k, source.get(k)) for k in required}
             values.update({k: clean(k, source[k]) for k in optional if k in source})
+            # API versioning settings (docs/deployment.md) are open-ended: one pair per API major.
+            versioning = re.compile(r'EXTEND_(DEPRECATED_API_VERSIONS|API_V[0-9]+_(CLI|CLIENT_CRATE))')
+            values.update({k: clean(k, v) for k, v in source.items() if versioning.fullmatch(k)})
+            ignored = sorted(k for k in source if k not in values)
+            if ignored:
+                print('extend-render-env: ignoring unknown keys in the runtime secret: ' + ', '.join(ignored))
             if 'sslmode=verify-full' not in values['EXTEND_DATABASE_URL']:
                 raise SystemExit('EXTEND_DATABASE_URL must use sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem')
             defaults = {
@@ -475,7 +481,7 @@ Resources:
               -v /opt/extend/rds-global-bundle.pem:/etc/ssl/rds/global-bundle.pem:ro \
               --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
               --cap-drop ALL --security-opt no-new-privileges:true --memory 1600m --memory-swap 3200m \
-              --log-driver awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=$LOG_GROUP \
+              --log-driver awslogs --log-opt awslogs-region=${AWS::Region} --log-opt awslogs-group=${LogGroup} \
               --log-opt awslogs-stream=extend-service --log-opt mode=non-blocking \
               $EXTEND_IMAGE serve
             ExecStop=/usr/bin/docker stop --time 20 extend-service

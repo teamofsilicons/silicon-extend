@@ -13,9 +13,10 @@ a list of things to act on (buttons, fields, lists) and acts on them.
 [`cli.yaml`](understanding/cli.yaml); formats and flows are in
 [`TECHNICAL.md`](understanding/TECHNICAL.md).
 
-**Status:** not released. Nothing is deployed or published yet, and physical devices, Windows and
-production integrations are unverified. A second round of fixes after an audit against
-`UNDERSTANDING.md` (2026-09-27) is in the working tree, not yet committed. What is left, and what needs a Carbon's decision, is in
+**Status:** 1.0.0. The service runs at `backend.extend.teamofsilicons.com`, the website at
+[extend.teamofsilicons.com](https://extend.teamofsilicons.com), and the device apps are on the
+[releases page](https://github.com/teamofsilicons/silicon-extend/releases). Windows is a preview.
+What is still open, and what needs a Carbon's decision, is in
 [docs/completion-work.md](docs/completion-work.md); what was run is in
 [docs/verification.md](docs/verification.md). This product was called Silicon Bridge until
 2026-09-26.
@@ -53,7 +54,6 @@ documentation; every node explains itself. More: [docs/cli.md](docs/cli.md).
 | `apps/desktop` | Packaging for the desktop app |
 | `web` | The configuration website (SolidJS) |
 | `vendor/agent-device` | Our fork of agent-device ([what changed](vendor/agent-device/FORK.md)) |
-| `vendor/silicon-iam-client` | The Silicon IAM client crate, vendored |
 | `docs` | [Device protocol](docs/device-protocol.md), [CLI](docs/cli.md), [client](docs/client.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [verification record](docs/verification.md), [open gates](docs/completion-work.md) |
 | `contracts` | Consumer contract fixtures the service's CI replays ([format](contracts/README.md)) |
 | `deploy/aws` | A single-host production stack for the service (not deployed) |
@@ -67,7 +67,7 @@ See [docs/development.md](docs/development.md). In short:
 docker run -d --name silicon-extend-postgres -e POSTGRES_USER=extend -e POSTGRES_PASSWORD=extend -e POSTGRES_DB=extend -p 127.0.0.1:5440:5432 postgres:16.9-bookworm
 cargo test --workspace                        # unit + service end-to-end (creates throwaway databases)
 set -a; . e2e/dev.env; set +a; cargo run -p extend-service &
-cargo build -p extend-cli -p extend-service --example fake_device && bash e2e/cli-e2e.sh
+cargo build -p silicon-extend-cli -p extend-service --example fake_device && bash e2e/cli-e2e.sh
 cd web && pnpm install && pnpm dev            # website against the local service
 ```
 

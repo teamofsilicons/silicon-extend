@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://extend.teamofsilicons.com"
+readme = "README.md"
+keywords = ["silicon", "extend", "devices", "automation", "client"]
+categories = ["api-bindings"]
 
 [package.metadata.docs.rs]
 all-features = true

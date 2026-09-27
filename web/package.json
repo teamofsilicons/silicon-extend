@@ -9,7 +9,7 @@
     "dev": "pnpm docs:gen && vite",
     "dev:mock": "pnpm docs:gen && concurrently -k -n mock,web -c blue,green \"tsx mock/server.ts\" \"EXTEND_API_PROXY=http://127.0.0.1:8490 vite --port 5190 --strictPort\"",
     "mock": "tsx mock/server.ts",
-    "build": "pnpm docs:gen && tsc --noEmit -p tsconfig.json && vite build",
+    "build": "pnpm docs:gen && node scripts/gen-licences.mjs && tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",

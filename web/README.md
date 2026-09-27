@@ -99,7 +99,7 @@ and field, on a shape the CLI reference page can't show.
 ## Layout
 
 ```
-src/config.ts               API URL, download links (/download/<platform> placeholders), device kinds and guides
+src/config.ts               API URL, download files (stable GitHub release asset names), device kinds and guides
 src/lib/api.ts              the Extend client: envelopes, errors, headers, serialised token refresh
 src/lib/session.ts          worlds (production / test environment), tokens, team, telemetry
 src/lib/auth.ts             IAM consent redirect and callback

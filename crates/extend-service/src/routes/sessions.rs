@@ -873,6 +873,7 @@ pub async fn command(
     State(state): State<Shared>,
     SessionAuth(auth): SessionAuth,
     Path(session_id): Path<String>,
+    headers: HeaderMap,
     Body(req): Body<CommandRequest>,
 ) -> AppResult<Response> {
     auth.require_silicon()?;
@@ -1236,18 +1237,20 @@ pub async fn command(
         });
     }
     let _ = FileKind::Other;
-    crate::telemetry::record(
-        &state,
-        &auth.world,
-        Some(auth.p.id()),
-        serde_json::json!({
-            "source": "service", "event": "command", "step": "session.command.relay", "success": outcome.ok,
-            "duration_ms": duration_ms, "command": spec.name, "device_os": d.os().as_str(), "session_id": session_id,
-            "command_id": command_id, "files": files.len(), "warnings": warnings.len(),
-            "error_code": outcome.error.as_ref().map(|e| e.code.clone()),
-        }),
-    )
-    .await;
+    if !crate::telemetry::opted_out(&headers) {
+        crate::telemetry::record(
+            &state,
+            &auth.world,
+            Some(auth.p.id()),
+            serde_json::json!({
+                "source": "service", "event": "command", "step": "session.command.relay", "success": outcome.ok,
+                "duration_ms": duration_ms, "command": spec.name, "device_os": d.os().as_str(),
+                "session_id": session_id, "command_id": command_id, "files": files.len(),
+                "warnings": warnings.len(), "error_code": outcome.error.as_ref().map(|e| e.code.clone()),
+            }),
+        )
+        .await;
+    }
     let idle = log_command(
         if outcome.ok { "ok" } else { "failed" },
         files.iter().map(|f| f.file_id).collect(),

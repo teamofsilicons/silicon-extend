@@ -2049,8 +2049,9 @@ paths:
       operationId: telemetry
       summary: Forward a telemetry event to Space Station
       description: |
-        So the CLI and apps never hold the Space Station ingest key. `X-Extend-Telemetry: off` (or the member's
-        setting) drops it. Never accepts typed text, screen contents, tokens, codes or secrets.
+        So the CLI and apps never hold the Space Station ingest key. `X-Extend-Telemetry: off` drops it, and on
+        any other route it keeps the service from recording that request (for example a command's event).
+        Never accepts typed text, screen contents, tokens, codes or secrets.
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -2192,7 +2193,7 @@ components:
               code: device_in_use
               message: 'Device 7c1e09ab (Saket''s Pixel) is being used by si:chef in session a3f since 2026-09-26T09:58:00Z. Only one Silicon can use a device at a time.'
               hint: 'Ask for it with: extend request send 7c1e09ab --reason "<why, up to 300 characters>"'
-              docs_url: https://docs.extend.teamofsilicons.com/errors#device_in_use
+              docs_url: https://extend.teamofsilicons.com/docs/cli#error-device_in_use
               request_id: 01926f41-0a1b-7c2d-8e3f-4a5b6c7d8e9f
               details: {in_use: {silicon_id: 'si:chef', session_id: a3f, since: '2026-09-26T09:58:00.000Z'}}
 

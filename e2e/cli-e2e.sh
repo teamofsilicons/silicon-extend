@@ -132,7 +132,10 @@ grep -q "stopped" "$WORK/err" && ok "Silicon learns the session ended and why"
 as chef --help | grep -q "connected to session" && die "--help still says connected after the session ended" || ok "--help forgets the ended session"
 
 # ── Report and version ──
-as chef report "fill loses the last character" --pr https://github.com/teamofsilicons/silicon-extend/pull/1 | grep -q "sent" && ok "bug report sent"
+# The dev service has no Postmark token, so a report is stored and the CLI must not claim it was emailed.
+out=$(as chef report "fill loses the last character" --pr https://github.com/teamofsilicons/silicon-extend/pull/1)
+grep -q "saved, but not emailed" <<<"$out" && ! grep -q "sent to" <<<"$out" && ok "bug report stored, and not called sent"
+as chef report "the keyboard hides the send button" | grep -q "open a pull request at https://github.com/teamofsilicons/silicon-extend" && ok "a report without --pr invites a pull request"
 as chef version | grep -q "API v1" && ok "version shows the negotiated API"
 
 # ── Remove ──

@@ -34,7 +34,7 @@ member-id logins and plain-http public URLs):
 | `EXTEND_BRIEFCASE_URL`, `EXTEND_BRIEFCASE_WEB_URL` | Briefcase API and web origins |
 | `EXTEND_TING_URL` | Ting API |
 | `EXTEND_HONEYCOMB_SERVICE_TOKEN` | Honeycomb's lifecycle credential |
-| `EXTEND_POSTMARK_SERVER_TOKEN` | For `extend report` emails |
+| `EXTEND_POSTMARK_SERVER_TOKEN` | For `extend report` emails. Production refuses to start without it. |
 | `EXTEND_WEBSITE_URL`, `EXTEND_DOCS_URL` | Public links returned by `/api/v1/iam` |
 | `EXTEND_TRUSTED_PROXY_CIDRS` | The proxy or load balancer addresses (comma-separated CIDRs) whose `X-Forwarded-For` Extend believes, so the per-address enrollment limit counts clients, not the proxy |
 
@@ -44,14 +44,25 @@ list of majors to deprecate, applied at start; never the newest one this build s
 reports, default `>=n.0.0, <n+1.0.0`), and `EXTEND_DEVICE_APP_MIN_VERSION` (default `1.0.0`).
 `EXTEND_REPORT_RECIPIENTS` overrides where bug reports go.
 
-In Silicon IAM, register the OBO endpoints Extend calls: Briefcase `briefcase.files.create`,
-`briefcase.invitations.create` (critical — needs Briefcase's approval), `briefcase.entries.trash`
-and `briefcase.files.read` (the file download route, `GET /api/v1/files/{file_id}/content`), and
-Ting `tings.send` and `subscriptions.register` (called when a Silicon starts a session; a real Ting
-refuses requests to unregistered recipients); and the scopes `self.identity.read`,
-`self.membership.read`. Register Extend's webhook endpoint (`/webhook/`) and put its signing secret
-in `EXTEND_IAM_WEBHOOK_SECRET`. `e2e/real-iam/realiam.py --briefcase --ting` seeds
-exactly this catalog against local services and is the reference for it.
+Extend is registered through Honeycomb: `honeycomb apps create application.json` creates the IAM
+application (app id `extend`, team `tos`) and returns the app secret once. `application.json`
+declares:
+
+- the webhook `https://backend.extend.teamofsilicons.com/webhook/` and its signing secret, which
+  also goes in `EXTEND_IAM_WEBHOOK_SECRET`. The destination then needs a Carbon's step-up approval:
+  `honeycomb apps webhook approve`;
+- the IAM scopes `self.identity.read`, `self.profile.read`, `self.organizations.read`,
+  `self.membership.read`, `directory.silicons.read`, `directory.carbons.read`,
+  `directory.memberships.read` and `directory.profiles.read`;
+- the external OBO endpoints Extend calls: Briefcase `briefcase.files.create`,
+  `briefcase.invitations.create` (critical: it needs Briefcase's approval),
+  `briefcase.entries.trash` and `briefcase.files.read` (the file download route,
+  `GET /api/v1/files/{file_id}/content`), and Ting `tings.send` and `subscriptions.register` (called
+  when a Silicon starts a session; a real Ting refuses requests to unregistered recipients).
+
+Register the Ting type `extend.device.requested` with `ting types register`.
+`e2e/real-iam/realiam.py --briefcase --ting` seeds exactly this catalog against local services and
+is the reference for it.
 
 ## Website (`extend.teamofsilicons.com`)
 
@@ -70,8 +81,10 @@ Carbon session, like the sibling apps.
 
 ## Device apps
 
-Android: `apps/android` builds the APK, package `com.teamofsilicons.extend` (sign with the release
-key; host the download on the website). APKs are development-signed today.
+Android: `apps/android` builds the APK, package `com.teamofsilicons.extend`. A release APK is signed
+only when `EXTEND_ANDROID_SIGNING_PROPERTIES` names a properties file with `storeFile`,
+`storePassword`, `keyAlias` and `keyPassword` (a relative `storeFile` is resolved against
+`apps/android/app`); otherwise it is left unsigned, never debug-signed.
 
 Desktop: `apps/desktop` builds the macOS app bundle, the Linux tarball and `.deb`, and the Windows
 zip. Distribute only the Mac zip without a suffix (`Silicon-Extend-<version>-macos-<arch>.zip`),
@@ -87,5 +100,5 @@ Every artifact carries Team of Silicons' MIT licence and third-party code
 The CLI archive, the service image and the Mac, Linux and Windows packages ship `LICENSE`,
 `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text, from
 `cargo about`); the Mac and Linux packages also ship agent-device's and Node.js's licence files; the
-Android app shows its notices. The website does not yet ship its fonts' and libraries' licence
-texts.
+Android app shows its notices. The website serves `/licences.txt`, written by
+`web/scripts/gen-licences.mjs` on every build.

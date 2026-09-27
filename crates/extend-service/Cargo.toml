@@ -45,7 +45,7 @@ url.workspace = true
 uuid.workspace = true
 space-station = "0.1.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-silicon-iam-client = { version = "4.0.0", path = "../../vendor/silicon-iam-client" }
+silicon-iam-client = "4.0.0"
 
 [dev-dependencies]
 tokio-tungstenite.workspace = true

@@ -562,7 +562,7 @@ def up(args):
         raise SystemExit(f"a fixture is already up ({STATE_DIR}); run `realiam.py down` first")
     for tool in (IAM_CLI, *(TARGET.joinpath(*parts) for parts in BINARIES.values())):
         if not Path(tool).exists():
-            raise SystemExit(f"missing {tool}; build with: cargo build -p extend-service -p extend-cli --bins --examples")
+            raise SystemExit(f"missing {tool}; build with: cargo build -p extend-service -p silicon-extend-cli --bins --examples")
     import socket
     with socket.socket() as probe:
         if probe.connect_ex(("127.0.0.1", EXTEND_PORT)) == 0:

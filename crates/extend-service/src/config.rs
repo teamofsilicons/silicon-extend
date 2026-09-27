@@ -233,6 +233,13 @@ impl Config {
                  to its key version)."
             );
         }
+        if production && var("EXTEND_POSTMARK_SERVER_TOKEN").is_none() {
+            bail!(
+                "EXTEND_POSTMARK_SERVER_TOKEN is required in production: without it `extend report` stores \
+                 bug reports that nobody is ever emailed about. Set it to a Postmark server token that may \
+                 send from bugs@teamofsilicons.com."
+            );
+        }
         let bind = var_or("EXTEND_BIND", "127.0.0.1:8480")
             .parse()
             .context("EXTEND_BIND must be host:port")?;
@@ -338,6 +345,7 @@ mod tests {
             ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
             ("EXTEND_IAM_APP_ID", "extend"),
             ("EXTEND_IAM_APP_SECRET", "ask_x"),
+            ("EXTEND_POSTMARK_SERVER_TOKEN", "pm_x"),
         ];
         vars.extend_from_slice(extra);
         cfg(&vars)
@@ -357,6 +365,26 @@ mod tests {
         .unwrap();
         assert_eq!(ok.webhook_secret, Some((3, "whsec".into())));
         assert!(matches!(ok.iam, IamMode::Sdk { .. }));
+    }
+
+    #[test]
+    fn production_needs_the_postmark_token() {
+        let err = cfg(&[
+            DB,
+            ("EXTEND_ENVIRONMENT", "production"),
+            ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
+            ("EXTEND_IAM_APP_ID", "extend"),
+            ("EXTEND_IAM_APP_SECRET", "ask_x"),
+            ("EXTEND_IAM_WEBHOOK_SECRET", "whsec"),
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("EXTEND_POSTMARK_SERVER_TOKEN is required in production"),
+            "{err}"
+        );
+        let dev = cfg(&[DB, ("EXTEND_ENVIRONMENT", "development")]).unwrap();
+        assert!(dev.postmark_token.is_none());
     }
 
     #[test]

@@ -1,11 +1,15 @@
 [package]
-name = "extend-cli"
+name = "silicon-extend-cli"
 description = "The extend command: find and use the devices a Silicon has access to"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://extend.teamofsilicons.com"
+readme = "README.md"
+keywords = ["silicon", "extend", "devices", "automation", "cli"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "extend"
