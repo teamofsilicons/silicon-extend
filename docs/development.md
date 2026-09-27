@@ -55,6 +55,7 @@ own `EXTEND_DATA_DIR`, and point the lane at it (`bash e2e/cli-e2e.sh http://127
 | `cargo test -p silicon-extend-cli` | Includes `tests/device_args.rs`: the real binary against a fake service, reading the exact arguments a device receives |
 | `bash e2e/cli-e2e.sh` | The `extend` CLI end to end against a running service and `examples/fake_device` |
 | `python3 e2e/released-cli-compat.py --old-cli /absolute/path/to/extend-1.0.0 --out target/released-cli-compat --full-cli-lane` | Released CLI 1.0 and current CLI share saved login/session state against an owned current service and scripted 1.0 device; optionally runs all current CLI checks. Requires built debug binaries and local PostgreSQL; leaves installed logins/services untouched and cleans its exact database. |
+| `python3 apps/desktop/macos/banner-native-e2e.py` | macOS production banner in an owned fake-agent app: native frame, controls, focus and timeout checks. `--interactive` leaves only that fixture open for a human drag check. No real driver, service, TCC change or installed-app mutation. |
 | `cd web && pnpm test && pnpm build && pnpm test:e2e` | Website unit tests, the type-checked build, and Playwright against the mock API; `pnpm test:e2e:real` against a running service (`EXTEND_REAL_URL`) |
 | `apps/android` | See its README (unit tests, emulator runs, the notices generator and dependency verification) |
 | `crates/extend-agent`, `apps/desktop/linux-e2e` | Desktop agent tests; Linux run and recording lanes in Docker (`apps/desktop/README.md`) |

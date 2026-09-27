@@ -32,6 +32,25 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — native Mac banner and focus preservation
+
+The isolated `apps/desktop/macos/banner-native-e2e.py` fixture runs the production UI with a fake
+agent and a process-local AppKit probe. It exposed a real focus bug: Tao's `set_visible(true)`
+made the banner key on every show despite `focused=false`. Banner display now uses AppKit
+`orderFront` on macOS; a sentinel window keeps focus when a session announces itself.
+
+The rebuilt fixture passed 13 native scenarios: expanded/collapsed sizes, restored position,
+screen-edge clamping, new-session expansion, hide/reappear, ten-second timeout and focus retention.
+Three Stop actions reached the correct fake targets. CUA clicks also verified collapse, Stop and
+restore with the native frame retained at (160,220). Rust UI tests passed 17/17, DOM tests 2/2,
+strict Clippy and Python compilation passed. Owned fixture processes exited; installed apps,
+TCC, real sessions and unrelated windows were untouched. Evidence: `target/desktop/banner-native-e2e/`.
+
+Physical dragging remains unverified: CUA's app-targeted drag could move neither the banner nor
+the fixture's standard AppKit title bar, and macOS reported no pressed mouse button. This
+establishes a tool limitation, not a banner drag defect. Multi-monitor movement, Windows/Linux
+native behavior and metadata refresh during recording remain separate checks.
+
 ## 2026-09-28 — released 1.0 CLI against service 1.1
 
 The installed, released 1.0.0 CLI (SHA256

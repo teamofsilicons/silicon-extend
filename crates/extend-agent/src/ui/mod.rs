@@ -684,6 +684,17 @@ impl Ui {
             self.banner = Some((window, view));
         }
         if let Some((w, _)) = &self.banner {
+            // Tao's set_visible(true) calls makeKeyAndOrderFront on macOS, even when
+            // the window was built with focused=false. Status refreshes must not
+            // take the keyboard away from the app the Carbon or Silicon is using.
+            // SAFETY: Ui runs on the main thread, and Tao owns this NSWindow for w's lifetime.
+            #[cfg(target_os = "macos")]
+            unsafe {
+                use tao::platform::macos::WindowExtMacOS as _;
+                let native = &*w.ns_window().cast::<objc2::runtime::AnyObject>();
+                let _: () = objc2::msg_send![native, orderFront: std::ptr::null::<objc2::runtime::AnyObject>()];
+            }
+            #[cfg(not(target_os = "macos"))]
             w.set_visible(true);
         }
     }

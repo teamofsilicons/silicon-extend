@@ -58,11 +58,12 @@ step is removed. See the new verification entry; this is not a released build.
 
 Remaining from the Carbon's final requests, before the release gates below:
 
-- Finish native banner verification. Carried-device host controls, durable offline choices,
-  shared carried aliases and restart timing are implemented; agent/service and actual-page
-  Chromium checks pass. Exercise actual window drag/collapse/position retention, ten-second
-  hiding, takeover, Stop and TV bottom-centre placement on native targets. A metadata-only attach
-  preserves the live driver; verify it during a real recording as well.
+- Finish remaining native banner verification. Mac native collapse/restore, position retention,
+  edge clamping, ten-second hiding, Stop and focus preservation now pass. Physical dragging is
+  unverified because CUA cannot move a standard native title bar either. Verify human dragging,
+  multi-monitor movement, Windows/Linux native behavior and TV bottom-centre placement.
+  Carried-device controls, durable offline choices, shared aliases and restart timing are built;
+  a metadata-only attach preserves the live driver, but still needs a real-recording check.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
