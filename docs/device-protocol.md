@@ -521,6 +521,13 @@ directory, then replace every argument of the form `attachment:<name>` with that
 before running the command. Example: `display show --image attachment:cat.png` with an attachment
 named `cat.png`.
 
+For `display show --image` and `--video`, the service also resolves `file:<file_id>`, a bare file
+UUID, the stored Briefcase link or its own `/api/v1/files/{id}/content` URL into this existing
+attachment format. It checks the requesting Silicon's file visibility and reads through Briefcase
+as that Silicon; the device receives no user token or OBO proof. Resolved media shares the command's
+8-file/8-MiB limit. The original reference stays in the command's audit input; only the relayed
+argument becomes `attachment:<generated-name>`. Devices need no new protocol feature for this.
+
 ### Files
 
 For each file a command produces, upload it before sending the `result`, using the next unused id

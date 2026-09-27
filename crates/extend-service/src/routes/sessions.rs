@@ -1124,7 +1124,9 @@ pub async fn command(
             .map_err(|_| AppError::invalid(format!("attachment {} is not valid base64.", a.name)))?;
         total_attach += bytes.len();
     }
-    if total_attach > 8 << 20 || req.attachments.len() > 8 {
+    if total_attach > super::display_files::MAX_ATTACHMENT_BYTES
+        || req.attachments.len() > super::display_files::MAX_ATTACHMENTS
+    {
         return Err(AppError::invalid(
             "Attachments are limited to 8 files and 8 MiB in total.",
         ));
@@ -1141,6 +1143,33 @@ pub async fn command(
         .await?
         .unwrap_or_else(|| s.clone());
     refuse_unless_active(&now, &d)?;
+    let mut device_req = req.clone();
+    let resolving_at = std::time::Instant::now();
+    tokio::time::timeout(
+        Duration::from_millis(timeout_ms),
+        super::display_files::resolve(&state, &auth, &mut device_req, total_attach),
+    )
+    .await
+    .map_err(|_| {
+        AppError::new(
+            ErrorCode::CommandTimeout,
+            "Reading the display file exceeded the command's timeout.",
+        )
+    })??;
+    let timeout_ms = timeout_ms.saturating_sub(resolving_at.elapsed().as_millis() as u64);
+    if timeout_ms == 0 {
+        return Err(AppError::new(
+            ErrorCode::CommandTimeout,
+            "Reading the display file exhausted the command's timeout.",
+        ));
+    }
+    // Reading private media may outlive a Stop/takeover that arrived during the read.
+    if spec.name == "display" {
+        let current = domain::load_session(&state, &auth.world, &session_id)
+            .await?
+            .unwrap_or_else(|| now.clone());
+        refuse_unless_active(&current, &d)?;
+    }
     state.session_principals.write().await.insert(
         (auth.world.schema.clone(), session_id.clone()),
         (auth.p.clone(), auth.sel.clone()),
@@ -1181,8 +1210,8 @@ pub async fn command(
         session_id: session_id.parse().map_err(AppError::internal)?,
         target: d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok()),
         command: spec.name.to_owned(),
-        args: req.args.clone(),
-        attachments: req.attachments.clone(),
+        args: device_req.args,
+        attachments: device_req.attachments,
         timeout_ms,
         upload_ids: upload_ids.clone(),
     });

@@ -96,6 +96,12 @@ says the command may have run, and the CLI disconnects the session.
   Extend's own commands (`device`, `session`, `config`, …) everything after `--` is positional.
 - **Local files** (replay and test scripts, display media, APKs, `adb push` sources) travel with the
   command: at most 8 files and 8 MiB in total, checked before anything is read or sent.
+  For stored Extend images/videos, use `extend display show --image file:<file_id>` or
+  `--video file:<file_id>`. A bare file UUID, the stored Briefcase link, or an Extend file-content
+  URL also works. Extend reads it as the requesting Silicon, checks the Team, ownership and
+  self-destruct time, then forwards an attachment. It must fit the same combined 8-file/8-MiB
+  limit. Public media URLs continue to load directly on the device. `file:` explicitly selects
+  a stored file; a bare value matching a local file is uploaded by the CLI instead.
   `install`, `reinstall`, `adb install` and `adb push` take a local regular file only; a Briefcase
   file id, a link, a directory or an `.aab` is refused with the command to run instead (for example
   `extend file get <file_id> --out ./app.apk`). For a larger APK, push it in parts and install it

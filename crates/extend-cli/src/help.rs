@@ -665,9 +665,10 @@ pub fn render_device_command(name: &str, connected: Option<&Connected>) -> Optio
             "They may come before or after the command's arguments. `--` ends Extend's flags: everything after it goes to the device as written, even `-h` or `--json`.\n"
         }
     };
-    let more = match c.origin {
-        Origin::AgentDevice => format!("\nArgument details: {DOCS}/cli\n"),
-        Origin::Extend => String::new(),
+    let more = match (name, c.origin) {
+        ("display", _) => "\nFor --image and --video, pass a local file, a public media URL, or file:<file_id> (the bare UUID and the stored Extend/Briefcase link also work). Extend reads stored files as you: only your unexpired files in this Team are allowed. Stored and local files share the command's 8-file, 8-MiB attachment limit.\nExample: extend display show --image file:<file_id>\n".into(),
+        (_, Origin::AgentDevice) => format!("\nArgument details: {DOCS}/cli\n"),
+        (_, Origin::Extend) => String::new(),
     };
     let note = connected
         .and_then(|on| not_available(c, on))

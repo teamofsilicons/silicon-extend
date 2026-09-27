@@ -32,6 +32,35 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — display stored Extend files
+
+`display show --image/--video` accepts a bare file UUID, `file:<file_id>`, its stored Briefcase
+link or the service's file-content URL. The service resolves it in the caller's world, reuses the
+normal file visibility check (requesting Silicon, Team and self-destruct time), reads Briefcase as
+that caller, and relays an ordinary attachment. It sends no caller token or OBO proof to the device.
+The same 8-file/8-MiB command attachment budget applies, including existing attachments. Store reads
+enforce the actual byte limit, not only recorded size or Content-Length. File resolution happens
+under the session's command lock, shares the command deadline, and rechecks the session before
+relay so a concurrent Stop/takeover cannot be followed by display. Public media URLs still go to
+the device unchanged. CLI help and implementation docs describe the forms and limit.
+
+- Four real HTTP/WebSocket/PostgreSQL display tests pass: a previous session's own image reaches
+  a 1.0 fake TV app in the existing attachment format; private links and file IDs resolve;
+  other Silicons, other Teams, expired files, wrong types and exceeded budgets are refused before
+  relay. A deliberately oversized local file with small recorded metadata is refused too.
+  A controlled read exercises Stop and command timeout before relay. Log:
+  `/tmp/extend-display-files-service.log`.
+- A fake Briefcase HTTP endpoint verifies the delegated reader/Team and chunked response limit.
+  This is part of the four tests, not live IAM/Briefcase evidence.
+- Service suite: 147 pass, including existing contract/1.0 consumer replay; log:
+  `/tmp/extend-display-files-all-service.log`. Opt-in real-service tests remain disabled.
+- Client/CLI tests: 81 pass across nine result groups, including 1.0 source compatibility;
+  log: `/tmp/extend-display-files-client-cli.log`. Explicit `file:` references stay remote instead
+  of being mistaken for local paths.
+- Workspace Clippy with `-D warnings` passes: `/tmp/extend-display-files-clippy.log`.
+
+The combined real Briefcase → installed native TV path and production release are still unverified.
+
 ## 2026-09-28 — TV image readiness and memory
 
 Image display now acknowledges decoded content in the foreground, rather than activity startup.

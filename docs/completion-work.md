@@ -56,8 +56,11 @@ Remaining from the Carbon's final requests, before the release gates below:
   Verify it on a physical iPad as well (including disconnect/reconnect and a new session).
 - TV image failures now reach the command result; bounded downloads, downsampling and asynchronous
   readiness are implemented and verified on an isolated Android TV emulator. Verify on the physical
-  TV and finish allowing a Silicon to display its own Extend files, with correct owner/session
-  authorization. Overall TV memory use and debugging reconnect still need the work listed above.
+  TV. Stored Extend images/videos now resolve to ordinary device attachments with Silicon/Team,
+  expiry, active-session and bounded-read checks. Service/WebSocket tests cover that handoff; verify
+  it through the real Briefcase and native TV together. Stored media uses the existing combined
+  8-file/8-MiB attachment limit. Overall TV memory use and debugging reconnect still need the work
+  listed above.
 - Re-run the final feature and requirements audit and integration checks after those fixes;
   reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
   publish/deploy and verify the release. None of this checkpoint updates installed apps.

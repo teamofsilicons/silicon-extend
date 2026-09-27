@@ -4,6 +4,7 @@ mod auth;
 mod dev;
 mod device_app;
 mod devices;
+mod display_files;
 pub mod enroll;
 mod files;
 mod ops;

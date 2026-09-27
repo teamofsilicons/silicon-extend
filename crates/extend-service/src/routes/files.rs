@@ -3,6 +3,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use base64::Engine as _;
 use extend_protocol::ErrorCode;
 use extend_protocol::model::{FileInfo, FileKind};
 use serde::Deserialize;
@@ -133,6 +134,91 @@ async fn visible(state: &Shared, auth: &Auth, file_id: Uuid) -> AppResult<FileRo
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(not_found)
+}
+
+/// Resolve private display media through the same visibility and Briefcase delegation as a
+/// download. Unrelated public URLs remain device-side URLs; no caller-provided URL is fetched.
+pub(crate) async fn display_attachment(
+    state: &Shared,
+    auth: &Auth,
+    value: &str,
+    kind: &str,
+    max_bytes: usize,
+) -> AppResult<Option<extend_protocol::model::Attachment>> {
+    let id = if let Some(id) = value.strip_prefix("file:") {
+        Some(
+            id.parse::<Uuid>()
+                .map_err(|_| AppError::invalid("Use file:<file_id> with a valid Extend file UUID."))?,
+        )
+    } else {
+        value.parse::<Uuid>().ok()
+    };
+    let f = if let Some(id) = id {
+        visible(state, auth, id).await?
+    } else {
+        let Ok(url) = url::Url::parse(value) else {
+            return Ok(None);
+        };
+        if !matches!(url.scheme(), "http" | "https") {
+            return Ok(None);
+        }
+        let same_origin = |base: &str| url::Url::parse(base).is_ok_and(|base| base.origin() == url.origin());
+        if same_origin(&state.cfg.public_url)
+            && let Some(id) = url
+                .path()
+                .strip_prefix("/api/v1/files/")
+                .and_then(|s| s.strip_suffix("/content"))
+                .or_else(|| url.path().strip_prefix("/dev/files/"))
+        {
+            visible(state, auth, id.parse().map_err(|_| not_found())?).await?
+        } else {
+            let id: Option<(Uuid,)> = sqlx::query_as(sql!(
+                "SELECT file_id FROM {} WHERE url = $1 LIMIT 1",
+                auth.world.t("files")
+            ))
+            .bind(value)
+            .fetch_optional(&state.pool)
+            .await?;
+            match id {
+                Some((id,)) => visible(state, auth, id).await?,
+                None => {
+                    if let crate::config::FilesMode::Briefcase { web_url, .. } = &state.cfg.files
+                        && same_origin(web_url)
+                    {
+                        return Err(not_found());
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+    };
+    let media_type = f
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !media_type.starts_with(&format!("{kind}/")) {
+        return Err(AppError::invalid(format!(
+            "{} is {}, not a {kind} file.",
+            f.name, f.content_type
+        )));
+    }
+    if f.size_bytes < 0 || f.size_bytes as u64 > max_bytes as u64 {
+        return Err(crate::files::too_large(max_bytes));
+    }
+    let (bytes, _) = state
+        .files
+        .read_bounded(&auth.p, f.file_id, auth.sel.as_ref(), max_bytes)
+        .await?;
+    // Expiry can pass during a slow read. Never forward a file that self-destructed meanwhile.
+    visible(state, auth, f.file_id).await?;
+    Ok(Some(extend_protocol::model::Attachment {
+        name: format!("extend-{}", Uuid::new_v4()),
+        content_type: f.content_type,
+        content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    }))
 }
 
 pub async fn get(State(state): State<Shared>, auth: Auth, Path(file_id): Path<Uuid>) -> AppResult<Response> {

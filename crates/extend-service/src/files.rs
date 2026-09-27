@@ -23,6 +23,7 @@ use extend_protocol::ErrorCode;
 use rand::Rng as _;
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
+use tokio::io::AsyncReadExt as _;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -57,6 +58,16 @@ pub trait FileStore: Send + Sync {
         member: &Principal,
         file_id: Uuid,
         sel: Option<&TestingSelection>,
+    ) -> AppResult<(Vec<u8>, String)> {
+        self.read_bounded(member, file_id, sel, usize::MAX).await
+    }
+    /// Refuses oversized responses while reading, before allocating their entire contents.
+    async fn read_bounded(
+        &self,
+        member: &Principal,
+        file_id: Uuid,
+        sel: Option<&TestingSelection>,
+        max_bytes: usize,
     ) -> AppResult<(Vec<u8>, String)>;
     /// Local files only: the bytes behind `/dev/files/{id}`.
     async fn read_local(&self, _file_id: Uuid) -> Option<(Vec<u8>, String)> {
@@ -350,11 +361,12 @@ impl FileStore for BriefcaseFiles {
         }
     }
 
-    async fn read(
+    async fn read_bounded(
         &self,
         member: &Principal,
         file_id: Uuid,
         sel: Option<&TestingSelection>,
+        max_bytes: usize,
     ) -> AppResult<(Vec<u8>, String)> {
         let body = serde_json::to_vec(&serde_json::json!({"entry_id": file_id})).map_err(AppError::internal)?;
         let call = Delegated {
@@ -365,18 +377,28 @@ impl FileStore for BriefcaseFiles {
             content_type: "application/json",
             doing: format!("read file {file_id}"),
         };
-        let resp = self.delegated(member, call, sel).await?;
+        let mut resp = self.delegated(member, call, sel).await?;
         let content_type = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("application/octet-stream")
             .to_owned();
-        let bytes = resp
-            .bytes()
+        if resp.content_length().is_some_and(|n| n > max_bytes as u64) {
+            return Err(too_large(max_bytes));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map_err(|e| AppError::unavailable("Briefcase", format!("reading file {file_id} broke off: {e}")))?;
-        Ok((bytes.to_vec(), content_type))
+            .map_err(|e| AppError::unavailable("Briefcase", format!("reading file {file_id} broke off: {e}")))?
+        {
+            if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+                return Err(too_large(max_bytes));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((bytes, content_type))
     }
 }
 
@@ -426,13 +448,31 @@ impl FileStore for LocalFiles {
         Ok(())
     }
 
-    async fn read(
+    async fn read_bounded(
         &self,
         _member: &Principal,
         file_id: Uuid,
         _sel: Option<&TestingSelection>,
+        max_bytes: usize,
     ) -> AppResult<(Vec<u8>, String)> {
-        self.read_local(file_id).await.ok_or_else(not_found)
+        let file = tokio::fs::File::open(self.dir.join(file_id.to_string()))
+            .await
+            .map_err(|_| not_found())?;
+        if file.metadata().await.map_err(AppError::internal)?.len() > max_bytes as u64 {
+            return Err(too_large(max_bytes));
+        }
+        let mut bytes = Vec::new();
+        file.take((max_bytes as u64).saturating_add(1))
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(AppError::internal)?;
+        if bytes.len() > max_bytes {
+            return Err(too_large(max_bytes));
+        }
+        let ct = tokio::fs::read_to_string(self.dir.join(format!("{file_id}.type")))
+            .await
+            .unwrap_or_else(|_| "application/octet-stream".into());
+        Ok((bytes, ct))
     }
 
     async fn read_local(&self, file_id: Uuid) -> Option<(Vec<u8>, String)> {
@@ -449,6 +489,11 @@ pub fn not_found() -> AppError {
         ErrorCode::FileNotFound,
         "The file does not exist, already self-destructed, or is not visible to you.",
     )
+}
+
+pub fn too_large(max_bytes: usize) -> AppError {
+    AppError::invalid(format!("The file exceeds the remaining attachment limit ({max_bytes} bytes)."))
+        .hint("Command attachments are limited to 8 files and 8 MiB in total. Use a smaller file or a directly accessible media URL.")
 }
 
 #[cfg(test)]
