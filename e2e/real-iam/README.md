@@ -161,3 +161,32 @@ environment's webhook key digest and leaves production untouched.
 - Not exercised here: OBO proofs to Briefcase and Ting without `--briefcase`/`--ting` (the default
   run uses `EXTEND_FILES_MODE=local` and `EXTEND_TING_MODE=local`), Carbon removal, and the
   Honeycomb coordinator itself (its instruction to Extend is sent directly).
+
+## Native TV display through real Briefcase
+
+`native_display.py` is an opt-in lane for a dedicated Android TV emulator that already has the debug
+APK installed and accessibility enabled. Supply both its serial and its exact AVD name. Physical
+serials, mismatched AVDs, non-debug APKs, and an existing real-IAM fixture are refused before pairing.
+It replaces only the selected emulator's pairing, starts its own real IAM/Briefcase/MinIO services,
+and removes those services on exit. The app is left unpaired at its previous debug service URL.
+
+```sh
+cargo build -p extend-service -p silicon-extend-cli --bins --examples
+python3 e2e/real-iam/native_display.py \
+  --serial emulator-5640 --avd ExtendReconnectVerification \
+  --adb "$HOME/Library/Android/sdk/platform-tools/adb" \
+  --out target/real-briefcase-native-tv
+```
+
+The lane displays a four-color card on the native TV, captures it through Extend as `si:chef`, and
+verifies the actual PNG in real Briefcase/MinIO, owned by that Silicon and shared with `c:alice`.
+It then displays the stored image through `file:<UUID>`, bare UUID and the private Briefcase URL.
+Each replay starts from a visibly different text screen, then checks all four RGB samples from
+Android's raw screenshot and saves a native PNG. This exercises the Briefcase delegated read,
+service attachment and real Android decode together. A missing file and another Silicon's attempt
+are refused; damaged image bytes produce native `action_failed`; the next stored image still works.
+
+The Carbon signs into Briefcase first so its existing recipient-projection limitation does not
+block sharing. This is a native emulator test, not a result for the user's physical TV. The output
+folder retains the report, screenshots, exact command results, service logs, logcat and memory dump.
+The lane does not send notifications to real people or change production services.

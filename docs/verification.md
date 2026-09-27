@@ -32,6 +32,22 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — native TV display through real Briefcase
+
+The repeatable `e2e/real-iam/native_display.py` lane passed 12 checks in 27.24 seconds with local
+real IAM, Briefcase and MinIO and the installed debug app on dedicated Android TV emulator-5640.
+It stored a native screenshot as `si:chef`, verified its Briefcase ownership and Carbon share,
+then displayed it by `file:<UUID>`, bare UUID and private Briefcase URL. Before each replay the TV
+showed a distinct text screen; all four sampled color quadrants then matched exactly at 1920×1080.
+Missing files and another Silicon's private-file access were refused. Damaged image bytes reached
+the native decoder and returned `action_failed`; the next stored-image display recovered.
+
+Evidence is in `target/real-briefcase-native-tv/`: `report.json`, before/after PNGs, command results,
+service logs, logcat and a memory dump. Owned fixture services were removed; the dedicated emulator
+was left unpaired at its prior debug URL. Physical devices and production were untouched. The
+Carbon signs into Briefcase first to satisfy its existing recipient-projection limitation. This
+closes the real-service/native-emulator handoff gate, not the physical-TV or production gate.
+
 ## 2026-09-28 — real IAM, Briefcase and Ting 1.1 checks
 
 - The combined local real IAM + Briefcase + Ting run passed 75 checks with zero failures. A fresh
@@ -178,7 +194,8 @@ the device unchanged. CLI help and implementation docs describe the forms and li
   of being mistaken for local paths.
 - Workspace Clippy with `-D warnings` passes: `/tmp/extend-display-files-clippy.log`.
 
-The combined real Briefcase → installed native TV path and production release are still unverified.
+The combined real Briefcase → installed native TV emulator path subsequently passed the lane
+recorded above. The physical-TV path and production release remain unverified.
 
 ## 2026-09-28 — TV image readiness and memory
 

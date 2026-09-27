@@ -42,8 +42,9 @@ setup retry, the device engine named Silicon Extend) is built and its automated 
 The existing 1.0 Mac signing identity and `extend-release` notarization profile work; that release
 was accepted by Apple. The permanent Android key exists under `~/.silicon-release/extend`.
 Preserve those identities for update compatibility. Honeycomb, Ting, GitHub and Vercel sessions
-are authenticated, and the published backend and GitHub assets remain 1.0.0. AWS profile
-`silicon-production` needs SSO renewal (its token expired and refresh failed). Historical signing
+are authenticated, and the published backend and GitHub assets remain 1.0.0. The Carbon renewed
+AWS profile `silicon-production`; STS access and the existing production stack were verified.
+Historical signing
 and "nothing published" entries below are not current blockers. No 1.1 CI or publication has run.
 
 ### Engineering left for 1.1.0
@@ -73,8 +74,9 @@ Remaining from the Carbon's final requests, before the release gates below:
 - TV image failures now reach the command result; bounded downloads, downsampling and asynchronous
   readiness are implemented and verified on an isolated Android TV emulator. Verify on the physical
   TV. Stored Extend images/videos now resolve to ordinary device attachments with Silicon/Team,
-  expiry, active-session and bounded-read checks. Service/WebSocket tests cover that handoff; verify
-  it through the real Briefcase and native TV together. Stored media uses the existing combined
+  expiry, active-session and bounded-read checks. The real Briefcase/native TV emulator handoff
+  passed 12 checks, including actual replayed pixels and failures; the physical TV remains open.
+  Stored media uses the existing combined
   8-file/8-MiB attachment limit. Overall TV memory use and debugging reconnect still need the work
   listed above.
 - Re-run the final feature and requirements audit and integration checks after those fixes;
