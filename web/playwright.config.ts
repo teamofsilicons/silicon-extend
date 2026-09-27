@@ -11,7 +11,9 @@ export default defineConfig({
   outputDir: "test-results/artifacts",
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry on CI only: a shared runner occasionally fails to capture a screenshot (a browser
+  // protocol error, not a failed assertion). Locally a failure is always reported first time.
+  retries: process.env.CI ? 1 : 0,
   timeout: 45_000,
   expect: { timeout: 8_000 },
   reporter: [["list"]],
