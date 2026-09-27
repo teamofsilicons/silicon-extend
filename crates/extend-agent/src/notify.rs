@@ -19,10 +19,11 @@
 //! * Windows: a WinRT toast under the app's AUMID, with one tag and group, removed from the
 //!   history (`ToastNotificationHistory.Remove`) before it is shown again or when it goes.
 //! * Linux: `org.freedesktop.Notifications.Notify` over D-Bus with `replaces_id` (and
-//!   `CloseNotification`), falling back to `notify-send` (argv only, never a shell).
+//!   `CloseNotification`). Without that backend, it reports that the request could not be shown;
+//!   an untrackable notification could expose another side after its session starts.
 //!
-//! Reasons are shown as plain text: XML-escaped for toasts, markup-escaped for D-Bus and
-//! `notify-send`, and never interpreted anywhere.
+//! Reasons are shown as plain text: XML-escaped for toasts and markup-escaped for D-Bus,
+//! never interpreted anywhere.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -480,13 +481,15 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    //! `org.freedesktop.Notifications` over D-Bus (with the tray build), else `notify-send`.
+    //! Retractable notifications through `org.freedesktop.Notifications` (the tray build).
 
     use std::sync::{Arc, Mutex};
 
-    use super::{NotShown, Notification, Notifier, markup_escape};
+    #[cfg(feature = "tray")]
+    use super::markup_escape;
+    use super::{NotShown, Notification, Notifier};
 
-    const NO_SERVICE: &str = "This computer has no notification service running, so it couldn't show the request.";
+    const NO_SERVICE: &str = "Silicon Extend couldn't show a wake notification that it can later remove. Use the Linux desktop build with a running D-Bus notification service; the request remains available in Extend.";
 
     pub fn notifier() -> Arc<dyn Notifier> {
         Arc::new(Freedesktop { last_id: Mutex::new(0) })
@@ -555,24 +558,6 @@ mod platform {
     #[cfg(not(feature = "tray"))]
     fn close_dbus(_id: u32) {}
 
-    /// `notify-send` as argv: the text is never read by a shell. It can't replace or withdraw a
-    /// notification, so it is only the fallback when D-Bus isn't reachable from this build.
-    fn notify_send(n: &Notification) -> Result<(), String> {
-        let program = crate::config::which("notify-send").ok_or("notify-send isn't installed")?;
-        let status = std::process::Command::new(program)
-            .args(["--app-name=Silicon Extend", "--urgency=normal", "--category=device"])
-            .arg("--")
-            .arg(markup_escape(&n.title))
-            .arg(markup_escape(&n.body))
-            .status()
-            .map_err(|e| e.to_string())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("notify-send exited with {status}"))
-        }
-    }
-
     impl Notifier for Freedesktop {
         fn show(&self, n: &Notification) -> Result<(), NotShown> {
             let mut last = self.last_id.lock().unwrap();
@@ -582,11 +567,10 @@ mod platform {
                     Ok(())
                 }
                 Err(e) => {
-                    tracing::info!("no D-Bus notification service ({e}); trying notify-send");
-                    notify_send(n).map_err(|e| {
-                        tracing::warn!("couldn't show the wake notification: {e}");
-                        NO_SERVICE.to_owned()
-                    })
+                    // A fallback without a notification id cannot replace private text when
+                    // another side starts using the device, or withdraw an ended request.
+                    tracing::warn!("couldn't show a retractable wake notification: {e}");
+                    Err(NO_SERVICE.to_owned())
                 }
             }
         }
@@ -597,6 +581,72 @@ mod platform {
                 close_dbus(*last);
                 *last = 0;
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        use super::*;
+
+        /// Isolate the real backend in a child process: neither D-Bus nor a fallback command
+        /// can contact the user's desktop. The fake CLI would succeed and record any invocation.
+        #[test]
+        fn unavailable_backend_never_posts_an_untrackable_notification() {
+            const CHILD: &str = "EXTEND_NOTIFY_BACKEND_TEST_CHILD";
+            const MARKER: &str = "EXTEND_NOTIFY_BACKEND_TEST_MARKER";
+            if std::env::var_os(CHILD).is_some() {
+                let notifier = notifier();
+                for (title, body) in [
+                    ("si:private asks to use this computer", "another side's private reason"),
+                    ("A Silicon asks to use this computer", super::super::REDACTED),
+                ] {
+                    let result = notifier.show(&Notification {
+                        title: title.into(),
+                        body: body.into(),
+                        alert: false,
+                    });
+                    assert_eq!(result, Err(NO_SERVICE.to_owned()));
+                    notifier.clear();
+                }
+                return;
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let program = dir.path().join("notify-send");
+            std::fs::write(
+                &program,
+                "#!/bin/sh\n: > \"$EXTEND_NOTIFY_BACKEND_TEST_MARKER\"\nexit 0\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let marker = dir.path().join("cli-was-called");
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "notify::platform::tests::unavailable_backend_never_posts_an_untrackable_notification",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env(MARKER, &marker)
+                .env("PATH", dir.path())
+                .env(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    format!("unix:path={}/no-session-bus", dir.path().display()),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                !marker.exists(),
+                "the unavailable backend invoked an untrackable notification CLI"
+            );
+            assert!(
+                output.status.success(),
+                "isolated backend check failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 }

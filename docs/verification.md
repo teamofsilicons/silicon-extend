@@ -32,6 +32,23 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — retractable Linux wake notifications
+
+The Linux `notify-send` fallback posted a notification without retaining an ID, so later
+redaction or withdrawal could leave the original requester's private name/reason in notification
+history. The fallback is removed. A missing/unavailable D-Bus backend now returns an actionable
+`NotShown` result; existing agent feedback reports `shown: false`, and the request remains
+available in Extend. Successful notifications still use D-Bus replacement and withdrawal.
+
+The regression isolates the real backend in a child with an unavailable session bus and a fake
+successful notification CLI. Both private and redacted attempts must report failure without
+invoking that CLI. The old fallback fails this test; the restored fixed source passes.
+Linux notification tests pass 9/9 with default features and 9/9 without default features; strict
+library Clippy passes both. Mac notification tests pass 8/8 and strict Clippy passes. Evidence:
+`target/linux-native-banner-fix/notify-*.log` and `notify-negative-control-result.json`.
+No user notification service was contacted. Actual GNOME/KDE notification-center behavior is
+still a physical desktop check.
+
 ## 2026-09-28 — native Linux banner sizing and recording continuity
 
 The downloaded arm64 CI package reproduced a native banner at 420×200 instead of 420×52 on

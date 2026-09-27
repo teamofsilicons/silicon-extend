@@ -217,6 +217,11 @@ Extend service on `:8480`: pair, a Silicon session, then commands with uploads.
 
 ## Linux
 
+Wake notifications require the desktop build and a running D-Bus notification service that
+supports replacing and withdrawing notifications. If it is unavailable, Extend reports the
+notification as not shown and keeps the request in the app and website. It does not invoke an
+untrackable notification command that could leave another Carbon's request in notification history.
+
 ```
 apps/desktop/linux-e2e/run.sh                                                    # driver run on a real desktop
 EXTEND_E2E_SERVICE=http://host.docker.internal:8480 apps/desktop/linux-e2e/run.sh    # plus the full agent vs a service

@@ -20,7 +20,8 @@ path = "src/main.rs"
 default = ["tray"]
 # The menu-bar / tray icon and the pairing window. Without it the agent only runs headless. On
 # Linux it also brings D-Bus (already linked by the tray), for wake notifications and keeping the
-# display on during a session; a headless build falls back to notify-send and holds nothing.
+# display on during a session; a headless build cannot show retractable wake notifications and
+# holds no display inhibition.
 tray = ["dep:tray-icon", "dep:tao", "dep:wry", "dep:dbus"]
 
 [dependencies]
