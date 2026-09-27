@@ -609,7 +609,7 @@ async fn a_refused_self_send_is_remembered() {
     let (url, _) = stand_in(Arc::new(|_: &Received| {
         json(
             StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({"error": {"code": "invalid_recipient", "message": "A member can't notify themselves."}}),
+            serde_json::json!({"error": {"code": "self_send_not_allowed", "message": "A member can't notify themselves."}}),
         )
     }))
     .await;
@@ -622,4 +622,55 @@ async fn a_refused_self_send_is_remembered() {
         .unwrap_err();
     assert!(extend_service::ting::self_send_refusal(&err));
     assert!(ting.self_send_refused(), "the chains skip self-sends from now on");
+}
+
+#[tokio::test]
+async fn an_unrelated_self_send_failure_retries_the_same_body_with_a_new_proof() {
+    for (status, code) in [
+        (StatusCode::UNAUTHORIZED, "unauthorized"),
+        (StatusCode::FORBIDDEN, "forbidden"),
+        (StatusCode::BAD_REQUEST, "invalid_request"),
+        (StatusCode::UNPROCESSABLE_ENTITY, "invalid_recipient"),
+    ] {
+        let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (url, seen) = stand_in(Arc::new(move |_: &Received| {
+            if failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                json(
+                    status,
+                    serde_json::json!({"error": {"code":code, "message":"This attempt was refused."}}),
+                )
+            } else {
+                json(StatusCode::ACCEPTED, serde_json::json!({"data": {"accepted": true}}))
+            }
+        }))
+        .await;
+        let iam = Arc::new(RecordingIam::default());
+        let ting = TingNotifier::new(url, iam.clone());
+        let bob = member("c:bob", "oat_bob");
+        let body = extend_service::ting::request_body("extend", "acme", &routed(Uuid::now_v7()));
+        let err = ting.send_frozen(&bob, &body, None).await.unwrap_err();
+        assert!(!extend_service::ting::self_send_refusal(&err), "{status} {code}");
+        assert!(
+            !ting.self_send_refused(),
+            "{status} {code} must not disable later self-sends"
+        );
+        // The delivery actor chain consults this flag before each attempt. Keeping it clear lets
+        // the next attempt recover, using a newly minted single-use proof and the frozen body.
+        ting.send_frozen(&bob, &body, None).await.unwrap();
+        let seen = seen.lock().unwrap();
+        let asked = iam.asked.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(asked.len(), 2);
+        assert_eq!(seen[0].body, seen[1].body);
+        assert_ne!(asked[0].proof, asked[1].proof);
+        assert_eq!(
+            seen[0].header("authorization"),
+            Some(format!("Bearer {}", asked[0].proof).as_str())
+        );
+        assert_eq!(
+            seen[1].header("authorization"),
+            Some(format!("Bearer {}", asked[1].proof).as_str())
+        );
+        assert!(!ting.self_send_refused());
+    }
 }

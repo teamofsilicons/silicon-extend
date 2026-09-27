@@ -295,10 +295,11 @@ impl TingNotifier {
     }
 }
 
-/// A refusal of a Ting a member sent to themselves that says Ting won't take such Tings (not a
-/// missing registration, type or rate limit).
+/// Only an explicit provider self-send restriction establishes that capability. Authentication,
+/// authorization and recipient validation failures say nothing about other self-sends, and must
+/// remain retryable with a fresh proof or after the affected member's permissions change.
 fn refuses_self_send(status: u16, code: &str) -> bool {
-    (400..500).contains(&status) && status != 404 && status != 429 && code != "recipient_not_registered"
+    matches!(status, 400 | 403 | 422) && matches!(code, "self_send_not_allowed" | "self_send_unsupported")
 }
 
 /// Turns a Ting refusal into an error that says what happened, why, and what to do. `details`
@@ -519,7 +520,7 @@ impl Notifier for LocalNotifier {
         }
         if self.refuse_self_sends.load(Ordering::Relaxed) && recipient == actor.id() {
             self.self_send_refused.store(true, Ordering::Relaxed);
-            return Err(Self::refusal(422, "invalid_recipient", body, actor));
+            return Err(Self::refusal(422, "self_send_not_allowed", body, actor));
         }
         if self.require_registration.load(Ordering::Relaxed) {
             let env = sel.map(|s| s.environment_id);
