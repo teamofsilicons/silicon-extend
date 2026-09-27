@@ -183,3 +183,12 @@ script never reaches production. Production and test logins are stored separatel
 
 `extend config ls` shows them all: `api_url`, `telemetry` (on by default), `output`, `team`,
 `screenshot_scale`, `self_destruct`, `download_dir`, `color`.
+
+### In-use banner (1.1)
+
+A Carbon who paired the device can run `extend device banner <device_id> on|off`.
+The setting belongs to the physical device, so it applies to every Carbon's pair.
+`extend device show <device_id>` includes the current banner setting. This never ends a session;
+Stop remains available in the Extend app and on the website. With the setting on, the banner
+shows for 10 seconds per session. Requests waiting for a Carbon remain visible. Android's quiet
+foreground-service notification and Apple's Automation Running banner remain platform requirements.

@@ -54,14 +54,34 @@ class Config(context: Context) {
             value?.let { ExtendJson.encodeToString(TestingEnvironment.serializer(), it) },
         ).apply()
 
+    /**
+     * The device's `in_use_indicator` as last read from Extend or set here (shown until either
+     * says otherwise), so the badge and notification follow it from the moment the app starts.
+     */
+    var inUseIndicatorShown: Boolean
+        get() = prefs.getBoolean(KEY_INDICATOR, true)
+        set(value) = prefs.edit().putBoolean(KEY_INDICATOR, value).apply()
+
+    /** The Carbon changed [inUseIndicatorShown] here and Extend hasn't heard yet (offline): sent on the next connection. */
+    var inUseIndicatorPending: Boolean
+        get() = prefs.getBoolean(KEY_INDICATOR_PENDING, false)
+        set(value) = prefs.edit().putBoolean(KEY_INDICATOR_PENDING, value).apply()
+
+    /** The session the badge or notification last announced ([com.teamofsilicons.extend.core.InUseIndicator.key]). */
+    var announcedSession: String?
+        get() = prefs.getString(KEY_ANNOUNCED, null)
+        set(value) = prefs.edit().putString(KEY_ANNOUNCED, value).apply()
+
     /** One Carbon's pair ended; the environment goes with the last one. */
     fun clearPair(deviceId: String) {
         val rest = pairIds.filter { it != deviceId }
         if (rest.isEmpty()) clearPairs() else pairIds = rest
     }
 
+    /** Every pair ended: a new pairing starts from the defaults (the indicator shown). */
     fun clearPairs() {
-        prefs.edit().remove(KEY_PAIR_IDS).remove(KEY_DEVICE_ID).remove(KEY_ENVIRONMENT).apply()
+        prefs.edit().remove(KEY_PAIR_IDS).remove(KEY_DEVICE_ID).remove(KEY_ENVIRONMENT)
+            .remove(KEY_INDICATOR).remove(KEY_INDICATOR_PENDING).remove(KEY_ANNOUNCED).apply()
     }
 
     fun webSocketUrl(path: String): String {
@@ -81,6 +101,9 @@ class Config(context: Context) {
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_PAIR_IDS = "pair_ids"
         private const val KEY_ENVIRONMENT = "environment"
+        private const val KEY_INDICATOR = "in_use_indicator_shown"
+        private const val KEY_INDICATOR_PENDING = "in_use_indicator_pending"
+        private const val KEY_ANNOUNCED = "announced_session"
     }
 }
 
@@ -157,4 +180,16 @@ object DeviceInfo {
     val osVersion: String get() = Build.VERSION.RELEASE ?: Build.VERSION.SDK_INT.toString()
 
     val model: String get() = Build.MODEL ?: "Android device"
+
+    /**
+     * Keep the app lean: Android calls this a low-RAM device, or gives apps 128 MB of heap or less.
+     * TVs and TV boxes with 512 MB–1 GB (a MediaTek MT9255 TV with 440 MB free) kill even a visible
+     * app when it takes tens of MB at once, and then its Android debugging connection is gone too.
+     */
+    fun lean(context: Context): Boolean = runCatching {
+        val am = context.getSystemService(android.app.ActivityManager::class.java)
+        lean(am.isLowRamDevice, am.memoryClass)
+    }.getOrDefault(false)
+
+    fun lean(lowRam: Boolean, memoryClassMb: Int): Boolean = lowRam || memoryClassMb in 1..128
 }

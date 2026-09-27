@@ -319,6 +319,7 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
 );
 "#,
     WORLD_1_1,
+    WORLD_1_1_BANNER,
 ];
 
 /// Schema version 4 (1.1.0): devices belong to the Carbons who paired them; several Carbons can
@@ -480,8 +481,16 @@ CREATE TABLE IF NOT EXISTS {s}.membership_checks (
     PRIMARY KEY (member_id, team));
 "#;
 
+/// Schema version 5 (1.1.0): whether the device shows the badge, banner or notification naming
+/// the Silicon using it. One setting per physical device, so every pair of it shares it. Additive:
+/// 1.0.0 never reads it after a rollback, and the instances its rows create get the default.
+const WORLD_1_1_BANNER: &str = r#"
+ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text NOT NULL DEFAULT 'shown'
+    CHECK (in_use_indicator IN ('shown','hidden'));
+"#;
+
 /// The schema version a 1.1.0 service brings every world to.
-pub const WORLD_VERSION: i32 = 4;
+pub const WORLD_VERSION: i32 = 5;
 
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
     // Serialise migrations across service instances.

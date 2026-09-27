@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use extend_driver::{Driver, Probe};
 use extend_protocol::frames::{CommandOutcome, DeviceFrame, Hello, ServiceFrame, close};
-use extend_protocol::model::{CommandError, EnrollmentCreate, MissingCapability, TestingEnvironment};
+use extend_protocol::model::{CommandError, EnrollmentCreate, InUseIndicator, MissingCapability, TestingEnvironment};
 use extend_protocol::{Capability, DeviceId};
 use futures::{SinkExt as _, StreamExt as _};
 use tokio::sync::{Notify, mpsc, watch};
@@ -60,6 +60,8 @@ pub enum UiAction {
     CancelPairAnother,
     /// Check permissions and helpers again now.
     Reprobe,
+    /// The Carbon's choice for the in-use banner on this computer.
+    SetInUseIndicator { shown: bool },
 }
 
 /// Reads whether this computer's screen can be used right now, and how long since the last input
@@ -769,6 +771,28 @@ impl Core {
                 }
                 self.status.update(|s| s.adding_pair = None);
             }
+            UiAction::SetInUseIndicator { shown } => {
+                let Some(link) = self.online_link(None).or_else(|| self.links().into_iter().next()) else {
+                    return;
+                };
+                let value = if shown {
+                    InUseIndicator::Shown
+                } else {
+                    InUseIndicator::Hidden
+                };
+                match self.service.set_in_use_indicator(&link.credential(), value).await {
+                    Ok(d) => self.status.update(|s| {
+                        s.in_use_indicator = d.in_use_indicator;
+                        s.last_error = None;
+                    }),
+                    Err(e) => self.status.update(|s| {
+                        s.last_error = Some(format!(
+                            "Couldn't change the in-use banner: {}. Try again when connected.",
+                            e.message
+                        ))
+                    }),
+                }
+            }
             UiAction::Reprobe => self.reprobe.notify_one(),
         }
     }
@@ -1009,6 +1033,7 @@ impl Core {
                         p.first_pair = d.first_pair.or(p.first_pair);
                     }
                     s.environment = env;
+                    s.in_use_indicator = d.in_use_indicator;
                     // The service names the session only on the pair it runs through.
                     match &d.in_use {
                         Some(u) => {
@@ -1215,6 +1240,7 @@ impl Core {
                 name,
                 address,
                 removed,
+                in_use_indicator,
             } => {
                 if removed {
                     tracing::info!("no longer carrying {device_id}");
@@ -1225,6 +1251,7 @@ impl Core {
                 } else {
                     tracing::info!("carrying {device_id} ({}) for {}", os.as_str(), link.id);
                     self.hosted.attach(AttachRecord {
+                        in_use_indicator,
                         device_id: device_id.clone(),
                         os,
                         name,

@@ -6,6 +6,8 @@ describe("activitySummary (details as the service logs them)", () => {
     ["renamed", { name: { from: "Pixel", to: "Pixel 9" } }, "Renamed from “Pixel” to “Pixel 9”"],
     ["settings_changed", { pair_ttl_days: 9 }, "Stays paired 9 days without activity"],
     ["settings_changed", { visibility: "personal" }, "Visible only to its owner"],
+    ["settings_changed", { in_use_indicator: "hidden" }, "Turned off the banner while a Silicon uses it"],
+    ["settings_changed", { in_use_indicator: { from: "hidden", to: "shown" } }, "Turned on the banner while a Silicon uses it"],
     ["settings_changed", { name: { from: "A", to: "B" }, pair_ttl_days: 1, visibility: "team" }, "Renamed from “A” to “B”, stays paired 1 day without activity, visible to the Team"],
     ["access_granted", { silicon_id: "si:chef" }, "Gave si:chef access"],
     ["access_revoked", { silicon_id: "si:chef", reason: "left_team" }, "Took access away from si:chef (it, or you, left its Team)"],

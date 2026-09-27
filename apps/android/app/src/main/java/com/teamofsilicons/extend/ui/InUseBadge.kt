@@ -25,10 +25,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.teamofsilicons.extend.R
 import com.teamofsilicons.extend.core.UiState
+import com.teamofsilicons.extend.core.InUseIndicator
 import java.io.File
 
 /**
- * What the TV's corner badge says while a Silicon works: short, and always which Silicon.
+ * What the TV's bottom-centre badge says while a Silicon works: short, and always which Silicon.
  * [line] follows the Silicon's name; [detail] is the takeover reason, on a second line.
  */
 data class InUseBadge(
@@ -43,7 +44,7 @@ data class InUseBadge(
     companion object {
         /** The badge for this state, or null when a TV has nothing to show (or this isn't a TV). */
         fun from(state: UiState): InUseBadge? {
-            if (!state.isTv) return null
+            if (!state.isTv || InUseIndicator.show(state) == InUseIndicator.Show.NONE) return null
             val session = state.session
             val takeover = state.takeover
             return when {
@@ -56,7 +57,7 @@ data class InUseBadge(
 }
 
 /**
- * The corner badge a TV shows over other apps, in Interface's system: a cobalt pill with a pale
+ * The bottom-centre badge a TV shows over other apps, in Interface's system: a cobalt pill with a pale
  * cobalt edge, the 3 × 3 pixel indicator, a mono SILICON tag and the Silicon's name in IBM Plex
  * Sans. When a Silicon is waiting for the Carbon it turns ink with an orange-red edge and
  * indicator, and the reason goes on a second line. A plain View: it lives in an accessibility

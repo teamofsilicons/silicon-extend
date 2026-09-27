@@ -190,6 +190,11 @@ pub struct Device {
     /// same Team (another Carbon's id for it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub same_device: Option<Vec<DeviceId>>,
+    /// Whether the device shows the badge, banner or notification naming the Silicon using it.
+    /// One setting per physical device, shared by every pair of it. Absent (a 1.0 service) means
+    /// shown.
+    #[serde(default)]
+    pub in_use_indicator: InUseIndicator,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -343,6 +348,21 @@ pub struct DevicePatch {
     pub visibility: Option<Visibility>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pair_ttl_days: Option<i32>,
+}
+
+/// The 1.1 device settings request. Kept separate so 1.0 callers constructing
+/// `DevicePatch` with a struct literal remain source compatible.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeviceSettingsPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_ttl_days: Option<i32>,
+    /// 1.1: show or hide the in-use banner on the device (every pair of it). Carbon only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_use_indicator: Option<InUseIndicator>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -802,6 +822,10 @@ pub struct DeviceSelf {
     /// (see [`crate::TERMINAL_NOT_SHARED_REASON`]). Absent from 1.0 services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_pair: Option<bool>,
+    /// 1.1: whether this device shows the badge, banner or notification naming the Silicon using
+    /// it. Shared by every pair of the device. Absent (a 1.0 service) means shown.
+    #[serde(default)]
+    pub in_use_indicator: InUseIndicator,
 }
 
 // ───────────── 1.1.0: waking a device ─────────────
@@ -1323,6 +1347,67 @@ impl RetryResult {
     }
 }
 
+// ───────────── 1.1.0: the in-use banner ─────────────
+
+open_enum! {
+    /// Whether a device shows that a Silicon is using it: the badge, banner or notification that
+    /// names the Silicon. Shown, it appears for 10 seconds when a session starts, then hides (a
+    /// menu bar or tray icon stays changed for the session). Hidden, nothing is drawn or notified
+    /// about the Silicon. Either way, a takeover prompt shows until it is answered, and the
+    /// Extend app's own screen and the website show who is using the device, with Stop.
+    ///
+    /// One setting per physical device, shared by every pair of it. Absent on the wire means
+    /// `Shown`; so does a value this build doesn't know (see [`InUseIndicator::shows`]).
+    #[non_exhaustive]
+    #[derive(Default)]
+    pub enum InUseIndicator {
+        #[default]
+        Shown => "shown",
+        Hidden => "hidden",
+    }
+}
+
+impl InUseIndicator {
+    /// Seconds the badge, banner or notification stays up after a Silicon starts using the device.
+    pub const AUTO_HIDE_S: u64 = 10;
+
+    /// Whether the device should show it. Only `Hidden` hides it: a value from a newer service
+    /// shows it, the safe side for the people around the device.
+    pub fn shows(self) -> bool {
+        self != Self::Hidden
+    }
+
+    /// "on" or "off", as the CLI and the website say it.
+    pub fn on_off(self) -> &'static str {
+        if self.shows() { "on" } else { "off" }
+    }
+
+    /// Reads "on"/"off" (and "shown"/"hidden").
+    pub fn from_on_off(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "on" | "shown" | "show" => Some(Self::Shown),
+            "off" | "hidden" | "hide" => Some(Self::Hidden),
+            _ => None,
+        }
+    }
+}
+
+/// Body of `PATCH /api/v1/device` (device credential, any of the device's pairs): the device app
+/// changes its own settings. Absent fields stay as they are.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeviceSelfPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_use_indicator: Option<InUseIndicator>,
+}
+
+impl DeviceSelfPatch {
+    pub fn in_use_indicator(indicator: InUseIndicator) -> Self {
+        Self {
+            in_use_indicator: Some(indicator),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::de::DeserializeOwned;
@@ -1435,8 +1520,11 @@ mod tests {
         );
         assert!(!d.in_use_by_other && !d.in_use_by_other_carried);
         assert_eq!((d.engine_version, d.same_device, d.wake_requests), (None, None, None));
-        // Nothing new appears when a 1.1 service leaves the new fields unset.
-        let back = serde_json::to_value(serde_json::from_value::<Device>(device_1_0()).unwrap()).unwrap();
+        // Nothing new appears when a 1.1 service leaves the new fields unset, except
+        // `in_use_indicator`, which a 1.1 service always writes.
+        let mut back = serde_json::to_value(serde_json::from_value::<Device>(device_1_0()).unwrap()).unwrap();
+        assert_eq!(back["in_use_indicator"], "shown");
+        back.as_object_mut().unwrap().remove("in_use_indicator");
         assert_eq!(back, device_1_0());
     }
 
@@ -1638,6 +1726,53 @@ mod tests {
     }
 
     #[test]
+    fn in_use_indicator() {
+        open_enum_round_trips(
+            InUseIndicator::ALL,
+            InUseIndicator::as_str,
+            InUseIndicator::parse,
+            InUseIndicator::Other,
+        );
+        assert_eq!(InUseIndicator::default(), InUseIndicator::Shown);
+        assert!(InUseIndicator::Shown.shows() && !InUseIndicator::Hidden.shows() && InUseIndicator::Other.shows());
+        assert_eq!(
+            (InUseIndicator::Shown.on_off(), InUseIndicator::Hidden.on_off()),
+            ("on", "off")
+        );
+        assert_eq!(InUseIndicator::from_on_off("off"), Some(InUseIndicator::Hidden));
+        assert_eq!(InUseIndicator::from_on_off(" ON "), Some(InUseIndicator::Shown));
+        assert_eq!(InUseIndicator::from_on_off("maybe"), None);
+
+        // Device: absent (a 1.0 service) reads as shown; a 1.1 service always writes it.
+        let d: Device = serde_json::from_value(device_1_0()).unwrap();
+        assert_eq!(d.in_use_indicator, InUseIndicator::Shown);
+        let mut hidden = d.clone();
+        hidden.in_use_indicator = InUseIndicator::Hidden;
+        let v = serde_json::to_value(&hidden).unwrap();
+        assert_eq!(v["in_use_indicator"], "hidden");
+        assert_eq!(serde_json::from_value::<Device>(v).unwrap(), hidden);
+
+        // The patches: only what is set is written.
+        exact(&DevicePatch::default(), json!({}));
+        exact(
+            &DeviceSettingsPatch {
+                in_use_indicator: Some(InUseIndicator::Hidden),
+                ..Default::default()
+            },
+            json!({"in_use_indicator":"hidden"}),
+        );
+        exact(&DeviceSelfPatch::default(), json!({}));
+        exact(
+            &DeviceSelfPatch::in_use_indicator(InUseIndicator::Shown),
+            json!({"in_use_indicator":"shown"}),
+        );
+        assert_eq!(
+            serde_json::from_value::<DeviceSelfPatch>(json!({"in_use_indicator":null})).unwrap(),
+            DeviceSelfPatch::default()
+        );
+    }
+
+    #[test]
     fn team_fields_on_1_0_shapes() {
         // 1.0 JSON decodes; the 1.1 field round-trips; unset, it's left out.
         let grant = json!({"device_id":"7c1e09ab","silicon_id":"si:chef","granted_by":"c:alice",
@@ -1725,7 +1860,13 @@ mod tests {
             (me.instance_id, me.hardware_salt.clone(), me.first_pair),
             (None, None, None)
         );
-        assert_eq!(serde_json::to_value(&me).unwrap(), old);
+        assert_eq!(me.in_use_indicator, InUseIndicator::Shown);
+        let mut back = serde_json::to_value(&me).unwrap();
+        assert_eq!(back["in_use_indicator"], "shown");
+        back.as_object_mut().unwrap().remove("in_use_indicator");
+        assert_eq!(back, old);
+        me.in_use_indicator = InUseIndicator::Hidden;
+        assert_eq!(serde_json::to_value(&me).unwrap()["in_use_indicator"], "hidden");
         me.instance_id = Some(WAKE.parse().unwrap());
         me.hardware_salt = Some("ab".repeat(32));
         me.first_pair = Some(true);

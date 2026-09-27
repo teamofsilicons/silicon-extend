@@ -1,4 +1,4 @@
-//! 1.1 schema (world version 4) on a live 1.0 database, rows 1.0.0 writes after a rollback, and
+//! 1.1 schema (world version 5) on a live 1.0 database, rows 1.0.0 writes after a rollback, and
 //! the down step deploy/rollback/1.1-to-1.0.sql with the roll-forward that follows (test_plan 18).
 
 mod common;
@@ -70,7 +70,15 @@ async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
             &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")
         )
         .await,
-        4
+        5
+    );
+    assert!(
+        one::<bool>(
+            &pool,
+            &format!("SELECT bool_and(in_use_indicator = 'shown') FROM {s}.device_instances")
+        )
+        .await,
+        "existing devices keep showing their indicator after the additive migration"
     );
     // Each device is its own instance, with its own side salt; every device is personal.
     assert_eq!(

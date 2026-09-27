@@ -15,7 +15,8 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use extend_protocol::frames::{AttachedStatus, DeviceFrame, ServiceFrame, close};
 use extend_protocol::model::{
-    DeviceSelf, EndReason, InUse, Member, MemberKind, Setup, SetupState, SleepState, Takeover,
+    DeviceSelf, DeviceSelfPatch, EndReason, InUse, InUseIndicator, Member, MemberKind, Setup, SetupState, SleepState,
+    Takeover,
 };
 use extend_protocol::{Capability, ErrorCode, MAX_ARTIFACT_BYTES, ids};
 use futures::{SinkExt as _, StreamExt as _};
@@ -111,8 +112,41 @@ pub async fn me(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Resp
                 None
             },
             first_pair: Some(d.first_pair),
+            in_use_indicator: d.in_use_indicator(),
         },
     ))
+}
+
+/// `PATCH /api/v1/device`: the device's own Extend app changes the device's settings (today only
+/// `in_use_indicator`), with any of its pair credentials. The setting belongs to the physical
+/// device, so it changes for every pair of it; answers the device as `GET /api/v1/device` would.
+pub async fn update(State(state): State<Shared>, auth: DeviceAuth, body: Bytes) -> AppResult<Response> {
+    // The usual envelope `{"type": "device_self", "data": {...}}`, or the bare object.
+    let v: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| AppError::invalid(format!("The body is not valid JSON: {e}")))?;
+    let data = if v.get("type").is_some() && v.get("data").is_some() {
+        v["data"].clone()
+    } else {
+        v
+    };
+    let patch: DeviceSelfPatch =
+        serde_json::from_value(data).map_err(|e| AppError::invalid(format!("The body's data is not valid: {e}")))?;
+    let d = this_device(&state, &auth).await?;
+    let Some(value) = patch.in_use_indicator else {
+        return Err(AppError::invalid("Send in_use_indicator: \"shown\" or \"hidden\"."));
+    };
+    if value == InUseIndicator::Other {
+        return Err(AppError::invalid("in_use_indicator is \"shown\" or \"hidden\"."));
+    }
+    domain::set_in_use_indicator(
+        &state,
+        &auth.world,
+        d.instance_id,
+        value,
+        domain::BannerChangedBy::Device,
+    )
+    .await?;
+    me(State(state), auth).await
 }
 
 pub async fn revoke(State(state): State<Shared>, auth: DeviceAuth) -> AppResult<Response> {
@@ -337,14 +371,10 @@ async fn greet(state: &AppState, world: &World, device_id: &str) -> Vec<ServiceF
     .await
     .unwrap_or_default();
     for h in hosted {
-        let Ok(id) = h.device_id.parse() else { continue };
-        frames.push(ServiceFrame::Attach {
-            device_id: id,
-            os: h.os(),
-            name: h.name.clone(),
-            address: h.address.clone(),
-            removed: false,
-        });
+        if h.device_id.parse::<extend_protocol::DeviceId>().is_err() {
+            continue;
+        }
+        frames.push(h.attach_frame(false));
         if let Some(f) = session_started(state, world, &h, true).await {
             frames.push(f);
         }
@@ -1007,6 +1037,12 @@ async fn link(state: &AppState, world: &World, c: &DeviceRow, other: &str, targe
     .await?;
     tx.commit().await?;
     let _ = other;
+    // It now shares the device's in-use banner setting: tell its computer when that differs.
+    if let Ok(Some(n)) = domain::load_device(state, world, &c.device_id).await
+        && n.in_use_indicator != c.in_use_indicator
+    {
+        let _ = state.hub.send(&n.route(world), n.attach_frame(false)).await;
+    }
     domain::log(
         state,
         world,

@@ -32,6 +32,50 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — resumed banner follow-up
+
+Recovered the interrupted Claude working tree on `release/1.1.0` at `505a695` and completed the
+shared banner setting through the service, Rust client/CLI, website, Android notification/badge,
+and desktop banner/icon. Preserved the 1.0 Rust `DevicePatch` struct-literal API by introducing
+`DeviceSettingsPatch`; added consumer fixtures for both new calls and replayed them alongside
+frozen 1.0 consumers. Device settings and the shared indicator now change in one transaction,
+including the version check. Concurrent conditional edits are covered by a service test.
+
+Observed on this Mac, with the existing local PostgreSQL and stand-in IAM; no physical device,
+installed app or production service was changed:
+
+- Android offline Gradle unit tests, lint and debug APK: 228 app + 10 libadb tests pass, lint and
+  assembly pass. The new virtual-time tests cover the exact 10-second boundary, hiding, takeover
+  persistence, session identity across pairs and process-restart announcement suppression. They
+  also assert hiding the badge keeps the session and screen hold alive. Log:
+  `/tmp/extend-resume-android.log`.
+- Real HTTP/WebSocket/PostgreSQL banner tests: 4 pass, including two Carbons sharing the setting,
+  Silicon refusal, carried-device refresh/reconnect, test isolation and competing If-Match edits.
+  Existing device gap tests: 7 pass. Log: `/tmp/extend-banner-service-tests.log`.
+- Client contract generation: 3 pass; real service contract replay: 9 pass, including frozen 1.0.
+  Logs: `/tmp/extend-banner-contract-write.log`, `/tmp/extend-banner-contract-replay.log`.
+- Protocol/client tests and old request-body source compatibility pass:
+  `/tmp/extend-banner-client-tests.log`. CLI behavior tests include exact banner PATCH bodies and
+  argument rejection; desktop tests include independent per-device timers, hidden icons,
+  takeover persistence and Stop availability. `/tmp/extend-banner-rust-tests.log` records those
+  passes before its missing-fixture gate failed; the separate contract run above closes that gate.
+- Website typecheck, 170 unit tests and production build pass. Browser tests exercise the extra
+  setup step and persist the banner setting across reload without stopping the running session.
+  The first run caught outdated setup-step expectations. After updating the successful pairing
+  paths, 57 browser cases passed; the remaining visual-tour case passed separately after changing
+  its expected mobile progress from step 4/6 to step 5/7. Logs:
+  `/tmp/extend-resume-web-e2e.log`, `/tmp/extend-resume-web-restyle.log`. Phone-width device settings
+  screenshot was visually inspected (`web/test-results/screenshots/12-device-page-phone.png`).
+- Workspace Clippy with `-D warnings` passes: `/tmp/extend-resume-clippy.log`.
+- Final `cargo test --workspace --locked`: 559 pass, 4 ignored, 0 failures across 36 test/doc-test
+  result groups (`/tmp/extend-resume-workspace.log`). The migration suite verifies schema 5,
+  default-shown indicators on pre-existing rows, and rollback/roll-forward behavior. Opt-in
+  real-service/native lanes were not enabled; a green harness result does not establish those.
+
+This is local evidence, not proof of Windows/Linux native windows, a physical TV's placement,
+Android's notification rendering, production interoperability or a release. The remaining final
+fixes and runtime/release gates stay in `completion-work.md`.
+
 ## 2026-09-27 — 1.1.0 integration
 
 1.1.0 was built by ten groups, each testing its own part, on top of `8da8e2d`; an integration pass

@@ -20,7 +20,7 @@ object KeepScreenOn {
 }
 
 /**
- * Keeps a phone's or tablet's screen on while [KeepScreenOn] wants it: one transparent pixel in an
+ * Keeps a phone's, tablet's or TV's screen on while [KeepScreenOn] wants it: one transparent pixel in an
  * accessibility overlay (no "display over other apps" permission), which can't take touches or
  * focus, with FLAG_KEEP_SCREEN_ON. Android honours that flag only for a window it has drawn, which
  * a zero-sized window may never be, hence one pixel. No wake lock: those can turn a screen on.

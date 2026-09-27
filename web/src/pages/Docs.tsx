@@ -154,7 +154,10 @@ function Start() {
           Open <Link href="/devices/new">Add a device</Link> and pick what you are pairing.
         </li>
         <li>Download the Extend app on that device from the link shown, and open it. It shows a 6-character pairing code. It never asks you to log in.</li>
-        <li>Type the code on the website, give the device a name, and finish the device's own setup (turning on debugging, allowing permissions). Each step is explained as you go.</li>
+        <li>
+          Type the code on the website, give the device a name, choose whether it shows a banner while a Silicon is using it (on unless you turn it off), and finish the device's own
+          setup (turning on debugging, allowing permissions). Each step is explained as you go.
+        </li>
         <li>Choose which Silicons can use it, or skip that and do it later from the device's page.</li>
       </ol>
       <p>
@@ -166,7 +169,8 @@ function Start() {
       <p>Once a Silicon has access, ask it in plain words, and include the device id from the device's page so it doesn't have to guess:</p>
       <blockquote class="ask">“Use my Pixel (7c1e09ab) through Extend to check whether my Swiggy order was confirmed, then end the session.”</blockquote>
       <p>
-        While it works, the device shows which Silicon is using it, with a Stop button. You can also stop it from the device's page here. The device page shows every action it took, and the files it made are shared with you in Briefcase.
+        When it starts, the device shows the Silicon's name for 10 seconds (a badge, banner or notification), unless you turned that off. The device's Extend app and its page here
+        always show which Silicon is using it, with a Stop button. The device page shows every action it took, and the files it made are shared with you in Briefcase.
       </p>
 
       <h3>3. Stay in control</h3>
@@ -180,6 +184,10 @@ function Start() {
           reach a Team, the website says <em>Sign in to Extend for &lt;team&gt;</em>: sign in again and select that Team in Silicon IAM. You can still take access away there.
         </li>
         <li>Take a Silicon's access away at any time. If it is using the device, its session ends at once.</li>
+        <li>
+          Turn off the banner a device shows while a Silicon is using it, on the device's page or in its Extend app, and turn it back on the same way. It's one setting for the device,
+          shared with any other Carbon who paired it.
+        </li>
         <li>Signing out of Extend (here or in the CLI) ends the running sessions of the Silicons you gave access to. They keep their access.</li>
         <li>A device unpairs itself after 1 to 30 days without activity (14 by default). Set this per device.</li>
         <li>
@@ -316,7 +324,10 @@ function DevicesDoc() {
     <>
       <p class="eyebrow">Carbons</p>
       <h1 class="page-title">Pairing each kind of device.</h1>
-      <p class="lead">Every Extend app works the same way: before pairing it shows a pairing code; during setup it walks you through what that device needs; once paired it shows its name, who it is paired to, and which Silicon is using it.</p>
+      <p class="lead">
+        Every Extend app works the same way: before pairing it shows a pairing code; during setup it walks you through what that device needs, and asks whether to show a banner while
+        a Silicon is using the device; once paired it shows its name, who it is paired to, and which Silicon is using it.
+      </p>
       <For each={DEVICE_KINDS}>
         {(k) => (
           <section class="doc-device" id={k.id}>
@@ -338,6 +349,9 @@ function DevicesDoc() {
             </ol>
             <p>
               <strong>A Silicon can:</strong> {k.canDo}
+            </p>
+            <p>
+              <strong>While in use:</strong> {k.inUse} {k.via === "app" ? "You can turn that off on the device's page or in its Extend app." : ""} {k.inUseStays ?? ""}
             </p>
             <Show when={k.goodToKnow}>
               <p>

@@ -46,6 +46,12 @@ export type WakeEndReason =
 export type DeviceNotice = "sent" | "shown" | "not_shown" | "offline" | "unsupported" | (string & {});
 /** Where a request for a device in use went: to the Silicon using it, or to the Carbon who gave that Silicon access. */
 export type RequestRoute = "holder" | "carbon" | (string & {});
+/**
+ * Whether the device itself shows that a Silicon is using it (a badge, banner, notification or icon
+ * change, for 10 seconds when a session starts). One setting per physical device, shared by every
+ * Carbon who paired it. Absent means shown.
+ */
+export type InUseIndicator = "shown" | "hidden" | (string & {});
 
 export interface Envelope<T> {
   type: string;
@@ -182,6 +188,8 @@ export interface Device {
   paired_by_others?: boolean | null;
   /** Silicon only: its other pairs of this same device. */
   same_device?: string[] | null;
+  /** What the device itself shows while a Silicon uses it; absent means "shown". */
+  in_use_indicator?: InUseIndicator | null;
 }
 
 export interface DeviceDetail extends Device {

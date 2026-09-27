@@ -149,6 +149,11 @@ function settingsSummary(d: Details): string[] {
   if (name && typeof name === "object") parts.push(`renamed from “${str(name.from) ?? "?"}” to “${str(name.to) ?? "?"}”`);
   else if (str(d.from) && str(d.to)) parts.push(`renamed from “${d.from}” to “${d.to}”`);
   if (typeof d.pair_ttl_days === "number") parts.push(`stays paired ${plural(d.pair_ttl_days, "day")} without activity`);
+  // What the device shows while a Silicon uses it: "hidden" / "shown", or {"from", "to"}.
+  const indicator = d.in_use_indicator as { to?: unknown } | string | undefined;
+  const shown = indicator && typeof indicator === "object" ? str(indicator.to) : str(indicator);
+  if (shown === "hidden") parts.push("turned off the banner while a Silicon uses it");
+  if (shown === "shown") parts.push("turned on the banner while a Silicon uses it");
   // Only 1.0 wrote these: since 1.1 a device is visible only to the Carbons who paired it.
   if (d.visibility === "team") parts.push("visible to the Team");
   if (d.visibility === "personal") parts.push("visible only to its owner");

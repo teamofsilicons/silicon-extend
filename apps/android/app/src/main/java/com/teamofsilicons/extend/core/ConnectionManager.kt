@@ -19,6 +19,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -51,6 +53,16 @@ class ConnectionManager(private val extend: Extend) : LinkHost {
     private val enrollWake = Channel<Unit>(Channel.CONFLATED)
     private val sendLock = Mutex()
     private val wakeLock = Mutex()
+    private val indicatorLock = Mutex()
+    private var announceJob: Job? = null
+
+    /** The 10 s during which the badge or notification names a Silicon that just started. */
+    private val announcer = InUseAnnouncer(
+        extend.scope,
+        update = { f -> extend.update(f) },
+        announced = { extend.config.announcedSession },
+        remember = { extend.config.announcedSession = it },
+    )
     private val supervisor = PairSupervisor(extend.scope, ::newLink, ::pairEnded)
 
     /** The app process's `awake` run, and the sequence number shared by every connection. */
@@ -68,6 +80,11 @@ class ConnectionManager(private val extend: Extend) : LinkHost {
     val wakefulness = Wakefulness.Watcher(extend.context, { extend.isTv }, ::awakeChanged, ::screenOn)
 
     fun start() {
+        if (announceJob?.isActive != true) {
+            announceJob = extend.scope.launch {
+                extend.state.map { it.session }.distinctUntilChangedBy { s -> s?.let { InUseIndicator.key(it) } }.collect { announcer.onSession(it) }
+            }
+        }
         if (mainJob?.isActive == true) return
         mainJob = extend.scope.launch { supervise() }
         if (watcherJob?.isActive != true) {
@@ -287,7 +304,12 @@ class ConnectionManager(private val extend: Extend) : LinkHost {
     override fun opened(link: PairLink) {
         sendHello(link, SetupReport.compute(extend.context, config))
         link.send(awakeFrame(wakefulness.forConnect()))
-        extend.scope.launch { refreshPair(link) }
+        extend.scope.launch {
+            // A change the Carbon made here while this device was offline goes first, so the
+            // re-read below doesn't undo it.
+            if (config.inUseIndicatorPending) pushIndicator(config.inUseIndicatorShown)
+            refreshPair(link)
+        }
     }
 
     override fun closed(link: PairLink) {
@@ -379,6 +401,13 @@ class ConnectionManager(private val extend: Extend) : LinkHost {
                 return
             }
             config.environment = d.environment
+            // One setting for the whole device: whichever pair read it last is right. A 1.0
+            // service leaves it out, and a change still on its way to Extend wins.
+            val indicator = d.inUseIndicator?.takeIf { !config.inUseIndicatorPending }?.let { InUseIndicator.shows(it) }
+            if (indicator != null && indicator != config.inUseIndicatorShown) {
+                Extend.log("in-use indicator is ${InUseIndicator.value(indicator)} (from Extend)")
+                config.inUseIndicatorShown = indicator
+            }
             // Sessions of this pair that ended while its connection was down are no longer in use.
             extend.executor.reconcile(d.inUse?.sessionId, link.deviceId)
             extend.update { s ->
@@ -404,7 +433,10 @@ class ConnectionManager(private val extend: Extend) : LinkHost {
                     current?.pairId == d.deviceId -> null
                     else -> s.takeover
                 }
-                s.copy(pairs = rows, environment = d.environment, session = session, takeover = takeover)
+                s.copy(
+                    pairs = rows, environment = d.environment, session = session, takeover = takeover,
+                    indicatorShown = indicator ?: s.indicatorShown,
+                )
             }
             wakeChanged(wait = false)
         } catch (e: ApiException) {
@@ -545,6 +577,69 @@ class ConnectionManager(private val extend: Extend) : LinkHost {
     }
 
     // ───────────── What the Carbon does ─────────────
+
+    /**
+     * The Carbon turned the in-use badge or notification on or off here. It takes effect on this
+     * device at once, then goes to Extend for every pair of it (`PATCH /api/v1/device`); while
+     * this device is offline it waits for the next connection.
+     */
+    fun setInUseIndicator(shown: Boolean) {
+        config.inUseIndicatorShown = shown
+        config.inUseIndicatorPending = true
+        Extend.log("in-use indicator set to ${InUseIndicator.value(shown)} on this device")
+        extend.update { it.copy(indicatorShown = shown, indicatorNote = null) }
+        extend.scope.launch { pushIndicator(shown) }
+    }
+
+    /** Sends the Carbon's choice to Extend with the first pair credential that works; says what happened when it didn't. */
+    private suspend fun pushIndicator(shown: Boolean) = indicatorLock.withLock {
+        if (config.inUseIndicatorShown != shown || !config.inUseIndicatorPending) return@withLock
+        val noun = DeviceInfo.noun(extend.context, extend.isTv)
+        val credentials = (supervisor.links().sortedByDescending { it.connected }.map { it.credential } +
+            runCatching { extend.secrets.pairs().map { it.credential } }.getOrDefault(emptyList())).distinct()
+        var note: String? = "Saved on this $noun. Extend hears about it when this $noun is back online."
+        for (credential in credentials) {
+            try {
+                val now = extend.api.setInUseIndicator(credential, InUseIndicator.value(shown))
+                // A newer toggle may have been queued while this request was in flight.
+                if (config.inUseIndicatorShown != shown) return@withLock
+                config.inUseIndicatorPending = false
+                note = null
+                // Extend may know better (another Carbon changed it at the same moment).
+                val applied = now?.let { InUseIndicator.shows(it) } ?: shown
+                if (applied != shown) {
+                    config.inUseIndicatorShown = applied
+                    extend.update { it.copy(indicatorShown = applied) }
+                }
+                break
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiException) {
+                Extend.log("PATCH /api/v1/device (in_use_indicator) refused: ${e.status} ${e.code} ${e.message}")
+                if (config.inUseIndicatorShown != shown) return@withLock
+                when {
+                    e.status == 401 -> continue
+                    e.status == 404 || e.status == 405 || e.status == 501 -> {
+                        // A 1.0 service: this device keeps the choice for itself.
+                        config.inUseIndicatorPending = false
+                        note = "Saved on this $noun only: the Extend service it uses is too old to show this setting on the website."
+                    }
+                    e.status == 429 || e.status >= 500 -> Unit
+                    else -> {
+                        config.inUseIndicatorPending = false
+                        config.inUseIndicatorShown = !shown
+                        extend.update { it.copy(indicatorShown = !shown) }
+                        note = (e.message?.trim()?.trimEnd('.')?.takeIf { it.isNotEmpty() && !it.startsWith("HTTP ") } ?: "Extend didn't accept the change (HTTP ${e.status})") + "."
+                    }
+                }
+                break
+            } catch (e: Exception) {
+                Extend.log("PATCH /api/v1/device (in_use_indicator) failed", e)
+                break
+            }
+        }
+        extend.update { it.copy(indicatorNote = note) }
+    }
 
     /** Stop: ends the Silicon's session, whichever Carbon's pair it came through. */
     fun stopSession() {

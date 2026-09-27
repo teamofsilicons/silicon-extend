@@ -371,6 +371,17 @@ impl Client {
         decode(self.send(r).await?).await
     }
 
+    /// The device's own Extend app changes the device's settings (`PATCH /api/v1/device`, 1.1),
+    /// with any of its pair credentials: today whether it shows the in-use banner, which every pair
+    /// of the device shares. Answers the device as [`Client::device_self`] reads it.
+    pub async fn update_device_self(&self, credential: &str, patch: &DeviceSelfPatch) -> Result<DeviceSelf> {
+        let r = self
+            .req(Method::PATCH, "/api/v1/device")
+            .header("authorization", format!("Extend-Device {credential}"))
+            .json(&env("device_self", patch));
+        decode(self.send(r).await?).await
+    }
+
     pub async fn revoke_pair(&self, credential: &str) -> Result<()> {
         let r = self
             .req(Method::DELETE, "/api/v1/device")
@@ -596,6 +607,20 @@ impl Authed<'_> {
         if let Some(v) = version {
             r = r.header("If-Match", format!("\"{v}\""));
         }
+        decode(self.c.send(r).await?).await
+    }
+
+    /// Shows or hides the in-use banner on a device (`PATCH /api/v1/devices/{id}` with
+    /// `in_use_indicator`, 1.1). One setting for the physical device, shared by every Carbon who
+    /// paired it. Carbon only: a Silicon gets `carbon_only`.
+    pub async fn set_in_use_indicator(&self, id: &str, value: InUseIndicator) -> Result<Device> {
+        let r = self.req(Method::PATCH, &format!("/api/v1/devices/{id}")).json(&env(
+            "device",
+            &DeviceSettingsPatch {
+                in_use_indicator: Some(value),
+                ..Default::default()
+            },
+        ));
         decode(self.c.send(r).await?).await
     }
 

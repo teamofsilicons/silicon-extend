@@ -229,7 +229,7 @@ data class SetupReport(
             }
 
             // 3. Background: stay connected with the screen off.
-            if (!tv || (!s.batteryOk && s.batteryRequestResolvable)) {
+            if (!tv) {
                 val where = if (s.sdk >= 31) "Settings › Apps › $label › App battery usage (Battery) › Unrestricted."
                 else "Settings › Apps & notifications › Special app access › Battery optimisation › All apps › $label › Don't optimise."
                 items += SetupItem(

@@ -73,7 +73,7 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v1/files/{file_id}", get(files::get))
         .route("/api/v1/files/{file_id}/keep", post(files::keep))
         .route("/api/v1/files/{file_id}/content", get(files::content))
-        .route("/api/v1/device", get(device_app::me).delete(device_app::revoke))
+        .route("/api/v1/device", get(device_app::me).patch(device_app::update).delete(device_app::revoke))
         .route("/api/v1/device/stop", post(device_app::stop))
         .route("/api/v1/device/enrollments", post(device_app::enrollments_create))
         .route("/api/v1/device/connect", get(device_app::socket))

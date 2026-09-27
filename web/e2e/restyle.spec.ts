@@ -113,6 +113,8 @@ test.describe("restyle tour", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Kitchen tablet");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await expect(page.locator('[data-testid="setup-step"][data-status="done"]')).toHaveCount(1, { timeout: 10_000 });
     await capture(page, "07-wizard-setup");
     // A narrow desktop: the strip is wider than the page, so it scrolls itself to the current step.
@@ -132,7 +134,7 @@ test.describe("restyle tour", () => {
     // A phone: one mono line and a pixel bar say where the Carbon is.
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByTestId("step-progress")).toBeVisible();
-    await expect(page.getByTestId("step-progress")).toContainText("Step 4 of 6 · Device setup.");
+    await expect(page.getByTestId("step-progress")).toContainText("Step 5 of 7 · Device setup.");
     await expect(rail).toBeHidden();
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect(page.getByTestId("setup-complete")).toBeVisible({ timeout: 20_000 });

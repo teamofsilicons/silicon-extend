@@ -500,6 +500,14 @@ private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) 
     Gap(22.dp)
     InUseCard(extend, state)
     WakeRequestsCard(state)
+    Gap(22.dp)
+    CardTitle("In-use banner")
+    Gap(8.dp)
+    ExtendSwitch("Show a banner while a Silicon uses this $noun", state.indicatorShown, extend.connection::setInUseIndicator)
+    Muted("Shows for 10 seconds when a session starts, then hides. This choice applies to every Carbon paired to this $noun. You can always stop the Silicon here or on the website.")
+    if (!tv) Muted("Android's quiet running notification stays. Requests that need your help still appear.")
+    else Muted("Requests that need your help still appear.")
+    state.indicatorNote?.let { Muted(it) }
 
     val report = state.report
     if (report != null) {

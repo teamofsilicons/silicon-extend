@@ -72,8 +72,8 @@ class ExtendAccessibilityService : AccessibilityService() {
         s.launch {
             Extend.get(this@ExtendAccessibilityService).state.collect { st ->
                 badge?.render(st)
-                // A TV's badge window keeps its screen on; a phone needs a window of its own.
-                keeper?.render(!st.isTv && KeepScreenOn.wanted(st))
+                // Keep awake independently of the badge: it hides after 10 seconds.
+                keeper?.render(KeepScreenOn.wanted(st))
             }
         }
         Extend.get(this).onCapabilitiesMayHaveChanged()

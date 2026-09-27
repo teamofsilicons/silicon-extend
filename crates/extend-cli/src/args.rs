@@ -187,6 +187,10 @@ pub const SPECS: &[Spec] = &[
         flags: &[],
     },
     Spec {
+        path: "device banner",
+        flags: &[],
+    },
+    Spec {
         path: "device visibility",
         flags: &[],
     },

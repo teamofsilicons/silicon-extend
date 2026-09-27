@@ -144,6 +144,88 @@ fn a_1_0_reader_decodes_1_1_resources() {
 }
 
 #[test]
+fn the_in_use_indicator_is_additive() {
+    use v11::model::{DeviceSelfPatch, DeviceSettingsPatch as DevicePatch, InUseIndicator};
+
+    // A 1.0 CLI, client or website reads a 1.1 device with the banner off.
+    let mut d = device_1_1();
+    d.in_use_indicator = InUseIndicator::Hidden;
+    assert_eq!(serde_json::to_value(&d).unwrap()["in_use_indicator"], "hidden");
+    let old: model::Device = v1_0(&d);
+    assert_eq!(old.name, "Living room TV");
+
+    // A 1.0 agent reads GET /api/v1/device with it.
+    let me: v11::model::DeviceSelf = serde_json::from_value(json!({"device_id":"7c1e09ab","name":"Studio Mac",
+        "owner":{"type":"carbon","id":"c:alice"},"team":"labs","os":"macos","in_use":null,"takeover":null,
+        "setup":{"state":"complete","steps":[]},"environment":null,"in_use_indicator":"hidden"}))
+    .unwrap();
+    assert_eq!(me.in_use_indicator, InUseIndicator::Hidden);
+    let _: model::DeviceSelf = v1_0(&me);
+
+    // A 1.0 computer still carries a device from an attach frame that has the new field.
+    let attach = v11::frames::ServiceFrame::Attach {
+        device_id: "3a2b0c1d".parse().unwrap(),
+        os: v11::DeviceOs::Ios,
+        name: "Alice's iPhone".into(),
+        address: None,
+        removed: false,
+        in_use_indicator: InUseIndicator::Hidden,
+    };
+    let frames::ServiceFrame::Attach { device_id, removed, .. } = v1_0(&attach) else {
+        panic!()
+    };
+    assert_eq!((device_id.as_str(), removed), ("3a2b0c1d", false));
+
+    // A 1.0 service reads a 1.1 PATCH body and ignores the new field (it changes nothing there).
+    let patch = DevicePatch {
+        name: Some("Den TV".into()),
+        in_use_indicator: Some(InUseIndicator::Hidden),
+        ..Default::default()
+    };
+    let old: model::DevicePatch = v1_0(&patch);
+    assert_eq!(old.name.as_deref(), Some("Den TV"));
+    let _: model::DevicePatch = v1_0(&DeviceSelfPatch::in_use_indicator(InUseIndicator::Hidden));
+
+    // A 1.1 app, agent, client or CLI reads a 1.0 service: shown.
+    let old_attach = frames::ServiceFrame::Attach {
+        device_id: "3a2b0c1d".parse().unwrap(),
+        os: capability::DeviceOs::Ios,
+        name: "Alice's iPhone".into(),
+        address: None,
+        removed: false,
+    };
+    let v11::frames::ServiceFrame::Attach { in_use_indicator, .. } = v1_1(&old_attach) else {
+        panic!()
+    };
+    assert_eq!(in_use_indicator, InUseIndicator::Shown);
+    let me = model::DeviceSelf {
+        device_id: "7c1e09ab".parse().unwrap(),
+        name: "Studio Mac".into(),
+        owner: model::Member {
+            kind: model::MemberKind::Carbon,
+            id: "c:alice".into(),
+            display_name: None,
+        },
+        team: "labs".into(),
+        os: capability::DeviceOs::Macos,
+        in_use: None,
+        takeover: None,
+        setup: model::Setup::complete(),
+        environment: None,
+    };
+    assert_eq!(
+        v1_1::<v11::model::DeviceSelf>(&me).in_use_indicator,
+        InUseIndicator::Shown
+    );
+    let patch: v11::model::DeviceSettingsPatch = v1_1(&model::DevicePatch {
+        name: None,
+        visibility: None,
+        pair_ttl_days: Some(30),
+    });
+    assert_eq!(patch.in_use_indicator, None);
+}
+
+#[test]
 fn a_1_0_app_reads_the_1_1_frames_it_knows_and_skips_the_rest() {
     let started = v11::frames::ServiceFrame::SessionStarted {
         target: None,

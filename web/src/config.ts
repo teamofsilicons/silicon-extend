@@ -143,6 +143,13 @@ export interface DeviceKind {
   setup: string[];
   canDo: string;
   goodToKnow?: string;
+  /**
+   * What the device itself shows while a Silicon uses it, when its in-use banner is on (the
+   * default). A Carbon who paired it can turn that off on the device's page or in its Extend app.
+   */
+  inUse: string;
+  /** What stays even when it is turned off, because the device's maker requires it. */
+  inUseStays?: string;
   icon: "phone" | "tv" | "laptop" | "monitor" | "tablet";
 }
 
@@ -169,6 +176,8 @@ export const DEVICE_KINDS: DeviceKind[] = [
       "Open any app, see the screen, tap, type, scroll, swipe, press back, home and recent apps, read notifications, install apps, take screenshots and recordings, read device logs, and use Android debugging.",
     goodToKnow:
       "The device needs to be on Wi-Fi (any network). After it restarts, wireless debugging turns off and the app asks you to turn it back on.",
+    inUse: "A notification names the Silicon for 10 seconds when it starts, with a Stop button.",
+    inUseStays: "Android's own quiet notification that the app is running stays either way; it doesn't name the Silicon.",
   },
   {
     id: "android_tv",
@@ -190,7 +199,8 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo:
       "Open any app, press any remote button, see the screen, install apps, take screenshots, read device logs, use Android debugging, and show a link, image, video or text full screen.",
     goodToKnow:
-      "A small badge in a corner of the TV shows which Silicon is using it. Stop it from the TV app or from here.",
+      "Stop a Silicon using the TV from the TV app or from its page here.",
+    inUse: "A small badge at the bottom centre of the screen names the Silicon for 10 seconds when it starts.",
   },
   {
     id: "mac",
@@ -213,6 +223,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
       "Open any app, see and use any window and the menu bar, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.",
     goodToKnow:
       "While the Mac is locked or asleep a Silicon can still use the terminal; for the screen it asks you to wake it, and Extend never wakes it on its own. The Silicon uses the real mouse and keyboard. A paired Mac is also what iPhones, iPads and Apple TVs pair through.",
+    inUse: "A banner names the Silicon for 10 seconds when it starts, and the menu bar icon stays changed for the whole session.",
   },
   {
     id: "windows",
@@ -232,6 +243,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
       "Open any app, see and use any window, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.",
     goodToKnow:
       "While it is locked a Silicon can still use the terminal; for the screen it asks you to unlock it. Admin prompts always need you.",
+    inUse: "A banner names the Silicon for 10 seconds when it starts, and the tray icon stays changed for the whole session.",
   },
   {
     id: "linux",
@@ -253,6 +265,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
       "Open any app, see and use any window, click, type, scroll, take screenshots and recordings, and use the terminal.",
     goodToKnow:
       "While it is locked a Silicon can still use the terminal; for the screen it asks you to unlock it. A computer without a screen, like a server, only gets the terminal.",
+    inUse: "A banner names the Silicon for 10 seconds when it starts, and the tray icon, where the desktop shows one, stays changed for the whole session.",
   },
   {
     id: "iphone",
@@ -276,6 +289,8 @@ export const DEVICE_KINDS: DeviceKind[] = [
       "Open any app, see the screen, tap, type, swipe, scroll, and take screenshots and recordings.",
     goodToKnow:
       "The iPhone must be near its Mac (same Wi-Fi or plugged in), awake and unlocked. A Silicon can't approve payments or Face ID. The iPhone shows “Automation Running” while Extend sets it up and while a Silicon is working on it (Apple shows that on every automated iPhone). It goes away when the Silicon's session ends, or about a minute after its last action.",
+    inUse: "Extend shows nothing of its own on the iPhone.",
+    inUseStays: "Apple's own “Automation Running” banner shows while a Silicon is working, and Extend can't hide it.",
   },
   {
     id: "ipad",
@@ -299,6 +314,8 @@ export const DEVICE_KINDS: DeviceKind[] = [
       "Open any app, see the screen, tap, type, swipe, scroll, and take screenshots and recordings.",
     goodToKnow:
       "The iPad must be near its Mac (same Wi-Fi or plugged in), awake and unlocked. A Silicon can't approve payments or Face ID. The iPad shows “Automation Running” while Extend sets it up and while a Silicon is working on it (Apple shows that on every automated iPad). It goes away when the Silicon's session ends, or about a minute after its last action.",
+    inUse: "Extend shows nothing of its own on the iPad.",
+    inUseStays: "Apple's own “Automation Running” banner shows while a Silicon is working, and Extend can't hide it.",
   },
   {
     id: "apple_tv",
@@ -315,6 +332,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     setup: ["Enter the 4-digit code the Apple TV shows."],
     canDo: "Open apps, press remote buttons, and show pictures and videos on the screen.",
     goodToKnow: "The Apple TV must stay on the same network as its Mac.",
+    inUse: "Extend shows nothing on the Apple TV itself: it can't run the Extend app.",
   },
   {
     id: "samsung_tv",
@@ -332,6 +350,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo: "Open apps, press remote buttons, and open links.",
     goodToKnow:
       "A Silicon can't see what is on this TV's screen. The TV must stay on the same network as its computer.",
+    inUse: "Extend shows nothing on the TV itself: it can't run the Extend app.",
   },
   {
     id: "lg_tv",
@@ -349,11 +368,17 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo: "Open apps, press remote buttons, and open links.",
     goodToKnow:
       "A Silicon can't see what is on this TV's screen. The TV must stay on the same network as its computer.",
+    inUse: "Extend shows nothing on the TV itself: it can't run the Extend app.",
   },
 ];
 
 export function deviceKind(id: string | undefined): DeviceKind | undefined {
   return DEVICE_KINDS.find((k) => k.id === id);
+}
+
+/** The kind a paired device is, from its OS (an Android phone and tablet are one kind). */
+export function kindOfDevice(device: { os: DeviceOs | string }): DeviceKind | undefined {
+  return DEVICE_KINDS.find((k) => k.os === device.os);
 }
 
 export const OS_LABEL: Record<DeviceOs, string> = {

@@ -24,8 +24,9 @@
 
 pub mod icon;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use extend_protocol::DeviceId;
 use tao::dpi::{LogicalPosition, LogicalSize};
@@ -124,6 +125,7 @@ pub fn run(
         main: None,
         banner: None,
         banner_minimized: false,
+        banner_clock: BannerClock::default(),
         status: AgentStatus::default(),
         shown_code: false,
         agent_thread: Some(agent_thread),
@@ -137,9 +139,14 @@ pub fn run(
     };
 
     event_loop.run(move |event, target, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ui
+            .banner_clock
+            .next_deadline(Instant::now())
+            .map(ControlFlow::WaitUntil)
+            .unwrap_or(ControlFlow::Wait);
         match event {
             Event::NewEvents(StartCause::Init) => ui.create_tray(),
+            Event::NewEvents(StartCause::ResumeTimeReached { .. }) => ui.on_status(ui.status.clone(), target),
             Event::UserEvent(UserEvent::Status(s)) => ui.on_status(*s, target),
             Event::UserEvent(UserEvent::Menu(e)) => ui.on_menu(e.id.0.as_str(), target, control_flow),
             Event::UserEvent(UserEvent::Ipc { banner, body }) => ui.on_ipc(banner, &body, target),
@@ -169,6 +176,7 @@ struct Ui {
     main: Option<(Window, WebView)>,
     banner: Option<(Window, WebView)>,
     banner_minimized: bool,
+    banner_clock: BannerClock,
     status: AgentStatus,
     shown_code: bool,
     agent_thread: Option<std::thread::JoinHandle<()>>,
@@ -192,7 +200,7 @@ struct BannerSession {
 /// The banner's sessions, this computer's first, then the carried devices' in the menu's order.
 fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
     let mut out = Vec::new();
-    if s.in_use.is_some() || s.takeover.is_some() {
+    if (s.in_use_indicator.shows() && s.in_use.is_some()) || s.takeover.is_some() {
         out.push(BannerSession {
             target: None,
             session_id: s.in_use.as_ref().map(|u| u.session_id.clone()),
@@ -200,7 +208,7 @@ fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
         });
     }
     for a in &s.attached {
-        if a.in_use.is_some() || a.takeover.is_some() {
+        if (a.in_use_indicator.shows() && a.in_use.is_some()) || a.takeover.is_some() {
             out.push(BannerSession {
                 target: Some(a.device_id.clone()),
                 session_id: a.in_use.as_ref().map(|u| u.session_id.clone()),
@@ -211,13 +219,57 @@ fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
     out
 }
 
+/// Monotonic deadlines are keyed by device and session; refreshes never extend them.
+#[derive(Default)]
+struct BannerClock {
+    deadlines: BTreeMap<(Option<String>, Option<String>), Instant>,
+}
+impl BannerClock {
+    fn observe(&mut self, s: &AgentStatus, now: Instant) {
+        // Observe hidden sessions too: showing the setting later doesn't restart a session.
+        let mut all = s.clone();
+        all.in_use_indicator = Default::default();
+        for a in &mut all.attached {
+            a.in_use_indicator = Default::default();
+        }
+        let sessions = banner_sessions(&all);
+        self.deadlines.retain(|key, _| {
+            sessions
+                .iter()
+                .any(|b| &(b.target.clone(), b.session_id.clone()) == key)
+        });
+        for b in sessions {
+            self.deadlines
+                .entry((b.target, b.session_id))
+                .or_insert(now + Duration::from_secs(extend_protocol::model::InUseIndicator::AUTO_HIDE_S));
+        }
+    }
+    fn visible(&self, s: &AgentStatus, now: Instant) -> Vec<BannerSession> {
+        banner_sessions(s)
+            .into_iter()
+            .filter(|b| {
+                b.takeover.is_some()
+                    || self
+                        .deadlines
+                        .get(&(b.target.clone(), b.session_id.clone()))
+                        .is_some_and(|end| now < *end)
+            })
+            .collect()
+    }
+    fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.deadlines.values().filter(|end| **end > now).min().copied()
+    }
+}
+
 /// The most rows the banner shows at once (a row each for this computer and carried devices).
 const BANNER_MAX_ROWS: usize = 4;
 
 fn icon_state(s: &AgentStatus) -> IconState {
-    if s.in_use.is_some()
+    if (s.in_use_indicator.shows() && s.in_use.is_some())
         || s.takeover.is_some()
-        || s.attached.iter().any(|a| a.in_use.is_some() || a.takeover.is_some())
+        || s.attached
+            .iter()
+            .any(|a| (a.in_use_indicator.shows() && a.in_use.is_some()) || a.takeover.is_some())
     {
         IconState::InUse
     } else if matches!(s.phase, Phase::Enrolling | Phase::Starting) {
@@ -374,7 +426,7 @@ impl Ui {
         }
         add(&PredefinedMenuItem::separator());
         add(&MenuItem::with_id("show", "Show Silicon Extend…", true, None));
-        if s.in_use.is_some() || s.takeover.is_some() {
+        if !banner_sessions(s).is_empty() {
             add(&MenuItem::with_id("banner_restore", "Show activity banner", true, None));
         }
         add(&CheckMenuItem::with_id(
@@ -402,14 +454,15 @@ impl Ui {
 
     fn on_status(&mut self, s: AgentStatus, target: &EventLoopWindowTarget<UserEvent>) {
         let first_code = s.phase == Phase::Enrolling && !self.shown_code;
-        let banner_needed = !banner_sessions(&s).is_empty();
+        self.banner_clock.observe(&s, Instant::now());
+        let banner_needed = !self.banner_clock.visible(&s, Instant::now()).is_empty();
         let minimized = keep_minimized(self.banner_minimized, &self.status, &s);
         let resize = minimized != self.banner_minimized
             || s.environment.is_some() != self.status.environment.is_some()
             || banner_sessions(&s).len() != banner_sessions(&self.status).len();
         self.banner_minimized = minimized;
         self.status = s;
-        if resize {
+        if resize || self.banner.is_some() {
             self.fit_banner();
         }
         if !self.checked_autostart && paired(&self.status) {
@@ -500,10 +553,18 @@ impl Ui {
     }
 
     fn push_state(&self) {
+        let mut state: serde_json::Value =
+            serde_json::from_str(&page_state(&self.status, &self.extras())).expect("page state is JSON");
+        state["banner_targets"] = serde_json::json!(
+            self.banner_clock
+                .visible(&self.status, Instant::now())
+                .iter()
+                .map(|b| &b.target)
+                .collect::<Vec<_>>()
+        );
         let js = format!(
             "window.__extend && window.__extend({}, {})",
-            page_state(&self.status, &self.extras()),
-            self.banner_minimized
+            state, self.banner_minimized
         );
         for (_, view) in self.main.iter().chain(self.banner.iter()) {
             let _ = view.evaluate_script(&js);
@@ -610,7 +671,7 @@ impl Ui {
         banner_size(
             self.banner_minimized,
             self.status.environment.is_some(),
-            banner_sessions(&self.status).len(),
+            self.banner_clock.visible(&self.status, Instant::now()).len(),
         )
     }
 
@@ -667,8 +728,14 @@ impl Ui {
             "takeover_done" => self.send(UiAction::TakeoverDone { target: None }),
             "show" => self.show_main(target),
             "banner_restore" => {
-                self.set_banner_minimized(false);
-                self.show_banner(target);
+                let now = Instant::now();
+                for b in banner_sessions(&self.status) {
+                    self.banner_clock
+                        .deadlines
+                        .insert((b.target, b.session_id), now + Duration::from_secs(10));
+                }
+                self.banner_minimized = false;
+                self.on_status(self.status.clone(), target);
             }
             "revoke" => {
                 // The confirmation lives in the window (one pair), or the list of Carbons does.
@@ -727,6 +794,11 @@ impl Ui {
             "pair_another" if !banner => self.send(UiAction::PairAnother),
             "cancel_pair_another" if !banner => self.send(UiAction::CancelPairAnother),
             "reprobe" => self.send(UiAction::Reprobe),
+            "set_banner" if !banner => {
+                if let Some(shown) = msg.get("on").and_then(|v| v.as_bool()) {
+                    self.send(UiAction::SetInUseIndicator { shown });
+                }
+            }
             "set_autostart" if !banner => {
                 if let Some(on) = msg.get("on").and_then(|v| v.as_bool()) {
                     self.set_autostart(on);
@@ -933,6 +1005,51 @@ mod tests {
     use crate::status::{InUseInfo, PairingInfo, TakeoverInfo};
 
     #[test]
+    fn banner_timeout_hiding_and_takeover_keep_stop_available() {
+        let now = Instant::now();
+        let mut clock = BannerClock::default();
+        let mut s = AgentStatus {
+            phase: Phase::Online,
+            in_use: Some(InUseInfo {
+                silicon_id: "si:chef".into(),
+                session_id: "abc".into(),
+                since: String::new(),
+                pair: None,
+                carbon: None,
+                side: None,
+            }),
+            ..Default::default()
+        };
+        clock.observe(&s, now);
+        assert_eq!(clock.visible(&s, now).len(), 1);
+        clock.observe(&s, now + Duration::from_secs(9));
+        assert_eq!(clock.visible(&s, now + Duration::from_secs(9)).len(), 1);
+        assert!(clock.visible(&s, now + Duration::from_secs(10)).is_empty());
+        assert_eq!(icon_state(&s), IconState::InUse);
+        assert!(s.in_use.is_some());
+        s.in_use_indicator = extend_protocol::model::InUseIndicator::Hidden;
+        assert!(clock.visible(&s, now).is_empty());
+        assert_eq!(icon_state(&s), IconState::Idle);
+        s.takeover = Some(TakeoverInfo {
+            session_id: "abc".into(),
+            reason: "Sign in".into(),
+            expires_at: String::new(),
+        });
+        assert_eq!(clock.visible(&s, now + Duration::from_secs(60)).len(), 1);
+        s.takeover = None;
+        assert!(clock.visible(&s, now + Duration::from_secs(60)).is_empty());
+        let mut phone = carried("3f2a1b0c", "Phone");
+        phone.in_use = s.in_use.clone();
+        s.attached.push(phone);
+        let later = now + Duration::from_secs(60);
+        clock.observe(&s, later);
+        assert_eq!(clock.visible(&s, later).len(), 1);
+        s.attached[0].in_use_indicator = extend_protocol::model::InUseIndicator::Hidden;
+        assert!(clock.visible(&s, later).is_empty());
+        assert!(attached_menu(&s).iter().any(|m| m.id == "stop:3f2a1b0c"));
+    }
+
+    #[test]
     fn icon_follows_the_status() {
         let mut s = AgentStatus {
             phase: Phase::Enrolling,
@@ -1010,6 +1127,7 @@ mod tests {
 
     fn carried(id: &str, name: &str) -> crate::status::AttachedInfo {
         crate::status::AttachedInfo {
+            in_use_indicator: Default::default(),
             device_id: id.into(),
             name: name.into(),
             os: extend_protocol::DeviceOs::Ios,

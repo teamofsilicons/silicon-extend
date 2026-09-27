@@ -1,9 +1,9 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Laptop, Monitor, Smartphone, Tablet, Tv, Users } from "lucide-solid";
 import { session } from "../lib/session";
-import { toApiError, type ApiError } from "../lib/api";
+import { ifMatchValue, toApiError, type ApiError } from "../lib/api";
 import type { AttachOs, Device } from "../lib/types";
-import { canAdvance, initialState, nameProblem, reduce, STEP_TITLE, stepsFor, type Step, type WizardEvent } from "../lib/wizard";
+import { bannerChanged, canAdvance, initialState, nameProblem, reduce, STEP_TITLE, stepsFor, type Step, type WizardEvent } from "../lib/wizard";
 import { displayPairingCode, formatCodeInput, normalizePairingCode } from "../lib/pairing";
 import { DEVICE_KINDS, DOWNLOADS, deviceKind, MULTI_CARBON_APP_VERSION, OS_LABEL, type DeviceKind, type DeviceKindId } from "../config";
 import { Link, navigate, query } from "../lib/router";
@@ -87,6 +87,40 @@ export default function AddDevice() {
       void s.client().telemetry({ event: "pairing", step: k.via === "app" ? "web.pairing.claim" : "web.pairing.attach", success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: k.os });
     }
   }
+  /**
+   * The banner step: saves the choice on the device just created, when it differs from the device's
+   * own value (a new device shows it). If-Match comes from the claim's version; if the device changed
+   * since (its setup reports move it on), it is read again and the change sent once more.
+   */
+  async function saveBanner() {
+    const device = state().device;
+    if (!device) return;
+    if (!bannerChanged(state())) return dispatch({ type: "next" });
+    dispatch({ type: "save_banner" });
+    if (!state().savingBanner) return;
+    const change = { in_use_indicator: state().banner ? "shown" : "hidden" } as const;
+    const started = performance.now();
+    const send = async (ifMatch: string) => (await s.client().updateDevice(device.device_id, change, ifMatch)).device;
+    try {
+      let updated;
+      try {
+        updated = await send(ifMatchValue(null, device.version));
+      } catch (e) {
+        const error = toApiError(e);
+        if (error.status !== 412 && error.code !== "version_unknown") throw e;
+        const fresh = await s.client().getDevice(device.device_id);
+        updated = await send(ifMatchValue(fresh.etag, fresh.device.version));
+      }
+      dispatch({ type: "banner_saved", device: updated });
+      void s.client().telemetry({ event: "device_update", step: "web.pairing.in_use_indicator", success: true, duration_ms: performance.now() - started, device_os: device.os });
+    } catch (e) {
+      const error = toApiError(e);
+      setLastError(error);
+      dispatch({ type: "failed", error: { code: error.code, message: error.message, hint: error.hint } });
+      void s.client().telemetry({ event: "device_update", step: "web.pairing.in_use_indicator", success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: device.os });
+    }
+  }
+
   /** The wizard keeps the error's text; the full ApiError (hint, request id) is shown from here. */
   const shownError = () => (state().error ? lastError() : null);
 
@@ -273,7 +307,64 @@ export default function AddDevice() {
             )}
           </Match>
 
-          {/* 5. Device setup */}
+          {/* 5. Banner while in use */}
+          <Match when={state().step === "banner" && state().device}>
+            {(device) => (
+              <form
+                class="card"
+                data-testid="banner-step"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveBanner();
+                }}
+              >
+                <p class="eyebrow">While a Silicon uses it</p>
+                <p class="success-line">
+                  <Check size={16} aria-hidden="true" /> <span><strong>{device().name}</strong> is paired{s.world().kind === "testing" ? " in the test environment" : ""}.</span>
+                </p>
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    checked={state().banner}
+                    disabled={state().savingBanner}
+                    onChange={(e) => dispatch({ type: "set_banner", shown: e.currentTarget.checked })}
+                    data-testid="banner-toggle"
+                  />
+                  <span>Show a banner while a Silicon is using this device</span>
+                </label>
+                <Show
+                  when={kind()?.via !== "host"}
+                  fallback={
+                    <p class="fine" data-testid="banner-explain">
+                      {kind()?.inUse} {kind()?.inUseStays ?? ""} The computer it pairs through and this website show which Silicon is using it, with Stop.
+                    </p>
+                  }
+                >
+                  <p class="fine" data-testid="banner-explain">
+                    When a Silicon starts using it, the device shows the Silicon's name for 10 seconds. Turned off, the device shows nothing while a Silicon uses it; the Extend app and
+                    this website still show who is using it, with Stop.
+                  </p>
+                </Show>
+                <Show when={device().paired_by_others && !state().banner && !bannerChanged(state())}>
+                  <p class="fine" data-testid="banner-shared">It's already off on this device: it's one setting for the whole device, shared with the other Carbons who paired it.</p>
+                </Show>
+                <p class="fine">You can change this later on the device's page.</p>
+                <ErrorNote error={shownError()} testid="banner-error" />
+                <div class="wizard-nav">
+                  <Show when={state().error} fallback={<span />}>
+                    <Button variant="ghost" onClick={() => dispatch({ type: "next" })} data-testid="banner-skip">
+                      Continue without saving
+                    </Button>
+                  </Show>
+                  <Button variant="primary" type="submit" busy={state().savingBanner} data-testid="banner-next">
+                    Continue <ArrowRight size={16} aria-hidden="true" />
+                  </Button>
+                </div>
+              </form>
+            )}
+          </Match>
+
+          {/* 6. Device setup */}
           <Match when={state().step === "setup" && state().device}>
             {(device) => (
               <div class="card" data-testid="setup-step-card">
@@ -294,7 +385,7 @@ export default function AddDevice() {
             )}
           </Match>
 
-          {/* 6. Silicons */}
+          {/* 7. Silicons */}
           <Match when={state().step === "access" && state().device}>
             {(device) => (
               <div class="card" data-testid="access-step">
@@ -321,7 +412,7 @@ export default function AddDevice() {
             )}
           </Match>
 
-          {/* 7. Done */}
+          {/* 8. Done */}
           <Match when={state().step === "done" && state().device}>
             {(device) => (
               <div class="card done" data-testid="wizard-done">

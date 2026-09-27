@@ -114,6 +114,11 @@ data class DeviceSelf(
     val instanceId: String? = null,
     /** 1.1: true for the pair made by the app's first enrollment, false for "Pair with another Carbon". */
     val firstPair: Boolean? = null,
+    /**
+     * 1.1: "shown" or "hidden", the same for every pair of this device
+     * ([com.teamofsilicons.extend.core.InUseIndicator]). Null from a 1.0 service: the app keeps its own.
+     */
+    val inUseIndicator: String? = null,
 )
 
 @Serializable

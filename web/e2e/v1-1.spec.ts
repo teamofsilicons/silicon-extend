@@ -298,6 +298,8 @@ test.describe("setup retry (contract A)", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Old phone");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await expect(page.getByTestId("setup-step-error")).toHaveText("Developer options are off. Turn them on, then tap Retry on the phone.", { timeout: 10_000 });
     await page.getByTestId("setup-retry").click();
     const error = page.getByTestId("setup-retry-error");
@@ -331,6 +333,8 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Shared PC");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await expect(page.getByTestId("wizard-shared-note")).toContainText("Another Carbon paired this computer too.");
     await expect(page.getByTestId("wizard-shared-computer-warning")).toContainText(
       "Only Silicons given access by the Carbon who installed Silicon Extend on this computer can use its terminal",
@@ -369,6 +373,8 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("device-name-input").fill("Bedroom TV");
     const created = page.waitForResponse((r) => r.url().includes("/attachments") && r.status() === 201);
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     const deviceId = ((await (await created).json()) as { data: { device_id: string } }).data.device_id;
 
     await mock.post("carried", { device_id: deviceId, state: "duplicate_other" });
@@ -484,4 +490,20 @@ test("docs and downloads say 1.1", async ({ page, mock }) => {
   await page.goto("/download/mac");
   await expect(page.getByTestId("download-version")).toHaveText("Download · version 1.1.0");
   await expect(page.getByTestId("download-file")).toHaveAttribute("href", "https://github.com/teamofsilicons/silicon-extend/releases/latest/download/Silicon-Extend-macos-arm64.zip");
+});
+
+test("a Carbon can hide and show the in-use banner without ending the session", async ({ page, mock }) => {
+  void mock;
+  await signInWithSlt(page);
+  await page.goto(`/devices/${DEVICE_PIXEL}`);
+  const setting = page.getByTestId("banner-setting");
+  await expect(setting).toHaveAttribute("data-indicator", "shown");
+  const stopBefore = await page.getByTestId("stop-session").count();
+  await setting.getByTestId("banner-toggle").uncheck();
+  await expect(setting).toHaveAttribute("data-indicator", "hidden");
+  await page.reload();
+  await expect(setting).toHaveAttribute("data-indicator", "hidden");
+  await expect(page.getByTestId("stop-session")).toHaveCount(stopBefore);
+  await setting.getByTestId("banner-toggle").check();
+  await expect(setting).toHaveAttribute("data-indicator", "shown");
 });

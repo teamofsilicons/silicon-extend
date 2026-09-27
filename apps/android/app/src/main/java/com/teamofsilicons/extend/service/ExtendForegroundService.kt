@@ -14,6 +14,7 @@ import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.R
 import com.teamofsilicons.extend.adb.DebuggingAfterRestart
 import com.teamofsilicons.extend.config.DeviceInfo
+import com.teamofsilicons.extend.core.InUseIndicator
 import com.teamofsilicons.extend.core.Link
 import com.teamofsilicons.extend.core.Phase
 import com.teamofsilicons.extend.core.UiState
@@ -58,7 +59,7 @@ class ExtendForegroundService : Service() {
                 .distinctUntilChanged().collect { renderConnection(extend.state.value) }
         }
         s.launch {
-            extend.state.map { st -> st.session?.let { InUseModel(it.siliconId, it.stopping, st.takeover?.reason, it.carbon, st.pairs.size > 1, st.isTv) } }
+            extend.state.map { st -> st.session?.let { InUseModel(it.siliconId, it.stopping, st.takeover?.reason, it.carbon, st.pairs.size > 1, st.isTv, InUseIndicator.show(st)) } }
                 .distinctUntilChanged().collect { renderInUse(extend.state.value) }
         }
         s.launch {
@@ -97,7 +98,7 @@ class ExtendForegroundService : Service() {
     }
 
     /** What the in-use notification shows. */
-    private data class InUseModel(val silicon: String, val stopping: Boolean, val takeover: String?, val carbon: String?, val several: Boolean, val tv: Boolean)
+    private data class InUseModel(val silicon: String, val stopping: Boolean, val takeover: String?, val carbon: String?, val several: Boolean, val tv: Boolean, val show: InUseIndicator.Show)
 
     private fun renderConnection(state: UiState) {
         getSystemService(NotificationManager::class.java).notify(ID_CONNECTION, connectionNotification(state))
@@ -105,7 +106,7 @@ class ExtendForegroundService : Service() {
 
     private fun renderInUse(state: UiState) {
         val nm = getSystemService(NotificationManager::class.java)
-        if (state.session != null && !state.isTv) {
+        if (state.session != null && !state.isTv && InUseIndicator.show(state) != InUseIndicator.Show.NONE) {
             nm.notify(ID_IN_USE, inUseNotification(state))
         } else {
             nm.cancel(ID_IN_USE)

@@ -1738,3 +1738,36 @@ fn device_show_explains_waking_sharing_and_access() {
         assert!(out.contains(want), "no {want:?} in:\n{out}");
     }
 }
+
+#[test]
+fn banner_setting_uses_only_the_new_field_and_checks_arguments() {
+    let f = Fake::start(|r| {
+        if r.method == "PATCH" && r.path_only() == "/api/v1/devices/7c1e09ab" {
+            let mut d = device("7c1e09ab", "Living room TV", true);
+            d["in_use_indicator"] = r.body["data"]["in_use_indicator"].clone();
+            Some(ok("device", d))
+        } else {
+            None
+        }
+    });
+    let c = Cli::new("banner", &f.url).signed_in("c:alice");
+    for (arg, value) in [("off", "hidden"), ("on", "shown")] {
+        let o = c.run(&["--json", "device", "banner", "7c1e09ab", arg]);
+        assert!(o.status.success(), "{}", stderr(&o));
+        assert_eq!(json_out(&o)["in_use_indicator"], value);
+    }
+    let requests = f.requests("PATCH", "/api/v1/devices/7c1e09ab");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].body,
+        json!({"type":"device", "data":{"in_use_indicator":"hidden"}})
+    );
+    for args in [
+        vec!["device", "banner", "7c1e09ab", "maybe"],
+        vec!["device", "banner", "7c1e09ab"],
+        vec!["device", "banner", "bad/id", "off"],
+    ] {
+        assert_eq!(c.run(&args).status.code(), Some(2));
+    }
+    assert_eq!(f.requests("PATCH", "/api/v1/devices/7c1e09ab").len(), 2);
+}

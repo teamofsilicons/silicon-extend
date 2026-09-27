@@ -26,8 +26,8 @@
 use extend_protocol::capability::{DeviceKind, commands_for};
 use extend_protocol::frames::ServiceFrame;
 use extend_protocol::model::{
-    Device, DeviceState, EndReason, InUse, Member, MemberKind, MissingCapability, Session, SessionState, Setup,
-    SetupStep, SleepState, StepStatus, Visibility,
+    Device, DeviceState, EndReason, InUse, InUseIndicator, Member, MemberKind, MissingCapability, Session,
+    SessionState, Setup, SetupStep, SleepState, StepStatus, Visibility,
 };
 use extend_protocol::{Capability, DeviceOs, ErrorCode};
 use hmac::{Hmac, Mac as _};
@@ -88,6 +88,8 @@ pub struct DeviceRow {
     pub awake: Option<bool>,
     pub sleep_state: Option<String>,
     pub awake_changed_at: Option<OffsetDateTime>,
+    /// `shown` or `hidden`: the physical device's in-use banner, shared by its pairs.
+    pub in_use_indicator: String,
     /// Whether another Carbon has a live pair of the same device.
     pub paired_by_others: bool,
     /// Grants on this pair, all Teams.
@@ -225,6 +227,23 @@ impl DeviceRow {
     pub fn sleep(&self) -> Option<SleepState> {
         self.sleep_state.as_deref().map(SleepState::parse)
     }
+    pub fn in_use_indicator(&self) -> InUseIndicator {
+        InUseIndicator::parse(&self.in_use_indicator)
+    }
+    /// The `attach` frame its host is sent for this carried pair.
+    pub fn attach_frame(&self, removed: bool) -> ServiceFrame {
+        ServiceFrame::Attach {
+            device_id: self
+                .device_id
+                .parse()
+                .unwrap_or_else(|_| extend_protocol::DeviceId::random()),
+            os: self.os(),
+            name: self.name.clone(),
+            address: self.address.clone(),
+            removed,
+            in_use_indicator: self.in_use_indicator(),
+        }
+    }
 }
 
 pub fn device_select(world: &World) -> String {
@@ -237,7 +256,7 @@ pub fn device_select(world: &World) -> String {
                 d.instance_id, d.wake_muted, d.hardware_key, d.duplicate, d.provisional_until, d.first_pair,
                 s.session_id AS in_use_session, s.silicon_id AS in_use_silicon, s.started_at AS in_use_since, s.state AS in_use_state,
                 s.device_id AS in_use_device_id, s.team AS in_use_team, sd.owner_id AS in_use_carbon,
-                i.awake, i.sleep_state, i.awake_changed_at,
+                i.awake, i.sleep_state, i.awake_changed_at, i.in_use_indicator,
                 EXISTS (SELECT 1 FROM {devices} o WHERE o.instance_id = d.instance_id AND o.removed_at IS NULL
                           AND o.owner_id <> d.owner_id) AS paired_by_others,
                 (SELECT count(*) FROM {access} a WHERE a.device_id = d.device_id) AS access_count,
@@ -746,7 +765,132 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
         wake_muted: owner_view.then_some(d.wake_muted),
         paired_by_others: owner_view.then_some(d.paired_by_others),
         same_device,
+        in_use_indicator: d.in_use_indicator(),
     }
+}
+
+/// Who changed a device's in-use banner (see [`set_in_use_indicator`]).
+pub enum BannerChangedBy<'a> {
+    /// A Carbon who paired it, through their own pair (the website or the CLI).
+    Carbon { device_id: &'a str, member: &'a Member },
+    /// The device's own Extend app, with one of its pair credentials.
+    Device,
+}
+
+/// Shows or hides the in-use banner on a physical device: one setting shared by every pair of it.
+/// Returns false when it already had that value (nothing is logged or sent then).
+///
+/// The side that changed it logs it: a Carbon on their own pair only, so no other Carbon learns
+/// who; the device's own app on every pair, as the device (it names no Carbon). Then every live
+/// connection of the device re-reads it: a pair's own app gets `refresh`; the computer carrying a
+/// device gets its `attach` again, with the new value.
+pub async fn set_in_use_indicator(
+    state: &AppState,
+    world: &World,
+    instance_id: Uuid,
+    value: InUseIndicator,
+    by: BannerChangedBy<'_>,
+) -> AppResult<bool> {
+    let own = match &by {
+        BannerChangedBy::Carbon { device_id, .. } => Some(*device_id),
+        BannerChangedBy::Device => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let changed = update_in_use_indicator(&mut tx, world, instance_id, value, own).await?;
+    tx.commit().await?;
+    if changed {
+        notify_in_use_indicator(state, world, instance_id, value, by).await?;
+    }
+    Ok(changed)
+}
+
+/// Part of the caller's transaction so a settings PATCH and its If-Match check are atomic.
+pub async fn update_in_use_indicator(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    world: &World,
+    instance_id: Uuid,
+    value: InUseIndicator,
+    own: Option<&str>,
+) -> AppResult<bool> {
+    // Lock order: the instance row first (see the module docs).
+    let current: Option<String> = sqlx::query_scalar(sql!(
+        "SELECT in_use_indicator FROM {} WHERE instance_id = $1 FOR NO KEY UPDATE",
+        world.t("device_instances")
+    ))
+    .bind(instance_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if current.as_deref() == Some(value.as_str()) || current.is_none() {
+        return Ok(false);
+    }
+    sqlx::query(sql!(
+        "UPDATE {} SET in_use_indicator = $2 WHERE instance_id = $1",
+        world.t("device_instances")
+    ))
+    .bind(instance_id)
+    .bind(value.as_str())
+    .execute(&mut **tx)
+    .await?;
+    // Every pair's view changed, so every pair's ETag does; only the changing Carbon's pair counts
+    // it as activity (it keeps that pair from running out).
+    sqlx::query(sql!(
+        "UPDATE {} SET version = version + 1,
+                last_activity_at = CASE WHEN device_id = $2 THEN now() ELSE last_activity_at END
+         WHERE instance_id = $1 AND removed_at IS NULL",
+        world.t("devices")
+    ))
+    .bind(instance_id)
+    .bind(own)
+    .execute(&mut **tx)
+    .await?;
+    Ok(true)
+}
+
+pub async fn notify_in_use_indicator(
+    state: &AppState,
+    world: &World,
+    instance_id: Uuid,
+    value: InUseIndicator,
+    by: BannerChangedBy<'_>,
+) -> AppResult<()> {
+    let action = if value.shows() { "banner_shown" } else { "banner_hidden" };
+    let pairs = pairs_of(state, world, instance_id).await?;
+    match by {
+        BannerChangedBy::Carbon { device_id, member } => {
+            log(
+                state,
+                world,
+                device_id,
+                member,
+                action,
+                None,
+                serde_json::json!({"in_use_indicator": value.as_str()}),
+            )
+            .await;
+        }
+        BannerChangedBy::Device => {
+            for p in &pairs {
+                log(
+                    state,
+                    world,
+                    &p.device_id,
+                    &system_member(),
+                    action,
+                    None,
+                    serde_json::json!({"in_use_indicator": value.as_str(), "on_device": true}),
+                )
+                .await;
+            }
+        }
+    }
+    for p in &pairs {
+        if p.host_device_id.is_some() {
+            let _ = state.hub.send(&p.route(world), p.attach_frame(false)).await;
+        } else {
+            let _ = state.hub.send(&p.key(world), ServiceFrame::Refresh).await;
+        }
+    }
+    Ok(())
 }
 
 /// Silicon views: the other pairs of the same physical device the Silicon has a grant on in the
@@ -1454,19 +1598,7 @@ pub fn unpair_with<'a>(
         if let Some(host) = &d.host_device_id {
             let _ = state
                 .hub
-                .send(
-                    &(world.schema.clone(), host.clone()),
-                    ServiceFrame::Attach {
-                        device_id: d
-                            .device_id
-                            .parse()
-                            .unwrap_or_else(|_| extend_protocol::DeviceId::random()),
-                        os: d.os(),
-                        name: d.name.clone(),
-                        address: d.address.clone(),
-                        removed: true,
-                    },
-                )
+                .send(&(world.schema.clone(), host.clone()), d.attach_frame(true))
                 .await;
         } else {
             let key = d.key(world);

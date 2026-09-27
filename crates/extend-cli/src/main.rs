@@ -2177,6 +2177,35 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 "Nothing changed. Choose which Silicons can use it with `extend device access grant <device_id> <silicon_id>`.",
             ));
         }
+        "banner" => {
+            a.at_most(2)?;
+            let id = a.req(0, "device id")?;
+            parse_device_id(&id)?;
+            let value = a.req(1, "on or off")?;
+            let indicator = match value.as_str() {
+                "on" => InUseIndicator::Shown,
+                "off" => InUseIndicator::Hidden,
+                _ => {
+                    return Err(CliError::usage(
+                        "banner takes on or off",
+                        format!("extend device banner {id} off"),
+                    ));
+                }
+            };
+            let d = ctx
+                .call(&format!("PATCH /api/v1/devices/{id}"), |c, t, team| {
+                    let id = id.clone();
+                    async move { c.authed(&t, team.as_deref()).set_in_use_indicator(&id, indicator).await }
+                })
+                .await?;
+            ctx.emit(to_json(&d), || {
+                format!(
+                    "In-use banner {} for {}. This applies to every Carbon's pair of this device.",
+                    d.in_use_indicator.on_off(),
+                    d.name,
+                )
+            });
+        }
         "rename" | "ttl" => {
             a.at_most(2)?;
             let id = a.req(0, "device id")?;
@@ -2709,6 +2738,7 @@ fn device_text(d: &Device, v: &ShowView) -> String {
             None => "no".to_owned(),
         };
         s.push_str(&format!("  In use:    {in_use}\n"));
+        s.push_str(&format!("  Banner:    {}\n", d.in_use_indicator.on_off()));
         if let Some(days) = d.days_left {
             s.push_str(&format!(
                 "  Pairing:   {days} day(s) left of {}\n",

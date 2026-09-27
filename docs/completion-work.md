@@ -31,15 +31,35 @@ setup retry, the device engine named Silicon Extend) is built and its automated 
   `extend.device.requested` in `tos` exists today.
 - **Send the Ting request**, `docs/requests/ting-app-level-types.md`, to the Ting and Honeycomb
   maintainers.
-- **The in-use indicator change** in `UNDERSTANDING.md` (commit `5326b68`: it shows for 10 seconds
-  and then hides, any Carbon can hide it on every device, a setup step asks about the banner, the TV
-  badge sits at the bottom centre) came after the 1.1 design and is not built. Decide whether 1.1.0
-  ships without it.
 - **A Carbon's logout** ends their Silicons' sessions as `access_removed` (the Silicon's hint says the
   Carbon took access away or signed out); `stopped_by_carbon` was the other choice. Confirm
   (`TECHNICAL.md` C9).
 
 ### Engineering left for 1.1.0
+
+The interrupted final-fix pass resumed on 2026-09-28. The shared banner setting, service/client/CLI
+controls, website setup and settings, Android setup switch and notification/badge timer, and
+desktop timer/icon hiding are implemented locally. Android TV's phone-only background exemption
+step is removed. See the new verification entry; this is not a released build.
+
+Remaining from the Carbon's final requests, before the release gates below:
+
+- Finish the banner audit on actual app surfaces: carried-device switches in the host app (the
+  website and CLI can already set each carried device), offline desktop preference persistence,
+  and restart/reconnect behavior. Exercise drag/collapse, ten-second hiding, takeover persistence,
+  Stop after hiding and TV bottom-centre placement on native targets. A metadata-only attach now
+  preserves the live driver; verify it during a real recording as well.
+- Diagnose and repair the TV's Android debugging disconnect/reconnect after process death;
+  measure and reduce its memory usage. These are not covered by the banner changes.
+- iPhone/iPad: a first screenshot must attach to whatever is already on screen without requiring
+  an explicit `open <app>`; finish this in the hosted driver and verify it.
+- Finish the TV display failure path and allow a Silicon to display its own Extend files, with
+  correct owner/session authorization and bounded downloads. Verify actual image decode failures
+  are returned as failures.
+- Re-run the final feature and requirements audit and integration checks after those fixes;
+  reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
+  publish/deploy and verify the release. None of this checkpoint updates installed apps.
+
 
 - `e2e/real-iam/realiam.py --ting` doesn't know 1.1 yet: seed Extend's four types in acme and globex,
   show a third Team reporting them missing, and cover waking, woken, declined and routed requests.

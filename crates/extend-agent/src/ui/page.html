@@ -893,6 +893,13 @@
       <ol class="rows" id="attached-list"></ol>
     </section>
 
+    <section id="banner-choice" class="card hidden">
+      <div class="card-head"><h2>In-use banner.</h2>
+        <button class="button secondary" id="banner-toggle" data-action="set_banner" data-on="false">Turn off</button>
+      </div>
+      <p class="fine">Show a banner for 10 seconds when a Silicon starts using this computer. Turn it off to hide the banner and icon change for every Carbon's pair. You can always stop the Silicon here. Requests that need your help still appear.</p>
+    </section>
+
     <section id="startup" class="card hidden">
       <div class="card-head">
         <h2>Start at login.</h2>
@@ -1310,7 +1317,7 @@
     (s.attached || []).forEach(function (a) {
       if (a.in_use || a.takeover) rows.push(row(a.device_id, a.name, a.in_use, a.takeover));
     });
-    return rows;
+    return rows.filter(function (r) { return !s.banner_targets || s.banner_targets.indexOf(r.target) >= 0; });
   }
   function targetOf(el, target) {
     if (target) el.setAttribute('data-target', target); else el.removeAttribute('data-target');
@@ -1534,6 +1541,9 @@
     $('startup-text').textContent = auto.on
       ? 'Silicon Extend opens by itself when you log in to this ' + word + ', so Silicons you allow can reach it again after a restart.'
       : 'Silicon Extend doesn\'t open by itself when you log in, so after a restart no Silicon can reach this ' + word + ' until you open it. Turn it on to open it at login.';
+    show('banner-choice', paired);
+    $('banner-toggle').textContent = s.in_use_indicator === 'hidden' ? 'Turn on' : 'Turn off';
+    $('banner-toggle').setAttribute('data-on', s.in_use_indicator === 'hidden' ? 'true' : 'false');
     $('startup-toggle').textContent = auto.on ? 'Turn off' : 'Turn on';
     $('startup-toggle').setAttribute('data-on', auto.on ? 'false' : 'true');
     $('startup-toggle').className = auto.on ? 'button secondary' : 'button primary';
@@ -1609,7 +1619,7 @@
         '<span class="os">' + esc(OS_NAME[a.os] || a.os) + '</span></div>' + line + '</div>' + (side ? '<div class="row-side">' + side + '</div>' : '') + '</li>';
     }).join('');
 
-    show('problem', !!s.last_error && phase !== 'online');
+    show('problem', !!s.last_error);
     $('problem-text').textContent = s.last_error || '';
     $('problem-dot').innerHTML = dot('attention');
     $('version').textContent = s.app_version ? 'Silicon Extend ' + s.app_version : '';

@@ -558,6 +558,34 @@ fn ops() -> Vec<Op> {
             ),
             |c| c.client.device_self(DEVICE_CREDENTIAL)
         ),
+        op!(
+            "device.banner",
+            "Client::update_device_self",
+            ["device"],
+            200,
+            "device_self",
+            Some(
+                json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": member("carbon", "c:alice"), "team": TEAM,
+                "os": "android", "in_use": null, "takeover": null, "setup": setup(), "environment": null, "in_use_indicator": "hidden"})
+            ),
+            |c| c.client.update_device_self(
+                DEVICE_CREDENTIAL,
+                &DeviceSelfPatch::in_use_indicator(InUseIndicator::Hidden)
+            )
+        ),
+        op!(
+            "devices.banner",
+            "Authed::set_in_use_indicator",
+            ["device"],
+            200,
+            "device",
+            Some({
+                let mut d = device();
+                d["in_use_indicator"] = json!("hidden");
+                d
+            }),
+            |c| c.carbon().set_in_use_indicator(DEVICE_ID, InUseIndicator::Hidden)
+        ),
         op!("device.revoke", "Client::revoke_pair", ["device"], 204, "", None, |c| c
             .client
             .revoke_pair(DEVICE_CREDENTIAL)),

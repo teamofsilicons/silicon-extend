@@ -1606,6 +1606,13 @@ input[type="checkbox"] {
   width: 18px;
   height: 18px;
 }
+/* One setting inside a card (its switch, what it means, its own error), spaced like the card's rows. */
+.setting-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
 .segmented {
   display: inline-flex;
   align-self: flex-start;

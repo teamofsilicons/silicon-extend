@@ -151,6 +151,8 @@ test.describe("adding a device", () => {
     await page.getByTestId("device-name-input").fill("Test Pixel");
     await shoot(page, "07-wizard-name");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
 
     await expect(page.getByTestId("setup-steps")).toBeVisible();
     await expect(page.getByTestId("setup-step").first()).toBeVisible();
@@ -199,6 +201,8 @@ test.describe("adding a device", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Desk PC");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await page.getByTestId("setup-next").click();
     await page.getByTestId("grant-input").fill("si:juniper c:alice");
     await page.getByTestId("grant-submit").click();
@@ -224,6 +228,8 @@ test.describe("adding a device", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Bedroom Apple TV");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await expect(page.getByTestId("setup-code-input")).toBeVisible({ timeout: 10_000 });
     await shoot(page, "11-wizard-apple-tv-code");
     await page.getByTestId("setup-code-input").fill("4821");

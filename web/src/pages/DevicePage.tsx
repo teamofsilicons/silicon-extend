@@ -1,11 +1,11 @@
 import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js";
 import { ArrowLeft, Check, CircleStop, Hand, Pencil, Trash2, Users } from "lucide-solid";
 import { session } from "../lib/session";
-import { ifMatchValue, toApiError, type ApiError } from "../lib/api";
+import { ifMatchValue, toApiError, type ApiError, type DevicePatch } from "../lib/api";
 import type { AccessGrant, ActivityEntry, ExtendRequest, Device, DeviceDetail, Takeover, TingRegistration, WakeRequest } from "../lib/types";
 import { usePoll } from "../lib/poll";
 import { Link, navigate } from "../lib/router";
-import { DEVICE_KINDS, OS_LABEL, POLL_MS } from "../config";
+import { DEVICE_KINDS, kindOfDevice, OS_LABEL, POLL_MS } from "../config";
 import { activitySummary, awakeLabel, clock, dateTime, day, duration, plural, relativeTime, removedWhy, wakeEnd } from "../lib/format";
 import { Button, DeviceIcon, ErrorNote, MemberTag, memberType, Modal, OnlineDot, Spinner, StatusDot, toast } from "../components/ui";
 import { devicesChanged } from "../lib/refresh";
@@ -14,6 +14,7 @@ import { AccessPicker } from "../components/AccessPicker";
 import { SetupSteps } from "../components/SetupSteps";
 import { TingBanner } from "../components/Ting";
 import { WakeBanner } from "../components/WakeRequests";
+import { indicatorShown } from "../lib/wizard";
 
 export default function DevicePage(props: { id: string }) {
   const s = session();
@@ -66,7 +67,7 @@ export default function DevicePage(props: { id: string }) {
   );
 
   /** Sends a settings change with If-Match; on a stale version, reloads so the Carbon sees what changed. */
-  async function patch(change: { name?: string; pair_ttl_days?: number }): Promise<ApiError | null> {
+  async function patch(change: DevicePatch): Promise<ApiError | null> {
     const d = device();
     if (!d) return null;
     const started = performance.now();
@@ -122,6 +123,7 @@ export default function DevicePage(props: { id: string }) {
 const KIND_WORD: Record<Device["kind"], string> = { tv: "TV", computer: "Computer", tablet: "Tablet", phone: "Phone" };
 
 function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => Promise<ApiError | null> }) {
+  const s = session();
   const [editing, setEditing] = createSignal(false);
   const [name, setName] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -200,6 +202,12 @@ function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => 
           </Show>
           <Show when={!d().removed_at && !d().online && d().last_seen_at}>
             <span>last seen {relativeTime(d().last_seen_at)}</span>
+          </Show>
+          {/* The Carbon turned off what the device shows while a Silicon uses it (the switch is under Settings). */}
+          <Show when={!d().removed_at && s.member()?.type !== "silicon" && !indicatorShown(d())}>
+            <span class="badge muted" data-testid="banner-off" title="The device shows nothing while a Silicon uses it. Change it under Settings.">
+              Banner off
+            </span>
           </Show>
         </p>
         <ErrorNote error={error()} compact />
@@ -618,12 +626,15 @@ function Access(props: { device: DeviceDetail; onChanged: () => void; onTeams?: 
   );
 }
 
-function Settings(props: { device: DeviceDetail; patch: (c: { pair_ttl_days?: number }) => Promise<ApiError | null>; onChanged: () => void }) {
+function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Promise<ApiError | null>; onChanged: () => void }) {
   const s = session();
   const [ttl, setTtl] = createSignal(props.device.pair_ttl_days ?? 14);
   const [dirty, setDirty] = createSignal(false);
-  const [busy, setBusy] = createSignal<"ttl" | "wake" | null>(null);
+  const [busy, setBusy] = createSignal<"ttl" | "wake" | "banner" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
+  const [bannerError, setBannerError] = createSignal<ApiError | null>(null);
+  const kind = () => kindOfDevice(props.device);
+  const carried = () => !!props.device.host_device_id || kind()?.via === "host";
   // Follow the server's value unless the Carbon is mid-change.
   createEffect(on(() => props.device.pair_ttl_days, (v) => !dirty() && setTtl(v ?? 14)));
 
@@ -636,6 +647,26 @@ function Settings(props: { device: DeviceDetail; patch: (c: { pair_ttl_days?: nu
       setDirty(false);
       toast(`${props.device.name} now stays paired for ${plural(ttl(), "day")} without activity`);
     }
+  }
+  /**
+   * Shows or hides what the device itself shows while a Silicon uses it, saved at once. It is one
+   * setting for the whole device, so a version conflict (the device page read before a change) is
+   * sent once more on the version `patch` just re-read: the Carbon's choice is the same either way.
+   */
+  async function setBanner(shown: boolean, input: HTMLInputElement) {
+    setBusy("banner");
+    setBannerError(null);
+    const change: DevicePatch = { in_use_indicator: shown ? "shown" : "hidden" };
+    let err = await props.patch(change);
+    if (err?.status === 412) err = await props.patch(change);
+    setBusy(null);
+    if (err) {
+      // The value didn't change, so nothing re-renders the switch: put it back by hand.
+      input.checked = !shown;
+      setBannerError(err);
+      return;
+    }
+    toast(shown ? `${props.device.name} shows a banner while a Silicon uses it` : `${props.device.name} shows nothing while a Silicon uses it`);
   }
   async function setWake(on: boolean) {
     setBusy("wake");
@@ -652,7 +683,7 @@ function Settings(props: { device: DeviceDetail; patch: (c: { pair_ttl_days?: nu
   }
   return (
     <div class="card" data-testid="settings-card">
-      <h2 class="card-title">Pairing.</h2>
+      <h2 class="card-title">Settings.</h2>
       <TtlSlider
         id="device-ttl"
         value={ttl()}
@@ -680,6 +711,39 @@ function Settings(props: { device: DeviceDetail; patch: (c: { pair_ttl_days?: nu
       </div>
       <Show when={props.device.paired_by_others}>
         <p class="fine">Any Silicon using the device, through any Carbon's pair, counts as activity for your pair too.</p>
+      </Show>
+      {/* Carbons only: a Silicon never changes what the device shows about it. */}
+      <Show when={s.member()?.type !== "silicon"}>
+        <div class="setting-block" data-testid="banner-setting" data-indicator={indicatorShown(props.device) ? "shown" : "hidden"}>
+          <label class="switch">
+            <input
+              type="checkbox"
+              checked={indicatorShown(props.device)}
+              disabled={busy() === "banner"}
+              onChange={(e) => setBanner(e.currentTarget.checked, e.currentTarget)}
+              data-testid="banner-toggle"
+            />
+            <span>Banner while a Silicon is using this device</span>
+          </label>
+          <Show
+            when={!carried()}
+            fallback={
+              <p class="fine" data-testid="banner-explain">
+                {kind()?.inUse ?? "Extend shows nothing on this device itself."} {kind()?.inUseStays ?? ""} The computer it pairs through and this page show which Silicon is using it, with
+                Stop.
+              </p>
+            }
+          >
+            <p class="fine" data-testid="banner-explain">
+              <strong>On:</strong> {kind()?.inUse ?? "the device names the Silicon for 10 seconds when it starts."} <strong>Off:</strong> the device shows nothing while a Silicon uses it
+              {kind()?.inUseStays ? ` (${kind()!.inUseStays!.replace(/\.$/, "")})` : ""}. The Extend app and this page still show which Silicon is using it, with Stop.
+            </p>
+          </Show>
+          <Show when={props.device.paired_by_others}>
+            <p class="fine" data-testid="banner-shared">It's one setting for the whole device, so it changes for the other Carbons who paired it too.</p>
+          </Show>
+          <ErrorNote error={bannerError()} compact testid="banner-error" />
+        </div>
       </Show>
       <Show when={props.device.wake_muted !== undefined && props.device.wake_muted !== null}>
         <label class="switch">

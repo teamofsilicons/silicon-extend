@@ -40,6 +40,8 @@ pub const WAKE_PROBE_EVERY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachRecord {
+    #[serde(default)]
+    pub in_use_indicator: extend_protocol::model::InUseIndicator,
     pub device_id: DeviceId,
     pub os: DeviceOs,
     pub name: String,
@@ -171,11 +173,16 @@ impl HostedRegistry {
         };
         let _ = std::fs::create_dir_all(&device.state_dir);
         {
-            let entries = self.entries.lock().unwrap();
-            // Attached again unchanged (every reconnect's greeting): keep the driver and its state.
-            if let Some(e) = entries.get(&record.device_id)
-                && e.record == record
+            let mut entries = self.entries.lock().unwrap();
+            // Metadata-only changes must not replace a live driver or its recording state.
+            if let Some(e) = entries.get_mut(&record.device_id)
+                && e.record.os == record.os
+                && e.record.address == record.address
+                && e.record.host == record.host
             {
+                e.record = record;
+                drop(entries);
+                self.save();
                 return;
             }
         }
@@ -467,6 +474,7 @@ impl HostedRegistry {
             .unwrap()
             .values()
             .map(|e| AttachedInfo {
+                in_use_indicator: e.record.in_use_indicator,
                 device_id: e.record.device_id.to_string(),
                 name: e.record.name.clone(),
                 os: e.record.os,
@@ -609,6 +617,7 @@ mod tests {
 
     fn record(id: &str, os: DeviceOs, name: &str, address: Option<&str>, host: Option<&str>) -> AttachRecord {
         AttachRecord {
+            in_use_indicator: Default::default(),
             device_id: id.parse().unwrap(),
             os,
             name: name.into(),
@@ -632,6 +641,28 @@ mod tests {
         ));
         reg.attach(record("0000bbbb", DeviceOs::Tvos, "Apple TV", None, Some("7c1e09ab")));
         assert!(reg.driver(&tv).is_ok());
+        let before = reg.driver(&tv).unwrap();
+        let mut changed = record(
+            "0000aaaa",
+            DeviceOs::SamsungTv,
+            "Lounge TV",
+            Some("10.0.0.5"),
+            Some("7c1e09ab"),
+        );
+        changed.in_use_indicator = extend_protocol::model::InUseIndicator::Hidden;
+        reg.attach(changed);
+        assert!(
+            Arc::ptr_eq(&before, &reg.driver(&tv).unwrap()),
+            "hiding the banner must preserve the live driver"
+        );
+        assert_eq!(
+            reg.infos()
+                .iter()
+                .find(|a| a.device_id == "0000aaaa")
+                .unwrap()
+                .in_use_indicator,
+            extend_protocol::model::InUseIndicator::Hidden
+        );
         assert_eq!(reg.driver(&atv).err().unwrap(), "Apple TVs need a Mac");
         assert!(reg.driver(&"0000cccc".parse().unwrap()).is_err());
 

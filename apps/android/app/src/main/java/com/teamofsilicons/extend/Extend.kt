@@ -38,6 +38,7 @@ class Extend private constructor(val context: Context) {
             isTv = DeviceInfo.isTv(context, config),
             isFireTv = DeviceInfo.isFireTv(context),
             serviceUrl = config.serviceUrl,
+            indicatorShown = config.inUseIndicatorShown,
             pairs = config.pairIds.map { PairUi(it) },
             environment = config.environment,
         ),

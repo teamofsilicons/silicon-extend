@@ -17,6 +17,7 @@ import type {
   DeviceStopped,
   ErrorBody,
   IamInfo,
+  InUseIndicator,
   Me,
   Member,
   Page,
@@ -34,6 +35,13 @@ import type {
 } from "./types";
 
 export const API_MAJOR = 1;
+
+/** What PATCH /devices/{id} changes; send only what changed. */
+export interface DevicePatch {
+  name?: string;
+  pair_ttl_days?: number;
+  in_use_indicator?: InUseIndicator;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -480,8 +488,12 @@ export class ExtendClient {
     return { device: res.data, etag: res.headers.get("ETag") };
   }
 
-  /** Renames the Carbon's pair of a device, or sets how long it stays paired. Visibility is gone in 1.1. */
-  async updateDevice(deviceId: string, patch: { name?: string; pair_ttl_days?: number }, ifMatch: string): Promise<{ device: Device; etag: string | null }> {
+  /**
+   * Renames the Carbon's pair of a device, sets how long it stays paired, or shows or hides what the
+   * device itself shows while a Silicon uses it (`in_use_indicator`, one setting for the whole
+   * device, shared by every Carbon who paired it). Visibility is gone in 1.1.
+   */
+  async updateDevice(deviceId: string, patch: DevicePatch, ifMatch: string): Promise<{ device: Device; etag: string | null }> {
     const res = await this.request<Device>({
       method: "PATCH",
       path: `/api/v1/devices/${encodeURIComponent(deviceId)}`,

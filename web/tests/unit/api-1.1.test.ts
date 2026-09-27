@@ -159,3 +159,22 @@ describe("pairing (1.1)", () => {
     await expect(c.stopDevice("7c1e09ab")).rejects.toMatchObject({ code: "unexpected_response", message: 'Expected a "session" or "device_stopped" response from Extend, got "device".' });
   });
 });
+
+describe("the banner while a Silicon uses a device (1.1)", () => {
+  it("hides it with a PATCH of in_use_indicator alone, with If-Match", async () => {
+    const { client: c, calls } = client(() => json(200, { type: "device", data: { device_id: "7c1e09ab", version: 5, in_use_indicator: "hidden" } }, { ETag: '"5"' }));
+    const { device, etag } = await c.updateDevice("7c1e09ab", { in_use_indicator: "hidden" }, '"4"');
+    expect(device.in_use_indicator).toBe("hidden");
+    expect(etag).toBe('"5"');
+    expect(`${calls[0].method} ${path(calls[0].url)}`).toBe("PATCH /api/v1/devices/7c1e09ab");
+    expect(calls[0].headers["If-Match"]).toBe('"4"');
+    expect(calls[0].body).toEqual({ type: "device", data: { in_use_indicator: "hidden" } });
+  });
+
+  it("a Silicon is refused with carbon_only, as the service says it", async () => {
+    const { client: c } = client(() =>
+      json(403, { type: "error", data: { code: "carbon_only", message: "si:chef is a Silicon. Only the Carbons who paired a device manage it.", hint: "Ask the Carbon who paired it." } }),
+    );
+    await expect(c.updateDevice("7c1e09ab", { in_use_indicator: "shown" }, '"4"')).rejects.toMatchObject({ status: 403, code: "carbon_only", hint: "Ask the Carbon who paired it." });
+  });
+});

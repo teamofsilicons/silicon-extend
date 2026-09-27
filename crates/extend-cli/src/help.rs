@@ -94,7 +94,7 @@ pub const NODES: &[Node] = &[
     },
     Node {
         path: "device",
-        usage: "extend device <ls|show|pair|attach|setup|setup-code|rename|ttl|stop|rm|access|activity|requests|wake|wake-requests>",
+        usage: "extend device <ls|show|pair|attach|setup|setup-code|rename|banner|ttl|stop|rm|access|activity|requests|wake|wake-requests>",
         who: "Carbon or Silicon",
         purpose: "Find devices (Silicons: the ones you can use) and manage them (Carbons: the ones you paired).",
         used_with: "A Silicon runs `extend device ls`, then `extend device show <device_id>` to see what it can do there, then `extend session new <device_id>`. A device that isn't awake still works for the terminal and Android debugging; for its screen, ask its Carbon with `extend device wake <device_id> --reason \"...\"`. \
@@ -221,6 +221,15 @@ AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — 
         used_with: "Choose who can use a device with `extend device access grant <device_id> <silicon_id>`.",
         flags: &[],
         examples: &[],
+    },
+    Node {
+        path: "device banner",
+        usage: "extend device banner <device_id> on|off",
+        who: "Carbon (owner)",
+        purpose: "Show or hide the device's in-use banner, notification and icon change. The choice applies to every Carbon's pair of this device.",
+        used_with: "On: the banner shows for 10 seconds per session. Off: the app and website still show who is using the device, with Stop. Requests waiting for a Carbon still appear; Android's quiet running notification and Apple's Automation Running banner remain.",
+        flags: &[],
+        examples: &["extend device banner 7c1e09ab off"],
     },
     Node {
         path: "device ttl",

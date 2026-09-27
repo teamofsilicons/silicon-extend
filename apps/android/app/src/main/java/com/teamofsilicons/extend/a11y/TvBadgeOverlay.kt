@@ -8,7 +8,7 @@ import com.teamofsilicons.extend.ui.InUseBadge
 import com.teamofsilicons.extend.ui.InUseBadgeView
 
 /**
- * The TV's in-use indicator: a small badge in the top-right corner, drawn as an accessibility
+ * The TV's in-use indicator: a small badge in the bottom centre, drawn as an accessibility
  * overlay so it needs no "display over other apps" permission. It can't take focus or touches, so
  * it never gets in the way of the remote.
  *
@@ -38,10 +38,9 @@ class TvBadgeOverlay(private val service: ExtendAccessibilityService) {
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT,
             ).apply {
-                // Inside a TV's overscan-safe area (48 dp from the side, at least 27 dp from the
-                // top), centred on the Extend app's top bar row so it sits in line with it there.
-                gravity = Gravity.TOP or Gravity.END
-                x = dp(48)
+                // Stay inside the TV's overscan-safe area.
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                x = 0
                 y = dp(40)
                 title = "Silicon Extend in-use badge"
                 if (keepOn) flags = flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON

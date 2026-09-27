@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use crate::capability::{Capability, DeviceOs};
 use crate::ids::{DeviceCredential, DeviceId, SessionId};
-use crate::model::{Attachment, EndReason, MissingCapability, Setup, SleepState, TestingEnvironment, Timestamp};
+use crate::model::{
+    Attachment, EndReason, InUseIndicator, MissingCapability, Setup, SleepState, TestingEnvironment, Timestamp,
+};
 
 /// Frames a paired device sends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -190,6 +192,7 @@ pub enum ServiceFrame {
     /// The device's name, owner or environment changed; re-read `GET /api/v1/device`.
     Refresh,
     /// A device paired through this host needs setting up (or was removed when `removed`).
+    /// 1.1: sent again when the carried device's `in_use_indicator` changes.
     Attach {
         device_id: DeviceId,
         os: DeviceOs,
@@ -198,6 +201,10 @@ pub enum ServiceFrame {
         address: Option<String>,
         #[serde(default)]
         removed: bool,
+        /// 1.1: whether the carried device shows the in-use badge or banner. Absent (a 1.0
+        /// service) means shown.
+        #[serde(default)]
+        in_use_indicator: InUseIndicator,
     },
     /// A setup code the Carbon entered for an attached device (Apple TV).
     SetupCode {
@@ -629,5 +636,40 @@ mod tests {
             serde_json::from_value::<DeviceFrame>(serde_json::to_value(&p).unwrap()).unwrap(),
             p
         );
+    }
+
+    #[test]
+    fn attach_carries_the_in_use_indicator() {
+        let attach = |in_use_indicator| ServiceFrame::Attach {
+            device_id: "3a2b0c1d".parse().unwrap(),
+            os: DeviceOs::Ios,
+            name: "Alice's iPhone".into(),
+            address: None,
+            removed: false,
+            in_use_indicator,
+        };
+        exact(
+            &attach(InUseIndicator::Hidden),
+            json!({"type":"attach","device_id":"3a2b0c1d","os":"ios","name":"Alice's iPhone","address":null,
+                   "removed":false,"in_use_indicator":"hidden"}),
+        );
+        exact(
+            &attach(InUseIndicator::Shown),
+            json!({"type":"attach","device_id":"3a2b0c1d","os":"ios","name":"Alice's iPhone","address":null,
+                   "removed":false,"in_use_indicator":"shown"}),
+        );
+        // A 1.0 service's frame: shown.
+        assert_eq!(
+            service(json!({"type":"attach","device_id":"3a2b0c1d","os":"ios","name":"Alice's iPhone"})),
+            attach(InUseIndicator::Shown)
+        );
+        // A value from a newer service decodes, and still shows.
+        let ServiceFrame::Attach { in_use_indicator, .. } = service(
+            json!({"type":"attach","device_id":"3a2b0c1d","os":"ios","name":"Alice's iPhone","in_use_indicator":"dimmed"}),
+        ) else {
+            panic!()
+        };
+        assert_eq!(in_use_indicator, InUseIndicator::Other);
+        assert!(in_use_indicator.shows());
     }
 }

@@ -98,6 +98,12 @@ data class UiState(
     val awake: AwakeUi? = null,
     val wakeRequests: List<WakeUi> = emptyList(),
     val addingPair: AddPairUi? = null,
+    /** The device's `in_use_indicator` ([InUseIndicator]): the badge or notification names the Silicon for 10 s. */
+    val indicatorShown: Boolean = true,
+    /** What happened to the Carbon's last change of [indicatorShown], when it needs saying. */
+    val indicatorNote: String? = null,
+    /** The session the device last announced, and whether its 10 s are running ([InUseAnnouncer]). */
+    val announce: AnnounceUi? = null,
 ) {
     /** The first pair's device id (the app's first enrollment), for the developer settings. */
     val deviceId: String? get() = pairs.firstOrNull()?.deviceId

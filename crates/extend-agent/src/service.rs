@@ -3,7 +3,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use extend_protocol::model::{DeviceSelf, EnrollmentCreate, EnrollmentCreated, EnrollmentState};
+use extend_protocol::model::{
+    DeviceSelf, DeviceSelfPatch, EnrollmentCreate, EnrollmentCreated, EnrollmentState, InUseIndicator,
+};
 use extend_protocol::{API_VERSION, API_VERSION_HEADER, Envelope};
 use rand::Rng as _;
 use sha2::{Digest as _, Sha256};
@@ -136,6 +138,17 @@ impl ServiceClient {
             .await
             .map_err(ServiceError::network)?;
         read_empty(resp).await
+    }
+
+    pub async fn set_in_use_indicator(&self, credential: &str, value: InUseIndicator) -> ServiceResult<DeviceSelf> {
+        let resp = self
+            .request(reqwest::Method::PATCH, "api/v1/device")
+            .header("Authorization", device_auth(credential))
+            .json(&Envelope::new("device_self", DeviceSelfPatch::in_use_indicator(value)))
+            .send()
+            .await
+            .map_err(ServiceError::network)?;
+        read_envelope(resp).await
     }
 
     pub async fn device_self(&self, credential: &str) -> ServiceResult<DeviceSelf> {

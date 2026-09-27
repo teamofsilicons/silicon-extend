@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use extend_protocol::model::{MissingCapability, Setup, SetupState, SleepState};
+use extend_protocol::model::{InUseIndicator, MissingCapability, Setup, SetupState, SleepState};
 use extend_protocol::{Capability, DeviceOs};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -133,6 +133,8 @@ pub struct EnvironmentInfo {
 /// A device this computer carries (iPhone, iPad, Apple TV, Samsung or LG TV).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttachedInfo {
+    #[serde(default)]
+    pub in_use_indicator: InUseIndicator,
     pub device_id: String,
     pub name: String,
     pub os: DeviceOs,
@@ -161,6 +163,8 @@ pub struct AttachedInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AgentStatus {
+    #[serde(default)]
+    pub in_use_indicator: InUseIndicator,
     pub pid: u32,
     pub app_version: String,
     pub service_url: String,
@@ -529,6 +533,7 @@ mod tests {
                 expires_at: "t".into(),
             }],
             attached: vec![AttachedInfo {
+                in_use_indicator: InUseIndicator::Shown,
                 device_id: "3f2a1b0c".into(),
                 name: "Alice's iPhone".into(),
                 os: DeviceOs::Ios,

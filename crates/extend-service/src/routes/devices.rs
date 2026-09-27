@@ -10,9 +10,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use extend_protocol::frames::{EnrollmentFrame, ServiceFrame};
 use extend_protocol::model::{
-    AccessGrant, ActivityEntry, AttachmentCreate, Delivery, DevicePatch, DeviceStopped, EndReason, Member, MemberKind,
-    PairingClaim, RequestCreate, RequestInfo, RequestRoute, RetryResult, SetupRetryInput, StepStatus, TeamReach,
-    TeamSilicons, TestingEnvironment,
+    AccessGrant, ActivityEntry, AttachmentCreate, Delivery, DeviceSettingsPatch as DevicePatch, DeviceStopped,
+    EndReason, InUseIndicator, Member, MemberKind, PairingClaim, RequestCreate, RequestInfo, RequestRoute, RetryResult,
+    SetupRetryInput, StepStatus, TeamReach, TeamSilicons, TestingEnvironment,
 };
 use extend_protocol::{DeviceId, DeviceOs, ErrorCode, PairingCode, TEST_DEVICE_LIMIT, TEST_DEVICE_LIMIT_MESSAGE, ids};
 use serde::Deserialize;
@@ -759,13 +759,52 @@ pub async fn update(
     headers: HeaderMap,
     Body(patch): Body<DevicePatch>,
 ) -> AppResult<Response> {
+    // The in-use banner is the Carbons' to decide, never a Silicon's.
+    if patch.in_use_indicator.is_some() {
+        auth.require_carbon()?;
+    }
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
-    if patch.name.is_none() && patch.visibility.is_none() && patch.pair_ttl_days.is_none() {
-        return Err(AppError::invalid("Send at least one of name, pair_ttl_days."));
+    if patch.name.is_none()
+        && patch.visibility.is_none()
+        && patch.pair_ttl_days.is_none()
+        && patch.in_use_indicator.is_none()
+    {
+        return Err(AppError::invalid(
+            "Send at least one of name, pair_ttl_days, in_use_indicator.",
+        ));
+    }
+    if patch.in_use_indicator == Some(InUseIndicator::Other) {
+        return Err(AppError::invalid("in_use_indicator is \"shown\" or \"hidden\"."));
     }
     if_match(&headers, d.version)?;
     let name = patch.name.as_deref().map(clean_name).transpose()?;
     let ttl = patch.pair_ttl_days.map(|t| check_ttl(Some(t))).transpose()?;
+    let mut tx = state.pool.begin().await?;
+    // Same lock order as pairing, removal and the shared banner update: instance, then pairs.
+    sqlx::query(sql!(
+        "SELECT instance_id FROM {} WHERE instance_id = $1 FOR NO KEY UPDATE",
+        auth.world.t("device_instances")
+    ))
+    .bind(d.instance_id)
+    .execute(&mut *tx)
+    .await?;
+    let current: Option<i64> = sqlx::query_scalar(sql!(
+        "SELECT version FROM {} WHERE device_id = $1 AND removed_at IS NULL FOR UPDATE",
+        auth.world.t("devices")
+    ))
+    .bind(&device_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current.is_none() {
+        return Err(domain::device_not_found(&device_id));
+    }
+    if current != Some(d.version) {
+        return Err(AppError::new(
+            ErrorCode::VersionConflict,
+            "The device changed while you were updating it.",
+        )
+        .hint("Read it again and retry."));
+    }
     // `visibility` is accepted and ignored: a device is only ever visible to the Carbons who
     // paired it (a 1.0 website may still send it).
     if name.is_some() || ttl.is_some() {
@@ -778,7 +817,7 @@ pub async fn update(
         .bind(&name)
         .bind(ttl)
         .bind(d.version)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
         if updated.rows_affected() == 0 {
             return Err(AppError::new(
@@ -787,6 +826,14 @@ pub async fn update(
             )
             .hint("Read it again and retry."));
         }
+    }
+    let banner_changed = if let Some(value) = patch.in_use_indicator {
+        domain::update_in_use_indicator(&mut tx, &auth.world, d.instance_id, value, Some(&device_id)).await?
+    } else {
+        false
+    };
+    tx.commit().await?;
+    if name.is_some() || ttl.is_some() {
         let mut changes = serde_json::Map::new();
         if let Some(n) = &name {
             changes.insert("name".into(), serde_json::json!({"from": d.name, "to": n}));
@@ -811,6 +858,19 @@ pub async fn update(
         .await;
         // Only this pair's connection re-reads: another Carbon's name for the device is theirs.
         let _ = state.hub.send(&d.route(&auth.world), ServiceFrame::Refresh).await;
+    }
+    if banner_changed {
+        domain::notify_in_use_indicator(
+            &state,
+            &auth.world,
+            d.instance_id,
+            patch.in_use_indicator.unwrap(),
+            domain::BannerChangedBy::Carbon {
+                device_id: &device_id,
+                member: &auth.p.member,
+            },
+        )
+        .await?;
     }
     let d = domain::load_device(&state, &auth.world, &device_id)
         .await?
@@ -1032,18 +1092,7 @@ pub async fn attach(
                 .await?
                 .ok_or_else(|| AppError::internal("attached device vanished"))?;
             add.commit().await?;
-            st.hub
-                .send(
-                    &host.key(&world),
-                    ServiceFrame::Attach {
-                        device_id: device_id.parse().map_err(AppError::internal)?,
-                        os: input.os,
-                        name: name.clone(),
-                        address: input.address.clone(),
-                        removed: false,
-                    },
-                )
-                .await;
+            st.hub.send(&host.key(&world), d.attach_frame(false)).await;
             domain::log(
                 &st,
                 &world,

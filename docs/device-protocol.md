@@ -603,3 +603,19 @@ offer Pair with another Carbon. It keeps sending `agent_device_version`, which t
 
 No capability, end reason or error code was added in 1.1: a 1.0 reader refuses values it doesn't
 know (an unknown capability makes a 1.0 service drop the whole hello).
+
+### In-use indicator (1.1 follow-up)
+
+`GET /api/v1/device` and each carried-device `attach` frame now carry `in_use_indicator`:
+`shown` (the default when absent) or `hidden`. `PATCH /api/v1/device` with a device credential
+accepts `{"type":"device_self","data":{"in_use_indicator":"hidden"}}` and returns `device_self`.
+Any live pair's credential can change its own physical device's setting. Every pair reads the
+same value. The service sends `refresh` to the device's live pair connections; for carried devices,
+it sends `attach` with the new setting to their hosts. A banner-only refresh must preserve a live
+driver and its session/recording state. Carbons can also set it through the existing device PATCH;
+Silicons cannot. Both APIs are covered by the client contract fixtures.
+
+Android and desktop banner timers use a 10-second deadline without ending the session or the
+screen hold. Hidden suppresses in-use announcements and desktop icon changes. Takeover requests
+still show until answered; Stop remains in the app and website. The Android TV badge is positioned
+at bottom centre. Test-environment disclosure is separate from this preference.

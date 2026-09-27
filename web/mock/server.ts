@@ -7,7 +7,8 @@
  * 1.1: devices belong to the Carbons who paired them (X-Org-ID doesn't filter them), grants are per
  * Team, several Carbons can pair one physical device (an "instance") with separate pairs and sides,
  * one Silicon at a time holds the instance, requests are routed to the Carbon who gave the holder
- * access, wake requests, Ting registration per Team, and setup retry (contract A).
+ * access, wake requests, Ting registration per Team, setup retry (contract A), and whether the device
+ * shows that a Silicon is using it (in_use_indicator, one setting per physical device).
  *
  * It also serves a stand-in for the IAM consent screen under /__mock/iam/login, and control
  * endpoints under /__mock/* for tests. Run: `pnpm mock` (port 8490) or `pnpm dev:mock`.
@@ -56,6 +57,11 @@ interface InstanceRec {
   awake: boolean | null;
   sleep_state: string | null;
   awake_changed_at: string | null;
+  /**
+   * Whether the device itself shows that a Silicon is using it: one setting for the physical
+   * device, shared by every Carbon who paired it. Unset means shown.
+   */
+  in_use_indicator?: "shown" | "hidden";
 }
 
 interface DeviceRec {
@@ -839,6 +845,10 @@ function checkVisibility(v: unknown): "team" | "personal" {
   if (v !== "team" && v !== "personal") fail(422, "invalid_input", 'visibility must be "team" or "personal".', null, { field: "visibility" });
   return v as "team" | "personal";
 }
+function checkIndicator(v: unknown): "shown" | "hidden" {
+  if (v !== "shown" && v !== "hidden") fail(422, "invalid_input", 'in_use_indicator must be "shown" or "hidden".', null, { field: "in_use_indicator" });
+  return v as "shown" | "hidden";
+}
 function checkTtl(v: unknown): number {
   if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 30)
     fail(422, "invalid_input", `pair_ttl_days must be a whole number from 1 to 30; got ${JSON.stringify(v)}.`, "Pick between 1 and 30 days.", { field: "pair_ttl_days" });
@@ -1053,6 +1063,7 @@ function deviceView(world: World, d: DeviceRec, viewer: Viewer, detail = false) 
     open_wake_requests: visibleWakes.length,
     ...(detail ? { wake_requests: visibleWakes.map((w) => wakeView(world, w, viewer)) } : {}),
     ...(ownerView ? { wake_muted: d.wake_muted, paired_by_others: pairsOf(world, d.instance_id).some((x) => x.owner !== d.owner) } : {}),
+    ...(ownerView ? { in_use_indicator: instance?.in_use_indicator ?? "shown" } : {}),
   };
 }
 
@@ -1673,8 +1684,8 @@ route("PATCH", "/api/v1/devices/:device_id", (ctx) => {
   const d = ownedDevice(ctx, member);
   checkIfMatch(ctx, d);
   const data = envelope(ctx, "device");
-  onlyKeys(data, ["name", "visibility", "pair_ttl_days"]);
-  if (!Object.keys(data).length) fail(422, "invalid_input", "Send at least one of name, visibility, pair_ttl_days.");
+  onlyKeys(data, ["name", "visibility", "pair_ttl_days", "in_use_indicator"]);
+  if (!Object.keys(data).length) fail(422, "invalid_input", "Send at least one of name, visibility, pair_ttl_days, in_use_indicator.");
   // Logged like the service: one entry, "renamed" when only the name changed, else "settings_changed".
   // Visibility is accepted and ignored since 1.1: the device stays personal.
   const changes: Record<string, unknown> = {};
@@ -1685,6 +1696,16 @@ route("PATCH", "/api/v1/devices/:device_id", (ctx) => {
   }
   if ("visibility" in data) checkVisibility(data.visibility);
   if ("pair_ttl_days" in data) changes.pair_ttl_days = d.pair_ttl_days = checkTtl(data.pair_ttl_days);
+  // One setting for the physical device: every Carbon's pair of it reads the new value (and a new version).
+  if ("in_use_indicator" in data) {
+    const value = checkIndicator(data.in_use_indicator);
+    const instance = ctx.world.instances.get(d.instance_id)!;
+    if ((instance.in_use_indicator ?? "shown") !== value) {
+      instance.in_use_indicator = value;
+      changes.in_use_indicator = value;
+      for (const other of pairsOf(ctx.world, d.instance_id)) if (other.device_id !== d.device_id) other.version += 1;
+    }
+  }
   if (Object.keys(changes).length) {
     const action = "name" in changes && Object.keys(changes).length === 1 ? "renamed" : "settings_changed";
     logActivity(ctx.world, d.device_id, { actor: { type: "carbon", id: member.id }, action, details: changes });
@@ -2176,6 +2197,16 @@ route("POST", "/__mock/carried", (ctx) => {
   if (d!.duplicate) logActivity(ctx.world, d!.device_id, { actor: { type: "carbon", id: "extend" }, action: "duplicate_device", details: { kind: data.state === "duplicate_own" ? "same_carbon" : "other_computer" } });
   d!.version += 1;
   return ok(200, "carried", setupView(ctx.world, d!));
+});
+
+/** Sets what a device (its instance, so every pair of it) shows while a Silicon uses it, as its Extend app would. */
+route("POST", "/__mock/indicator", (ctx) => {
+  const data = (ctx.body ?? {}) as { device_id: string; in_use_indicator: string };
+  const d = ctx.world.devices.get(String(data.device_id));
+  if (!d) fail(404, "device_not_found", "No such device.");
+  ctx.world.instances.get(d!.instance_id)!.in_use_indicator = checkIndicator(data.in_use_indicator);
+  for (const pair of pairsOf(ctx.world, d!.instance_id)) pair.version += 1;
+  return ok(200, "indicator", { device_id: d!.device_id, in_use_indicator: data.in_use_indicator });
 });
 
 /** Sets whether a device (its instance, so every pair of it) is awake. */

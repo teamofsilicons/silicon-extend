@@ -814,6 +814,7 @@ async fn hosted_device_end_to_end() {
             name: "Living room TV".into(),
             address: Some("192.168.1.40".into()),
             removed: false,
+            in_use_indicator: InUseIndicator::Shown,
         }
     );
     // A carried device can't carry others.
