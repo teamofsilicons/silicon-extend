@@ -32,6 +32,32 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — iPad first screenshot
+
+The hosted iOS driver now responds to the engine's typed `SESSION_NOT_FOUND` on screenshot or
+screenshot-diff by attaching the same session with a bare `open`, then retrying the capture once.
+It never supplies an app target. Existing sessions retain their binding. Attachment failures are
+returned, and waiting for the device, stale-session cleanup, attachment and capture share the
+original command deadline and cancellation token.
+
+- Hosted-driver suite: 78 pass, 4 opt-in native tests ignored; the new regressions exercise first
+  capture, repeated capture, lost daemon state, abandoned setup recovery, attachment failure,
+  cancellation and timeout. Log: `/tmp/extend-ios-attach-tests.log`.
+- `cargo clippy -p extend-hosted --all-targets --locked -- -D warnings` passes; log:
+  `/tmp/extend-ios-attach-clippy.log`.
+- The opt-in `simulator_first_screenshot` test passes through the built engine on a newly created
+  iPad Air 11-inch (M2), iOS 18.4 simulator. Settings was already open via `simctl` before the
+  Extend session. The engine event log records screenshot → `SESSION_NOT_FOUND` → targetless
+  open → successful screenshot → close. The PNG was visually inspected: Settings/General
+  remains visible. No XCTest runner existed before or after. Evidence is under
+  `target/ios-first-capture/` (`before.png`, `capture/screenshot.png`, `events.ndjson`, `test.log`).
+  The test used its own daemon, claims and leases; the daemon was stopped and the temporary
+  simulator was shut down and deleted afterward.
+
+This proves the driver and simulator path, not physical iPad/CoreDevice capture, annotated
+screenshots requiring app accessibility, or an installed/released desktop build. Physical-device
+and release checks remain in `completion-work.md`.
+
 ## 2026-09-28 — resumed banner follow-up
 
 Recovered the interrupted Claude working tree on `release/1.1.0` at `505a695` and completed the

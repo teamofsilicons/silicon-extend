@@ -3,6 +3,8 @@
 //! Every command runs as `<device-engine argv> <command> <args…> --platform ios --udid <udid> --json
 //! --session extend-<session id>`. Files a command writes (screenshots, recordings, diffs, replay
 //! scripts) are given explicit paths in the command's workdir so they come back as `LocalFile`s.
+//! A first screenshot attaches to the current screen with a bare `open` if the engine has no
+//! session yet; it does not launch an app. Attachment and recovery share the command's deadline.
 //!
 //! Setup follows UNDERSTANDING.md: the Carbon plugs the iPhone in and taps Trust, turns on
 //! Developer Mode, and Extend then puts the device engine's XCTest runner (the "helper") on it with
@@ -1655,7 +1657,6 @@ impl Inner {
         session: &str,
         command: &str,
         args: &[String],
-        inv: Option<&Invocation<'_>>,
     ) -> Result<(String, String, bool), String> {
         let mut cmd = self.base_command();
         cmd.args(with_extend_flags(
@@ -1669,18 +1670,7 @@ impl Inner {
                 self.device.agent_device[0]
             )
         })?;
-        let wait = child.wait_with_output();
-        let out = match inv {
-            Some(inv) => {
-                tokio::select! {
-                    r = wait => r,
-                    _ = inv.cancel.cancelled() => return Err("cancelled".into()),
-                    _ = tokio::time::sleep(inv.timeout) => return Err(format!("the device engine didn't finish within {} ms", inv.timeout.as_millis())),
-                }
-            }
-            None => wait.await,
-        }
-        .map_err(|e| e.to_string())?;
+        let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
         Ok((
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -1697,12 +1687,51 @@ impl Inner {
         args: &[String],
         limit: Duration,
     ) -> Result<(String, String, bool), String> {
-        match tokio::time::timeout(limit, self.agent_device(udid, session, command, args, None)).await {
+        match tokio::time::timeout(limit, self.agent_device(udid, session, command, args)).await {
             Ok(r) => r,
             Err(_) => Err(format!(
                 "the device engine didn't finish `{command}` within {} s",
                 limit.as_secs()
             )),
+        }
+    }
+
+    /// Capture the current screen without requiring the caller to open an app. A bare open
+    /// binds this session to the device without launching an app or warming the XCTest runner.
+    /// Ask the daemon whether the session exists: persisted host state can outlive the daemon.
+    async fn run_command(&self, udid: &str, session: &str, command: &str, args: &[String]) -> Result<Output, String> {
+        let can_attach =
+            command == "screenshot" || (command == "diff" && args.first().map(String::as_str) == Some("screenshot"));
+        let mut attached = false;
+        let mut closed_stale = false;
+        let mut opening = false;
+        loop {
+            let (next, args) = if opening { ("open", &[][..]) } else { (command, args) };
+            let (stdout, stderr, ok) = self.agent_device(udid, session, next, args).await?;
+            let out = to_output(next, &stdout, &stderr, ok);
+            if !closed_stale && let Some(owner) = stale_owner(&out, session) {
+                closed_stale = true;
+                self.close_stale(udid, &owner).await;
+                continue;
+            }
+            if opening {
+                if !out.ok {
+                    return Ok(out);
+                }
+                opening = false;
+                continue;
+            }
+            if can_attach
+                && !attached
+                && out.error.as_ref().is_some_and(|error| {
+                    error.details.get("engine_code").and_then(Value::as_str) == Some("SESSION_NOT_FOUND")
+                })
+            {
+                attached = true;
+                opening = true;
+                continue;
+            }
+            return Ok(out);
         }
     }
 
@@ -2202,6 +2231,7 @@ impl Driver for IosDriver {
     }
 
     async fn run(&self, inv: Invocation<'_>) -> Output {
+        let deadline = tokio::time::Instant::now() + inv.timeout;
         let me = &self.inner;
         let Some(udid) = me.udid() else {
             return crate::common::not_ready(format!(
@@ -2219,16 +2249,17 @@ impl Driver for IosDriver {
         };
         let dev = shared(&udid);
         let _held = tokio::select! {
-            held = dev.guard.clone().lock_owned() => held,
+            biased;
             _ = inv.cancel.cancelled() => {
                 return crate::common::failed(format!("`{}` was cancelled", inv.command));
             }
-            _ = tokio::time::sleep(inv.timeout) => {
+            _ = tokio::time::sleep_until(deadline) => {
                 return Output::fail(
                     ErrorCode::CommandTimeout.as_str().as_str(),
                     format!("The {} was still busy (Extend was setting it up, ending a session or stopping its idle runner) after {} ms", me.kind(), inv.timeout.as_millis()),
                 );
             }
+            held = dev.guard.clone().lock_owned() => held,
         };
         // The device counts as used until the command is over, however it ends (the runner's idle
         // stop counts from there).
@@ -2247,29 +2278,22 @@ impl Driver for IosDriver {
         let before = list_files(inv.workdir);
         let session = session_name(inv.session_id);
         me.note_session(&session, runner_use(inv.command, inv.args) != RunnerUse::Free);
-        let mut out = Output::fail(ErrorCode::CommandFailed.as_str().as_str(), "not run");
-        for attempt in 0..2 {
-            let (stdout, stderr, ok) = match me
-                .agent_device(&udid, &session, inv.command, &plan.args, Some(&inv))
-                .await
-            {
-                Ok(r) => r,
-                Err(e) if e == "cancelled" => {
-                    return crate::common::failed(format!("`{}` was cancelled", inv.command));
-                }
-                Err(e) if e.contains("didn't finish") => {
-                    return Output::fail(ErrorCode::CommandTimeout.as_str().as_str(), e);
-                }
-                Err(e) => return crate::common::failed(e),
-            };
-            out = to_output(inv.command, &stdout, &stderr, ok);
-            // Extend lets one session use a device at a time, so another `extend-…` the device engine
-            // session still holding it was left behind (a crash, a lost session end): close it.
-            match stale_owner(&out, &session) {
-                Some(owner) if attempt == 0 => me.close_stale(&udid, &owner).await,
-                _ => break,
+        let mut out = tokio::select! {
+            biased;
+            _ = inv.cancel.cancelled() => {
+                return crate::common::failed(format!("`{}` was cancelled", inv.command));
             }
-        }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Output::fail(ErrorCode::CommandTimeout.as_str().as_str(),
+                    format!("The device engine didn't finish `{}` within {} ms", inv.command, inv.timeout.as_millis()));
+            }
+            result = me.run_command(&udid, &session, inv.command, &plan.args) => {
+                match result {
+                    Ok(out) => out,
+                    Err(e) => return crate::common::failed(e),
+                }
+            }
+        };
 
         if out.ok
             && let Some(path) = &plan.record_to
@@ -2676,6 +2700,68 @@ mod tests {
         assert_eq!(
             render_snapshot(&data),
             "App: com.apple.Preferences\nSnapshot: 4 nodes\n@e2 [navigation-bar] \"Settings\"\n@e3 [search] \"Search\" [editable]\n@e9 [cell] \"General\"\n@e6 [collection]\n[more content below; scroll down]"
+        );
+    }
+
+    /// Capture an already-booted test Simulator without opening an app through Extend.
+    /// Requires an isolated engine state and claims directory, like `simulator_runner_lifecycle`.
+    #[tokio::test]
+    #[ignore = "needs an isolated iOS Simulator and a built device engine"]
+    async fn simulator_first_screenshot() {
+        let udid = std::env::var("EXTEND_HOSTED_SIM_UDID").expect("set EXTEND_HOSTED_SIM_UDID");
+        assert!(simulators_allowed(), "set {SIMULATOR_ENV}=1");
+        assert!(engine_setting("STATE_DIR").is_some(), "set EXTEND_ENGINE_STATE_DIR");
+        assert!(engine_setting("CLAIMS_DIR").is_some(), "set EXTEND_ENGINE_CLAIMS_DIR");
+        let state = tempfile::tempdir().unwrap();
+        let driver = IosDriver::new(HostedDevice {
+            device_id: "dev_capture_sim".into(),
+            os: DeviceOs::Ios,
+            name: "Capture test iPad".into(),
+            address: Some(udid.clone()),
+            state_dir: state.path().to_path_buf(),
+            agent_device: vec![
+                "node".into(),
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../vendor/extend-engine/bin/extend-engine.mjs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        });
+        let work = std::env::var_os("EXTEND_HOSTED_CAPTURE_OUT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.path().join("work"));
+        assert!(
+            runner_pids(&udid).await.is_empty(),
+            "start with no runner on this test device"
+        );
+        let out = driver
+            .run(Invocation {
+                id: uuid::Uuid::new_v4(),
+                session_id: "first-capture",
+                command: "screenshot",
+                args: &[],
+                attachments: &[],
+                workdir: &work,
+                timeout: Duration::from_secs(60),
+                cancel: extend_driver::cancel::CancelToken::new(),
+            })
+            .await;
+        // Release claims even when capture fails, before assertions end the test.
+        driver.session_ended("first-capture").await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(out.files.len(), 1, "{out:?}");
+        assert_eq!(out.files[0].kind, FileKind::Screenshot);
+        let png = std::fs::read(&out.files[0].path).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(png.len() > 1_000, "empty screenshot");
+        assert!(
+            runner_pids(&udid).await.is_empty(),
+            "plain capture must leave no XCTest runner"
+        );
+        println!(
+            "first screenshot: {} ({} bytes)",
+            out.files[0].path.display(),
+            png.len()
         );
     }
 
@@ -3149,8 +3235,27 @@ if [ -f '{held}' ]; then
     *) echo '{refusal}'; exit 1 ;;
   esac
 fi
+command="$1"
+previous=''
+for word in "$@"; do
+  if [ "$previous" = --session ]; then session="$word"; fi
+  previous="$word"
+done
+case "$command" in
+  open)
+    if [ -f '{root}/slow-open' ]; then exec sleep 60; fi
+    if [ -f '{root}/open-error.json' ]; then cat '{root}/open-error.json'; exit 1; fi
+    touch "{root}/$session.open" ;;
+  close) rm -f "{root}/$session.open" ;;
+  screenshot|diff)
+    if [ ! -f "{root}/$session.open" ]; then
+      echo '{{"success":false,"error":{{"code":"SESSION_NOT_FOUND","message":"No active session. Run open first."}}}}'
+      exit 1
+    fi ;;
+esac
 echo '{{"success":true,"data":{{"message":"ok"}}}}'
 "#,
+                    root = dir.path().display(),
                     log = log.display(),
                     held = held_file.display(),
                     setup = SETUP_SESSION,
@@ -3225,6 +3330,108 @@ echo '{{"success":true,"data":{{"message":"ok"}}}}'
     #[cfg(unix)]
     fn call(command: &str, session: &str) -> (String, String) {
         (command.to_owned(), session.to_owned())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn first_screenshot_attaches_without_launching_an_app_and_reuses_the_session() {
+        let fake = FakeAgentDevice::new();
+        assert!(fake.run("first", "screenshot", &[]).await.ok);
+        assert_eq!(
+            fake.calls(),
+            [
+                call("screenshot", "extend-first"),
+                call("open", "extend-first"),
+                call("screenshot", "extend-first"),
+            ]
+        );
+        let log = std::fs::read_to_string(fake.dir.path().join("calls.log")).unwrap();
+        assert!(
+            log.lines().any(|line| line.contains("|open --platform ios --udid ")),
+            "implicit open must have no app target: {log}"
+        );
+        assert!(!fake.open_sessions()["extend-first"].runner);
+        assert!(fake.run("first", "screenshot", &[]).await.ok);
+        assert_eq!(fake.calls().iter().filter(|(cmd, _)| cmd == "open").count(), 1);
+
+        // Host bookkeeping survives a daemon restart, so it cannot tell us whether to attach.
+        std::fs::remove_file(fake.dir.path().join("extend-first.open")).unwrap();
+        assert!(fake.run("first", "screenshot", &[]).await.ok);
+        assert_eq!(fake.calls().iter().filter(|(cmd, _)| cmd == "open").count(), 2);
+        fake.driver.session_ended("first").await;
+        assert!(fake.open_sessions().is_empty());
+        assert!(!fake.dir.path().join("extend-first.open").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn screenshot_attach_recovers_abandoned_setup_but_preserves_attach_failures() {
+        let fake = FakeAgentDevice::with_setup_held(true);
+        assert!(fake.run("capture", "screenshot", &[]).await.ok);
+        assert_eq!(
+            fake.calls(),
+            [
+                call("screenshot", "extend-capture"),
+                call("close", SETUP_SESSION),
+                call("screenshot", "extend-capture"),
+                call("open", "extend-capture"),
+                call("screenshot", "extend-capture"),
+            ]
+        );
+        std::fs::write(
+            fake.dir.path().join("open-error.json"),
+            r#"{"success":false,"error":{"code":"DEVICE_NOT_FOUND","message":"iPad disconnected"}}"#,
+        )
+        .unwrap();
+        let out = fake.run("disconnected", "screenshot", &[]).await;
+        assert!(!out.ok);
+        assert_eq!(out.error.unwrap().message, "iPad disconnected");
+        assert_eq!(fake.calls().last(), Some(&call("open", "extend-disconnected")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn screenshot_attach_is_cancelled_and_bounded_by_the_command_deadline() {
+        let fake = FakeAgentDevice::new();
+        std::fs::write(fake.dir.path().join("slow-open"), "").unwrap();
+        let work = fake.dir.path().join("work");
+        let cancel = extend_driver::cancel::CancelToken::new();
+        let invocation = Invocation {
+            id: uuid::Uuid::new_v4(),
+            session_id: "deadline",
+            command: "screenshot",
+            args: &[],
+            attachments: &[],
+            workdir: &work,
+            timeout: Duration::from_millis(250),
+            cancel: cancel.clone(),
+        };
+        let out = tokio::time::timeout(Duration::from_secs(3), fake.driver.run(invocation.clone()))
+            .await
+            .expect("attach must respect the original deadline");
+        assert_eq!(out.error.unwrap().code, ErrorCode::CommandTimeout.as_str().as_str());
+        assert_eq!(fake.calls().last(), Some(&call("open", "extend-deadline")));
+
+        let cancelling = async {
+            loop {
+                if fake.calls().last() == Some(&call("open", "extend-cancel")) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            cancel.cancel();
+        };
+        let running = fake.driver.run(Invocation {
+            session_id: "cancel",
+            timeout: Duration::from_secs(30),
+            ..invocation
+        });
+        let (out, ()) = tokio::time::timeout(Duration::from_secs(3), async { tokio::join!(running, cancelling) })
+            .await
+            .expect("cancelling must stop attach promptly");
+        assert!(!out.ok);
+        assert!(out.error.unwrap().message.contains("cancelled"));
+        assert_eq!(fake.calls().last(), Some(&call("open", "extend-cancel")));
     }
 
     #[cfg(unix)]

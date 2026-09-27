@@ -51,8 +51,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   preserves the live driver; verify it during a real recording as well.
 - Diagnose and repair the TV's Android debugging disconnect/reconnect after process death;
   measure and reduce its memory usage. These are not covered by the banner changes.
-- iPhone/iPad: a first screenshot must attach to whatever is already on screen without requiring
-  an explicit `open <app>`; finish this in the hosted driver and verify it.
+- iPhone/iPad: first-screenshot attachment is implemented and verified through the real engine on
+  an isolated iPad simulator, preserving the current screen without launching an app or a runner.
+  Verify it on a physical iPad as well (including disconnect/reconnect and a new session).
 - Finish the TV display failure path and allow a Silicon to display its own Extend files, with
   correct owner/session authorization and bounded downloads. Verify actual image decode failures
   are returned as failures.
