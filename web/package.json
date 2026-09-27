@@ -1,6 +1,6 @@
 {
   "name": "@teamofsilicons/extend-web",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Silicon Extend configuration website (extend.teamofsilicons.com): pair devices and decide which Silicons can use them.",
