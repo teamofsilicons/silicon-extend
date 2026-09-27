@@ -504,6 +504,8 @@ test("a Carbon can hide and show the in-use banner without ending the session", 
   const stopBefore = await page.getByTestId("stop-session").count();
   await setting.getByTestId("banner-toggle").uncheck();
   await expect(setting).toHaveAttribute("data-indicator", "hidden");
+  await expect(page.getByTestId("toast").last()).toContainText("Banner preference saved");
+  await expect(setting.getByTestId("banner-version-note")).toContainText("Silicon Extend 1.1 or later");
   await page.reload();
   await expect(setting).toHaveAttribute("data-indicator", "hidden");
   await expect(page.getByTestId("stop-session")).toHaveCount(stopBefore);

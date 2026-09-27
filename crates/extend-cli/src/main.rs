@@ -2199,7 +2199,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 .await?;
             ctx.emit(to_json(&d), || {
                 format!(
-                    "In-use banner {} for {}. This applies to every Carbon's pair of this device.",
+                    "Saved in-use banner {} for {}. This applies to every Carbon's pair of this device. The device app, or the computer it pairs through, needs Silicon Extend 1.1 or later; offline devices apply it when they reconnect.",
                     d.in_use_indicator.on_off(),
                     d.name,
                 )

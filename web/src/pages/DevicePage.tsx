@@ -666,7 +666,7 @@ function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Prom
       setBannerError(err);
       return;
     }
-    toast(shown ? `${props.device.name} shows a banner while a Silicon uses it` : `${props.device.name} shows nothing while a Silicon uses it`);
+    toast(`Banner preference saved for ${props.device.name}: ${shown ? "on" : "off"}`);
   }
   async function setWake(on: boolean) {
     setBusy("wake");
@@ -739,6 +739,9 @@ function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Prom
               {kind()?.inUseStays ? ` (${kind()!.inUseStays!.replace(/\.$/, "")})` : ""}. The Extend app and this page still show which Silicon is using it, with Stop.
             </p>
           </Show>
+          <p class="fine" data-testid="banner-version-note">
+            The device app, or the computer it pairs through, needs Silicon Extend 1.1 or later to apply this choice. Offline devices apply it when they reconnect.
+          </p>
           <Show when={props.device.paired_by_others}>
             <p class="fine" data-testid="banner-shared">It's one setting for the whole device, so it changes for the other Carbons who paired it too.</p>
           </Show>

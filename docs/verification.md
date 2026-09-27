@@ -32,6 +32,23 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — final local suite pass and legacy banner guidance
+
+The full workspace pass completed with 580 Rust tests passing, zero failures and six opt-in tests
+ignored; workspace Clippy with warnings denied and formatting passed. Website validation passed
+170 unit and 58 Chromium tests and a production build. Desktop packaging passed 67 checks; the
+isolated current CLI lane passed 119. Logs and counts: `target/release-production-check/`.
+
+The subsequent banner copy correction reports a saved preference rather than claiming that an
+old/offline app has already changed. Website/CLI guidance explains the device or carrying app needs
+1.1+ and offline devices apply changes on reconnect. The existing browser banner persistence/Stop
+case, CLI suite, web build and formatting pass after that correction. This changes no wire format.
+
+After the separately audited self-notification fix, the combined real IAM/Briefcase/Ting lane
+passed 75 checks with zero failures. Real routed/self-send/wake, global type lookup, genuine
+missing-type fallback, files and Carbon removal still pass. All owned fixture resources were
+removed. Evidence: `target/realiam-1.1-verification/release-audit-final/`.
+
 ## 2026-09-28 — self-notification recovery after transient refusal
 
 The release audit found that a generic 401/403/400/422 response on a self-send permanently marked
@@ -41,7 +58,7 @@ HTTP regression proves unrelated failures leave self-send enabled and the next a
 with a fresh IAM proof and unchanged notification body. The OBO suite passed 10/10 and the routed
 actor-chain regression passed 1/1; the service rebuilt and strict Clippy/formatting passed.
 Evidence: `target/ting-self-send-{regression,chain,build,clippy}.log`. The combined real-service
-positive-flow lane is being rerun separately after this fix.
+positive-flow lane subsequently passed 75 checks, as recorded above.
 
 ## 2026-09-28 — actual 1.0 website source upgraded against service 1.1
 
