@@ -4,7 +4,7 @@
 --
 --   psql "$EXTEND_DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/rollback/1.1-to-1.0.sql
 --
--- It changes every world schema at version 4 (production and each test environment) and the
+-- It changes every world schema at version 4 or later (production and each test environment) and the
 -- global schema, in one transaction. Running it twice does no harm.
 --
 -- Why it is needed:
@@ -22,6 +22,8 @@
 --
 -- While 1.0.0 runs, the 1.1.0 triggers stay and keep it safe: devices stay personal and get an
 -- instance, grants get a Team, one lock per physical device, and requests get the holder columns.
+-- Schema 5's in_use_indicator column stays, including hidden choices. 1.0.0 ignores it; the
+-- instance rows its inserts create default to shown. Rolling forward preserves existing choices.
 
 BEGIN;
 

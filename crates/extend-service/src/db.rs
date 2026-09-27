@@ -4,6 +4,7 @@
 //! world's data (TECHNICAL.md section 3). Schema names are generated here from UUIDs only, never
 //! from caller input, which is what makes it safe to format them into SQL.
 
+use anyhow::Context as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Executor as _, Row as _};
 use uuid::Uuid;
@@ -607,11 +608,27 @@ pub async fn restore_rollback_grants(pool: &PgPool, world: &World) -> anyhow::Re
     let exists: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
         .bind(&stash)
         .fetch_one(pool)
-        .await?;
+        .await
+        .context("checking rollback stash before restore")?;
     if exists.is_none() {
         return Ok(());
     }
     let mut tx = pool.begin().await?;
+    // ensure_world_to releases this migration lock before restoration. Two service startups can
+    // therefore both see the stash above; serialize the restore transaction and re-check after
+    // waiting, before either reading the stash or dropping it. The fast path stays lock-free.
+    sqlx::query("SELECT pg_advisory_xact_lock(7342002)")
+        .execute(&mut *tx)
+        .await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'rollback_1_1_grants')")
+        .bind(&world.schema)
+        .fetch_one(&mut *tx)
+        .await
+        .context("checking rollback stash under lock")?;
+    if !exists {
+        tx.commit().await?;
+        return Ok(());
+    }
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT g.device_id, g.silicon_id, g.team, g.granted_by FROM {stash} g JOIN {devices} d ON d.device_id = g.device_id
          WHERE d.removed_at IS NULL
@@ -621,7 +638,7 @@ pub async fn restore_rollback_grants(pool: &PgPool, world: &World) -> anyhow::Re
         activity = world.t("activity"),
     )))
     .fetch_all(&mut *tx)
-    .await?;
+    .await.context("reading rollback grants")?;
     let mut restored = 0;
     for (device_id, silicon_id, team, granted_by) in rows {
         let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(

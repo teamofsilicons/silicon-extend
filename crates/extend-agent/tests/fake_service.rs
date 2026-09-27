@@ -900,6 +900,110 @@ async fn a_local_carried_choice_applies_to_both_known_pairs_of_one_device() {
 }
 
 #[tokio::test]
+async fn old_service_missing_banner_fields_preserve_synchronized_choices_after_restart() {
+    use extend_protocol::model::InUseIndicator;
+    let mut h = start(true).await;
+    eventually("initial device details", || {
+        (h.fake.count(|s| matches!(s, Seen::DeviceSelf { .. })) > 0).then_some(())
+    })
+    .await;
+    let attach = |name: &str| json!({"type":"attach","device_id":"0000aaaa","os":"samsung_tv","name":name,"address":"10.0.0.5","removed":false});
+    h.fake.send_to(DEVICE_ID, attach("TV"));
+    eventually("TV attached", || {
+        (!h.handle.status.get().attached.is_empty()).then_some(())
+    })
+    .await;
+    h.handle
+        .actions
+        .send(UiAction::SetInUseIndicator { shown: false })
+        .unwrap();
+    h.handle
+        .actions
+        .send(UiAction::SetAttachedInUseIndicator {
+            device_id: "0000aaaa".parse().unwrap(),
+            shown: false,
+        })
+        .unwrap();
+    eventually("both preferences synchronized", || {
+        let s = h.handle.status.get();
+        (s.in_use_indicator == InUseIndicator::Hidden
+            && s.attached[0].in_use_indicator == InUseIndicator::Hidden
+            && !s.indicator_sync_pending)
+            .then_some(())
+    })
+    .await;
+
+    // The backend rolls back to 1.0: GET and attach omit the unknown setting entirely.
+    {
+        let mut fake = h.fake.0.lock().unwrap();
+        let data = fake.selves.get_mut(DEVICE_ID).unwrap().as_object_mut().unwrap();
+        data.remove("in_use_indicator");
+        data.insert("name".into(), json!("Rolled back host"));
+    }
+    h.fake.send_to(DEVICE_ID, json!({"type":"refresh"}));
+    h.fake.send_to(DEVICE_ID, attach("Old service TV"));
+    eventually("old service frames applied", || {
+        let s = h.handle.status.get();
+        (s.pairs[0].name.as_deref() == Some("Rolled back host") && s.attached[0].name == "Old service TV").then_some(())
+    })
+    .await;
+    let s = h.handle.status.get();
+    assert_eq!(s.in_use_indicator, InUseIndicator::Hidden);
+    assert_eq!(s.attached[0].in_use_indicator, InUseIndicator::Hidden);
+    assert!(
+        !s.indicator_sync_pending,
+        "omission is not a new setting or an unsent change"
+    );
+
+    h.handle.shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(15), &mut h.task)
+        .await
+        .unwrap()
+        .unwrap();
+    let config = Config::for_tests(h._dir.path(), &h.handle.status.get().service_url);
+    let (agent, handle) = Agent::new(AgentDeps {
+        config,
+        local: h.computer.clone(),
+        hosted_factory: Arc::new(|_| Ok(Box::new(Tv))),
+        credentials: h.store.clone(),
+        probe_interval: Duration::from_secs(3600),
+        screen_watch: None,
+        notifier: h.notifier.clone(),
+        display: h.display.clone(),
+    });
+    h.handle = handle;
+    h.task = tokio::spawn(agent.run());
+    eventually("app restarted against old backend", || {
+        (h.handle.status.get().pairs.first().and_then(|p| p.name.as_deref()) == Some("Rolled back host")).then_some(())
+    })
+    .await;
+    h.fake.send_to(DEVICE_ID, attach("Old greeting TV"));
+    eventually("old reconnect greeting applied", || {
+        (h.handle.status.get().attached[0].name == "Old greeting TV").then_some(())
+    })
+    .await;
+    assert_eq!(h.handle.status.get().in_use_indicator, InUseIndicator::Hidden);
+    assert_eq!(
+        h.handle.status.get().attached[0].in_use_indicator,
+        InUseIndicator::Hidden
+    );
+
+    // After rolling forward, an explicit 1.1 change to shown remains authoritative.
+    h.fake.0.lock().unwrap().selves.get_mut(DEVICE_ID).unwrap()["in_use_indicator"] = json!("shown");
+    h.fake.send_to(DEVICE_ID, json!({"type":"refresh"}));
+    let mut explicit = attach("New service TV");
+    explicit["in_use_indicator"] = json!("shown");
+    h.fake.send_to(DEVICE_ID, explicit);
+    eventually("explicit shown accepted", || {
+        let s = h.handle.status.get();
+        (s.in_use_indicator == InUseIndicator::Shown && s.attached[0].in_use_indicator == InUseIndicator::Shown)
+            .then_some(())
+    })
+    .await;
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn full_life_of_a_paired_computer() {
     let h = start(false).await;
     let fake = h.fake.clone();

@@ -32,6 +32,27 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — repeated rollback and old-service banner compatibility
+
+Four migration tests pass on owned local PostgreSQL databases. The rehearsal runs three down/up
+cycles across production-shaped schema5 and schema4/schema5 test worlds, repeating each step twice.
+Instance identities, first-pair markers, salts, confirmed credentials, hidden-banner choices and
+grant metadata survive. Removed and revoked grants stay absent, and 1.0-style writes still work.
+A controlled overlapping-startup test reproduced a missing rollback-stash relation; restoration
+now holds the migration advisory lock and rechecks the catalog inside its transaction. Both
+concurrent restores pass and restore/log each grant once. Owned databases are cleaned on success
+and assertion failure; retained logs were checked for leftovers.
+
+The desktop's internal service reader now distinguishes an omitted old-service banner field from
+an explicit `shown`. A real HTTP/WebSocket regression covers synchronized hidden choices for the
+computer and a carried device, old refresh/attach responses, app restart and reconnect, then an
+explicit 1.1 change back to shown. Public protocol defaults and the public client API are unchanged.
+The full agent suite passes 231 tests with one existing ignored; agent/service Clippy with warnings
+denied, formatting and diff checks pass. Evidence: `target/rollback-verification/`.
+
+This is synthetic database and simulated old-service proof. The production-schema-copy and actual
+1.0 application rehearsal remain separate release gates.
+
 ## 2026-09-28 — native TV display through real Briefcase
 
 The repeatable `e2e/real-iam/native_display.py` lane passed 12 checks in 27.24 seconds with local

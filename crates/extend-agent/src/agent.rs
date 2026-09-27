@@ -1040,11 +1040,17 @@ impl Core {
     /// if the credential is refused.
     async fn refresh_device(self: &Arc<Self>, link: &Link) -> Option<PairedEnd> {
         let revision = self.indicators.lock().unwrap().get(COMPUTER).revision;
-        match tokio::time::timeout(Duration::from_secs(15), self.service.device_self(&link.credential())).await {
+        match tokio::time::timeout(
+            Duration::from_secs(15),
+            self.service.device_self_reading(&link.credential()),
+        )
+        .await
+        {
             Err(_) => tracing::info!("GET /api/v1/device timed out"),
             Ok(Err(e)) if e.is_auth() => return Some(PairedEnd::Unpaired("credential refused".into())),
             Ok(Err(e)) => tracing::info!("couldn't read this device's details: {e}"),
-            Ok(Ok(d)) => {
+            Ok(Ok(reading)) => {
+                let d = reading.device;
                 if let Some(salt) = &d.hardware_salt {
                     self.hosted.set_salt(Some(salt.clone()));
                 }
@@ -1074,7 +1080,10 @@ impl Core {
                 let env = d.environment.as_ref().map(environment_info);
                 let id = link.id.to_string();
                 let mut choices = self.indicators.lock().unwrap();
-                let indicator = choices.observe(COMPUTER, d.in_use_indicator, revision);
+                let indicator = match reading.indicator {
+                    Some(value) => choices.observe(COMPUTER, value, revision),
+                    None => choices.get(COMPUTER).value,
+                };
                 self.status.update(|s| {
                     if let Some(p) = s.pairs.iter_mut().find(|p| p.device_id == id) {
                         p.name = Some(d.name.clone());
@@ -1164,6 +1173,7 @@ impl Core {
         link: &Arc<Link>,
         frame: ServiceFrame,
         tx: &mpsc::UnboundedSender<DeviceFrame>,
+        indicator_present: bool,
     ) -> Option<PairedEnd> {
         match frame {
             ServiceFrame::Command(c) => {
@@ -1302,7 +1312,11 @@ impl Core {
                 } else {
                     let mut choices = self.indicators.lock().unwrap();
                     let revision = choices.get(device_id.as_str()).revision;
-                    let in_use_indicator = choices.observe(device_id.as_str(), in_use_indicator, revision);
+                    let in_use_indicator = if indicator_present {
+                        choices.observe(device_id.as_str(), in_use_indicator, revision)
+                    } else {
+                        choices.get(device_id.as_str()).value
+                    };
                     tracing::info!("carrying {device_id} ({}) for {}", os.as_str(), link.id);
                     self.hosted.attach(AttachRecord {
                         in_use_indicator,
@@ -1668,6 +1682,9 @@ async fn connection(
                 match msg {
                     Message::Text(text) => match serde_json::from_str::<ServiceFrame>(&text) {
                         Ok(frame) => {
+                            let indicator_present = matches!(frame, ServiceFrame::Attach { .. })
+                                && serde_json::from_str::<serde_json::Value>(&text).ok()
+                                    .is_some_and(|v| v.get("in_use_indicator").is_some());
                             // The greeting is over at the first ping, which the service sends
                             // only once it has announced every carried device's live session.
                             match (&frame, greeting.as_mut()) {
@@ -1684,7 +1701,7 @@ async fn connection(
                                 }
                                 _ => {}
                             }
-                            if let Some(end) = core.handle_frame(link, frame, &tx).await {
+                            if let Some(end) = core.handle_frame(link, frame, &tx, indicator_present).await {
                                 let _ = sink.send(Message::Close(None)).await;
                                 return ConnEnd::Paired(end);
                             }

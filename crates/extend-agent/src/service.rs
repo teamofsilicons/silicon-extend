@@ -53,6 +53,13 @@ impl ServiceError {
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
+/// The public protocol defaults a missing banner field to shown for old consumers. The native
+/// app also needs its presence: a 1.0 service cannot override a saved local choice by omitting it.
+pub(crate) struct DeviceReading {
+    pub device: DeviceSelf,
+    pub indicator: Option<InUseIndicator>,
+}
+
 #[derive(Clone)]
 pub struct ServiceClient {
     http: reqwest::Client,
@@ -165,13 +172,28 @@ impl ServiceClient {
     }
 
     pub async fn device_self(&self, credential: &str) -> ServiceResult<DeviceSelf> {
+        self.device_self_reading(credential).await.map(|r| r.device)
+    }
+
+    pub(crate) async fn device_self_reading(&self, credential: &str) -> ServiceResult<DeviceReading> {
         let resp = self
             .request(reqwest::Method::GET, "api/v1/device")
             .header("Authorization", device_auth(credential))
             .send()
             .await
             .map_err(ServiceError::network)?;
-        read_envelope(resp).await
+        let status = resp.status().as_u16();
+        let data: serde_json::Value = read_envelope(resp).await?;
+        let indicator_present = data.get("in_use_indicator").is_some();
+        let device: DeviceSelf = serde_json::from_value(data).map_err(|e| ServiceError {
+            status: Some(status),
+            code: Some("bad_response".into()),
+            message: format!("Extend answered with something this app doesn't understand: {e}"),
+        })?;
+        Ok(DeviceReading {
+            indicator: indicator_present.then_some(device.in_use_indicator),
+            device,
+        })
     }
 
     /// Revoke pair: ends the pair `credential` belongs to (one Carbon's), no other. The caller

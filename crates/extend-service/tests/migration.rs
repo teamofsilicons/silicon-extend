@@ -4,15 +4,38 @@
 mod common;
 
 use extend_service::db::{self, World};
+use futures::FutureExt as _;
 use serde_json::{Value, json};
-use sqlx::PgPool;
+use sqlx::{Connection as _, PgPool};
 use uuid::Uuid;
 
-async fn pool() -> PgPool {
+/// Each rehearsal owns one database. Clean it even if an assertion panics; never sweep databases
+/// created by other tests or processes sharing the local PostgreSQL instance.
+async fn with_database<F, Fut>(run: F)
+where
+    F: FnOnce(PgPool) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let (url, _) = common::database("mig").await;
     let pool = db::connect(&url).await.unwrap();
-    db::migrate_global(&pool).await.unwrap();
-    pool
+    let result = std::panic::AssertUnwindSafe(async {
+        db::migrate_global(&pool).await.unwrap();
+        run(pool.clone()).await;
+    })
+    .catch_unwind()
+    .await;
+    pool.close().await;
+    let (admin, name) = url.rsplit_once('/').unwrap();
+    assert!(name.starts_with("extend_mig_") && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
+    let mut conn = sqlx::PgConnection::connect(&format!("{admin}/postgres")).await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    eprintln!("Cleaned owned migration database {name}");
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 async fn exec(pool: &PgPool, sql: &str) {
@@ -34,7 +57,7 @@ async fn one<T: for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Post
 
 #[tokio::test]
 async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
-    let pool = pool().await;
+    with_database(|pool| async move {
     let world = World::test(Uuid::new_v4());
     let s = world.schema.clone();
     db::ensure_world_to(&pool, &world, 3).await.unwrap();
@@ -209,6 +232,7 @@ async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
         .await
         .unwrap();
     assert_eq!(r, ("aaaa0003".into(), "acme".into(), "b4e".into(), "acme".into()));
+    }).await;
 }
 
 /// 1.0.0's queries, as it runs them.
@@ -283,7 +307,7 @@ mod v1_0 {
 
 #[tokio::test]
 async fn the_down_step_keeps_1_0_safe_and_the_roll_forward_restores_only_untouched_grants() {
-    let pool = pool().await;
+    with_database(|pool| async move {
     let s = "extend";
     let instance = Uuid::new_v4();
     exec(&pool, &format!("
@@ -379,4 +403,151 @@ async fn the_down_step_keeps_1_0_safe_and_the_roll_forward_restores_only_untouch
         .await
         .unwrap();
     assert!(stash.is_none(), "the stash is dropped");
+    }).await;
+}
+
+#[tokio::test]
+async fn repeated_rollback_and_forward_preserve_schema5_indicators_and_world_isolation() {
+    with_database(|pool| async move {
+        let worlds = [World::production(), World::test(Uuid::new_v4()), World::test(Uuid::new_v4())];
+        db::ensure_world_to(&pool, &worlds[1], 4).await.unwrap();
+        db::ensure_world(&pool, &worlds[2]).await.unwrap();
+        let mut identities = Vec::new();
+        for (index, world) in worlds.iter().enumerate() {
+            let s = &world.schema;
+            let shared = Uuid::new_v4();
+            exec(&pool, &format!(r#"
+                INSERT INTO {s}.devices (device_id, team, owner_id, name, os, state, instance_id, first_pair, credential_digest, next_credential_digest) VALUES
+                    ('cccc0001', 'acme', 'c:alice', 'Shared TV', 'android_tv', 'ready', '{shared}', true, 'confirmed-alice', 'pending-alice'),
+                    ('cccc0002', 'acme', 'c:bob', 'Shared TV', 'android_tv', 'ready', '{shared}', false, 'confirmed-bob', NULL);
+                INSERT INTO {s}.devices (device_id, team, owner_id, name, os, state) VALUES
+                    ('cccc0003', 'acme', 'c:alice', 'Removed later', 'macos', 'ready'),
+                    ('cccc0004', 'acme', 'c:alice', 'Own-team TV', 'android_tv', 'ready');
+                INSERT INTO {s}.device_access (device_id, team, silicon_id, granted_by, granted_at, last_used_at, wake_muted) VALUES
+                    ('cccc0001', 'acme', 'si:chef', 'c:alice', '2026-09-01T00:00:00Z', NULL, false),
+                    ('cccc0001', 'globex', 'si:chef', 'c:alice', '2026-09-01T00:00:00Z', NULL, false),
+                    ('cccc0001', 'globex', 'si:scout', 'c:alice', '2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z', true),
+                    ('cccc0003', 'globex', 'si:scout', 'c:alice', '2026-09-01T00:00:00Z', NULL, false),
+                    ('cccc0004', 'acme', 'si:chef', 'c:alice', '2026-09-01T00:00:00Z', NULL, false);
+                INSERT INTO {s}.session_ids VALUES ('c01'), ('c02');
+                INSERT INTO {s}.sessions (session_id, device_id, silicon_id, team, state) VALUES
+                    ('c01', 'cccc0001', 'si:scout', 'globex', 'active'),
+                    ('c02', 'cccc0004', 'si:chef', 'acme', 'active');
+                INSERT INTO {s}.device_locks (device_id, session_id) VALUES ('cccc0001', 'c01'), ('cccc0004', 'c02');
+                INSERT INTO {s}.wake_requests (wake_id, device_id, instance_id, team, from_id, to_id, reason, expires_at, wake_detectable, device_notice)
+                    VALUES ('{wake}', 'cccc0001', '{shared}', 'acme', 'si:chef', 'c:alice', 'wake', now() + interval '30 minutes', true, 'sent');
+                INSERT INTO extend_global.enrollments (enrollment_id, secret_digest, os, app_version, pairing_code, code_expires_at, instance_id, from_device_id)
+                    VALUES ('{join}', 'join-{index}', 'android_tv', '1.1.0', 'AA0{index}01', now() + interval '5 minutes', '{shared}', 'cccc0001'),
+                           ('{first}', 'first-{index}', 'android', '1.0.0', 'AA0{index}02', now() + interval '5 minutes', NULL, NULL);
+            "#, wake = Uuid::now_v7(), join = Uuid::now_v7(), first = Uuid::now_v7())).await;
+            if index != 1 {
+                exec(&pool, &format!("UPDATE {s}.device_instances SET in_use_indicator = 'hidden' WHERE instance_id = '{shared}'")).await;
+            }
+            // These identities and salts must never be regenerated by rollback or migration.
+            let rows: Value = one(&pool, &format!("SELECT jsonb_agg(jsonb_build_array(d.device_id, d.instance_id, d.first_pair, i.side_salt) ORDER BY d.device_id) FROM {s}.devices d JOIN {s}.device_instances i USING (instance_id)")).await;
+            let salt: String = one(&pool, &format!("SELECT value FROM {s}.world_settings WHERE name = 'hardware_salt'")).await;
+            identities.push((rows, salt));
+        }
+        let down = include_str!("../../../deploy/rollback/1.1-to-1.0.sql");
+        for cycle in 0..3 {
+            exec(&pool, down).await;
+            exec(&pool, down).await;
+            assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend_global.enrollments").await, 3, "only first-pair enrollments survive");
+            for (index, world) in worlds.iter().enumerate() {
+                let s = &world.schema;
+                assert_eq!(one::<i64>(&pool, &format!("SELECT count(*) FROM {s}.rollback_1_1_grants")).await, if cycle == 0 { 3 } else { 1 });
+                assert_eq!(one::<String>(&pool, &format!("SELECT state FROM {s}.sessions WHERE session_id = 'c01'")).await, "ended");
+                assert_eq!(one::<String>(&pool, &format!("SELECT state FROM {s}.sessions WHERE session_id = 'c02'")).await, "active");
+                assert_eq!(one::<i64>(&pool, &format!("SELECT count(*) FROM {s}.device_locks WHERE session_id = 'c02'")).await, 1);
+                assert_eq!(one::<String>(&pool, &format!("SELECT state FROM {s}.wake_requests")).await, "withdrawn");
+                assert_eq!(one::<String>(&pool, &format!("SELECT credential_digest FROM {s}.devices WHERE device_id = 'cccc0001'")).await, "confirmed-alice");
+                assert_eq!(one::<i64>(&pool, &format!("SELECT count(*) FROM {s}.devices WHERE next_credential_digest IS NOT NULL")).await, 0);
+
+                if cycle == 0 {
+                    v1_0::revoke(&pool, s, "cccc0001", "si:chef").await;
+                    exec(&pool, &format!("UPDATE {s}.devices SET removed_at = now(), removed_reason = 'pair_revoked' WHERE device_id = 'cccc0003'")).await;
+                }
+                // Writes copied from 1.0.0: no new columns in INSERT, including its grant upsert.
+                let new = format!("dddd000{cycle}");
+                let session = format!("d0{cycle}");
+                exec(&pool, &format!(r#"
+                    INSERT INTO {s}.devices (device_id, team, owner_id, name, os, visibility) VALUES ('{new}', 'acme', 'c:alice', 'Added by 1.0', 'android', 'team');
+                    INSERT INTO {s}.device_access (device_id, silicon_id, granted_by) VALUES ('{new}', 'si:chef', 'c:alice') ON CONFLICT DO NOTHING;
+                    INSERT INTO {s}.device_access (device_id, silicon_id, granted_by) VALUES ('{new}', 'si:chef', 'c:alice') ON CONFLICT DO NOTHING;
+                    INSERT INTO {s}.session_ids VALUES ('{session}');
+                    INSERT INTO {s}.sessions (session_id, device_id, silicon_id, team, state) VALUES ('{session}', '{new}', 'si:chef', 'acme', 'active');
+                    INSERT INTO {s}.device_locks (device_id, session_id) VALUES ('{new}', '{session}');
+                    UPDATE {s}.devices SET visibility = 'team', name = 'Renamed by 1.0' WHERE device_id = 'cccc0001';
+                "#)).await;
+                assert!(v1_0::access_of(&pool, s, &new, "si:chef").await);
+                assert!(!v1_0::access_of(&pool, s, "cccc0001", "si:scout").await);
+                assert_eq!(one::<String>(&pool, &format!("SELECT visibility FROM {s}.devices WHERE device_id = 'cccc0001'")).await, "personal");
+                // 1.0's migration starter sees version 4/5 and leaves it intact.
+                db::ensure_world_to(&pool, world, 3).await.unwrap();
+                db::ensure_world(&pool, world).await.unwrap();
+                db::ensure_world(&pool, world).await.unwrap();
+                assert_eq!(one::<i32>(&pool, &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")).await, 5);
+                let current: Value = one(&pool, &format!("SELECT jsonb_agg(jsonb_build_array(d.device_id, d.instance_id, d.first_pair, i.side_salt) ORDER BY d.device_id) FROM {s}.devices d JOIN {s}.device_instances i USING (instance_id) WHERE d.device_id LIKE 'cccc%'")).await;
+                assert_eq!(current, identities[index].0);
+                assert_eq!(one::<String>(&pool, &format!("SELECT value FROM {s}.world_settings WHERE name = 'hardware_salt'")).await, identities[index].1);
+                let indicator = if index == 1 { "shown" } else { "hidden" };
+                assert_eq!(one::<String>(&pool, &format!("SELECT i.in_use_indicator FROM {s}.devices d JOIN {s}.device_instances i USING (instance_id) WHERE d.device_id = 'cccc0002'")).await, indicator);
+                assert_eq!(one::<String>(&pool, &format!("SELECT i.in_use_indicator FROM {s}.devices d JOIN {s}.device_instances i USING (instance_id) WHERE d.device_id = '{new}'")).await, "shown");
+                assert_eq!(one::<i64>(&pool, &format!("SELECT count(*) FROM {s}.device_access WHERE team = 'globex'")).await, 1);
+                assert!(one::<bool>(&pool, &format!("SELECT wake_muted AND granted_at = '2026-09-01T00:00:00Z' AND last_used_at = '2026-09-02T00:00:00Z' FROM {s}.device_access WHERE device_id = 'cccc0001' AND silicon_id = 'si:scout'")).await);
+                assert_eq!(one::<i64>(&pool, &format!("SELECT count(*) FROM {s}.activity WHERE details->>'restored_after_rollback' = 'true'")).await, cycle + 1);
+                assert!(one::<Option<String>>(&pool, &format!("SELECT to_regclass('{s}.rollback_1_1_grants')::text")).await.is_none());
+                // New-column constraints remain live; old-service writes cannot break them.
+                let invalid = sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {s}.device_instances SET in_use_indicator = 'dimmed'"))).execute(&pool).await;
+                assert_eq!(invalid.unwrap_err().as_database_error().and_then(|e| e.code()).as_deref(), Some("23514"));
+            }
+        }
+    }).await;
+}
+
+#[tokio::test]
+async fn concurrent_roll_forward_serializes_the_grant_stash_restore() {
+    with_database(|pool| async move {
+        exec(&pool, r#"
+            INSERT INTO extend.devices (device_id, team, owner_id, name, os) VALUES ('eeee0001', 'acme', 'c:alice', 'TV', 'android_tv');
+            INSERT INTO extend.device_access (device_id, team, silicon_id, granted_by) VALUES ('eeee0001', 'globex', 'si:scout', 'c:alice');
+        "#).await;
+        exec(&pool, include_str!("../../../deploy/rollback/1.1-to-1.0.sql")).await;
+        // Hold only the stash's table lock. The first restorer reaches DROP after inserting the
+        // grant, and waits here; a second startup then reaches the same restore concurrently.
+        let mut gate = pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE extend.rollback_1_1_grants IN ACCESS SHARE MODE").execute(&mut *gate).await.unwrap();
+        let first_pool = pool.clone();
+        let first = tokio::spawn(async move { db::ensure_world(&first_pool, &World::production()).await });
+        let first_waiting = wait_for_restore_waiters(&pool, 1).await;
+        let second_pool = pool.clone();
+        // This startup already checked schema versions before the first acquired the restore
+        // lock. It must re-check the stash after waiting, even though it saw it on entry.
+        let second = tokio::spawn(async move { db::restore_rollback_grants(&second_pool, &World::production()).await });
+        let both_waiting = wait_for_restore_waiters(&pool, 2).await;
+        // Release before asserting so even a failed assertion cannot leave a blocked connection.
+        gate.commit().await.unwrap();
+        let (first, second) = tokio::join!(first, second);
+        assert!(first_waiting && both_waiting, "both startup attempts reached the controlled overlap");
+        assert!(first.as_ref().is_ok_and(|r| r.is_ok()), "first startup: {first:?}");
+        assert!(second.as_ref().is_ok_and(|r| r.is_ok()), "second startup: {second:?}");
+        assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.device_access WHERE device_id = 'eeee0001' AND team = 'globex'").await, 1);
+        assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.activity WHERE details->>'restored_after_rollback' = 'true'").await, 1);
+        assert!(one::<Option<String>>(&pool, "SELECT to_regclass('extend.rollback_1_1_grants')::text").await.is_none());
+    }).await;
+}
+
+async fn wait_for_restore_waiters(pool: &PgPool, count: i64) -> bool {
+    for _ in 0..150 {
+        let waiting = one::<i64>(
+            pool,
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .await;
+        if waiting >= count {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    false
 }
