@@ -384,7 +384,9 @@ and plugin, including the prebuilt `libspake2.so` inside spake2-android, which J
 a mutable Git tag. A changed artifact fails the build. After adding or upgrading a dependency run
 `./gradlew --write-verification-metadata sha256 help :app:assembleDebug :app:assembleRelease
 :app:assembleDebugAndroidTest :app:testDebugUnitTest :libadb:testDebugUnitTest`, and review the
-diff before committing it.
+diff before committing it. Run it with an empty Gradle cache (`GRADLE_USER_HOME=$(mktemp -d)`):
+with a warm cache Gradle skips metadata a fresh CI runner downloads, and CI then fails
+verification. `aapt2` is per host OS; the file pins its macOS, Linux and Windows jars.
 
 Verification commands:
 
