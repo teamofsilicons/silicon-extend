@@ -99,8 +99,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   (200, then 404 after removal), and Ting accepts a self-addressed notification (202). Re-run against
   the final release candidate and verify production configuration after deployment.
 - The rollback down step rehearsed on a copy of the production schema, and the roll-forward.
-- A release rehearsal in a test environment: the 1.1 service driven by the 1.0.0 CLI, website,
-  Android app and desktop agent; then each upgraded, including two Carbons on one Android TV and on
+- The released 1.0 CLI/current CLI rehearsal passes, including shared saved logins and sessions,
+  mixed-version takeover/Stop and all 119 current CLI checks. Still rehearse the 1.0 website,
+  Android app and desktop agent against 1.1, then each upgraded, including two Carbons on one Android TV and on
   one Mac (credential rotation, carried-device linking, the remote-stop rule, the terminal rule).
 
 ### Physical devices

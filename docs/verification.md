@@ -32,6 +32,22 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — released 1.0 CLI against service 1.1
+
+The installed, released 1.0.0 CLI (SHA256
+`0f450055fb96ffe5c45f9f2700c1b55c4cb394198eaaff6c1330ccadfa2038fd`) passed the new isolated
+`e2e/released-cli-compat.py` lane against the current 1.1 service. It covers negotiation, login,
+pairing/grants, additive device-response decoding, sessions, commands, screenshots and downloads.
+Switching between actual 1.0 and current CLI binaries preserves the same saved login and connected
+session. Mixed-version takeover/release and Carbon Stop work; the old CLI can resume a session
+saved by 1.1, end it and remove the device. The current full CLI suite then passed all 119 checks
+on the same owned service. Eight lane groups passed; logs/report are in `target/released-cli-compat/`.
+
+The fixture used local IAM/file/Ting implementations and a scripted 1.0 device, not an actual 1.0
+Android/desktop app or website. The owned database/processes were removed. The existing service on
+8480 and installed user logins were untouched. Actual device-app and website upgrade rehearsal
+remains open.
+
 ## 2026-09-28 — repeated rollback and old-service banner compatibility
 
 Four migration tests pass on owned local PostgreSQL databases. The rehearsal runs three down/up
