@@ -102,6 +102,13 @@ Remaining from the Carbon's final requests, before the release gates below:
 
 ### Release gates
 
+- Automatic file sharing still has a known Briefcase dependency: a delegated invitation to a
+  Carbon Briefcase has never seen is refused with `invalid_principal`. Extend retains the file
+  and reports the sharing failure, but it does not automatically re-share that file later. The
+  successful real-service/native-TV sharing checks first sign the Carbon into Briefcase; they
+  do not close the first-time-recipient requirement in `UNDERSTANDING.md`'s Files section.
+  Resolve the upstream recipient-projection behavior and verify the first-file path, or obtain
+  an explicit scope decision before calling the full file-sharing requirement complete.
 - The real-service fixture gates passed: a Silicon reads its granting Carbon's directory entry
   (200, then 404 after removal), and Ting accepts a self-addressed notification (202). Re-run against
   the final release candidate and verify production configuration after deployment.
