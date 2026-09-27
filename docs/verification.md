@@ -93,7 +93,11 @@ CI [36357303979](https://github.com/teamofsilicons/silicon-extend/actions/runs/3
 Android, web and contract lint but exposed two failures. The packaging job lacked the browser
 dependencies needed by the banner test; that test now runs in the web job after Chromium install.
 Local verification passed 65 packaging tests and both banner browser tests. The consumer-contract
-setup races are under repair; this record does not claim full CI success.
+harness now waits for persisted device readiness and individual setup steps instead of a 150 ms
+sleep or an already-offline state. Two PostgreSQL row-lock regressions fail with the original
+timing assumptions and pass with the fix; the full contract suite passes 11/11, including frozen
+1.0 fixtures, and strict test-target Clippy passes. No production code changed. A fresh GitHub
+CI run is still required.
 
 ## 2026-09-28 — production wake-type registration
 

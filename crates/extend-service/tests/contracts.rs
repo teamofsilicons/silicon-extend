@@ -29,7 +29,7 @@ use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode};
 use extend_service::versions::{self, Clock, Lifecycle, Policy, Registry};
 use futures::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
-use silicon_extend_client::Client;
+use silicon_extend_client::{Authed, Client};
 use sqlx::Connection as _;
 use time::OffsetDateTime;
 use tokio::net::TcpStream;
@@ -954,6 +954,7 @@ impl Device {
         &self,
         base: &str,
         client: &Client,
+        owner: Authed<'_>,
         hello: Value,
     ) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::UnboundedSender<Value>) {
         let mut ws = ws_connect(
@@ -962,7 +963,9 @@ impl Device {
         )
         .await;
         send_json(&mut ws, &hello).await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // A successful WebSocket send only queues hello. Wait until the real API exposes its
+        // persisted setup before a fixture can start a session or retry a failed step.
+        wait_for_device_report(owner, &self.id, &hello).await.unwrap();
         let base = base.to_owned();
         let credential = self.credential.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
@@ -1106,7 +1109,9 @@ impl<'a> Provider<'a> {
                         &["si:chef", "si:sous"],
                     )
                     .await;
-                    let (task, inject) = d.serve_with(&base, &self.client, hello(DeviceOs::Android)).await;
+                    let (task, inject) = d
+                        .serve_with(&base, &self.client, self.carbon(), hello(DeviceOs::Android))
+                        .await;
                     self.tasks.push(task);
                     self.inject.insert(d.id.clone(), inject);
                     let v = self.device_version(&d.id).await;
@@ -1169,7 +1174,9 @@ impl<'a> Provider<'a> {
                 }
                 "host" => {
                     let d = pair(&self.client, &self.var("carbon_token"), DeviceOs::Macos, &["si:chef"]).await;
-                    let (task, inject) = d.serve_with(&base, &self.client, hello(DeviceOs::Macos)).await;
+                    let (task, inject) = d
+                        .serve_with(&base, &self.client, self.carbon(), hello(DeviceOs::Macos))
+                        .await;
                     self.tasks.push(task);
                     self.inject.insert(d.id.clone(), inject);
                     self.vars.insert("host_credential".into(), d.credential.clone());
@@ -1208,6 +1215,7 @@ impl<'a> Provider<'a> {
                         .serve_with(
                             &base,
                             &self.client,
+                            self.client.authed(&self.vars["other_carbon_token"], Some("acme")),
                             hello_as(DeviceOs::Macos, "1.1.0", Setup::complete()),
                         )
                         .await;
@@ -1258,7 +1266,12 @@ impl<'a> Provider<'a> {
                         input: None,
                     }]);
                     let (task, inject) = d
-                        .serve_with(&base, &self.client, hello_as(DeviceOs::Android, "1.1.0", failed))
+                        .serve_with(
+                            &base,
+                            &self.client,
+                            self.carbon(),
+                            hello_as(DeviceOs::Android, "1.1.0", failed),
+                        )
                         .await;
                     self.tasks.push(task);
                     self.inject.insert(d.id.clone(), inject);
@@ -1637,6 +1650,124 @@ where
     Err(format!("{what} never happened"))
 }
 
+/// The service may prepend its own carried-device recognition step; every step the app
+/// reported must nevertheless be visible, including changed errors/statuses within one state.
+async fn reported_setup_is_visible(owner: Authed<'_>, id: &str, frame: &Value) -> bool {
+    let expected: Setup = serde_json::from_value(frame["setup"].clone()).expect("reported setup");
+    owner.setup(id).await.is_ok_and(|actual| {
+        actual.state == expected.state && expected.steps.iter().all(|step| actual.steps.contains(step))
+    })
+}
+
+/// Online can become true before hello is stored; an offline attachment is already offline
+/// before its first report. Neither is a barrier for the setup HTTP requests that follow.
+async fn wait_for_device_report(owner: Authed<'_>, id: &str, frame: &Value) -> Result<(), String> {
+    eventually("the complete device report becoming visible", move || async move {
+        let Ok(device) = owner.device(id).await else {
+            return false;
+        };
+        let online = frame["online"].as_bool().unwrap_or(true);
+        if device.online != online
+            || frame["awake"].as_bool().is_some_and(|v| device.awake != Some(v))
+            || frame["model"]
+                .as_str()
+                .is_some_and(|v| device.model.as_deref() != Some(v))
+            || frame["os_version"]
+                .as_str()
+                .is_some_and(|v| device.os_version.as_deref() != Some(v))
+            || frame["app_version"]
+                .as_str()
+                .is_some_and(|v| device.app_version.as_deref() != Some(v))
+            || frame["engine_version"]
+                .as_str()
+                .is_some_and(|v| device.engine_version.as_deref() != Some(v))
+        {
+            return false;
+        }
+        if frame["type"] == "hello" {
+            let setup: Setup = serde_json::from_value(frame["setup"].clone()).expect("hello setup");
+            let expected = if setup.state == SetupState::Complete || setup.steps.is_empty() {
+                DeviceState::Ready
+            } else {
+                DeviceState::Setup
+            };
+            if device.state != expected {
+                return false;
+            }
+        }
+        reported_setup_is_visible(owner, id, frame).await
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_provider_waits_for_hello_persistence_before_starting_a_session() {
+    let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
+    let mut p = Provider::new(&svc).await;
+    let d = pair(&p.client, &p.var("carbon_token"), DeviceOs::Android, &["si:chef"]).await;
+    // Force persistence to take longer than the old 150 ms sleep. WebSocket connection and
+    // writes still succeed, and ordinary API reads still see the previous committed row.
+    let mut lock = svc.pool.begin().await.unwrap();
+    sqlx::query("SELECT device_id FROM extend.devices WHERE device_id = $1 FOR UPDATE")
+        .bind(&d.id)
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    let (task, _inject) = {
+        let serving = d.serve_with(&svc.base, &p.client, p.carbon(), hello(DeviceOs::Android));
+        tokio::pin!(serving);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(350), serving.as_mut())
+                .await
+                .is_err(),
+            "the provider returned before the device's hello could be stored"
+        );
+        assert_eq!(p.carbon().device(&d.id).await.unwrap().state, DeviceState::Setup);
+        lock.rollback().await.unwrap();
+        serving.await
+    };
+    p.tasks.push(task);
+    assert_eq!(p.carbon().device(&d.id).await.unwrap().state, DeviceState::Ready);
+    let session = p.silicon().start_session(&d.id.parse().unwrap()).await.unwrap();
+    p.silicon().end_session(session.session_id.as_ref()).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_offline_attachment_waits_for_reported_steps_within_the_same_setup_state() {
+    let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
+    let mut p = Provider::new(&svc).await;
+    p.given("attached").await;
+    let id = p.var("attached_id");
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../contracts/v1/device/agent.device.socket.setup_retry.json"
+    ))
+    .unwrap();
+    // The first report is offline, as the new attachment already is. The second changes its
+    // steps but stays needs_carbon and offline, so neither broad status is an acknowledgement.
+    for step in [&fixture["sends"][1], &fixture["sends"][2]] {
+        let mut frame = p.fill_json(&step["frame"]).unwrap();
+        frame["online"] = json!(false);
+        let mut lock = svc.pool.begin().await.unwrap();
+        sqlx::query("SELECT device_id FROM extend.devices WHERE device_id = $1 FOR UPDATE")
+            .bind(&id)
+            .fetch_one(&mut *lock)
+            .await
+            .unwrap();
+        p.inject[&p.var("host_id")].send(frame.clone()).unwrap();
+        let reported = wait_for_device_report(p.carbon(), &id, &frame);
+        tokio::pin!(reported);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(350), reported.as_mut())
+                .await
+                .is_err(),
+            "the report wait accepted old offline/setup state before its steps were stored"
+        );
+        lock.rollback().await.unwrap();
+        reported.await.unwrap();
+        assert!(reported_setup_is_visible(p.carbon(), &id, &frame).await);
+    }
+}
+
 async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     let os: DeviceOs = serde_json::from_value(f["os"].clone()).map_err(|e| format!("os: {e}"))?;
     let base = p.svc.base.clone();
@@ -1756,7 +1887,12 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                 )
                 .await?;
                 let (task, _) = bob
-                    .serve_with(&base, &p.client, hello_as(os, "1.1.0", Setup::complete()))
+                    .serve_with(
+                        &base,
+                        &p.client,
+                        p.client.authed(&p.vars["other_carbon_token"], Some("acme")),
+                        hello_as(os, "1.1.0", Setup::complete()),
+                    )
                     .await;
                 p.tasks.push(task);
                 // A session through the fixture's pair ends, and each pair gets a new credential.
@@ -1837,23 +1973,7 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
         let device_id = d.id.as_str();
         let frame = &frame;
         match effect {
-            "hello" => {
-                // Pairing used another model, so a match means the service stored this hello.
-                eventually(
-                    "the device showing online with what the hello says",
-                    move || async move {
-                        owner.device(device_id).await.is_ok_and(|x| {
-                            x.online
-                                && x.app_version.as_deref() == frame["app_version"].as_str()
-                                && x.model.as_deref() == frame["model"].as_str()
-                                && x.os_version.as_deref() == frame["os_version"].as_str()
-                                && (frame["engine_version"].is_null()
-                                    || x.engine_version.as_deref() == frame["engine_version"].as_str())
-                        })
-                    },
-                )
-                .await?
-            }
+            "hello" => wait_for_device_report(owner, device_id, frame).await?,
             "awake" => {
                 let want = frame["awake"].as_bool();
                 let sleep = frame["sleep_state"].as_str().map(str::to_owned);
@@ -1963,22 +2083,16 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
             "setup_retry" => {
                 let target = retry_target.clone().unwrap_or_else(|| device_id.to_owned());
                 let target = target.as_str();
-                let want = &frame["setup"]["state"];
-                eventually("the setup reported after the retry", move || async move {
-                    owner
-                        .setup(target)
-                        .await
-                        .is_ok_and(|s| serde_json::to_value(s.state).ok().as_ref() == Some(want))
+                // Two retry reports can both be needs_carbon while different steps failed or
+                // finished. The state alone does not show that this frame was processed.
+                eventually("the setup reported after the retry", move || {
+                    reported_setup_is_visible(owner, target, frame)
                 })
                 .await?
             }
             "setup_progress" => {
-                let want = &frame["setup"]["state"];
-                eventually("the setup state changing", move || async move {
-                    owner
-                        .setup(device_id)
-                        .await
-                        .is_ok_and(|s| serde_json::to_value(s.state).ok().as_ref() == Some(want))
+                eventually("the reported setup progress", move || {
+                    reported_setup_is_visible(owner, device_id, frame)
                 })
                 .await?
             }
@@ -2018,17 +2132,7 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                 .await?
             }
             "attached" => {
-                let id = p.var("attached_id");
-                let id = id.as_str();
-                let online = frame["online"].as_bool();
-                let awake = frame["awake"].as_bool();
-                eventually("the attached device reporting its state", move || async move {
-                    owner
-                        .device(id)
-                        .await
-                        .is_ok_and(|x| Some(x.online) == online && (awake.is_none() || x.awake == awake))
-                })
-                .await?
+                wait_for_device_report(owner, &p.var("attached_id"), frame).await?;
             }
             "stop_target" => {
                 let sid = p.var("target_session");
