@@ -64,10 +64,13 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Finish remaining native banner verification. Mac native collapse/restore, position retention,
   edge clamping, ten-second hiding, Stop and focus preservation now pass. Physical dragging is
   unverified because CUA cannot move a standard native title bar either. Verify human dragging,
-  multi-monitor movement and Windows/Linux native behavior. TV bottom-centre placement and
+  multi-monitor movement and Windows native behavior. Linux drag/collapse/restore/Stop now pass
+  on an owned X11 desktop after fixing GTK's 200-pixel minimum banner height; physical
+  GNOME/KDE behavior remains open. TV bottom-centre placement and
   ten-second hiding pass on the owned API 34 emulator; physical TV verification remains.
   Carried-device controls, durable offline choices, shared aliases and restart timing are built;
-  a metadata-only attach preserves the live driver, but still needs a real-recording check.
+  a metadata-only attach preserves the live driver, but still needs a carried-device
+  real-recording check. Local Linux app/full-screen recordings survive host banner/name updates.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production

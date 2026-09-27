@@ -343,6 +343,17 @@ fn banner_size(minimized: bool, environment: bool, rows: usize) -> LogicalSize<f
     }
 }
 
+#[cfg(target_os = "linux")]
+fn fixed_banner_constraints(size: LogicalSize<f64>) -> tao::window::WindowSizeConstraints {
+    use tao::dpi::LogicalUnit;
+    tao::window::WindowSizeConstraints::new(
+        Some(LogicalUnit(size.width).into()),
+        Some(LogicalUnit(size.height).into()),
+        Some(LogicalUnit(size.width).into()),
+        Some(LogicalUnit(size.height).into()),
+    )
+}
+
 fn make_icon(state: IconState) -> Option<Icon> {
     Icon::from_rgba(icon::rgba(state), icon::SIZE, icon::SIZE).ok()
 }
@@ -655,11 +666,18 @@ impl Ui {
             let mut builder = WindowBuilder::new()
                 .with_title("Silicon Extend: in use")
                 .with_inner_size(size)
-                .with_resizable(false)
+                // GTK makes a non-resizable WebKit window at least its 200px natural height.
+                // Keep GTK's resize path active, with equal bounds so the banner still cannot
+                // be resized by the user and can shrink to its expanded or collapsed height.
+                .with_resizable(cfg!(target_os = "linux"))
                 .with_decorations(false)
                 .with_always_on_top(true)
                 .with_focused(false)
                 .with_visible(false);
+            #[cfg(target_os = "linux")]
+            {
+                builder = builder.with_inner_size_constraints(fixed_banner_constraints(size));
+            }
             if let Some(m) = target.primary_monitor() {
                 let scale = m.scale_factor();
                 let screen = m.size().to_logical::<f64>(scale);
@@ -717,6 +735,8 @@ impl Ui {
     fn fit_banner(&self) {
         if let Some((window, _)) = &self.banner {
             // Keep the position chosen by the user. Expanding near an edge must stay reachable.
+            #[cfg(target_os = "linux")]
+            window.set_inner_size_constraints(fixed_banner_constraints(self.banner_size()));
             window.set_inner_size(self.banner_size());
             if let (Ok(position), Some(monitor)) = (window.outer_position(), window.current_monitor()) {
                 let scale = window.scale_factor();

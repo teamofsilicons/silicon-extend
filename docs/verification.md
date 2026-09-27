@@ -32,6 +32,31 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — native Linux banner sizing and recording continuity
+
+The downloaded arm64 CI package reproduced a native banner at 420×200 instead of 420×52 on
+Debian trixie/X11/Openbox. GTK gives a non-resizable WebKit window its 200-pixel natural height.
+The Linux-only fix keeps GTK resizing enabled internally and pins equal minimum/maximum bounds;
+the user still cannot resize the banner. No new dependency or macOS behavior change is involved.
+
+`e2e/linux-release-rehearsal.py` passed six groups with that package's unchanged engine and an
+explicit rebuilt native-agent override. Native geometry is 420×52 expanded, 250×44 collapsed,
+then 420×52 restored. Real pointer dragging moved it from `(430,638)` to `(530,688)`; metadata
+refresh retained that position, and a manual resize request did not change its bounds. The
+normal announcement expired while its session stayed active. Collapsed Stop ended the session
+and killed its detached `setsid` terminal descendant.
+
+Both app and full-screen recordings survived host banner off/name update/banner on, fully
+decoded with changing frames and correct dimensions, and downloaded again with identical hashes.
+This is local-host metadata continuity, not the still-open carried-device attach/driver check.
+Evidence: `target/linux-release-rehearsal-fixed-2/` (report, geometry, screenshots and MP4s).
+Agent override SHA256: `8efd3b4380fd45ddcd62488c2864f03b34c7417f126c512a8db02d3fc098e299`.
+The exact desktop container, service and database were removed.
+
+This fixture uses synthetic local IAM/files/Ting and an owned Docker X11 desktop. Physical
+Linux, GNOME/KDE, Wayland, lock/sleep and multi-monitor behavior are not proved. Fresh release
+packages must include the fix; the original CI package is not a final candidate for Linux.
+
 ## 2026-09-28 — release artifact audit and service image smoke
 
 All eleven artifact ZIPs from release workflow `36357336309` match GitHub's SHA256 digests and
