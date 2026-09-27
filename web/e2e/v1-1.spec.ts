@@ -1,7 +1,7 @@
 /**
  * Silicon Extend 1.1 on the website, against the mock: devices belong to the Carbon (not a Team),
  * access per Team, several Carbons on one device with separate sides, requests routed to the Carbon
- * who gave the holder access, waking, Ting types per Team, setup retry (contract A), signing out,
+ * who gave the holder access, waking, Ting app types and recipient Teams, setup retry (contract A), signing out,
  * and a device in the 1.0 shape.
  */
 import { DEVICE_FAMILY_TV, DEVICE_IPHONE, DEVICE_MAC, DEVICE_PIXEL, DEVICE_STUDIO_MAC, SLT_CHEF } from "../mock/fixtures";
@@ -213,7 +213,7 @@ test.describe("waking", () => {
   });
 });
 
-test.describe("Ting types per Team", () => {
+test.describe("Ting app types and recipient Teams", () => {
   test("the device page names the Team missing Extend's types, with the exact command", async ({ page, mock }) => {
     void mock;
     await signInWithSlt(page);
@@ -221,15 +221,15 @@ test.describe("Ting types per Team", () => {
     const banner = page.getByTestId("ting-banner");
     await expect(banner.getByTestId("ting-missing")).toHaveCount(1);
     await expect(banner.getByTestId("ting-missing")).toHaveAttribute("data-team", "labs");
-    await expect(banner).toContainText("ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'");
-    await expect(banner).toContainText("ting --org labs types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'");
+    await expect(banner).toContainText("ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'");
+    await expect(banner).toContainText("ting --org '<owning-team>' types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'");
     // A device with grants only in acme, where nothing is missing, shows no banner.
     await page.goto(`/devices/${DEVICE_MAC}`);
     await expect(page.getByTestId("device-name")).toHaveText("MacBook Pro");
     await expect(page.getByTestId("ting-banner")).toHaveCount(0);
   });
 
-  test("Settings: a row per Team, Turn on, and a Ting manager's Turn on registers the types", async ({ page, mock }) => {
+  test("Settings: Turn on registers the recipient while missing app types keep their owner guidance", async ({ page, mock }) => {
     await signInWithSlt(page);
     await page.goto("/settings");
     const rows = page.getByTestId("ting-row");
@@ -244,14 +244,17 @@ test.describe("Ting types per Team", () => {
     await shoot(page, "35-settings-ting");
 
     await labs.getByTestId("ting-turn-on").click();
-    await expect(page.getByTestId("toast").last()).toContainText("a Ting manager of labs still has to register 2 types");
+    await expect(page.getByTestId("toast").last()).toContainText("a Ting manager in Extend's owning Team still has to register 2 app types");
     await expect(labs.getByTestId("ting-status")).toHaveText("On");
     await expect(labs.getByTestId("ting-missing")).toBeVisible();
 
-    // Carbon decision 4: where the Carbon is the Team's Ting manager, Extend registers them itself.
-    await mock.post("ting-manager", { member: "c:saket", team: "labs" });
-    await labs.getByTestId("ting-turn-on").click();
-    await expect(page.getByTestId("toast").last()).toHaveText("Extend's Tings reach you in labs");
+    await expect(labs.getByTestId("ting-turn-on")).toHaveCount(0);
+    await expect(labs.getByTestId("ting-missing")).toContainText("Turning your notifications on does not register app types.");
+    await page.reload();
+    await expect(labs.getByTestId("ting-missing")).toBeVisible();
+    // The owning-Team manager registers the types outside Extend, and a later send succeeds.
+    await mock.post("ting-types-known", { team: "labs" });
+    await page.reload();
     await expect(labs.getByTestId("ting-missing")).toHaveCount(0);
   });
 });

@@ -238,8 +238,8 @@ function Start() {
 
       <h2 id="ting">Ting notifications</h2>
       <p>
-        Extend's notifications go through Ting, which keeps notification types per Team. A Team's Ting manager registers Extend's four types once. Where they are missing,{" "}
-        <Link href="/settings">Settings</Link> and the device's page show the exact <code>ting</code> command to run. Settings also shows, per Team, whether Extend's Tings reach you,
+        Extend's notifications go through Ting. A Ting manager in the Team that owns Extend registers its four app types once for every delivery Team. Where they are missing,{" "}
+        <Link href="/settings">Settings</Link> and the device's page show the <code>ting</code> command; replace its owning-Team placeholder with that Team. Settings also shows your recipient registration in each Team,
         with <strong>Turn on</strong>.
       </p>
 

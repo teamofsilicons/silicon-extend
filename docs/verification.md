@@ -32,6 +32,45 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — real IAM, Briefcase and Ting 1.1 checks
+
+- The combined local real IAM + Briefcase + Ting run passed 75 checks with zero failures. A fresh
+  IAM + Ting run after the registration fix passed 62 with zero failures. These use the services'
+  actual implementations in owned fixtures, not production accounts or deployment.
+- Verified holder versus Carbon request routing, all wake events in acme/globex, a third Team
+  using globally registered app types, and genuine missing-type refusals after removing the types
+  only in the stopped owned fixture. Ting accepted self-send with HTTP 202. The Silicon's directory
+  lookup of c:bob returned 200, then 404 after real IAM removal; its own lookup stayed 200. In the
+  combined lane c:bob owned a second device granted to that Silicon, so this was a granting Carbon.
+- Ting 0.1.9 resolves types by context and app, independently of delivery Team, and its OBO catalog
+  has no `types.register`. Removed Extend's unsupported calls and corrected service, CLI and web
+  guidance to use the app's owning Team (an explicit quoted placeholder when unknown). Recipient
+  "Turn on" does not falsely clear missing-type errors. No additional OBO scope is required.
+- Focused validation: 121 Rust tests, 170 web unit tests, two Chromium cases, TypeScript, Clippy with
+  warnings denied and formatting passed. All fixture processes and containers were cleaned up.
+- Evidence: `target/realiam-1.1-verification/pre-guidance/` (combined run) and `final/` (fresh run),
+  including report JSON, service logs and focused check logs. Briefcase's unseen-recipient
+  projection remains a recorded dependency gap; the native-TV stored-file handoff is a separate
+  check. Production `tos` still needs the three wake types registered by its app manager.
+
+## 2026-09-28 — desktop carried banners and offline choices
+
+Per-carried-device switches, atomic offline preference persistence and delayed-response fencing
+are implemented. Known aliases of one carried device update together and use the correct host
+credential. Setting synchronization cannot block Stop. Restarting the app no longer announces an
+old session for another ten seconds. The new carried-settings endpoint authenticates the exact
+carrying pair and rechecks that relationship under instance locks before changing shared settings.
+
+- Agent: 230 passing tests (204 unit, 26 integration), one existing ignored. Tests cover offline
+  save/restart, slow HTTP versus Stop, remote refresh, two-Carbon aliases and retained live drivers.
+- Service indicator suite: five passing tests, covering authorization, world isolation, invalid
+  inputs, removed/unrelated targets and shared settings.
+- Actual desktop HTML in headless Chromium: two passing tests, covering carried controls, offline
+  messaging, drag IPC, collapse/restore, Stop, takeover Done and escaped names. Clippy and formatting
+  pass. Evidence: `target/desktop-banner-verification/extend-desktop-banner-*.log`.
+- These do not prove actual native window movement, multi-monitor position retention or a banner
+  change during a real native recording. Installed apps and production were not changed.
+
 ## 2026-09-28 — direct Android TV element clicks
 
 Android TV apps 1.1+ can receive direct `click` through their existing `screen.read` accessibility

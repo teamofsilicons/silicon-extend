@@ -157,7 +157,7 @@ async fn type_missing(state: &AppState, world: &World, team: &str, ty: &str, err
     if let Err(e) = res {
         tracing::warn!(error = %e, team, ty, "recording a missing Ting type failed");
     }
-    tracing::warn!(world = %world.schema, team, ty, "Ting doesn't know one of Extend's types in this Team; a Ting manager of the Team has to register it");
+    tracing::warn!(world = %world.schema, team, ty, "Ting refused an app type on a send to this Team; a Ting manager in the app owner's Team must register it");
 }
 
 /// A successful Ting to `member` in `team`: they receive Extend's Tings there.

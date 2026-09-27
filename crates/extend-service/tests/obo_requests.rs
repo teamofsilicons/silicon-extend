@@ -599,7 +599,7 @@ async fn a_type_ting_does_not_know_names_the_command_for_the_team() {
     );
     let hint = err.0.hint.unwrap_or_default();
     assert!(
-        hint.contains("ting --org labs types register --type extend.device.requested"),
+        hint.contains("ting --org '<owning-team>' types register --type extend.device.requested"),
         "{hint}"
     );
 }

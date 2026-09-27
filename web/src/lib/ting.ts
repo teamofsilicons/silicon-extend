@@ -1,9 +1,8 @@
 /**
  * Extend's Ting notification types, mirrored from crates/extend-protocol/src/ting.rs.
  *
- * Ting keeps notification types per environment, Team and app, and only a Team's Ting manager can
- * register them. Where Ting says one is missing in a Team (`TingRegistration.missing_types`), the
- * website shows the exact command that Team's Ting manager runs, instead of retrying silently.
+ * Ting resolves app types across delivery Teams. A type manager registers them in the app's
+ * owning Team. The notification's delivery Team does not identify that owner.
  */
 
 export interface TingType {
@@ -31,11 +30,11 @@ export function tingType(name: string): TingType | undefined {
 const shellQuote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
 
 /**
- * The command a Team's Ting manager runs to register one of Extend's types there, exactly as the
- * CLI prints it: `ting --org <team> types register --type extend.device.X --description '...'`.
+ * The command a manager in the app's owning Team runs. The owner is not supplied by the current
+ * API, so the UI explains this shell-quoted placeholder rather than guessing the delivery Team.
  */
-export function registerCommand(team: string, fullName: string, appId = "extend"): string {
+export function registerCommand(fullName: string, appId = "extend"): string {
   const type = tingType(fullName);
   const name = fullName.startsWith("device.") ? `${appId}.${fullName}` : fullName;
-  return `ting --org ${team} types register --type ${name} --description ${shellQuote(type?.description ?? name)}`;
+  return `ting --org '<owning-team>' types register --type ${name} --description ${shellQuote(type?.description ?? name)}`;
 }

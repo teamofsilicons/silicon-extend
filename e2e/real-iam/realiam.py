@@ -18,7 +18,7 @@ from X-Testing-Application-Secret, and a signed test-plane webhook is routed to 
 
 Everything is owned by this fixture: one Docker network, its containers (four, plus six with both
 lanes), one database on the Extend Postgres (`silicon-extend-postgres`, :5440). Nothing reads
-existing credentials. Identity rows (team acme, c:alice, c:bob, si:chef, si:sous, the `extend`
+existing credentials. Identity rows (Teams acme/globex/untyped, two Carbons, five Silicons, the `extend`
 application — and with lanes `briefcase` and `ting` — their secrets, scopes, OBO catalogs and
 webhook endpoints) are seeded by SQL into the disposable IAM; SLT issuance, login, refresh, revocation,
 authorization, directory reads, Silicon removal and webhook delivery are real IAM APIs.
@@ -69,12 +69,19 @@ EXTEND_DB_CONTAINER = "silicon-extend-postgres"
 EXTEND_DB = "extend_realiam"
 EXTEND_DB_URL = f"postgres://extend:extend@127.0.0.1:5440/{EXTEND_DB}"
 ORG_UUID = "3f1b1a52-7a55-4c55-8f4e-0b1d9d7a5c01"
+TEAMS = {"acme": ORG_UUID, "globex": "3f1b1a52-7a55-4c55-8f4e-0b1d9d7a5c02",
+         "untyped": "3f1b1a52-7a55-4c55-8f4e-0b1d9d7a5c03"}
 ACTORS = {"alice": ("c:alice", "carbon", "owner"),
           "chef": ("si:chef", "silicon", "member"),
           "sous": ("si:sous", "silicon", "member"),
           # A Carbon who is a plain member: the Briefcase lane pairs a device as bob to see exactly
           # what sharing grants a device owner who is not also a Team owner/admin.
-          "bob": ("c:bob", "carbon", "member")}
+          "bob": ("c:bob", "carbon", "member"),
+          "scout": ("si:scout", "silicon", "member"),
+          "novice": ("si:novice", "silicon", "member"),
+          "apprentice": ("si:apprentice", "silicon", "member")}
+ACTOR_TEAMS = {"alice": list(TEAMS), "bob": list(TEAMS), "chef": ["acme"], "sous": ["acme"],
+               "scout": ["globex"], "novice": ["untyped"], "apprentice": ["untyped"]}
 EXTEND_SCOPES = ["self.identity.read", "self.profile.read", "self.organizations.read", "self.membership.read",
                  "directory.silicons.read", "directory.carbons.read", "directory.memberships.read",
                  "directory.profiles.read"]
@@ -92,6 +99,12 @@ TING_COMMIT = os.environ.get("REALIAM_TING_COMMIT", "6853b4e247f434e358f4bbd05e5
 TING_SHA256 = os.environ.get("REALIAM_TING_SHA256", "069e71b1d40b4bec4b045155a5a73c2aed54c1f4dcd5440425b5abc99fbaec2e")
 TING_RUNTIME_IMAGE = "debian:bookworm-slim"
 TING_TYPE = "extend.device.requested"
+TING_TYPES = {
+    TING_TYPE: "A Silicon asks to use a device another Silicon is using",
+    "extend.device.wake_requested": "A Silicon asks its Carbon to wake a device",
+    "extend.device.woken": "A device a Silicon asked to wake is awake",
+    "extend.device.wake_declined": "A Carbon turned down a request to wake a device",
+}
 # Briefcase's IAM OBO catalog as its docs/obo.md registers it: endpoint → (path, metadata schema, critical).
 BRIEFCASE_ENDPOINTS = {
     "briefcase.files.create": ("/api/v1/obo/files", {"path": {"type": "string"}, "name": {"type": "string"},
@@ -231,7 +244,8 @@ def seed(state, pepper, enc_key):
         parts.append(f"INSERT INTO iam.principals(id,kind,status,activated_at) VALUES({q(actor)},{q(kind)},'active',now());")
     parts += [f"INSERT INTO iam.carbons(id,carbon_id,display_name) VALUES({q(actor)},{q(actor)},{q(label.title())});"
               for label, (actor, kind, _) in ACTORS.items() if kind == "carbon"]
-    parts += [f"INSERT INTO iam.organizations(id,org_id,created_by_carbon_id,name) VALUES('{ORG_UUID}','acme',{q(owner)},'Acme');"]
+    parts += [f"INSERT INTO iam.organizations(id,org_id,created_by_carbon_id,name) VALUES('{ident}',{q(team)},{q(owner)},{q(team.title())});"
+              for team, ident in TEAMS.items()]
     # Verified contacts, encrypted as IAM stores them, so step-up (local provider, code 000000) works.
     # IAM requires every active Carbon to hold verified contacts.
     contacts = {"c:alice": ("alice@example.invalid", "+12025550143"), "c:bob": ("bob@example.invalid", "+12025550144")}
@@ -245,9 +259,11 @@ def seed(state, pepper, enc_key):
         membership, session, access_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
         direct = ("cat_" if kind == "carbon" else "sat_") + secrets.token_urlsafe(32)
         state["direct"][label] = {"access_token": direct, "membership_id": membership, "session_id": session}
-        parts.append(f"INSERT INTO iam.organization_memberships(id,organization_id,principal_id,principal_kind,org_role) VALUES('{membership}','{ORG_UUID}',{q(actor)},{q(kind)},{q(role)});")
-        if kind == "silicon":
-            parts.append(f"INSERT INTO iam.silicons(id,organization_id,membership_id,organization_handle,silicon_handle,display_name,provisioning_status) VALUES({q(actor)},'{ORG_UUID}','{membership}','acme',{q(actor.removeprefix('si:'))},{q(label.title())},'active');")
+        for index, team in enumerate(ACTOR_TEAMS[label]):
+            member = membership if index == 0 else str(uuid.uuid4())
+            parts.append(f"INSERT INTO iam.organization_memberships(id,organization_id,principal_id,principal_kind,org_role) VALUES('{member}','{TEAMS[team]}',{q(actor)},{q(kind)},{q(role)});")
+            if kind == "silicon":
+                parts.append(f"INSERT INTO iam.silicons(id,organization_id,membership_id,organization_handle,silicon_handle,display_name,provisioning_status) VALUES({q(actor)},'{TEAMS[team]}','{member}',{q(team)},{q(actor.removeprefix('si:'))},{q(label.title())},'active');")
         method = "email_otp" if kind == "carbon" else "silicon_credential"
         parts.append(f"INSERT INTO iam.authentication_sessions(id,subject_principal_id,subject_kind,authentication_method,subject_auth_epoch,idle_expires_at,absolute_expires_at) VALUES('{session}',{q(actor)},{q(kind)},{q(method)},1,now()+interval '1 day',now()+interval '2 days');")
         parts.append(f"INSERT INTO iam.access_tokens(id,token_class,token_digest,digest_key_version,token_prefix,authentication_session_id,subject_principal_id,subject_kind,audience,subject_auth_epoch,expires_at) VALUES('{access_id}',{q(kind + '_access')},decode('{digest(pepper, kind + '-access-token', direct)}','hex'),1,{q(direct[:12])},'{session}',{q(actor)},{q(kind)},'silicon-iam',1,now()+interval '1 day');")
@@ -543,18 +559,20 @@ def up_ting(state):
         raise RuntimeError("Ting never answered /healthz:\n" + run(["docker", "logs", "--tail", "30", f"{NAME}-ting"], check=False).stdout.decode()[-2000:])
     healthy()
     # Ting registers types through Honeycomb-authorized sessions; with no Honeycomb here, the
-    # fixture writes Extend's one type while the server is stopped (never two SQLite writers).
+    # fixture writes all four types in acme and globex while the server is stopped. The third
+    # Team intentionally has none; do not invent an IAM types.register endpoint Ting doesn't offer.
     run(["docker", "stop", f"{NAME}-ting"])
     import sqlite3
     db = sqlite3.connect(data / "ting.sqlite")
     with db:
-        db.execute("INSERT OR IGNORE INTO types(ctx,org,app,name,description) VALUES('production','acme','extend',?,?)",
-                   (TING_TYPE, "A Silicon asks to use a device another Silicon is using"))
+        db.executemany("INSERT OR IGNORE INTO types(ctx,org,app,name,description) VALUES('production',?,'extend',?,?)",
+                       [(team, name, description) for team in ("acme", "globex")
+                        for name, description in TING_TYPES.items()])
     db.close()
     run(["docker", "start", f"{NAME}-ting"])
     tg["version"] = healthy().get("version")
     save(state)
-    print(f"• Ting {tg['version']} (server-{TING_COMMIT[:12]}) on {tg['url']}; type {TING_TYPE} registered")
+    print(f"• Ting {tg['version']} (server-{TING_COMMIT[:12]}) on {tg['url']}; four types in acme/globex, none in untyped")
 
 
 def up(args):
@@ -621,7 +639,7 @@ def up(args):
     state["containers"].append(f"{NAME}-iam"); save(state)
     port = run(["docker", "port", f"{NAME}-iam", "8080/tcp"]).stdout.decode().split()[0].rsplit(":", 1)[1]
     state["iam_url"] = f"http://127.0.0.1:{port}"; save(state)
-    print("• seeding team acme: c:alice (owner), c:bob, si:chef, si:sous; applications " + ", ".join(["extend", *sorted(lanes(state))]))
+    print("• seeding acme/globex/untyped, two Carbons and five Silicons; applications " + ", ".join(["extend", *sorted(lanes(state))]))
     seed(state, pepper, enc_key); save(state)
     wait_http(state["iam_url"] + "/healthz", "IAM")
     run(["docker", "run", "-d", "--name", f"{NAME}-worker", "--network", NAME, "--env-file", str(STATE_DIR / "iam-worker.env"), IAM_IMAGE, "iam-worker"])
@@ -779,14 +797,15 @@ class Checks:
         return json.loads(r.stdout)
 
     def slt(self, actor):
-        return self.iam_cli(actor, ["login", "--app-id", "extend", "--grant-org", "acme", "--approve-scopes"])["slt"]
+        return self.app_login(actor, "extend")
 
     def extend(self, who, *args, check=True, test=None):
         home = self.work / "homes" / who
         home.mkdir(parents=True, exist_ok=True)
         env = {k: v for k, v in os.environ.items() if not k.startswith("EXTEND_")}
         env.update({"EXTEND_API_URL": self.api, "EXTEND_TELEMETRY": "off", "SILICON_HOME": str(home)})
-        full = [binary("extend")] + (["--test", test] if test else []) + list(args)
+        selection = ["--team", ACTOR_TEAMS.get(who, ["acme"])[0]] if not test and "--team" not in args else []
+        full = [binary("extend")] + (["--test", test] if test else []) + selection + list(args)
         r = subprocess.run(full, capture_output=True, env=env, timeout=120)
         out, err = r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace")
         if check and r.returncode:
@@ -824,7 +843,8 @@ class Checks:
 
     def app_login(self, who, app):
         """A real IAM SLT for another application (Briefcase or Ting), approved by the member."""
-        return self.iam_cli(who, ["login", "--app-id", app, "--grant-org", "acme", "--approve-scopes"])["slt"]
+        grants = [arg for team in ACTOR_TEAMS[who] for arg in ("--grant-org", team)]
+        return self.iam_cli(who, ["login", "--app-id", app, *grants, "--approve-scopes"])["slt"]
 
     def wait_log(self, needle, since, timeout=45):
         deadline = time.time() + timeout
@@ -1040,63 +1060,290 @@ def ting_request(c, state, ctx, reason):
     return r, err, c.extend_log()[since:]
 
 
-def ting_unregistered(c, state, ctx):
-    # si:chef is using the device (session step); si:sous asks for it.
-    reason = "Need it for 2 minutes to read an OTP (sent before si:chef is a Ting recipient)"
-    r, err, _ = ting_request(c, state, ctx, reason)
-    ctx["ting_first_at"] = time.time()
-    if r["to"] != "si:chef":
-        raise RuntimeError(f"request addressed to {r['to']}, expected si:chef")
-    if r["delivery"] == "delivered":
-        c.ok("Extend registered si:chef as a Ting recipient before delivering", "first request delivered")
-        ctx["ting_registered_by_extend"] = True
-        return
-    c.fail("Extend registers the using Silicon as a Ting recipient (subscriptions.register) before delivering",
-           f"delivery={r['delivery']}; Ting answered: {err[:300]}")
+def ting_token(c, state, who):
+    cache = c.__dict__.setdefault("ting_tokens", {})
+    if who not in cache:
+        _, session = http("POST", state["ting"]["url"] + "/v1/session", {"slt": c.app_login(who, "ting")},
+                          headers={"Idempotency-Key": str(uuid.uuid4())}, expected=(200, 201))
+        cache[who] = session["session_token"]
+    return cache[who]
 
 
-def ting_register(c, state, who):
-    """Registers `who` as a Ting recipient for Extend the way Extend itself would: a fresh IAM OBO
-    proof for subscriptions.register, minted with Extend's credential for the member's Extend token."""
+def ting_inbox(c, state, who, team):
+    return http("GET", state["ting"]["url"] + f"/v1/orgs/{team}/inbox?app_id=extend&limit=100",
+                token=ting_token(c, state, who), expected=(200,))[1].get("items", [])
+
+
+def ting_find(c, state, who, team, key, typ, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = [t for t in ting_inbox(c, state, who, team) if t.get("key") == key]
+        if found:
+            if len(found) != 1 or found[0]["type"] != typ or found[0]["for"] != ACTORS[who][0]:
+                raise RuntimeError(f"wrong Ting for {who}/{team}/{key}: {found}")
+            return found[0]
+        time.sleep(0.2)
+    raise RuntimeError(f"no {typ} with key {key} in {who}'s {team} inbox after {timeout}s")
+
+
+def extend_api(c, who, method, path, kind=None, body=None, team="acme", expected=(200,)):
     token = json.loads(c.auth_file(who).read_text())["access_token"]
-    body = json.dumps({"org_id": "acme", "app_id": "extend", "for": ACTORS[who][0]}, separators=(",", ":")).encode()
-    proof = c.iam_cli(who, ["app", "obo", "exchange", "ting", "subscriptions.register", "--as-app-id", "extend",
-                            "--app-secret", state["app_secret"], "--subject-token", token, "--org-context", "acme",
-                            "--method", "POST", "--body-file", "-"], stdin=body)["access_proof"]
-    _, grant = http("POST", state["ting"]["url"] + "/v1/subscriptions", body, token=proof, expected=(200, 201))
-    return grant
+    return http(method, c.api + path, envelope(kind, body) if kind else body, token=token,
+                headers={"X-Org-ID": team, "Idempotency-Key": str(uuid.uuid4())}, expected=expected)[1]["data"]
+
+
+def ting_unregistered(c, state, ctx):
+    # There is no harness registration fallback: the service must register the holder itself.
+    reason = "Need it for 2 minutes — \"vendor\" OTP, ünïcode & <tags> kept exactly"
+    r, err, _ = ting_request(c, state, ctx, reason)
+    if (r["to"], r["delivery"], r.get("routed_to")) != ("si:chef", "delivered", "holder"):
+        raise RuntimeError(f"first request failed: {r}; Ting: {err[:300]}")
+    ctx["ting_first"] = r
+    ctx["ting_reason"] = reason
+    c.ok("Extend registers an unseen holder and delivers through real Ting", f"{r['request_id']} routed_to=holder")
 
 
 def ting_delivery(c, state, ctx):
-    tg = state["ting"]
-    if not ctx.get("ting_registered_by_extend"):
-        grant = ting_register(c, state, "chef")
-        if not grant.get("active") or grant.get("for") != "si:chef" or grant.get("app_id") != "extend":
-            raise RuntimeError(f"subscription: {grant}")
-        c.ok("stand-in for the missing Extend call: si:chef registered as a Ting recipient of extend through IAM OBO",
-             f"subscription {grant['id']} active")
-        # Extend returns a Silicon's open request for a device again within 60 s instead of sending another.
-        wait = 61 - (time.time() - ctx.get("ting_first_at", 0))
-        if wait > 0:
-            time.sleep(wait)
-    reason = "Need it for 2 minutes — \"vendor\" OTP, ünïcode & <tags> kept exactly"
-    r, err, log = ting_request(c, state, ctx, reason)
-    if r["delivery"] != "delivered":
-        raise RuntimeError(f"delivery={r['delivery']}: {err[:400]}")
-    c.ok("extend request send → Ting accepted it (OBO tings.send)", f"request {r['request_id']} delivery=delivered")
-    _, session = http("POST", tg["url"] + "/v1/session", {"slt": c.app_login("chef", "ting")},
-                      headers={"Idempotency-Key": str(uuid.uuid4())}, expected=(200, 201))
-    _, inbox = http("GET", tg["url"] + "/v1/orgs/acme/inbox?app_id=extend", token=session["session_token"], expected=(200,))
-    found = [t for t in inbox.get("items", []) if t.get("key") == r["request_id"]]
-    if not found:
-        raise RuntimeError(f"no ting with key {r['request_id']} in si:chef's inbox: {str(inbox)[:400]}")
-    t = found[0]
+    r = ctx["ting_first"]
+    t = ting_find(c, state, "chef", "acme", r["request_id"], TING_TYPE)
     data = t.get("data") or {}
-    if (t.get("type"), t.get("for"), data.get("reason"), data.get("from"), data.get("device_id")) != \
-            (TING_TYPE, "si:chef", reason, "si:sous", ctx["device"]):
+    if (data.get("reason"), data.get("from"), data.get("device_id"), data.get("routed_to")) != \
+            (ctx["ting_reason"], "si:sous", ctx["device"], "holder"):
         raise RuntimeError(f"the ting differs from the request: {t}")
-    c.ok("si:chef's Ting inbox has the request with the reason exactly as sent",
-         f"{t['id']} type={t['type']} for={t['for']} silent={t.get('silent')} reason={data['reason']!r}")
+    c.ok("si:chef's Ting inbox has the holder request with its exact reason", t["id"])
+
+
+def ting_11(c, state, ctx):
+    """Real Ting 1.1 deliveries in two Teams, an intentionally missing third Team, and OBO gaps."""
+    owned = []
+
+    def fake(team):
+        log = c.work / f"fake-wake-{team}-{uuid.uuid4().hex[:8]}.log"
+        env = {**os.environ, "FAKE_APP_VERSION": "1.1.0", "FAKE_AWAKE": "false", "FAKE_SLEEP_STATE": "standby"}
+        with open(log, "wb") as out:
+            proc = subprocess.Popen([binary("fake_device"), c.api, "android_tv"], env=env,
+                                    stdout=out, stderr=subprocess.STDOUT)
+        owned.append(proc)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            text = log.read_text(errors="replace")
+            if "PAIRING_CODE " in text:
+                code = text.split("PAIRING_CODE ", 1)[1].split()[0]
+                break
+            if proc.poll() is not None:
+                raise RuntimeError(f"wake fake exited: {text[-500:]}")
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("wake fake didn't enroll")
+        _, out, _ = c.extend("alice", "--team", team, "--json", "device", "pair", code, "--name", f"Wake {team}")
+        dev = json.loads(out)["device_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            d = extend_api(c, "alice", "GET", f"/api/v1/devices/{dev}", team=team)
+            if d.get("awake") is False:
+                return dev
+            time.sleep(0.1)
+        raise RuntimeError(f"fake didn't report standby: {d}")
+
+    def grant(dev, who, team):
+        c.extend("alice", "--team", team, "device", "access", "grant", dev, ACTORS[who][0])
+
+    def ask(dev, who, team):
+        return extend_api(c, who, "POST", f"/api/v1/devices/{dev}/wake-requests", "wake_request",
+                          {"reason": f"Wake test for {team}: ünïcode & <tags>"}, team, (200, 201))
+
+    def answer(dev, team, kind):
+        return extend_api(c, "alice", "POST", f"/api/v1/devices/{dev}/wake-requests/answer",
+                          "wake_answer", {"answer": kind}, team)
+
+    def seeded_types():
+        # Read the stopped-server seed via SQLite read-only; delivery below verifies actual enforcement.
+        import sqlite3
+        with sqlite3.connect(f"file:{STATE_DIR / 'ting-data' / 'ting.sqlite'}?mode=ro", uri=True) as db:
+            for team in ("acme", "globex"):
+                names = {r[0] for r in db.execute("SELECT name FROM types WHERE ctx='production' AND org=? AND app='extend'", (team,))}
+                if names != set(TING_TYPES):
+                    raise RuntimeError(f"{team} types: {names}")
+            if db.execute("SELECT count(*) FROM types WHERE ctx='production' AND org='untyped' AND app='extend'").fetchone()[0]:
+                raise RuntimeError("the third Team must start without any local type rows")
+        c.ok("all four Extend types are seeded in acme and globex")
+
+    def registration_api():
+        status, v = http("POST", state["ting"]["url"] + "/v1/types",
+                         {"org_id": "untyped", "app_id": "extend", "type": TING_TYPE,
+                          "description": TING_TYPES[TING_TYPE]}, token=ting_token(c, state, "alice"))
+        if status != 404:
+            raise RuntimeError(f"Ting's registration API changed: HTTP {status}: {v}; update the fixture catalog and checks")
+        c.ok("real Ting rejects the unavailable POST /v1/types route", "HTTP 404; no fictional types.register catalog entry seeded")
+        c.gap("Ting offers no types.register OBO operation",
+              "Pinned Ting exposes type registration through /v1/orgs/{org}/apps/{app}/types with Honeycomb authorization; "
+              "Type registration stays with a manager in the app-owning Team; Extend does not invent an OBO endpoint")
+
+    def cross_team_request():
+        grant(ctx["device"], "scout", "globex")
+        r = extend_api(c, "scout", "POST", f"/api/v1/devices/{ctx['device']}/requests", "device_request",
+                       {"reason": "Globex needs the shared device"}, "globex", (200, 201))
+        if (r["delivery"], r.get("routed_to"), r.get("to_hidden")) != ("delivered", "carbon", True):
+            raise RuntimeError(f"cross-Team route: {r}")
+        t = ting_find(c, state, "alice", "globex", r["request_id"], TING_TYPE)
+        data = t["data"]
+        if data.get("from") != "si:scout" or data.get("routed_to") != "carbon" or "session_id" in data or "si:chef" in json.dumps(data):
+            raise RuntimeError(f"Carbon routing leaked the holder or lost the requester: {data}")
+        c.ok("cross-Team request reaches the granting Carbon in globex without the acme holder's identity", t["id"])
+
+    def wakes(team, who):
+        dev = fake(team)
+        grant(dev, who, team)
+        w = ask(dev, who, team)
+        wid = w["wake_id"]
+        if w["ting"] != "delivered":
+            raise RuntimeError(f"wake requested wasn't delivered: {w}")
+        t = ting_find(c, state, "alice", team, f"wake:{wid}:1", "extend.device.wake_requested")
+        if t["data"].get("reason") != f"Wake test for {team}: ünïcode & <tags>":
+            raise RuntimeError(f"wake reason changed: {t}")
+        answer(dev, team, "woken")
+        t = ting_find(c, state, who, team, f"woken:{wid}", "extend.device.woken")
+        if "c:alice" in json.dumps(t["data"]):
+            raise RuntimeError(f"woken exposes the confirming Carbon: {t}")
+        # A woken request may immediately be followed by a new one; no artificial clock edits.
+        w = ask(dev, who, team)
+        answer(dev, team, "declined")
+        t = ting_find(c, state, who, team, f"declined:{w['wake_id']}", "extend.device.wake_declined")
+        if "c:alice" not in json.dumps(t["data"]):
+            raise RuntimeError(f"decline lost its Carbon: {t}")
+        c.ok(f"real wake_requested, woken and wake_declined arrive in {team}", f"{dev}; exact reason and Carbon privacy checked")
+
+    def replace_types(rows):
+        # This fixture owns this Ting. Stop it around SQLite writes: never compete with its writer.
+        import sqlite3
+        run(["docker", "stop", f"{NAME}-ting"])
+        try:
+            with sqlite3.connect(STATE_DIR / "ting-data" / "ting.sqlite") as db:
+                db.execute("DELETE FROM types WHERE ctx='production' AND app='extend'")
+                db.executemany("INSERT INTO types(ctx,org,app,name,description) VALUES('production',?,'extend',?,?)", rows)
+        finally:
+            run(["docker", "start", f"{NAME}-ting"])
+        for _ in range(60):
+            if probe(state["ting"]["url"] + "/healthz")[0] == 200:
+                return
+            time.sleep(0.2)
+        raise RuntimeError("owned Ting failed to restart after fixture type change")
+
+    def missing_types():
+        team = "untyped"
+        dev = fake(team)
+        for who in ("novice", "apprentice"):
+            grant(dev, who, team)
+        # Ting 0.1.9 resolves types globally per app despite storing their registration owner org.
+        # Prove that fact before removing the fixture's app types to exercise actual 404 fallback.
+        probe_wake = ask(dev, "novice", team)
+        if probe_wake["ting"] != "delivered":
+            raise RuntimeError(f"Ting type scope changed: {probe_wake}")
+        ting_find(c, state, "alice", team, f"wake:{probe_wake['wake_id']}:1", "extend.device.wake_requested")
+        answer(dev, team, "woken")
+        ting_find(c, state, "novice", team, f"woken:{probe_wake['wake_id']}", "extend.device.woken")
+        c.ok("an unseeded third Team receives the app's types registered in another Team", "Ting 0.1.9 app-global lookup, not per-delivery-Team registration")
+        saved = [(t, name, description) for t in ("acme", "globex") for name, description in TING_TYPES.items()]
+        replace_types([])
+        try:
+            # The next ask on the previous pair is covered by its delivered Carbon notification.
+            # A fresh pair makes an actual new wake_requested call instead of testing that throttle.
+            dev = fake(team)
+            for who in ("novice", "apprentice"):
+                grant(dev, who, team)
+            first = ask(dev, "novice", team)
+            if first["ting"] != "pending" or "extend.device.wake_requested" not in str(first.get("ting_last_error")):
+                raise RuntimeError(f"missing wake type isn't actionable: {first}")
+            answer(dev, team, "woken")
+            second = ask(dev, "apprentice", team)
+            answer(dev, team, "declined")
+            _, sid, _ = c.extend("novice", "session", "new", dev, "--connect")
+            try:
+                r = extend_api(c, "apprentice", "POST", f"/api/v1/devices/{dev}/requests", "device_request",
+                               {"reason": "Missing requested type"}, team, (200, 201))
+                if r["delivery"] != "pending":
+                    raise RuntimeError(f"unregistered type was delivered: {r}")
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    status = extend_api(c, "alice", "GET", "/api/v1/ting-registration?team=untyped", team=team)
+                    if set(status["missing_types"]) == set(TING_TYPES):
+                        break
+                    time.sleep(0.2)
+                else:
+                    raise RuntimeError(f"third Team doesn't report all four missing types: {status}")
+                _, out, err = c.extend("alice", "--team", team, "ting", "status")
+                for typ in TING_TYPES:
+                    command = f"ting --org '<owning-team>' types register --type {typ}"
+                    if command not in out + err:
+                        raise RuntimeError(f"missing CLI manager command: {command}; {out} {err}")
+                blocked = {f"wake:{first['wake_id']}:1", f"woken:{first['wake_id']}",
+                           f"declined:{second['wake_id']}", r["request_id"]}
+                for who in ("alice", "novice", "apprentice"):
+                    if any(t.get("key") in blocked for t in ting_inbox(c, state, who, team)):
+                        raise RuntimeError("a genuinely missing type produced an inbox Ting")
+                c.ok("all four globally missing types remain pending with exact manager commands in the third Team")
+            finally:
+                c.extend("novice", "session", "end", sid.strip(), check=False)
+        finally:
+            replace_types(saved)
+
+
+    for who in ("scout", "novice", "apprentice"):
+        c.extend(who, "login", c.slt(who))
+    try:
+        c.step("ting 1.1: seed scope", seeded_types)
+        c.step("ting 1.1: type registration API", registration_api)
+        c.step("ting 1.1: cross-Team Carbon route", cross_team_request)
+        for team, who in (("acme", "sous"), ("globex", "scout")):
+            c.step(f"ting 1.1: wake lifecycle in {team}", lambda team=team, who=who: wakes(team, who))
+        c.step("ting 1.1: third Team missing types", missing_types)
+    finally:
+        for proc in owned:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+
+def ting_self_send(c, state):
+    who = "chef"
+    key = "self-send:" + str(uuid.uuid4())
+    body = json.dumps({"org_id": "acme", "type": "extend.device.woken", "for": "si:chef", "key": key,
+                       "data": {"verification": "recipient is proof actor"}, "metadata": {}}, separators=(",", ":")).encode()
+    token = json.loads(c.auth_file(who).read_text())["access_token"]
+    proof = c.iam_cli(who, ["app", "obo", "exchange", "ting", "tings.send", "--as-app-id", "extend",
+                            "--app-secret", state["app_secret"], "--subject-token", token, "--org-context", "acme",
+                            "--method", "POST", "--body-file", "-"], stdin=body)["access_proof"]
+    http("POST", state["ting"]["url"] + "/v1/tings", body, token=proof, expected=(200, 201, 202))
+    t = ting_find(c, state, who, "acme", key, "extend.device.woken")
+    c.ok("Ting accepts a real IAM proof whose sender and recipient are the same Silicon", t["id"])
+
+
+def carbon_directory_removal(c, state):
+    """The app's Silicon token reads a Carbon, then sees 404 after real IAM membership removal."""
+    token = json.loads(c.auth_file("chef").read_text())["access_token"]
+    member = urllib.parse.quote("c:bob[acme]", safe="")
+    reader = urllib.parse.quote("si:chef[acme]", safe="")
+    base = state["iam_url"] + "/api/v1/organizations/acme"
+    own = http("GET", base + f"/directory/members/{reader}?fields=id,org", token=token, expected=(200,))[1]
+    before = http("GET", base + f"/directory/members/{member}?fields=id,org", token=token, expected=(200,))[1]
+    if own.get("id") != "si:chef" or before.get("id") != "c:bob":
+        raise RuntimeError(f"directory mismatch: self={own}, Carbon={before}")
+    alice = state["direct"]["alice"]["access_token"]
+    detail = http("GET", base + f"/members/{member}", token=alice, expected=(200,))[1]
+    assertion = step_up(state, "alice", "organization.authorization_change", "c:bob[acme]")
+    http("DELETE", base + f"/members/{member}", token=alice,
+         headers={"Idempotency-Key": str(uuid.uuid4()), "If-Match": f'"{detail["version"]}"',
+                  "X-Step-Up-Token": assertion}, expected=(200, 204))
+    status, after = http("GET", base + f"/directory/members/{member}?fields=id,org", token=token)
+    if status != 404:
+        raise RuntimeError(f"removed Carbon remains visible: HTTP {status} {after}")
+    http("GET", base + f"/directory/members/{reader}?fields=id,org", token=token, expected=(200,))
+    c.ok("a Silicon's Extend token reads a Carbon (200), then sees 404 after real IAM removal", "reader remains active (200)")
+
 
 
 def check(args):
@@ -1198,6 +1445,9 @@ def check(args):
         c.step("briefcase: download", lambda: briefcase_download(c, state, ctx))
     if "ting" in lanes(state):
         c.step("ting: delivery", lambda: ting_delivery(c, state, ctx))
+        c.step("ting: 1.1 flows", lambda: ting_11(c, state, ctx))
+        c.step("ting: self send", lambda: ting_self_send(c, state))
+    c.step("IAM: Carbon directory removal", lambda: carbon_directory_removal(c, state))
 
     def refresh():
         path = c.auth_file("chef")

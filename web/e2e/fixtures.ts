@@ -10,7 +10,7 @@ interface MockControls {
   /** A pairing code from an Extend app; `instance_of` makes it "Pair with another Carbon" on that pair's device. */
   enroll(os?: string, options?: { instance_of?: string; app_version?: string }): Promise<string>;
   config(c: Record<string, number>): Promise<void>;
-  /** Any other control under /__mock (fail-step, scenario, carried, awake, ting-manager, …). */
+  /** Any other control under /__mock (fail-step, scenario, carried, awake, ting-types-known, …). */
   post(path: string, data?: Record<string, unknown>): Promise<unknown>;
   get(path: string): Promise<unknown>;
 }

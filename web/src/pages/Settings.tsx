@@ -180,7 +180,7 @@ function TingSettings() {
         r.status !== "on"
           ? `Asked Ting again for ${team}`
           : r.missing_types?.length
-            ? `Extend's Tings reach you in ${team}; a Ting manager of ${team} still has to register ${r.missing_types.length === 1 ? "one type" : `${r.missing_types.length} types`}`
+            ? `Notifications are on for ${team}; a Ting manager in Extend's owning Team still has to register ${r.missing_types.length === 1 ? "one app type" : `${r.missing_types.length} app types`}`
             : `Extend's Tings reach you in ${team}`,
       );
       await load();
@@ -216,7 +216,7 @@ function TingSettings() {
                         <span class={`badge ${r.status === "on" ? "live" : r.status === "off" ? "warn" : "muted"}`} data-testid="ting-status">
                           {STATUS[r.status] ?? r.status}
                         </span>
-                        <Show when={(r.status !== "on" || r.missing_types?.length) && reached()}>
+                        <Show when={r.status !== "on" && reached()}>
                           <Button small busy={busy() === r.team} onClick={() => turnOn(r.team)} data-testid="ting-turn-on">
                             Turn on
                           </Button>

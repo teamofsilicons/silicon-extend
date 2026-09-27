@@ -220,8 +220,8 @@ expect_exit 12 as scout device wake "$TV" --reason "Again"; ok "asking again wit
 as chef device wake "$TV" --reason "Need the TV on" >"$WORK/out" || true
 grep -q "Asked c:alice to wake Family TV ($TV); the request expires at" "$WORK/out" && grep -q "then run: extend --team acme session new $TV" "$WORK/out" && ok "device wake says who was asked, and what to run once it wakes"
 grep -Eq "Its Carbon (was|will be|was already) told through Ting" "$WORK/out" && ok "device wake says how the Carbon hears of it"
-as alice ting status --all-teams | grep -q "ting --org globex types register --type extend.device.wake_requested" && ok "ting status shows the missing type, with the command for a Ting manager"
-as alice --team globex device access grant "$TV" si:scout 2>&1 >/dev/null | grep -q "ting --org globex types register --type extend.device.wake_requested" && ok "a grant warns when Ting lacks Extend's types in that Team"
+as alice ting status --all-teams | grep -q "ting --org '<owning-team>' types register --type extend.device.wake_requested" && ok "ting status shows the missing type, with the command for a Ting manager"
+as alice --team globex device access grant "$TV" si:scout 2>&1 >/dev/null | grep -q "ting --org '<owning-team>' types register --type extend.device.wake_requested" && ok "a grant warns when Ting lacks Extend's types in that Team"
 as alice device wake-requests ls "$TV" --open | grep -q "si:scout" && ok "wake-requests ls shows the open requests, every Team's"
 as alice device show "$TV" | grep -q "Open wake requests:" && ok "device show lists the open wake requests"
 as alice device wake-requests answer "$TV" woken | grep -q "is awake: every open request to wake it has ended" && ok "answer woken ends every open request"

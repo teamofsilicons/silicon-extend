@@ -1,9 +1,9 @@
 //! Extend's Ting notification types (1.1.0).
 //!
-//! Ting keeps notification types per environment, Team and app, and refuses a Ting whose type
-//! isn't registered in the Ting's Team. So each type must be registered in every Team Extend sends
-//! in, by that Team's Ting manager. The service reports the ones Ting doesn't know
-//! (`TingRegistration.missing_types`), and the CLI and website show [`register_command`] for them.
+//! Ting resolves notification types per environment and app, across delivery Teams. A Ting manager
+//! registers them in the app's owning Team with Honeycomb permission. The API's `missing_types`
+//! records failures observed in each delivery Team; it does not identify the app's owner.
+//! CLI and website show [`register_command`] with an explicit owner placeholder when unknown.
 
 use uuid::Uuid;
 
@@ -56,7 +56,12 @@ pub fn find(name: &str) -> Option<TingType> {
     ALL_TYPES.into_iter().find(|t| t.event == event)
 }
 
-/// The command a Team's Ting manager runs to register a type in that Team.
+/// A shell-safe placeholder when the app's owning Team has not been verified. Callers must explain
+/// that the manager replaces this value; a delivery Team must never be substituted for the owner.
+pub const OWNER_TEAM_PLACEHOLDER: &str = "'<owning-team>'";
+
+/// The command a Ting manager runs in the app's owning Team. `team` must be a verified owner or
+/// [`OWNER_TEAM_PLACEHOLDER`], never inferred from the notification's delivery Team.
 pub fn register_command(team: &str, app_id: &str, ty: TingType) -> String {
     format!(
         "ting --org {team} types register --type {} --description '{}'",

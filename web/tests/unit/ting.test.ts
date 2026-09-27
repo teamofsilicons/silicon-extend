@@ -10,9 +10,9 @@ describe("Extend's Ting types", () => {
   });
 
   it("builds the exact register command the CLI prints (crates/extend-protocol ting.rs)", () => {
-    expect(registerCommand("labs", "extend.device.wake_requested")).toBe(
-      "ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'",
+    expect(registerCommand("extend.device.wake_requested")).toBe(
+      "ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'",
     );
-    expect(registerCommand("labs", "device.woken")).toBe("ting --org labs types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'");
+    expect(registerCommand("device.woken")).toBe("ting --org '<owning-team>' types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'");
   });
 });

@@ -6,10 +6,10 @@
 //! itself (a notification to themselves, under their own consent); never a member who didn't take
 //! part, such as the Silicon holding a device someone asks for.
 //!
-//! Ting keeps notification types per environment, Team and app, and refuses a type that isn't
-//! registered in the Ting's Team, so Extend's four types ([`extend_protocol::ting::ALL_TYPES`])
-//! must be registered in every Team Extend sends in, by that Team's Ting manager. A refusal for
-//! that names the type and gives the exact command ([`extend_protocol::ting::register_command`]).
+//! Ting resolves notification types per environment and app, independently of the delivery Team.
+//! Extend's four types ([`extend_protocol::ting::ALL_TYPES`]) are registered once in the app owner's
+//! catalog by a Ting manager with Honeycomb permission. Ting does not offer an OBO operation for
+//! registering types; a missing type stays visible and pending until that manager registers it.
 //!
 //! Ting delivers an app's Tings only to recipients that registered the app
 //! (`subscriptions.register`, with the *recipient's* own proof); a send to anyone else is refused
@@ -189,17 +189,6 @@ pub trait Notifier: Send + Sync {
         Ok(())
     }
 
-    /// Registers one of Extend's types in the actor's Team, as a Team's Ting manager does with
-    /// `ting --org <team> types register`. Ting refuses it unless the actor manages Ting types in
-    /// that Team (Carbon decision, 2026-09-27: Extend registers them where the Carbon may, and
-    /// shows the command everywhere else).
-    async fn register_type(&self, actor: &Principal, _ty: TingType, _sel: Option<&TestingSelection>) -> AppResult<()> {
-        Err(AppError::new(
-            ErrorCode::NoAccess,
-            format!("{} can't register Ting types here.", actor.id()),
-        ))
-    }
-
     /// Forgets which Silicons were registered in a test environment (a clean removes Ting's test
     /// grants too), or in production for `None`.
     async fn clear_environment(&self, _environment_id: Option<Uuid>) {}
@@ -314,7 +303,7 @@ fn refuses_self_send(status: u16, code: &str) -> bool {
 
 /// Turns a Ting refusal into an error that says what happened, why, and what to do. `details`
 /// carries `ting_status` and `ting_code`, and `missing_type` (the full type name) when Ting doesn't
-/// know the type in the Ting's Team.
+/// know the app's type. The delivery Team is context for the failed send, not its registration owner.
 pub fn ting_error(
     status: u16,
     body: &Value,
@@ -347,13 +336,18 @@ pub fn ting_error(
             details["missing_type"] = json!(type_name);
             let team = team.unwrap_or("the Team");
             let command = types::find(&type_name)
-                .map(|t| types::register_command(team, app_id, t))
-                .unwrap_or_else(|| format!("ting --org {team} types register --type {type_name}"));
+                .map(|t| types::register_command(types::OWNER_TEAM_PLACEHOLDER, app_id, t))
+                .unwrap_or_else(|| {
+                    format!(
+                        "ting --org {} types register --type {type_name}",
+                        types::OWNER_TEAM_PLACEHOLDER
+                    )
+                });
             AppError::new(
                 ErrorCode::ServiceUnavailable,
-                format!("{what}: Ting doesn't know the type {type_name} in {team}."),
+                format!("{what}: Ting doesn't know the app type {type_name}; its notification to {team} stays pending."),
             )
-            .hint(format!("A Ting manager of {team} registers it once: {command}"))
+            .hint(format!("A Ting manager in the Team that owns {app_id} registers it once for every delivery Team. Replace <owning-team> with that Team: {command}"))
         }
         (401, _) | (503, "proof_verification_uncertain") => AppError::new(
             ErrorCode::ServiceUnavailable,
@@ -429,18 +423,6 @@ impl Notifier for TingNotifier {
         Ok(())
     }
 
-    async fn register_type(&self, actor: &Principal, ty: TingType, sel: Option<&TestingSelection>) -> AppResult<()> {
-        let team = actor.team()?.to_owned();
-        let app_id = self.iam.app_id();
-        // Ting's type registration, on the Carbon's behalf. IAM issues the proof only when Ting's
-        // catalog offers it to Extend; otherwise this fails and the command is shown instead.
-        let body =
-            json!({"org_id": team, "app_id": app_id, "type": ty.full_name(app_id), "description": ty.description});
-        self.call(actor, "types.register", "/v1/types", &body, sel)
-            .await
-            .map(|_| ())
-    }
-
     async fn clear_environment(&self, environment_id: Option<Uuid>) {
         self.registered
             .lock()
@@ -458,8 +440,7 @@ impl Notifier for TingNotifier {
 }
 
 /// Records Tings without sending them anywhere (development and tests). Tests can make it answer
-/// as Ting would when a type is missing in a Team, a recipient never registered, or self-sends are
-/// refused.
+/// with an injected type refusal on a Team's send, an unregistered recipient or a self-send refusal.
 #[derive(Default)]
 pub struct LocalNotifier {
     /// Every Ting accepted: `{"actor", "org_id", "type", "for", "key", "data"}`.
@@ -474,8 +455,6 @@ pub struct LocalNotifier {
     pub refuse_self_sends: AtomicBool,
     /// Answer every send with a 503, as an unreachable Ting.
     pub unavailable: AtomicBool,
-    /// (team, member) who may register Ting types in that Team (its Ting managers).
-    pub type_managers: std::sync::Mutex<HashSet<(String, String)>>,
     self_send_refused: AtomicBool,
 }
 
@@ -595,26 +574,6 @@ impl Notifier for LocalNotifier {
         Ok(())
     }
 
-    async fn register_type(&self, actor: &Principal, ty: TingType, _sel: Option<&TestingSelection>) -> AppResult<()> {
-        let team = actor.team()?.to_owned();
-        let manager = self
-            .type_managers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&(team.clone(), actor.id().to_owned()));
-        if !manager {
-            return Err(AppError::new(
-                ErrorCode::NoAccess,
-                format!("{} doesn't manage Ting types in {team}.", actor.id()),
-            ));
-        }
-        self.missing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&(team, ty.full_name("extend")));
-        Ok(())
-    }
-
     async fn clear_environment(&self, environment_id: Option<Uuid>) {
         self.registered
             .lock()
@@ -655,7 +614,7 @@ mod tests {
         assert_eq!(
             e.0.hint.as_deref(),
             Some(
-                "A Ting manager of labs registers it once: ting --org labs types register --type \
+                "A Ting manager in the Team that owns extend registers it once for every delivery Team. Replace <owning-team> with that Team: ting --org '<owning-team>' types register --type \
                  extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'"
             )
         );

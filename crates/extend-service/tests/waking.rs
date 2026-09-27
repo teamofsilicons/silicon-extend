@@ -782,25 +782,19 @@ async fn ting_types_and_registrations_per_team() {
         .unwrap()
         .to_owned();
     assert!(
-        err.contains("ting --org globex types register --type extend.device.wake_requested"),
+        err.contains("ting --org '<owning-team>' types register --type extend.device.wake_requested"),
         "{err}"
     );
     let (_, reg) = api(&env, "GET", "/api/v1/ting-registration?team=globex", &alice, None, None).await;
     assert_eq!(reg["data"]["missing_types"], json!(["extend.device.wake_requested"]));
     assert_eq!(reg["data"]["status"], "on");
-    // A Carbon who manages Ting types there registers them by opening their settings.
-    ting.type_managers
-        .lock()
-        .unwrap()
-        .insert(("globex".into(), "c:alice".into()));
+    // Opening settings or turning recipient notifications on cannot register app types:
+    // Ting exposes no delegated type-registration operation.
     let (_, reg) = api(&env, "GET", "/api/v1/ting-registration?team=globex", &alice, None, None).await;
-    assert_eq!(reg["data"]["missing_types"], json!([]));
-    // A later success in that Team clears the record too.
-    ting.set_missing("globex", "device.wake_requested", true);
-    sqlx::query("INSERT INTO extend.ting_type_status (team, ting_type, missing_since, last_checked_at) VALUES ('globex', 'extend.device.wake_requested', now(), now()) ON CONFLICT DO NOTHING")
-        .execute(&env.pool)
-        .await
-        .unwrap();
+    assert_eq!(reg["data"]["missing_types"], json!(["extend.device.wake_requested"]));
+    let (_, reg) = api(&env, "PUT", "/api/v1/ting-registration?team=globex", &alice, None, None).await;
+    assert_eq!(reg["data"]["missing_types"], json!(["extend.device.wake_requested"]));
+    // The manager registers the app type outside Extend; a later delivery clears the observation.
     ting.set_missing("globex", "device.wake_requested", false);
     sqlx::query("UPDATE extend.wake_requests SET ting_next_at = now() - interval '1 second'")
         .execute(&env.pool)

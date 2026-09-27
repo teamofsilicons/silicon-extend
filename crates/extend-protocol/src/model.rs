@@ -1222,9 +1222,8 @@ pub struct TingRegistration {
     pub refused_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    /// Extend's Ting types Ting doesn't know in this Team, by full name
-    /// (`extend.device.wake_requested`); a Team's Ting manager registers them
-    /// ([`crate::ting::register_command`]).
+    /// App types Ting reported missing on sends to this Team, by full name. A Ting manager in the
+    /// app's owning Team registers them once for all delivery Teams ([`crate::ting::register_command`]).
     #[serde(default)]
     pub missing_types: Vec<String>,
 }

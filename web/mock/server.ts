@@ -260,7 +260,6 @@ const retryFailures = new Map<string, { step: string; error: string }>();
 /** Teams whose directory read fails in team=any. */
 const failingDirectories = new Set<string>();
 /** member\nteam pairs that are the Team's Ting manager. */
-const tingManagers = new Set<string>();
 
 const gkey = (team: string, silicon: string) => `${team}\n${silicon}`;
 
@@ -1986,7 +1985,7 @@ route("POST", "/api/v1/devices/:device_id/wake-requests", (ctx) => {
     device_notice_note: null,
     ting: (ctx.world.tingMissing.get(team) ?? []).includes("extend.device.wake_requested") ? "failed" : "delivered",
     ting_last_error: (ctx.world.tingMissing.get(team) ?? []).includes("extend.device.wake_requested")
-      ? `Ting doesn't know extend.device.wake_requested in ${team}. A Ting manager of ${team} runs: ting --org ${team} types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'`
+      ? `Ting doesn't know the app type extend.device.wake_requested; its notification to ${team} stays pending. A Ting manager in the Team that owns Extend registers it once. Replace <owning-team> with that Team: ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'`
       : null,
     answer_ting: null,
   };
@@ -2090,8 +2089,6 @@ route("PUT", "/api/v1/ting-registration", (ctx) => {
   if (!team || team === "any") fail(422, "invalid_input", "Say which Team to turn Tings on in: ?team=<handle>.");
   if (!member.teams.includes(team!)) fail(403, "not_a_team_member", `${member.id}'s Extend login doesn't reach ${team}.`, `Sign in to Extend again and select ${team}.`);
   ctx.world.ting.set(`${member.id}\n${team}`, { member: member.id, team: team!, status: "on", last_error: null });
-  // A Ting manager's login registers Extend's missing types too (Carbon decision 4).
-  if (tingManagers.has(`${member.id}\n${team}`)) ctx.world.tingMissing.delete(team!);
   return ok(200, "ting_registration", tingView(ctx.world, member, team!));
 });
 
@@ -2122,7 +2119,6 @@ route("POST", "/__mock/reset", () => {
   pendingFailures.clear();
   retryFailures.clear();
   failingDirectories.clear();
-  tingManagers.clear();
   return ok(200, "reset", { ok: true });
 });
 
@@ -2222,15 +2218,16 @@ route("POST", "/__mock/awake", (ctx) => {
   return ok(200, "awake", instance);
 });
 
-/** Makes a Team's directory read fail in team=any, or makes a member a Team's Ting manager. */
+/** Makes a Team's directory read fail in team=any. */
 route("POST", "/__mock/directory-fails", (ctx) => {
   failingDirectories.add(String(((ctx.body ?? {}) as Record<string, unknown>).team));
   return ok(200, "directory", { failing: [...failingDirectories] });
 });
-route("POST", "/__mock/ting-manager", (ctx) => {
-  const data = (ctx.body ?? {}) as { member: string; team: string };
-  tingManagers.add(`${data.member}\n${data.team}`);
-  return ok(200, "ting_manager", { ok: true });
+/** A later successful notification observes externally registered app types. */
+route("POST", "/__mock/ting-types-known", (ctx) => {
+  const data = (ctx.body ?? {}) as { team: string };
+  ctx.world.tingMissing.delete(data.team);
+  return ok(200, "ting_types", { ok: true });
 });
 
 route("GET", "/__mock/retries", () => ok(200, "retries", { items: retryLog }));

@@ -1,12 +1,12 @@
 # Open gates
 
-The current list of what stands between this checkout and a released Silicon Extend, as of
-2026-09-27 after the second round of fixes. The Carbon-owned
+The current list of what stands between this checkout and a released Silicon Extend 1.1.0,
+updated on 2026-09-28. The Carbon-owned
 [`understanding/UNDERSTANDING.md`](../understanding/UNDERSTANDING.md) is the product authority;
 nothing here changes it. An implementation, a passing mock or an emulator run does not close a
 physical-device or production gate. What was run, and on what, is in
-[`verification.md`](verification.md). Round 2 is not committed yet: it is the working tree on top of
-`5b3c578`.
+[`verification.md`](verification.md). The 1.1.0 integration and subsequent fixes are local commits
+on `release/1.1.0`; later work may still be in progress.
 
 *1.0.0 went live on 2026-09-27 (the service, the website, the CLI through Honeycomb, and the apps);
 the sections below from "Needs the Carbon" on are the 1.0.0 record. What 1.1.0 still needs comes
@@ -21,19 +21,30 @@ setup retry, the device engine named Silicon Extend) is built and its automated 
 
 ### Needs the Carbon
 
-- **Approve the 1.1 drafts** of `understanding/TECHNICAL.md`, `api.yaml` and `cli.yaml`, and commit
-  the `UNDERSTANDING.md` edits they follow.
+- **Reconcile the 1.1 drafts** of `understanding/TECHNICAL.md`, `api.yaml` and `cli.yaml` with the
+  accepted design and completed implementation. The `UNDERSTANDING.md` changes they follow are
+  already committed (`3fe0347`, `5326b68`); do not ask for that work again.
 - **Answer `TECHNICAL.md` open questions 16–20**: the terminal when the installer's pair ends, the
   terminal rule and terminal apps on the screen, the device for the iPhone lock-state check,
   app-level Ting types, and routed requests to a Carbon who shares no Team with the asking Silicon.
-- **Ting types in every Team.** A Ting manager of each Team Extend sends in registers Extend's four
-  types (`docs/deployment.md`, "Releasing 1.1.0", step 1); in production only
-  `extend.device.requested` in `tos` exists today.
-- **Send the Ting request**, `docs/requests/ting-app-level-types.md`, to the Ting and Honeycomb
-  maintainers.
-- **A Carbon's logout** ends their Silicons' sessions as `access_removed` (the Silicon's hint says the
-  Carbon took access away or signed out); `stopped_by_carbon` was the other choice. Confirm
-  (`TECHNICAL.md` C9).
+- **Ting types.** Production currently has only `extend.device.requested` for app `extend` in
+  `tos`. Register the three wake types through the owning Team's manager in each used context.
+  Real Ting 0.1.9 resolves type names by context and app across delivery Teams; the earlier demand
+  for duplicate registration in every delivery Team was incorrect. Its published OBO catalog has
+  no `types.register`; use the supported manager CLI and retain the visible fallback.
+- **Reconcile the Ting request**, `docs/requests/ting-app-level-types.md`: its per-Team premise
+  is obsolete. No maintainer message has been sent; that needs explicit messaging authorization.
+- **A Carbon's logout** uses the accepted `access_removed` behavior (`TECHNICAL.md` C9 and the
+  saved design); verification remains required, but the reason does not need another decision.
+
+### Release access checked on 2026-09-28
+
+The existing 1.0 Mac signing identity and `extend-release` notarization profile work; that release
+was accepted by Apple. The permanent Android key exists under `~/.silicon-release/extend`.
+Preserve those identities for update compatibility. Honeycomb, Ting, GitHub and Vercel sessions
+are authenticated, and the published backend and GitHub assets remain 1.0.0. AWS profile
+`silicon-production` needs SSO renewal (its token expired and refresh failed). Historical signing
+and "nothing published" entries below are not current blockers. No 1.1 CI or publication has run.
 
 ### Engineering left for 1.1.0
 
@@ -44,16 +55,18 @@ step is removed. See the new verification entry; this is not a released build.
 
 Remaining from the Carbon's final requests, before the release gates below:
 
-- Finish the banner audit on actual app surfaces: carried-device switches in the host app (the
-  website and CLI can already set each carried device), offline desktop preference persistence,
-  and restart/reconnect behavior. Exercise drag/collapse, ten-second hiding, takeover persistence,
-  Stop after hiding and TV bottom-centre placement on native targets. A metadata-only attach now
+- Finish native banner verification. Carried-device host controls, durable offline choices,
+  shared carried aliases and restart timing are implemented; agent/service and actual-page
+  Chromium checks pass. Exercise actual window drag/collapse/position retention, ten-second
+  hiding, takeover, Stop and TV bottom-centre placement on native targets. A metadata-only attach
   preserves the live driver; verify it during a real recording as well.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
   reconnect defect was reproduced there. Measure and reduce overall TV memory use; initial
   debug-build background baselines are recorded, not a physical-TV memory result.
+  Screenshot peak memory is reduced locally by preserving raw ADB PNGs and streaming transformed
+  images from disk, with immediate bitmap cleanup; see the measured workload in `verification.md`.
 - iPhone/iPad: first-screenshot attachment is implemented and verified through the real engine on
   an isolated iPad simulator, preserving the current screen without launching an app or a runner.
   Verify it on a physical iPad as well (including disconnect/reconnect and a new session).
@@ -69,22 +82,20 @@ Remaining from the Carbon's final requests, before the release gates below:
   publish/deploy and verify the release. None of this checkpoint updates installed apps.
 
 
-- `e2e/real-iam/realiam.py --ting` doesn't know 1.1 yet: seed Extend's four types in acme and globex,
-  show a third Team reporting them missing, and cover waking, woken, declined and routed requests.
-  It also has to confirm that Ting offers the `types.register` call the service uses to register
-  missing types for a Team's Ting manager (`TingNotifier::register_type`); if not, the service keeps
-  showing the command.
-- `extend click` doesn't reach an Android TV: its capabilities have no pointer or touch, so the TV
-  click fallback is only reached through `find … click`. Allowing it means adding `input.pointer`
-  to Android TV's full capabilities in the protocol crate, which the Android work judged not
-  additive for 1.0 readers.
+- The 1.1 real IAM/Ting lane now covers wake events and routing across Teams, genuine missing-type
+  failures, self-send and Carbon removal. Unsupported automatic registration was removed; service,
+  CLI and web guidance points to the app-owning Team. Keep these checks in final integration.
+- Direct Android TV element click is fixed for apps 1.1+, with native navigation proof and frozen
+  1.0 response compatibility. Verify it on the physical TV; coordinate/repeated/held clicks still
+  depend on gesture injection, and no pointer/touch capability is advertised.
 - The Simulator's copy of the iPhone helper's runner could show "Silicon Extend" by copying the
   helper's display name into it before its re-sign (optional; a device runner can't be changed).
 
 ### Release gates
 
-- `e2e/real-iam/realiam.py --ting` against real IAM and Ting: a Silicon reading its Carbon's directory
-  entry (200, then 404 after removal), and Ting accepting a Ting whose recipient is its own sender.
+- The real-service fixture gates passed: a Silicon reads its granting Carbon's directory entry
+  (200, then 404 after removal), and Ting accepts a self-addressed notification (202). Re-run against
+  the final release candidate and verify production configuration after deployment.
 - The rollback down step rehearsed on a copy of the production schema, and the roll-forward.
 - A release rehearsal in a test environment: the 1.1 service driven by the 1.0.0 CLI, website,
   Android app and desktop agent; then each upgraded, including two Carbons on one Android TV and on

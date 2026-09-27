@@ -163,8 +163,8 @@ fn yes() -> bool {
     true
 }
 
-/// Makes the local Ting answer 404 for one of Extend's types in a Team, as Ting does for a type
-/// nobody registered there (or answer again, with `missing: false`). The CLI e2e uses it.
+/// Injects a missing-type refusal on a Team's send in the local stand-in (or removes the injection
+/// with `missing: false`). Real Ting resolves types app-wide; this limits a test failure's scope.
 pub async fn ting_missing(State(state): State<Shared>, Body(input): Body<MissingType>) -> AppResult<Response> {
     local(&state)?;
     let Some(ting) = &state.local_ting else {

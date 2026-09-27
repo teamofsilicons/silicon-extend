@@ -1910,9 +1910,10 @@ async fn device_name(ctx: &mut Ctx, id: &str) -> String {
     .map_or_else(|_| id.to_owned(), |d| d.name)
 }
 
-/// The command a Team's Ting manager runs to register each of Extend's Ting types `missing`
+/// The command a Ting manager in the app's owning Team runs for each type `missing`
 /// names (full names, like `extend.device.wake_requested`).
-fn register_commands(team: &str, missing: &[String]) -> Vec<String> {
+fn register_commands(missing: &[String]) -> Vec<String> {
+    let team = extend_protocol::ting::OWNER_TEAM_PLACEHOLDER;
     missing
         .iter()
         .map(|name| {
@@ -1928,11 +1929,9 @@ fn register_commands(team: &str, missing: &[String]) -> Vec<String> {
 /// Says which of Extend's Ting types Ting doesn't know in `team`, and how they get registered.
 fn missing_types_text(team: &str, missing: &[String]) -> String {
     format!(
-        "Ting doesn't know {} of Extend's notification types in {team} ({}), so those Tings won't arrive there until a Ting manager of {team} registers {}:\n{}",
-        if missing.len() == 1 { "one" } else { "some" },
+        "Ting reported missing app notification types while sending to {team} ({}). A Ting manager in the Team that owns Extend registers them once for every delivery Team. Replace <owning-team> with that Team:\n{}",
         missing.join(", "),
-        if missing.len() == 1 { "it" } else { "them" },
-        register_commands(team, missing)
+        register_commands(missing)
             .iter()
             .map(|c| format!("  {c}"))
             .collect::<Vec<_>>()
@@ -2461,7 +2460,7 @@ async fn device_access(ctx: &mut Ctx, a: &Args) -> R<()> {
             .map_err(|e| grant_refused(e, team.as_deref()))?;
         }
         // Wake requests and requests for devices in use reach the Carbon through Ting, which
-        // needs Extend's types registered in this Team; say so now rather than when one is lost.
+        // needs Extend's app types registered; show observed missing types on this Team's sends.
         let ting = match &team {
             Some(t) => {
                 let t = t.clone();
@@ -3439,9 +3438,9 @@ fn ting_text(items: &[TingRegistration], failed: &[(String, CliError)], failed_t
     let mut s = if items.is_empty() { String::new() } else { table(rows) };
     for r in items.iter().filter(|r| !r.missing_types.is_empty()) {
         s.push_str(&format!(
-            "\n\nA Ting manager of {} registers the missing types with:\n{}",
+            "\n\nMissing on sends to {}. A Ting manager in the Team that owns Extend registers these types once for every delivery Team. Replace <owning-team> with that Team:\n{}",
             r.team,
-            register_commands(&r.team, &r.missing_types)
+            register_commands(&r.missing_types)
                 .iter()
                 .map(|c| format!("  {c}"))
                 .collect::<Vec<_>>()

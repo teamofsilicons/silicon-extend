@@ -5,19 +5,15 @@ import { registerCommand, tingType } from "../lib/ting";
 import { Link } from "../lib/router";
 import { CopyText } from "./ui";
 
-/**
- * Extend's Ting types a Team is missing, with the exact command its Ting manager runs for each.
- * Ting refuses a notification whose type isn't registered in the Team it is sent in, so until they
- * are, requests and wake requests there reach nobody through Ting (the website still shows them).
- */
+/** App types Ting reported missing on sends to this Team, with owning-Team manager guidance. */
 export function MissingTingTypes(props: { registration: TingRegistration; compact?: boolean; inSettings?: boolean }) {
   const r = () => props.registration;
   return (
     <div class="ting-missing" data-testid="ting-missing" data-team={r().team}>
       <p>
-        Ting doesn't know {r().missing_types.length === 1 ? "one of Extend's notification types" : `${r().missing_types.length} of Extend's notification types`} in{" "}
-        <strong>{r().team}</strong>, so Tings of {r().missing_types.length === 1 ? "that type" : "those types"} can't be sent there. If you are a Ting manager of {r().team}, Extend
-        registers them with your login when you choose Turn on{props.inSettings ? "" : " in Settings"}. Otherwise a Ting manager of {r().team} runs:
+        Ting reported {r().missing_types.length === 1 ? "a missing app notification type" : `${r().missing_types.length} missing app notification types`} while sending to{" "}
+        <strong>{r().team}</strong>. A Ting manager in the Team that owns Extend registers {r().missing_types.length === 1 ? "it" : "them"} once for every delivery Team.
+        Replace <code>&lt;owning-team&gt;</code> below with that Team. Turning your notifications on does not register app types.
       </p>
       <ul class="ting-commands">
         <For each={r().missing_types}>
@@ -26,7 +22,7 @@ export function MissingTingTypes(props: { registration: TingRegistration; compac
               <Show when={!props.compact}>
                 <span class="fine">{tingType(name)?.description ?? name}</span>
               </Show>
-              <CopyText text={registerCommand(r().team, name)} label={`Copy the command that registers ${name} in ${r().team}`} />
+              <CopyText text={registerCommand(name)} label={`Copy the command that registers ${name} in Extend's owning Team`} />
             </li>
           )}
         </For>

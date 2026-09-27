@@ -1476,7 +1476,7 @@ fn access_is_per_team() {
     assert_eq!(stdout(&o).trim(), "Granted si:chef access to 7c1e09ab in labs.");
     assert!(
         stderr(&o).contains(
-            "ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'"
+            "ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'"
         ),
         "{}",
         stderr(&o)
@@ -1544,7 +1544,7 @@ fn ting_status_and_on() {
             && out.contains("acme  on       —")
             && out.contains("labs  pending  extend.device.woken (Sign in to Extend for labs)")
             && out.contains(
-                "A Ting manager of labs registers the missing types with:\n  ting --org labs types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'"
+                "Missing on sends to labs. A Ting manager in the Team that owns Extend registers these types once for every delivery Team. Replace <owning-team> with that Team:\n  ting --org '<owning-team>' types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'"
             ),
         "{out}"
     );

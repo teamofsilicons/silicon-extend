@@ -744,44 +744,6 @@ async fn registration(state: &AppState, world: &World, member: &str, team: &str)
     r
 }
 
-/// Where the Carbon manages Ting types in `team`, registers Extend's missing types there with
-/// their own login (Carbon decision, 2026-09-27). Where they don't, Ting refuses and the types stay
-/// listed with the command for the Team's Ting manager.
-async fn register_missing_types(
-    state: &AppState,
-    world: &World,
-    p: &Principal,
-    sel: Option<&TestingSelection>,
-    team: &str,
-) {
-    if !p.is_carbon() {
-        return;
-    }
-    let mut p = p.clone();
-    p.team = Some(team.to_owned());
-    for ty in delivery::missing_types(state, world, team).await {
-        let Some(t) = extend_protocol::ting::find(&ty) else {
-            continue;
-        };
-        match state.notifier.register_type(&p, t, sel).await {
-            Ok(()) => {
-                let _ = sqlx::query(sql!(
-                    "DELETE FROM {} WHERE team = $1 AND ting_type = $2",
-                    world.t("ting_type_status")
-                ))
-                .bind(team)
-                .bind(&ty)
-                .execute(&state.pool)
-                .await;
-                tracing::info!(world = %world.schema, team, ty, carbon = p.id(), "registered one of Extend's Ting types with the Carbon's login");
-            }
-            Err(e) => {
-                tracing::debug!(team, ty, carbon = p.id(), error = %e.0.message, "the Carbon can't register Ting types in this Team")
-            }
-        }
-    }
-}
-
 fn team_query(q: &TingQuery) -> AppResult<&str> {
     q.team
         .as_deref()
@@ -819,9 +781,6 @@ pub async fn ting_get(State(state): State<Shared>, auth: Auth, Query(q): Query<T
         let mut items = Vec::new();
         for t in teams {
             let reachable = auth.p.teams.contains(&t);
-            if reachable {
-                register_missing_types(&state, world, &auth.p, auth.sel.as_ref(), &t).await;
-            }
             let mut r = registration(&state, world, auth.p.id(), &t).await;
             if !reachable {
                 r.last_error = Some(format!("Sign in to Extend for {t}"));
@@ -833,7 +792,6 @@ pub async fn ting_get(State(state): State<Shared>, auth: Auth, Query(q): Query<T
     if !auth.p.teams.iter().any(|t| t == team) {
         return Err(unreachable_team(&auth.p, team));
     }
-    register_missing_types(&state, world, &auth.p, auth.sel.as_ref(), team).await;
     Ok(ok(
         "ting_registration",
         registration(&state, world, auth.p.id(), team).await,
@@ -853,7 +811,6 @@ pub async fn ting_turn_on(State(state): State<Shared>, auth: Auth, Query(q): Que
         .map_err(|_| unreachable_team(&auth.p, &team))?;
     p.team = Some(team.clone());
     delivery::register(&state, &auth.world, &p, auth.sel.as_ref(), true).await?;
-    register_missing_types(&state, &auth.world, &p, auth.sel.as_ref(), &team).await;
     // The Tings that waited for this registration go now.
     let (st, world, member) = (state.clone(), auth.world.clone(), p.id().to_owned());
     tokio::spawn(async move {

@@ -90,8 +90,9 @@ isn't awake gets the wake hint.
 
 ## Extend's Ting types
 
-Ting keeps notification types per environment, Team and application, and refuses a Ting whose type
-isn't registered in the Ting's Team. Extend sends four:
+Ting 0.1.9 resolves notification types by environment context and application, across delivery
+Teams. Registration is managed by the app's owning Team; a delivery Team does not register another
+copy. Extend sends four:
 
 | Type | Description it is registered with |
 |---|---|
@@ -102,20 +103,20 @@ isn't registered in the Ting's Team. Extend sends four:
 
 Runbook:
 
-- **A Team that starts using Extend** needs all four registered, once, by one of its Ting managers
-  (in production, and in each test environment's Ting context):
+- **The app's owning Team** registers all four once in each used context. For production Extend,
+  use a manager in `tos`; the delivery Team can be different:
 
   ```sh
-  ting --org <team> types register --type extend.device.requested --description 'A Silicon asks to use a device another Silicon is using'
-  ting --org <team> types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'
-  ting --org <team> types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'
-  ting --org <team> types register --type extend.device.wake_declined --description 'A Carbon turned down a request to wake a device'
+  ting --org <app-owning-team> types register --type extend.device.requested --description 'A Silicon asks to use a device another Silicon is using'
+  ting --org <app-owning-team> types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'
+  ting --org <app-owning-team> types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'
+  ting --org <app-owning-team> types register --type extend.device.wake_declined --description 'A Carbon turned down a request to wake a device'
   ```
 
-  Where a Carbon of that Team is its Ting manager and Ting lets Extend act on that Carbon's login,
-  Extend registers the missing types itself when that Carbon uses Extend.
-- **After every clean of a test environment**, register them again in each Team the tests use: a
-  Ting clean removes types, grants and hooks. Silicons are registered with Ting again at their next
+  The current Ting OBO catalog has no `types.register` endpoint. Use these manager commands;
+  Extend cannot perform this registration through the Carbon's delegated login.
+- **After every clean of a test environment**, register them again once for the app in that
+  context: a Ting clean removes types, grants and hooks. Silicons are registered with Ting again at their next
   session; Carbons at their next grant or signed-in call.
 - **Finding what is missing.** A Ting refused because its type is missing is recorded per Team
   (`ting_type_status`) and shown, never retried silently: in Settings, on the device page, in
@@ -124,7 +125,8 @@ Runbook:
   successful Ting of that type in that Team clears it. To list the Teams Extend sends in, from the
   production database: `SELECT team FROM extend.devices UNION SELECT team FROM extend.device_access
   UNION SELECT team FROM extend.sessions UNION SELECT team FROM extend.requests`.
-- `docs/requests/ting-app-level-types.md` asks Ting and Honeycomb for types registered once per app.
+- `docs/requests/ting-app-level-types.md` is an earlier proposal. Its per-Team premise is obsolete;
+  reconcile it with the verified app-global delivery semantics before sending it.
 
 ## Logs and signals
 
