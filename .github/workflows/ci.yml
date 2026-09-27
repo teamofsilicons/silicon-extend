@@ -57,7 +57,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium && pnpm test:e2e
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Desktop banner browser controls
+        run: node --test ../apps/desktop/banner-ui.e2e.mjs
+      - run: pnpm test:e2e
   # The device engine (vendor/extend-engine) and the desktop packaging that stamps and wraps it.
   fork:
     runs-on: ubuntu-24.04

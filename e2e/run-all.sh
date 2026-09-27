@@ -33,6 +33,7 @@ fi
 
 if command -v pnpm >/dev/null; then
   run web-unit bash -c "cd web && pnpm test"
+  run desktop-banner-browser node --test apps/desktop/banner-ui.e2e.mjs
   run web-e2e-mock bash -c "cd web && pnpm test:e2e"
   run web-build bash -c "cd web && pnpm build"
 else

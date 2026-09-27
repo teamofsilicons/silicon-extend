@@ -1,5 +1,5 @@
 // The desktop WebView's actual page, without opening the installed app or taking over the Mac.
-// Install web's development dependencies and Chromium, then: node --test apps/desktop/banner-ui.test.mjs
+// Install web's development dependencies and Chromium, then: node --test apps/desktop/banner-ui.e2e.mjs
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import test from 'node:test';

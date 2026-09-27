@@ -1,9 +1,10 @@
 # Silicon Extend for Mac, Windows and Linux: packaging and end-to-end runs
 
 The app is one Rust binary, [`crates/extend-agent`](../../crates/extend-agent/README.md). This
-directory packages it and holds the Linux end-to-end environment. macOS packaging signs with a
-Developer ID and can notarize; notarization is implemented but has only run with stubbed Apple
-tools, never against Apple. Nothing has been published.
+directory packages it and holds the Linux end-to-end environment. The published 1.0 macOS app
+is Developer ID signed and notarized. The 1.1 candidate has also passed Apple notarization,
+stapling and Gatekeeper assessment; publication and the remaining native checks are tracked in
+[`docs/completion-work.md`](../../docs/completion-work.md).
 
 | Path | What it does |
 |---|---|
@@ -17,7 +18,7 @@ tools, never against Apple. Nothing has been published.
 | `linux/build-in-docker.sh` | Runs `build-package.sh` in the linux-e2e image, then installs the `.deb` in a container and runs it |
 | `windows/build-zip.ps1` | Builds the Windows zip (run it on Windows) |
 | `linux-e2e/` | A real X11 desktop in Docker (`Dockerfile`, `build-image.sh`, `run.sh`, `e2e.sh`) and the recording lanes |
-| `banner-ui.test.mjs` | Runs the actual desktop WebView page in headless Chromium: carried switches, offline status, Stop, drag, collapse and takeover controls |
+| `banner-ui.e2e.mjs` | Runs the actual desktop WebView page in headless Chromium: carried switches, offline status, Stop, drag, collapse and takeover controls |
 
 The app's in-use banner controls apply immediately, including while disconnected. Choices live
 in the private `.extend-agent/indicators.json`, scoped to the service URL, and synchronize in the
@@ -25,7 +26,7 @@ background when a pair connects. Each carried device has its own switch in the h
 and takeover controls remain available when the banner is hidden. Restarting or reconnecting does
 not restart an old session's ten-second announcement; new sessions get a new announcement.
 
-Run `node --test apps/desktop/banner-ui.test.mjs` after installing `web`'s development dependencies
+Run `node --test apps/desktop/banner-ui.e2e.mjs` after installing `web`'s development dependencies
 and Playwright Chromium. This checks rendering and WebView messages; native window movement,
 multi-monitor placement and driver recording continuity still require native verification.
 
@@ -318,9 +319,9 @@ This verifies local relay and file storage, not production IAM or Briefcase inte
 There's no Node and no device engine: Windows uses Extend's own driver. The window needs WebView2,
 which Windows 10 and 11 ship.
 
-**None of the Windows side has run on Windows.** From this Mac it is checked with
-`cargo check` and `cargo clippy -- -D warnings` against `--target x86_64-pc-windows-msvc`, and
-the driver's pure logic is unit-tested. The script itself hasn't run.
+The 1.1 release workflow built x64 and arm64 packages on native Windows runners and ran each
+packaged agent's `--version` successfully. The driver's pure logic is unit-tested; interactive
+window, input, recording, sleep and lock behavior still require native verification.
 
 ### Packaged daemon update verification
 
