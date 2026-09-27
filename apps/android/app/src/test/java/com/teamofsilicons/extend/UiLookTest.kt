@@ -4,7 +4,12 @@ import androidx.compose.ui.graphics.toArgb
 import com.teamofsilicons.extend.core.SessionUi
 import com.teamofsilicons.extend.core.TakeoverUi
 import com.teamofsilicons.extend.core.UiState
+import androidx.compose.ui.unit.dp
 import com.teamofsilicons.extend.ui.DitherField
+import com.teamofsilicons.extend.ui.FocusRing
+import com.teamofsilicons.extend.ui.PlexMono
+import com.teamofsilicons.extend.ui.Scale
+import com.teamofsilicons.extend.ui.Type
 import com.teamofsilicons.extend.ui.Dissolve
 import com.teamofsilicons.extend.ui.InUseBadge
 import com.teamofsilicons.extend.ui.Inks
@@ -85,6 +90,29 @@ class UiLookTest {
         assertEquals("Sign in to Netflix", waiting.detail)
         assertEquals("si:concierge is waiting for you: Sign in to Netflix", waiting.spoken)
         for (b in listOf(using, stopping, waiting)) assertTrue("'${b.silicon} ${b.line}' stays short", "${b.silicon} ${b.line}".length <= 40)
+    }
+
+    @Test fun focusIsInterfacesFocusVisibleOutline() {
+        // styles.css: `outline: 2px solid var(--blue); outline-offset: 4px`.
+        assertEquals(Tokens.Cobalt, FocusRing.color)
+        assertEquals(2.dp, FocusRing.width)
+        assertEquals(4.dp, FocusRing.offset)
+    }
+
+    @Test fun serifTitlesAreSetTightAndUrlsInMono() {
+        assertEquals(-0.03f, Type.title(Scale.Phone).letterSpacing.value, 0.0001f)
+        assertEquals(-0.03f, Type.title(Scale.Tv).letterSpacing.value, 0.0001f)
+        assertTrue(Type.cardTitle(Scale.Phone).letterSpacing.value in -0.03f..-0.02f)
+        assertEquals(PlexMono, Type.monoField(Scale.Phone).fontFamily)
+        assertTrue("the developer settings URL field is set in mono", File("src/main/java/com/teamofsilicons/extend/ui/Screens.kt").readText()
+            .contains("\"Extend service URL\", keyboardType = KeyboardType.Uri, mono = true"))
+    }
+
+    @Test fun theInUseNotificationCarriesTheCobaltAccent() {
+        val src = File("src/main/java/com/teamofsilicons/extend/service/ExtendForegroundService.kt").readText()
+        val inUse = src.substringAfter("private fun inUseNotification").substringBefore("\n    }\n")
+        assertTrue(inUse.contains(".setColor(getColor(R.color.extend_cobalt))"))
+        assertTrue(File("src/main/res/values/colors.xml").readText().contains("<color name=\"extend_cobalt\">#FF1736B8</color>"))
     }
 
     @Test fun titlesAreSentencesEndingInOnePeriod() {

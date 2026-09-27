@@ -1,0 +1,26 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "enrollment"
+  ],
+  "kind": "http",
+  "operation": "enrollments.discard",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Enrollment {enrollment_secret}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "DELETE",
+    "path": "/api/v1/enrollments/{enrollment_id}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; crates/extend-agent/src/service.rs (discard_enrollment) with crates/extend-protocol types"
+}

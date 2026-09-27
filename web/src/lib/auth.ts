@@ -12,6 +12,10 @@
  *
  * IAM's SLT exchange has no PKCE, so the callback is bound to the attempt this tab started with a
  * random `state` kept in sessionStorage.
+ *
+ * Signing up goes through IAM too. IAM's auth site serves `/login` and `/signup` side by side, and
+ * its sign-up page carries `app_id` and `redirect_uri` through: it verifies the new Carbon's email and
+ * phone, creates the account, signs them in, then shows the same consent screen and returns here.
  */
 import { IAM_LOGIN_URL_OVERRIDE } from "../config";
 import { ApiError } from "./api";
@@ -20,12 +24,16 @@ import { readJson, remove, writeJson } from "./storage";
 import { KEYS } from "./session";
 
 const ATTEMPT_TTL_MS = 10 * 60_000;
+/** Creating an account verifies an email and a phone first, so a sign-up attempt gets longer. */
+const SIGNUP_TTL_MS = 30 * 60_000;
 
 interface LoginAttempt {
   state: string;
   /** "production" or the test environment id the attempt started in. */
   world: string;
   created: number;
+  /** A sign-up attempt (IAM's /signup, then its consent screen); absent for sign-in. */
+  signup?: boolean;
 }
 
 /**
@@ -45,6 +53,24 @@ export function iamLoginUrl(info: Pick<IamInfo, "iam_base_url" | "iam_login_url"
   }
 }
 
+/**
+ * IAM's sign-up page for Extend, or null when Extend can't tell where it is. `GET /api/v1/iam` may
+ * name it as `iam_signup_url`; otherwise, when the consent screen is IAM's own `<auth origin>/login`,
+ * sign-up is `<auth origin>/signup` (IAM serves both). A login URL laid out any other way, such as a
+ * local stand-in, gives null: the website then offers the sign-in page and says so, rather than guess.
+ */
+export function iamSignupUrl(info: Pick<IamInfo, "iam_base_url" | "iam_login_url" | "iam_signup_url">, override = IAM_LOGIN_URL_OVERRIDE): string | null {
+  if (info.iam_signup_url) return info.iam_signup_url;
+  try {
+    const url = new URL(iamLoginUrl(info, override));
+    if (url.pathname.replace(/\/+$/, "") !== "/login") return null;
+    url.pathname = "/signup";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function randomState(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -53,13 +79,25 @@ export function randomState(): string {
 
 /** Builds the consent URL and remembers the attempt. Returns the URL to navigate to. */
 export function beginIamLogin(info: IamInfo, origin: string, world: string, now = Date.now()): string {
-  const state = randomState();
-  const attempt: LoginAttempt = { state, world, created: now };
+  return begin(iamLoginUrl(info), info.app_id, origin, { state: randomState(), world, created: now });
+}
+
+/**
+ * Like `beginIamLogin`, for a Carbon who has no Silicon IAM account yet: IAM's sign-up page with the
+ * same app_id and callback, so after creating the account IAM asks them to approve Extend and sends
+ * them back signed in. Returns null when there is no sign-up page to send them to (see `iamSignupUrl`).
+ */
+export function beginIamSignup(info: IamInfo, origin: string, world: string, now = Date.now()): string | null {
+  const signup = iamSignupUrl(info);
+  return signup ? begin(signup, info.app_id, origin, { state: randomState(), world, created: now, signup: true }) : null;
+}
+
+function begin(page: string, appId: string, origin: string, attempt: LoginAttempt): string {
   writeJson("session", KEYS.loginState, attempt);
   const callback = new URL("/auth/callback", origin);
-  callback.searchParams.set("state", state);
-  const url = new URL(iamLoginUrl(info));
-  url.searchParams.set("app_id", info.app_id);
+  callback.searchParams.set("state", attempt.state);
+  const url = new URL(page);
+  url.searchParams.set("app_id", appId);
   url.searchParams.set("redirect_uri", callback.toString());
   return url.toString();
 }
@@ -83,11 +121,14 @@ export function finishIamLogin(params: URLSearchParams, world: string, now = Dat
       message: "IAM came back without a short-lived token.",
       hint: "Start sign-in again from this page.",
     });
-  if (!attempt || !state || attempt.state !== state || now - attempt.created > ATTEMPT_TTL_MS)
+  const ttl = attempt?.signup ? SIGNUP_TTL_MS : ATTEMPT_TTL_MS;
+  if (!attempt || !state || attempt.state !== state || now - attempt.created > ttl)
     throw new ApiError(0, {
       code: "invalid_login_state",
-      message: "This sign-in result doesn't belong to a sign-in started in this tab, or it is older than 10 minutes.",
-      hint: "Start sign-in again from this tab. Nothing was signed in.",
+      message: `This sign-in result doesn't belong to a sign-in started in this tab, or it is older than ${ttl / 60_000} minutes.`,
+      hint: attempt?.signup
+        ? "Your Silicon IAM account exists now, so sign in again from this tab. Nothing was signed in here."
+        : "Start sign-in again from this tab. Nothing was signed in.",
     });
   if (attempt.world !== world)
     throw new ApiError(0, {

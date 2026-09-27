@@ -203,6 +203,10 @@ pub mod close {
     pub const UNAUTHORIZED: u16 = 4401;
     pub const SUPERSEDED: u16 = 4409;
     pub const UPGRADE_REQUIRED: u16 = 4426;
+    /// The device's test environment is not open right now (Honeycomb disabled it, or it is
+    /// waiting for Honeycomb to confirm every service is ready). The pair is kept: the app stays
+    /// paired and reconnects with backoff. The close reason says which.
+    pub const ENVIRONMENT_UNAVAILABLE: u16 = 4503;
 }
 
 #[cfg(test)]

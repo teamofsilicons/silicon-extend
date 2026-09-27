@@ -1,5 +1,7 @@
 //! Pairing, devices, access, activity, and requests between Silicons.
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, PoisonError};
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -19,7 +21,7 @@ use super::{Body, decode_cursor, encode_cursor, hash_json, idempotent, limit, no
 use crate::db::World;
 use crate::domain::{self, Access, DeviceRow};
 use crate::error::{AppError, AppResult};
-use crate::state::{Auth, Shared};
+use crate::state::{AppState, Auth, Shared};
 use crate::ting::DeviceRequestTing;
 
 const PAIR_FAILURES: usize = 5;
@@ -69,6 +71,13 @@ async fn check_silicons(state: &Shared, auth: &Auth, ids_: &[String]) -> AppResu
     Ok(())
 }
 
+fn test_limit_error() -> AppError {
+    AppError::new(ErrorCode::TestDeviceLimit, TEST_DEVICE_LIMIT_MESSAGE)
+        .hint("Remove a device from this test environment first, with `extend device rm <device_id> --yes`.")
+}
+
+/// A quick refusal before any work when a test environment is already full. Not the guard: two
+/// requests can both pass it, so [`begin_device_add`] decides inside the insert's transaction.
 async fn test_limit(state: &Shared, world: &World) -> AppResult<()> {
     if !world.is_test() {
         return Ok(());
@@ -80,14 +89,132 @@ async fn test_limit(state: &Shared, world: &World) -> AppResult<()> {
     .fetch_one(&state.pool)
     .await?;
     if n >= TEST_DEVICE_LIMIT {
-        return Err(AppError::new(ErrorCode::TestDeviceLimit, TEST_DEVICE_LIMIT_MESSAGE)
-            .hint("Remove a device from this test environment first, with `extend device rm <device_id> --yes`."));
+        return Err(test_limit_error());
     }
     Ok(())
 }
 
+/// Advisory-lock class for "adding a device to this test environment" (the second key is the
+/// world's schema). Two-key advisory locks never collide with the single-key ones in db.rs.
+const TEST_DEVICE_LOCK_CLASS: i32 = 7_342_010;
+
+/// Longest a device add waits for its turn in this process before it is refused as busy.
+const TEST_ADD_WAIT: Duration = Duration::from_secs(10);
+
+/// Longest the turn's holder waits in the database for other service processes adding to the
+/// same environment (PostgreSQL `lock_timeout` for the rest of its transaction).
+const TEST_ADD_LOCK_TIMEOUT: &str = "5s";
+
+/// PostgreSQL's "canceling statement due to lock timeout".
+const LOCK_NOT_AVAILABLE: &str = "55P03";
+
+/// One turn per test environment (by world schema) for adding devices in this process. Waiting
+/// here holds no database connection: only the turn's holder takes one. Waiting on the advisory
+/// lock instead would pin a pooled connection per waiting request, so a burst of adds to one test
+/// environment could use up the pool every other request (production included) shares.
+static TEST_ADD_TURNS: LazyLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(Default::default);
+
+fn test_add_turn(schema: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut turns = TEST_ADD_TURNS.lock().unwrap_or_else(PoisonError::into_inner);
+    // Forget the environments nobody is adding to right now (only this map holds their turn).
+    turns.retain(|k, turn| k == schema || Arc::strong_count(turn) > 1);
+    turns.entry(schema.to_owned()).or_default().clone()
+}
+
+fn test_add_busy(waited: Duration) -> AppError {
+    AppError::new(
+        ErrorCode::RateLimited,
+        format!(
+            "This test environment is busy adding other devices. Devices join a test environment one at a \
+             time, so it never holds more than {TEST_DEVICE_LIMIT}, and this one waited {:.1} s without getting its turn.",
+            waited.as_secs_f64()
+        ),
+    )
+    .hint("Try again in a few seconds.")
+    .details(serde_json::json!({"retry_after_s": 2}))
+}
+
+/// The transaction that adds a device and, in a test environment, that environment's turn, held
+/// until the transaction ends.
+struct DeviceAdd {
+    tx: sqlx::Transaction<'static, sqlx::Postgres>,
+    /// Devices the test environment held before this one (0 in production).
+    paired_before: i64,
+    turn: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl DeviceAdd {
+    async fn commit(self) -> AppResult<()> {
+        self.tx.commit().await?;
+        drop(self.turn);
+        Ok(())
+    }
+}
+
+/// Starts the transaction that adds a device. In a test environment it also enforces the device
+/// limit: adds to one environment take turns (in memory within this process, through an advisory
+/// lock across processes) until their transaction ends, and count under the turn, so the count
+/// includes every device committed before them. Nothing here, and nothing a caller does before
+/// [`DeviceAdd::commit`], may use the pool: the turn's holder must never wait for a connection.
+async fn begin_device_add(state: &AppState, world: &World) -> AppResult<DeviceAdd> {
+    if !world.is_test() {
+        return Ok(DeviceAdd {
+            tx: state.pool.begin().await?,
+            paired_before: 0,
+            turn: None,
+        });
+    }
+    let started = std::time::Instant::now();
+    let turn = tokio::time::timeout(TEST_ADD_WAIT, test_add_turn(&world.schema).lock_owned())
+        .await
+        .map_err(|_| test_add_busy(started.elapsed()))?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT set_config('lock_timeout', $1, true)")
+        .bind(TEST_ADD_LOCK_TIMEOUT)
+        .execute(&mut *tx)
+        .await?;
+    match sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+        .bind(TEST_DEVICE_LOCK_CLASS)
+        .bind(&world.schema)
+        .execute(&mut *tx)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some(LOCK_NOT_AVAILABLE) => {
+            return Err(test_add_busy(started.elapsed()));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let n: i64 = sqlx::query_scalar(sql!(
+        "SELECT count(*) FROM {} WHERE removed_at IS NULL",
+        world.t("devices")
+    ))
+    .fetch_one(&mut *tx)
+    .await?;
+    if n >= TEST_DEVICE_LIMIT {
+        return Err(test_limit_error());
+    }
+    Ok(DeviceAdd {
+        tx,
+        paired_before: n,
+        turn: Some(turn),
+    })
+}
+
+/// What a device and the Carbon hear about the test environment it pairs into.
+fn environment_view(s: &crate::iam::TestingSelection, paired_devices: i64) -> TestingEnvironment {
+    TestingEnvironment {
+        environment_id: s.environment_id,
+        name: s.name.clone(),
+        state: "ready".into(),
+        paired_devices,
+        device_limit: TEST_DEVICE_LIMIT,
+    }
+}
+
 pub async fn env_view(
-    state: &crate::state::AppState,
+    state: &AppState,
     auth_sel: Option<&crate::iam::TestingSelection>,
     world: &World,
 ) -> Option<TestingEnvironment> {
@@ -99,13 +226,7 @@ pub async fn env_view(
     .fetch_one(&state.pool)
     .await
     .unwrap_or(0);
-    Some(TestingEnvironment {
-        environment_id: s.environment_id,
-        name: s.name.clone(),
-        state: "ready".into(),
-        paired_devices: n,
-        device_limit: TEST_DEVICE_LIMIT,
-    })
+    Some(environment_view(s, n))
 }
 
 async fn insert_device(
@@ -186,16 +307,18 @@ pub async fn claim(
     let p = auth.p.clone();
     let st = state.clone();
     idempotent(&state, &auth.world, auth.p.id(), "pairings", &headers, &hash, || async move {
-        let mut tx = st.pool.begin().await?;
+        // Until commit, everything runs on the add's own transaction: in a test environment this
+        // request holds the environment's turn, and others wait for it.
+        let mut add = begin_device_add(&st, &world).await?;
         let found: Option<(Uuid, String, Option<String>, Option<String>, String)> = sqlx::query_as(
             "SELECT enrollment_id, os, os_version, model, app_version FROM extend_global.enrollments
              WHERE pairing_code = $1 AND code_expires_at > now() AND paired_device_id IS NULL FOR UPDATE",
         )
         .bind(code.as_str())
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut *add.tx)
         .await?;
         let Some((enrollment_id, os, os_version, model, app_version)) = found else {
-            drop(tx);
+            drop(add);
             st.rate_limit(limit_key.clone(), PAIR_FAILURES + 1, PAIR_WINDOW, "wrong pairing codes").await?;
             return Err(AppError::new(ErrorCode::PairingCodeInvalid, "That pairing code is wrong, expired, or already used.")
                 .hint("Codes change every 5 minutes. Enter the one the device shows now."));
@@ -203,7 +326,7 @@ pub async fn claim(
         let os: DeviceOs = serde_json::from_value(serde_json::Value::String(os)).map_err(AppError::internal)?;
         let credential = ids::new_secret(ids::DEVICE_CREDENTIAL_PREFIX);
         let device_id = insert_device(
-            &mut tx,
+            &mut add.tx,
             &world,
             &team,
             p.id(),
@@ -219,13 +342,11 @@ pub async fn claim(
                 .bind(&device_id)
                 .bind(s)
                 .bind(p.id())
-                .execute(&mut *tx)
+                .execute(&mut *add.tx)
                 .await?;
         }
-        let environment = env_view(&st, sel.as_ref(), &world).await.map(|mut e| {
-            e.paired_devices += 1;
-            e
-        });
+        // Counted under the turn: the devices before this one, and this one.
+        let environment = sel.as_ref().map(|s| environment_view(s, add.paired_before + 1));
         sqlx::query(
             "UPDATE extend_global.enrollments SET paired_schema = $2, paired_device_id = $3, paired_credential = $4, paired_environment = $5
              WHERE enrollment_id = $1",
@@ -235,9 +356,14 @@ pub async fn claim(
         .bind(&device_id)
         .bind(&credential)
         .bind(environment.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default()))
-        .execute(&mut *tx)
+        .execute(&mut *add.tx)
         .await?;
-        tx.commit().await?;
+        // Read back before commit, so the answer after commit needs nothing that can fail: a
+        // committed pairing always answers 201.
+        let d = domain::load_device_in(&mut *add.tx, &world, &device_id)
+            .await?
+            .ok_or_else(|| AppError::internal("device vanished while pairing"))?;
+        add.commit().await?;
         st.rate_reset(&limit_key).await;
         st.hub
             .send_enrollment(
@@ -249,7 +375,6 @@ pub async fn claim(
         for s in &input.silicon_ids {
             domain::log(&st, &world, &device_id, &p.member, "access_granted", None, serde_json::json!({"silicon_id": s})).await;
         }
-        let d = domain::load_device(&st, &world, &device_id).await?.ok_or_else(|| AppError::internal("device vanished after pairing"))?;
         let view = domain::device_view(&st, &world, &d, Access::Owner, false).await;
         tracing::info!(world = %world.schema, device_id, os = os.as_str(), "device paired");
         Ok((StatusCode::CREATED, "device", serde_json::to_value(view).map_err(AppError::internal)?))
@@ -264,7 +389,13 @@ pub struct ListQuery {
     os: Option<String>,
     limit: Option<i64>,
     cursor: Option<String>,
+    /// `true` also lists the Carbon's removed devices (scope=mine only). Parsed by hand so a bad
+    /// value gets a precise error.
+    include_removed: Option<String>,
 }
+
+/// Rows read per query while filling a page that the online filter thins out.
+const ONLINE_SCAN_BATCH: i64 = 200;
 
 pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
     let team = auth.team()?.to_owned();
@@ -305,41 +436,86 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
             )));
         }
     };
-    let mut sql = format!(
-        "{} WHERE d.removed_at IS NULL AND d.team = $1 AND {cond}",
-        domain::device_select(&auth.world)
-    );
+    let include_removed = match q.include_removed.as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(other) => {
+            return Err(
+                AppError::invalid(format!("include_removed must be true or false; got {other:?}."))
+                    .hint("Send include_removed=true with scope=mine to list your removed devices too."),
+            );
+        }
+    };
+    if include_removed && access != Access::Owner {
+        return Err(AppError::invalid(format!(
+            "include_removed=true works only with scope=mine: a Carbon can list the devices they paired after \
+             they're removed, to read their activity log. This request lists scope={scope}, which shows paired \
+             devices only."
+        ))
+        .hint(
+            "Drop include_removed, or, as the Carbon who paired the devices, send scope=mine&include_removed=true.",
+        ));
+    }
+    let mut sql = format!("{} WHERE d.team = $1 AND {cond}", domain::device_select(&auth.world));
+    if !include_removed {
+        sql.push_str(" AND d.removed_at IS NULL");
+    }
     if let Some(os) = &q.os {
-        let os: DeviceOs = serde_json::from_value(serde_json::Value::String(os.clone()))
-            .map_err(|_| AppError::invalid(format!("unknown os {os:?}")))?;
+        let os: DeviceOs = serde_json::from_value(serde_json::Value::String(os.clone())).map_err(|_| {
+            AppError::invalid(format!("os={os:?} is not an operating system Extend knows."))
+                .hint("Use one of android, android_tv, macos, windows, linux, ios, ipados, tvos, samsung_tv, lg_tv.")
+        })?;
         sql.push_str(&format!(" AND d.os = '{}'", os.as_str()));
     }
     let after = q.cursor.as_deref().map(decode_cursor).transpose()?;
-    if after.is_some() {
-        sql.push_str(" AND d.device_id > $3");
-    }
-    sql.push_str(&format!(" ORDER BY d.device_id LIMIT {}", lim + 1));
-    let mut query = sqlx::query_as::<_, DeviceRow>(sqlx::AssertSqlSafe(sql.clone()))
-        .bind(&team)
-        .bind(auth.p.id());
-    if let Some(a) = &after {
-        query = query.bind(a);
-    }
-    let mut rows = query.fetch_all(&state.pool).await?;
-    let next = (rows.len() as i64 > lim).then(|| {
-        rows.truncate(lim as usize);
-        encode_cursor(&rows.last().map(|r| r.device_id.clone()).unwrap_or_default())
-    });
-    let mut items = Vec::new();
-    for r in &rows {
-        let v = domain::device_view(&state, &auth.world, r, access, false).await;
-        if q.online.is_none_or(|o| o == v.online) {
-            items.push(v);
+    // Online is known only to this process (live sockets), not to SQL, so the filter is applied
+    // while reading: keep reading in device-id order until the page has `lim` matches plus one
+    // more (which says another page exists) or the devices run out. next_cursor is the last
+    // returned device, so a page is short only when it is the last.
+    let batch = if q.online.is_some() {
+        ONLINE_SCAN_BATCH.max(lim + 1)
+    } else {
+        lim + 1
+    };
+    let mut scanned_to = after;
+    let mut rows: Vec<(DeviceRow, extend_protocol::model::Device)> = Vec::new();
+    loop {
+        let mut page_sql = sql.clone();
+        if scanned_to.is_some() {
+            page_sql.push_str(" AND d.device_id > $3");
+        }
+        page_sql.push_str(&format!(" ORDER BY d.device_id LIMIT {batch}"));
+        let mut query = sqlx::query_as::<_, DeviceRow>(sqlx::AssertSqlSafe(page_sql))
+            .bind(&team)
+            .bind(auth.p.id());
+        if let Some(a) = &scanned_to {
+            query = query.bind(a);
+        }
+        let fetched = query.fetch_all(&state.pool).await?;
+        let exhausted = (fetched.len() as i64) < batch;
+        for r in fetched {
+            scanned_to = Some(r.device_id.clone());
+            let v = domain::device_view(&state, &auth.world, &r, access, false).await;
+            if q.online.is_none_or(|o| o == v.online) {
+                rows.push((r, v));
+                if rows.len() as i64 > lim {
+                    break;
+                }
+            }
+        }
+        if exhausted || rows.len() as i64 > lim {
+            break;
         }
     }
+    let next = (rows.len() as i64 > lim).then(|| {
+        rows.truncate(lim as usize);
+        encode_cursor(&rows.last().map(|(r, _)| r.device_id.clone()).unwrap_or_default())
+    });
+    let mut items: Vec<_> = rows.into_iter().map(|(_, v)| v).collect();
     items.sort_by(|a, b| {
         b.online
             .cmp(&a.online)
+            .then_with(|| a.removed_at.is_some().cmp(&b.removed_at.is_some()))
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(ok("devices", serde_json::json!({"items": items, "next_cursor": next})))
@@ -353,7 +529,8 @@ fn with_etag(mut resp: Response, version: i64) -> Response {
 }
 
 pub async fn get(State(state): State<Shared>, auth: Auth, Path(device_id): Path<String>) -> AppResult<Response> {
-    let (d, access) = domain::visible_device(&state, &auth.world, &device_id, &auth.p).await?;
+    // The Carbon who paired a removed device can still read it (removed_at and removed_reason set).
+    let (d, access) = domain::readable_device(&state, &auth.world, &device_id, &auth.p).await?;
     let view = domain::device_view(&state, &auth.world, &d, access, access != Access::TeamViewer).await;
     Ok(with_etag(ok("device", view), d.version))
 }
@@ -492,7 +669,8 @@ pub async fn attach(
         return Err(AppError::invalid(format!(
             "{} devices run the Extend app themselves; pair them with their own pairing code.",
             input.os.as_str()
-        )));
+        ))
+        .hint("Install the Extend app on the device and enter the code it shows: `extend device pair <pairing_code> --name <name>`."));
     }
     if !input.os.allowed_hosts().contains(&host.os()) {
         let hosts: Vec<&str> = input.os.allowed_hosts().iter().map(|o| o.as_str()).collect();
@@ -502,12 +680,18 @@ pub async fn attach(
             hosts.join(" or "),
             host.name,
             host.os().as_str()
+        ))
+        .hint(format!(
+            "Pick one of your paired {} computers as the host; `extend device ls` lists them.",
+            hosts.join(" or ")
         )));
     }
     if host.host_device_id.is_some() {
-        return Err(AppError::invalid(
-            "A device paired through a computer can't carry other devices.",
-        ));
+        return Err(AppError::invalid(format!(
+            "{} is paired through a computer, so it can't carry other devices.",
+            host.name
+        ))
+        .hint("Attach the device to the computer instead: `extend device attach <host_device_id> …`."));
     }
     if !state.hub.is_connected(&host.key(&auth.world)).await {
         return Err(AppError::new(
@@ -535,9 +719,9 @@ pub async fn attach(
         &headers,
         &hash,
         || async move {
-            let mut tx = st.pool.begin().await?;
+            let mut add = begin_device_add(&st, &world).await?;
             let device_id = insert_device(
-                &mut tx,
+                &mut add.tx,
                 &world,
                 &team,
                 p.id(),
@@ -555,7 +739,11 @@ pub async fn attach(
                 ),
             )
             .await?;
-            tx.commit().await?;
+            // Read back on the add's transaction (see claim), then commit.
+            let d = domain::load_device_in(&mut *add.tx, &world, &device_id)
+                .await?
+                .ok_or_else(|| AppError::internal("attached device vanished"))?;
+            add.commit().await?;
             st.hub
                 .send(
                     &host.key(&world),
@@ -578,9 +766,6 @@ pub async fn attach(
                 serde_json::json!({"name": name, "through": host.device_id}),
             )
             .await;
-            let d = domain::load_device(&st, &world, &device_id)
-                .await?
-                .ok_or_else(|| AppError::internal("attached device vanished"))?;
             let view = domain::device_view(&st, &world, &d, Access::Owner, false).await;
             Ok((
                 StatusCode::CREATED,
@@ -599,7 +784,7 @@ pub async fn team_silicons(State(state): State<Shared>, auth: Auth) -> AppResult
 }
 
 pub async fn setup(State(state): State<Shared>, auth: Auth, Path(device_id): Path<String>) -> AppResult<Response> {
-    let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
+    let d = domain::owned_readable_device(&state, &auth.world, &device_id, &auth.p).await?;
     Ok(ok("setup", d.setup()))
 }
 
@@ -615,14 +800,28 @@ pub async fn setup_code(
     Body(input): Body<SetupCode>,
 ) -> AppResult<Response> {
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
+    if d.host_device_id.is_none() {
+        return Err(AppError::invalid(format!(
+            "{} runs the Extend app itself, so it takes no setup code; only an Apple TV paired through a Mac does.",
+            d.name
+        ))
+        .hint("Finish its setup on the device; watch the steps with `extend device setup <device_id>`."));
+    }
+    if d.os() != DeviceOs::Tvos {
+        return Err(AppError::invalid(format!(
+            "{} is a {} device, which takes no setup code; only an Apple TV does.",
+            d.name,
+            d.os().as_str()
+        ))
+        .hint("Follow the setup steps for this device instead: `extend device setup <device_id>` lists them."));
+    }
     let code = input.code.trim();
     if code.len() != 4 || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(AppError::invalid("The setup code is the 4 digits the Apple TV shows."));
-    }
-    if d.host_device_id.is_none() {
-        return Err(AppError::invalid(
-            "Only devices paired through a computer take a setup code.",
-        ));
+        return Err(AppError::invalid(format!(
+            "The setup code is the 4 digits the Apple TV shows; got {:?}.",
+            input.code
+        ))
+        .hint("Enter the 4 digits on the TV screen now; if they're gone, restart the setup on the Mac."));
     }
     let sent = state
         .hub
@@ -637,8 +836,12 @@ pub async fn setup_code(
     if !sent {
         return Err(AppError::new(
             ErrorCode::DeviceOffline,
-            "The computer this device pairs through is offline.",
-        ));
+            format!(
+                "The computer {} pairs through is offline, so the code could not reach it.",
+                d.name
+            ),
+        )
+        .hint("Open the Extend app on that Mac and make sure it's connected, then enter the code again."));
     }
     Ok(ok("setup", d.setup()))
 }
@@ -648,7 +851,7 @@ pub async fn access_list(
     auth: Auth,
     Path(device_id): Path<String>,
 ) -> AppResult<Response> {
-    domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
+    domain::owned_readable_device(&state, &auth.world, &device_id, &auth.p).await?;
     let rows: Vec<(String, String, String, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(sql!(
         "SELECT device_id, silicon_id, granted_by, granted_at, last_used_at FROM {} WHERE device_id = $1 ORDER BY granted_at",
         auth.world.t("device_access")
@@ -786,7 +989,8 @@ pub async fn activity(
     Path(device_id): Path<String>,
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
-    domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
+    // The log outlives the pair: the owner reads it after the device is removed too.
+    domain::owned_readable_device(&state, &auth.world, &device_id, &auth.p).await?;
     let lim = limit(q.limit)?;
     let before: Option<Uuid> = q
         .cursor
@@ -853,6 +1057,7 @@ struct RequestRow {
     reason: String,
     created_at: OffsetDateTime,
     delivery: String,
+    last_error: Option<String>,
 }
 
 impl RequestRow {
@@ -870,11 +1075,17 @@ impl RequestRow {
                 "failed" => Delivery::Failed,
                 _ => Delivery::Pending,
             },
+            last_error: if self.delivery == "delivered" {
+                None
+            } else {
+                self.last_error
+            },
         })
     }
 }
 
-const REQUEST_COLUMNS: &str = "request_id, device_id, from_id, to_id, session_id, reason, created_at, delivery";
+const REQUEST_COLUMNS: &str =
+    "request_id, device_id, from_id, to_id, session_id, reason, created_at, delivery, last_error";
 
 #[derive(Deserialize)]
 pub struct PageQuery {
@@ -927,7 +1138,7 @@ pub async fn requests_for_device(
     Path(device_id): Path<String>,
     Query(q): Query<PageQuery>,
 ) -> AppResult<Response> {
-    domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
+    domain::owned_readable_device(&state, &auth.world, &device_id, &auth.p).await?;
     request_page(&state, &auth.world, "device_id = $1", vec![device_id], &q).await
 }
 
@@ -954,6 +1165,10 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
     request_page(&state, &auth.world, &cond, binds, &q).await
 }
 
+/// Longest a request reason may be including the whitespace around it, which is kept and
+/// delivered as sent (the reason itself is 1–300 characters without it).
+const REASON_WITH_WHITESPACE_MAX_CHARS: usize = 1_000;
+
 pub async fn request_send(
     State(state): State<Shared>,
     auth: Auth,
@@ -969,12 +1184,22 @@ pub async fn request_send(
             format!("{} has no access to {}.", auth.p.id(), d.name),
         ));
     }
-    let reason = input.reason.trim().to_owned();
-    let n = reason.chars().count();
+    // The length is counted without surrounding whitespace, but the reason is stored and
+    // delivered exactly as the Silicon wrote it.
+    let reason = input.reason.clone();
+    let n = reason.trim().chars().count();
     if n == 0 || n > extend_protocol::REASON_MAX_CHARS {
         return Err(AppError::invalid(format!(
-            "The reason must be 1–300 characters; it is {n}."
-        )));
+            "The reason must be 1–300 characters (not counting spaces and line breaks around it); it is {n}."
+        ))
+        .hint("Say briefly why you need the device, for example \"Need it for an OTP, 2 minutes\"."));
+    }
+    let total = reason.chars().count();
+    if total > REASON_WITH_WHITESPACE_MAX_CHARS {
+        return Err(AppError::invalid(format!(
+            "The reason is {total} characters with the spaces and line breaks around it; at most {REASON_WITH_WHITESPACE_MAX_CHARS} are accepted."
+        ))
+        .hint("Remove the extra whitespace around the reason and send it again."));
     }
     let (Some(holder), Some(session)) = (d.in_use_silicon.clone(), d.in_use_session.clone()) else {
         return Err(AppError::new(
@@ -989,13 +1214,18 @@ pub async fn request_send(
             format!("You are already using {} in session {session}.", d.name),
         ));
     }
-    // One open request per Silicon per device per minute; a repeat returns the existing one.
+    // The same reason from the same Silicon for the same device (and the same session on it)
+    // within 60 s is a repeat (a retry, or a double send): it returns the existing request and
+    // sends nothing. A new reason is a new request and is delivered.
     let recent: Option<RequestRow> = sqlx::query_as(sql!(
-        "SELECT {REQUEST_COLUMNS} FROM {} WHERE device_id = $1 AND from_id = $2 AND created_at > now() - interval '60 seconds' ORDER BY created_at DESC LIMIT 1",
+        "SELECT {REQUEST_COLUMNS} FROM {} WHERE device_id = $1 AND from_id = $2 AND reason = $3 AND session_id = $4
+           AND created_at > now() - interval '60 seconds' ORDER BY created_at DESC LIMIT 1",
         auth.world.t("requests")
     ))
     .bind(&device_id)
     .bind(auth.p.id())
+    .bind(&reason)
+    .bind(&session)
     .fetch_optional(&state.pool)
     .await?;
     if let Some(r) = recent.and_then(RequestRow::view) {
@@ -1026,9 +1256,13 @@ pub async fn request_send(
             Ok(()) => "delivered",
             Err(e) => {
                 tracing::warn!(request_id = %id, error = %e.0.message, "Ting delivery failed; will retry");
+                let why = match &e.0.hint {
+                    Some(h) => format!("{} {h}", e.0.message),
+                    None => e.0.message.clone(),
+                };
                 sqlx::query(sql!("UPDATE {} SET attempts = attempts + 1, last_error = $2 WHERE request_id = $1", world.t("requests")))
                     .bind(id)
-                    .bind(&e.0.message)
+                    .bind(&why)
                     .execute(&st.pool)
                     .await?;
                 "pending"

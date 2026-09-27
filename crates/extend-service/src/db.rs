@@ -37,12 +37,27 @@ impl World {
     }
 }
 
+/// Advisory lock that serialises every change to how many test environments are active, so the
+/// limit of 10 holds under concurrent `prepare` and `restore` instructions.
+pub const TEST_SLOT_LOCK: i64 = 7342003;
+
+/// Takes the transaction-scoped advisory lock that serialises Honeycomb operations on one test
+/// environment (held until `tx` ends, including when it's dropped).
+pub async fn lock_environment(tx: &mut sqlx::PgConnection, environment_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 7342004))")
+        .bind(format!("extend-test-environment:{environment_id}"))
+        .execute(tx)
+        .await?;
+    Ok(())
+}
+
 pub async fn connect(url: &str) -> anyhow::Result<PgPool> {
     let pool = PgPoolOptions::new().max_connections(32).connect(url).await?;
     Ok(pool)
 }
 
-const GLOBAL: &[&str] = &[r#"
+const GLOBAL: &[&str] = &[
+    r#"
 CREATE SCHEMA IF NOT EXISTS extend_global;
 CREATE TABLE IF NOT EXISTS extend_global.schema_versions (
     schema_name text PRIMARY KEY,
@@ -97,7 +112,38 @@ CREATE TABLE IF NOT EXISTS extend_global.local_test_apps (
     secret_digest text PRIMARY KEY,
     environment_id uuid NOT NULL
 );
-"#];
+"#,
+    r#"
+-- The world an enrollment was started in: its pairing code pairs a device into that world only.
+ALTER TABLE extend_global.enrollments ADD COLUMN IF NOT EXISTS world_schema text NOT NULL DEFAULT 'extend';
+ALTER TABLE extend_global.enrollments ADD COLUMN IF NOT EXISTS environment_id uuid;
+CREATE INDEX IF NOT EXISTS enrollments_world ON extend_global.enrollments (world_schema) WHERE world_schema <> 'extend';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'enrollments_claimed_in_own_world') THEN
+        -- A backstop for the claim route's own check: a code never pairs into another world.
+        ALTER TABLE extend_global.enrollments ADD CONSTRAINT enrollments_claimed_in_own_world
+            CHECK (paired_schema IS NULL OR paired_schema = world_schema) NOT VALID;
+    END IF;
+END $$;
+-- The operation that last moved the environment (a retry of it may repeat its revision), and the
+-- digest of IAM's test webhook key, so signed test deliveries route after a restart.
+ALTER TABLE extend_global.test_environments ADD COLUMN IF NOT EXISTS last_operation_id uuid;
+ALTER TABLE extend_global.test_environments ADD COLUMN IF NOT EXISTS webhook_key_digest text;
+CREATE INDEX IF NOT EXISTS test_environments_webhook_key ON extend_global.test_environments (webhook_key_digest)
+    WHERE webhook_key_digest IS NOT NULL;
+ALTER TABLE extend_global.honeycomb_operations ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+-- The local IAM stand-in's view of a test application: active once IAM (Honeycomb) opened it.
+ALTER TABLE extend_global.local_test_apps ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+-- Test application secrets (by digest) IAM has confirmed, and for which environment, so a secret
+-- IAM refuses while its environment is being prepared or restored gets a precise answer.
+CREATE TABLE IF NOT EXISTS extend_global.test_secret_bindings (
+    secret_digest text PRIMARY KEY,
+    environment_id uuid NOT NULL,
+    confirmed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS test_secret_bindings_env ON extend_global.test_secret_bindings (environment_id);
+"#,
+];
 
 /// Migrations for every world schema. `{s}` is replaced with the schema name.
 const WORLD: &[&str] = &[
@@ -256,6 +302,15 @@ CREATE TABLE IF NOT EXISTS {s}.telemetry (
 ALTER TABLE {s}.telemetry ADD COLUMN IF NOT EXISTS exported_at timestamptz;
 CREATE INDEX IF NOT EXISTS telemetry_pending ON {s}.telemetry (id) WHERE exported_at IS NULL;
 "#,
+    r#"
+-- The newest version of each IAM aggregate applied here, so an older event arriving late is
+-- dropped instead of undoing a newer one (TECHNICAL.md section 9).
+CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
+    aggregate_id text PRIMARY KEY,
+    version bigint NOT NULL,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+"#,
 ];
 
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
@@ -308,12 +363,14 @@ pub async fn ensure_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
     result
 }
 
-/// Empties every table in a world (a test environment clean).
+/// Empties every table in a world (a test environment clean). The IAM event and aggregate
+/// records stay: they hold no test data, only which IAM events were already applied, so an event
+/// IAM delivers again after the clean can't be applied a second time.
 pub async fn truncate_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
     anyhow::ensure!(world.is_test(), "refusing to truncate production");
     let sql = format!(
         "TRUNCATE {s}.device_locks, {s}.sessions, {s}.session_ids, {s}.device_access, {s}.activity, {s}.requests,
-                  {s}.files, {s}.uploads, {s}.iam_events, {s}.idempotency, {s}.reports, {s}.telemetry, {s}.devices CASCADE",
+                  {s}.files, {s}.uploads, {s}.idempotency, {s}.reports, {s}.telemetry, {s}.devices CASCADE",
         s = world.schema
     );
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone())).execute(pool).await?;

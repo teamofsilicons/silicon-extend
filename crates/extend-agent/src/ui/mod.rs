@@ -5,17 +5,23 @@
 //! watch, taps go out as [`UiAction`]s.
 //!
 //! * Menu: the headline ("Pairing code: 4F9C2A", "Paired to c:alice", "si:chef is using this
-//!   Mac"), the test environment, **Stop** / **Done**, Show Silicon Extend…, Start at login,
-//!   Revoke pair…, Quit.
+//!   Mac"), the test environment, **Stop** / **Done** (for this computer and for each device it
+//!   carries), Show Silicon Extend…, Start at login, Revoke pair…, Quit.
 //! * Window: the big pairing code and how to use it, the setup steps with buttons that open the
 //!   right settings page, the device and its Carbon, the test-environment banner, devices this
-//!   computer carries, and Revoke pair with a confirmation.
+//!   computer carries, start at login with a switch to turn it off, "Download the update" when
+//!   Extend needs a newer app, and Revoke pair with a confirmation.
 //! * Banner: a small always-on-top strip, "si:chef is using this Mac  [Stop]", shown for as long
-//!   as a Silicon is using the computer (and "… needs you: <reason>  [Done]" during a takeover).
-//!   It never takes focus by itself, so it doesn't get in the way of the Silicon's typing.
+//!   as a Silicon is using the computer or a device it carries (one row each), and "… needs you:
+//!   <reason>  [Done]" during a takeover. It never takes focus by itself, so it doesn't get in the
+//!   way of the Silicon's typing.
+//!
+//! Once the computer is paired, start at login is turned on unless the Carbon turned it off
+//! ([`crate::autostart::after_pairing`]).
 
 pub mod icon;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use extend_protocol::DeviceId;
@@ -33,6 +39,23 @@ use icon::IconState;
 
 const PAGE: &str = include_str!("page.html");
 
+/// What the window needs from the configuration.
+#[derive(Debug, Clone)]
+pub struct Context {
+    /// Where the start-at-login choice is kept.
+    pub state_dir: PathBuf,
+    /// Where "Download the update" goes (`Config::download_url`).
+    pub download_url: String,
+}
+
+/// Start at login as the window shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AutostartView {
+    on: bool,
+    /// Why the last change didn't happen, and what to do.
+    error: Option<String>,
+}
+
 #[derive(Debug)]
 enum UserEvent {
     Status(Box<AgentStatus>),
@@ -42,7 +65,12 @@ enum UserEvent {
 }
 
 /// Runs the UI until Quit. `agent_thread` is joined (briefly) on the way out.
-pub fn run(handle: AgentHandle, runtime: tokio::runtime::Handle, agent_thread: std::thread::JoinHandle<()>) -> ! {
+pub fn run(
+    handle: AgentHandle,
+    runtime: tokio::runtime::Handle,
+    agent_thread: std::thread::JoinHandle<()>,
+    context: Context,
+) -> ! {
     #[allow(unused_mut)]
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
@@ -96,6 +124,13 @@ pub fn run(handle: AgentHandle, runtime: tokio::runtime::Handle, agent_thread: s
         status: AgentStatus::default(),
         shown_code: false,
         agent_thread: Some(agent_thread),
+        context,
+        autostart: AutostartView {
+            on: crate::autostart::is_installed(),
+            error: None,
+        },
+        checked_autostart: false,
+        download_error: None,
     };
 
     event_loop.run(move |event, target, control_flow| {
@@ -134,10 +169,53 @@ struct Ui {
     status: AgentStatus,
     shown_code: bool,
     agent_thread: Option<std::thread::JoinHandle<()>>,
+    context: Context,
+    autostart: AutostartView,
+    /// Start at login was settled for this run once the computer was paired.
+    checked_autostart: bool,
+    /// Why "Download the update" couldn't open the browser.
+    download_error: Option<String>,
 }
 
+/// One session the banner shows: this computer's own (`target` none) or one on a device it
+/// carries. A takeover is listed even when its session has already been announced as ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BannerSession {
+    target: Option<String>,
+    session_id: Option<String>,
+    takeover: Option<(String, String)>,
+}
+
+/// The banner's sessions, this computer's first, then the carried devices' in the menu's order.
+fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
+    let mut out = Vec::new();
+    if s.in_use.is_some() || s.takeover.is_some() {
+        out.push(BannerSession {
+            target: None,
+            session_id: s.in_use.as_ref().map(|u| u.session_id.clone()),
+            takeover: s.takeover.as_ref().map(|t| (t.session_id.clone(), t.reason.clone())),
+        });
+    }
+    for a in &s.attached {
+        if a.in_use.is_some() || a.takeover.is_some() {
+            out.push(BannerSession {
+                target: Some(a.device_id.clone()),
+                session_id: a.in_use.as_ref().map(|u| u.session_id.clone()),
+                takeover: a.takeover.as_ref().map(|t| (t.session_id.clone(), t.reason.clone())),
+            });
+        }
+    }
+    out
+}
+
+/// The most rows the banner shows at once (a row each for this computer and carried devices).
+const BANNER_MAX_ROWS: usize = 4;
+
 fn icon_state(s: &AgentStatus) -> IconState {
-    if s.in_use.is_some() || s.takeover.is_some() || s.attached.iter().any(|a| a.in_use.is_some()) {
+    if s.in_use.is_some()
+        || s.takeover.is_some()
+        || s.attached.iter().any(|a| a.in_use.is_some() || a.takeover.is_some())
+    {
         IconState::InUse
     } else if matches!(s.phase, Phase::Enrolling | Phase::Starting) {
         IconState::Unpaired
@@ -153,25 +231,39 @@ fn icon_state(s: &AgentStatus) -> IconState {
 }
 
 /// Whether a collapsed banner stays collapsed across a status change. A new session (another
-/// Silicon, or the same one again), a takeover, or the banner going away always brings back the
-/// full banner, so Stop, Done and the takeover reason are never hidden by an earlier choice.
+/// Silicon, the same one again, or one on a carried device), a takeover, or the banner going away
+/// always brings back the full banner, so Stop, Done and the takeover reason are never hidden by an
+/// earlier choice. (Not `expires_at`: the same takeover read back from the service may format it
+/// differently.)
 fn keep_minimized(minimized: bool, before: &AgentStatus, after: &AgentStatus) -> bool {
-    let session = |s: &AgentStatus| s.in_use.as_ref().map(|u| u.session_id.clone());
-    // Not `expires_at`: the same takeover read back from the service may format it differently.
-    let takeover = |s: &AgentStatus| s.takeover.as_ref().map(|t| (t.session_id.clone(), t.reason.clone()));
+    let sessions = |s: &AgentStatus| {
+        banner_sessions(s)
+            .into_iter()
+            .map(|b| (b.target, b.session_id))
+            .collect::<Vec<_>>()
+    };
+    let takeovers = |s: &AgentStatus| {
+        banner_sessions(s)
+            .into_iter()
+            .filter_map(|b| b.takeover.map(|t| (b.target, t)))
+            .collect::<Vec<_>>()
+    };
+    let now = takeovers(after);
     minimized
-        && (after.in_use.is_some() || after.takeover.is_some())
-        && session(before) == session(after)
-        && (after.takeover.is_none() || takeover(before) == takeover(after))
+        && !banner_sessions(after).is_empty()
+        && sessions(before) == sessions(after)
+        && (now.is_empty() || takeovers(before) == now)
 }
 
 /// The banner's size. Collapsed, it still has the Silicon's name, Stop (or Done) and the test
-/// environment's name, so stopping stays one tap.
-fn banner_size(minimized: bool, environment: bool) -> LogicalSize<f64> {
+/// environment's name, so stopping stays one tap. Expanded, each carried device in use adds a
+/// row with its own Stop (or Done).
+fn banner_size(minimized: bool, environment: bool, rows: usize) -> LogicalSize<f64> {
+    let extra = rows.clamp(1, BANNER_MAX_ROWS) - 1;
     match (minimized, environment) {
         (true, false) => LogicalSize::new(250.0, 44.0),
         (true, true) => LogicalSize::new(360.0, 44.0),
-        (false, _) => LogicalSize::new(420.0, 52.0),
+        (false, _) => LogicalSize::new(420.0, 52.0 + 38.0 * extra as f64),
     }
 }
 
@@ -179,9 +271,25 @@ fn make_icon(state: IconState) -> Option<Icon> {
     Icon::from_rgba(icon::rgba(state), icon::SIZE, icon::SIZE).ok()
 }
 
+/// What the page shows besides the status.
+#[derive(Debug, Clone, Default)]
+struct PageExtras {
+    autostart: AutostartView,
+    download_url: String,
+    download_error: Option<String>,
+}
+
 /// The JSON the page renders: the status plus a few words for this OS.
-fn page_state(s: &AgentStatus) -> String {
+fn page_state(s: &AgentStatus, extras: &PageExtras) -> String {
     let mut v = serde_json::to_value(s).unwrap_or_default();
+    v["autostart"] = serde_json::json!({"on": extras.autostart.on, "error": extras.autostart.error});
+    v["download_url"] = extras.download_url.clone().into();
+    v["download_host"] = url::Url::parse(&extras.download_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_default()
+        .into();
+    v["download_error"] = extras.download_error.clone().into();
     let os_label = if cfg!(target_os = "macos") {
         "Mac"
     } else if cfg!(windows) {
@@ -250,19 +358,8 @@ impl Ui {
         if let Some(u) = &s.in_use {
             add(&MenuItem::with_id("stop", format!("Stop {}", u.silicon_id), true, None));
         }
-        for a in &s.attached {
-            let line = match (&a.error, &a.in_use) {
-                (Some(e), _) => format!("{}: {}", a.name, truncate(e, 50)),
-                (None, Some(u)) => format!("{}: {} is using it", a.name, u.silicon_id),
-                (None, None) if a.online => format!("{}: online", a.name),
-                _ => format!("{}: offline", a.name),
-            };
-            add(&MenuItem::with_id(
-                format!("attached:{}", a.device_id),
-                line,
-                false,
-                None,
-            ));
+        for item in attached_menu(s) {
+            add(&MenuItem::with_id(item.id, item.label, item.enabled, None));
         }
         add(&PredefinedMenuItem::separator());
         add(&MenuItem::with_id("show", "Show Silicon Extend…", true, None));
@@ -273,7 +370,7 @@ impl Ui {
             "autostart",
             "Start at login",
             true,
-            crate::autostart::is_installed(),
+            self.autostart.on,
             None,
         ));
         if s.phase == Phase::Superseded {
@@ -289,13 +386,19 @@ impl Ui {
 
     fn on_status(&mut self, s: AgentStatus, target: &EventLoopWindowTarget<UserEvent>) {
         let first_code = s.phase == Phase::Enrolling && !self.shown_code;
-        let banner_needed = s.in_use.is_some() || s.takeover.is_some();
+        let banner_needed = !banner_sessions(&s).is_empty();
         let minimized = keep_minimized(self.banner_minimized, &self.status, &s);
-        let resize = minimized != self.banner_minimized || s.environment.is_some() != self.status.environment.is_some();
+        let resize = minimized != self.banner_minimized
+            || s.environment.is_some() != self.status.environment.is_some()
+            || banner_sessions(&s).len() != banner_sessions(&self.status).len();
         self.banner_minimized = minimized;
         self.status = s;
         if resize {
             self.fit_banner();
+        }
+        if !self.checked_autostart && paired(&self.status) {
+            self.checked_autostart = true;
+            self.settle_autostart();
         }
         if let Some(t) = &self.tray {
             let state = icon_state(&self.status);
@@ -316,10 +419,74 @@ impl Ui {
         }
     }
 
+    fn extras(&self) -> PageExtras {
+        PageExtras {
+            autostart: self.autostart.clone(),
+            download_url: self.context.download_url.clone(),
+            download_error: self.download_error.clone(),
+        }
+    }
+
+    /// Once the computer is paired: start at login on, unless the Carbon turned it off.
+    fn settle_autostart(&mut self) {
+        match crate::autostart::apply_after_pairing(&self.context.state_dir) {
+            Ok(done) => tracing::info!("{done}"),
+            Err(e) => {
+                tracing::warn!("couldn't turn start at login on: {e:#}");
+                self.autostart.error = Some(format!(
+                    "Couldn't turn on start at login: {} Silicon Extend won't open by itself after a restart until it is on; try the switch again.",
+                    sentence(&format!("{e:#}"))
+                ));
+            }
+        }
+        self.autostart.on = crate::autostart::is_installed();
+        self.refresh_menu();
+        self.push_state();
+    }
+
+    /// The Carbon's switch (window or menu): on or off for good.
+    fn set_autostart(&mut self, on: bool) {
+        let result = crate::autostart::set_by_carbon(&self.context.state_dir, on, &Default::default());
+        self.autostart.error = match result {
+            Ok(done) => {
+                tracing::info!("start at login {}: {done}", if on { "on" } else { "off" });
+                None
+            }
+            Err(e) => {
+                tracing::warn!("couldn't change start at login: {e:#}");
+                Some(format!(
+                    "Couldn't turn start at login {}: {}",
+                    if on { "on" } else { "off" },
+                    sentence(&format!("{e:#}"))
+                ))
+            }
+        };
+        self.autostart.on = crate::autostart::is_installed();
+        self.refresh_menu();
+        self.push_state();
+    }
+
+    fn refresh_menu(&self) {
+        if let Some(t) = &self.tray {
+            t.set_menu(Some(Box::new(self.build_menu())));
+        }
+    }
+
+    /// Opens the configured download page in the Carbon's browser.
+    fn open_download(&mut self) {
+        self.download_error = open_in_browser(&self.context.download_url).err().map(|why| {
+            format!(
+                "Couldn't open your browser ({why}). Open {} yourself to download the update.",
+                self.context.download_url
+            )
+        });
+        self.push_state();
+    }
+
     fn push_state(&self) {
         let js = format!(
             "window.__extend && window.__extend({}, {})",
-            page_state(&self.status),
+            page_state(&self.status, &self.extras()),
             self.banner_minimized
         );
         for (_, view) in self.main.iter().chain(self.banner.iter()) {
@@ -424,7 +591,11 @@ impl Ui {
     }
 
     fn banner_size(&self) -> LogicalSize<f64> {
-        banner_size(self.banner_minimized, self.status.environment.is_some())
+        banner_size(
+            self.banner_minimized,
+            self.status.environment.is_some(),
+            banner_sessions(&self.status).len(),
+        )
     }
 
     fn set_banner_minimized(&mut self, minimized: bool) {
@@ -462,6 +633,16 @@ impl Ui {
 
     fn on_menu(&mut self, id: &str, target: &EventLoopWindowTarget<UserEvent>, control_flow: &mut ControlFlow) {
         tracing::info!("menu: {id}");
+        if let Some((action, device)) = id.split_once(':')
+            && let Ok(device) = device.parse::<DeviceId>()
+        {
+            match action {
+                "stop" => self.send(UiAction::Stop { target: Some(device) }),
+                "done" => self.send(UiAction::TakeoverDone { target: Some(device) }),
+                _ => {}
+            }
+            return;
+        }
         match id {
             "stop" => self.send(UiAction::Stop { target: None }),
             "takeover_done" => self.send(UiAction::TakeoverDone { target: None }),
@@ -479,17 +660,8 @@ impl Ui {
             }
             "reconnect" => self.send(UiAction::Reconnect),
             "autostart" => {
-                let result = if crate::autostart::is_installed() {
-                    crate::autostart::uninstall().map(|_| ())
-                } else {
-                    crate::autostart::install(&Default::default()).map(|_| ())
-                };
-                if let Err(e) = result {
-                    tracing::warn!("couldn't change start at login: {e:#}");
-                }
-                if let Some(t) = &self.tray {
-                    t.set_menu(Some(Box::new(self.build_menu())));
-                }
+                let on = !crate::autostart::is_installed();
+                self.set_autostart(on);
             }
             "quit" => self.quit(control_flow),
             _ => {}
@@ -523,6 +695,12 @@ impl Ui {
             "revoke" if !banner => self.send(UiAction::RevokePair),
             "reconnect" => self.send(UiAction::Reconnect),
             "reprobe" => self.send(UiAction::Reprobe),
+            "set_autostart" if !banner => {
+                if let Some(on) = msg.get("on").and_then(|v| v.as_bool()) {
+                    self.set_autostart(on);
+                }
+            }
+            "open_download" if !banner => self.open_download(),
             "open_settings" => {
                 let step = msg.get("step").and_then(|s| s.as_str()).unwrap_or("");
                 open_settings(step);
@@ -557,6 +735,99 @@ fn open_settings(step: &str) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = step;
+}
+
+/// Paired, and past pairing: the computer has a device and a Carbon.
+fn paired(s: &AgentStatus) -> bool {
+    s.device.is_some() && !matches!(s.phase, Phase::Enrolling | Phase::Starting | Phase::NotRunning)
+}
+
+/// A line of the tray menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuLine {
+    id: String,
+    label: String,
+    enabled: bool,
+}
+
+/// The menu's lines for the devices this computer carries: a status line each, and for one in
+/// use, Stop (and Done during a takeover), one click each, as for this computer.
+fn attached_menu(s: &AgentStatus) -> Vec<MenuLine> {
+    let mut out = Vec::new();
+    for a in &s.attached {
+        let line = |label: String| MenuLine {
+            id: format!("attached:{}", a.device_id),
+            label,
+            enabled: false,
+        };
+        if let Some(e) = &a.error {
+            out.push(line(format!("{}: {}", a.name, truncate(e, 50))));
+            continue;
+        }
+        if let Some(t) = &a.takeover {
+            out.push(line(format!(
+                "{}: waiting for you: {}",
+                a.name,
+                truncate(&t.reason, 50)
+            )));
+            out.push(MenuLine {
+                id: format!("done:{}", a.device_id),
+                label: format!("Done on {}", a.name),
+                enabled: true,
+            });
+        }
+        match &a.in_use {
+            Some(u) => out.push(MenuLine {
+                id: format!("stop:{}", a.device_id),
+                label: format!("Stop {} on {}", u.silicon_id, a.name),
+                enabled: true,
+            }),
+            None if a.takeover.is_none() => out.push(line(format!(
+                "{}: {}",
+                a.name,
+                if a.online { "online" } else { "offline" }
+            ))),
+            None => {}
+        }
+    }
+    out
+}
+
+/// Opens an http(s) link in the default browser.
+fn open_in_browser(link: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(link).map_err(|e| format!("{link} isn't a link: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("{link} isn't a web link"));
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("/usr/bin/open");
+        c.arg(parsed.as_str());
+        c
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", parsed.as_str()]);
+        c
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(parsed.as_str());
+        c
+    };
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    // Reaped in the background: the opener exits as soon as it has handed the link over.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// `s` ending in exactly one full stop.
+fn sentence(s: &str) -> String {
+    format!("{}.", s.trim().trim_end_matches('.'))
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -601,10 +872,162 @@ mod tests {
             }),
             ..Default::default()
         };
-        let v: serde_json::Value = serde_json::from_str(&page_state(&s)).unwrap();
+        let extras = PageExtras {
+            autostart: AutostartView { on: true, error: None },
+            download_url: "https://downloads.example.org/extend/mac".into(),
+            download_error: None,
+        };
+        let v: serde_json::Value = serde_json::from_str(&page_state(&s, &extras)).unwrap();
         assert_eq!(v["pairing"]["code"], "4F9C2A");
         assert!(v["computer_word"].is_string());
         assert!(v["settings_steps"].is_array());
+        // The update's download page and start at login come from the configuration and the
+        // entry on disk, not from the page.
+        assert_eq!(v["download_url"], "https://downloads.example.org/extend/mac");
+        assert_eq!(v["download_host"], "downloads.example.org");
+        assert_eq!(v["autostart"], serde_json::json!({"on": true, "error": null}));
+    }
+
+    #[test]
+    fn the_update_view_has_a_download_button_and_start_at_login_a_switch() {
+        // The update view: one primary action that asks the app to open the configured page.
+        let upgrade = PAGE
+            .split_once("<section id=\"upgrade\"")
+            .unwrap()
+            .1
+            .split_once("</section>")
+            .unwrap()
+            .0;
+        assert!(upgrade.contains("data-action=\"open_download\""), "{upgrade}");
+        assert!(upgrade.contains("button primary"), "{upgrade}");
+        assert!(
+            !upgrade.contains("extend.teamofsilicons.com"),
+            "the page names the configured host"
+        );
+        // Start at login: a visible switch that sends set_autostart with on/off.
+        let startup = PAGE
+            .split_once("<section id=\"startup\"")
+            .unwrap()
+            .1
+            .split_once("</section>")
+            .unwrap()
+            .0;
+        assert!(startup.contains("data-action=\"set_autostart\""), "{startup}");
+        assert!(PAGE.contains("msg.on = el.getAttribute('data-on') === 'true'"));
+    }
+
+    fn carried(id: &str, name: &str) -> crate::status::AttachedInfo {
+        crate::status::AttachedInfo {
+            device_id: id.into(),
+            name: name.into(),
+            os: extend_protocol::DeviceOs::Ios,
+            online: true,
+            in_use: None,
+            takeover: None,
+            setup: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn carried_devices_have_one_click_stop_and_done_in_the_menu() {
+        let mut phone = carried("3f2a1b0c", "Alice's iPhone");
+        let tv = carried("9d8e7f6a", "Living room TV");
+        let mut s = AgentStatus {
+            phase: Phase::Online,
+            attached: vec![phone.clone(), tv.clone()],
+            ..Default::default()
+        };
+        let menu = attached_menu(&s);
+        assert!(menu.iter().all(|m| !m.enabled), "{menu:?}");
+        phone.in_use = Some(InUseInfo {
+            silicon_id: "si:chef".into(),
+            session_id: "b40".into(),
+            since: String::new(),
+        });
+        s.attached = vec![phone.clone(), tv.clone()];
+        let menu = attached_menu(&s);
+        let stop = menu.iter().find(|m| m.id == "stop:3f2a1b0c").expect("a Stop item");
+        assert!(stop.enabled);
+        assert_eq!(stop.label, "Stop si:chef on Alice's iPhone");
+        // The menu's ids name the device the action goes to.
+        let (action, device) = stop.id.split_once(':').unwrap();
+        assert_eq!(action, "stop");
+        assert!(device.parse::<DeviceId>().is_ok());
+        phone.takeover = Some(TakeoverInfo {
+            session_id: "b40".into(),
+            reason: "Approve Face ID".into(),
+            expires_at: String::new(),
+        });
+        s.attached = vec![phone, tv];
+        let menu = attached_menu(&s);
+        let done = menu.iter().find(|m| m.id == "done:3f2a1b0c").expect("a Done item");
+        assert!(done.enabled);
+        assert!(menu.iter().any(|m| m.id == "stop:3f2a1b0c" && m.enabled));
+        assert!(
+            menu.iter()
+                .any(|m| m.label.contains("waiting for you: Approve Face ID") && !m.enabled)
+        );
+        assert!(menu.iter().any(|m| m.label == "Living room TV: online" && !m.enabled));
+    }
+
+    #[test]
+    fn the_banner_shows_carried_devices_in_use_too() {
+        let mut phone = carried("3f2a1b0c", "Alice's iPhone");
+        let idle = AgentStatus {
+            phase: Phase::Online,
+            attached: vec![phone.clone()],
+            ..Default::default()
+        };
+        assert!(banner_sessions(&idle).is_empty());
+        phone.in_use = Some(InUseInfo {
+            silicon_id: "si:chef".into(),
+            session_id: "b40".into(),
+            since: String::new(),
+        });
+        let phone_only = AgentStatus {
+            attached: vec![phone.clone()],
+            ..idle.clone()
+        };
+        let rows = banner_sessions(&phone_only);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target.as_deref(), Some("3f2a1b0c"));
+        assert_eq!(icon_state(&phone_only), IconState::InUse);
+        // This computer's own session comes first; each session gets a row.
+        let both = AgentStatus {
+            attached: vec![phone.clone()],
+            ..in_use("a3f")
+        };
+        let rows = banner_sessions(&both);
+        assert_eq!(
+            rows.iter().map(|r| r.target.clone()).collect::<Vec<_>>(),
+            vec![None, Some("3f2a1b0c".into())]
+        );
+        assert!(banner_size(false, false, 2).height > banner_size(false, false, 1).height);
+        assert_eq!(
+            banner_size(false, false, 9).height,
+            banner_size(false, false, BANNER_MAX_ROWS).height
+        );
+        assert_eq!(banner_size(true, false, 3).height, banner_size(true, false, 1).height);
+        // A carried device's new session opens a collapsed banner again.
+        assert!(keep_minimized(true, &in_use("a3f"), &in_use("a3f")));
+        assert!(!keep_minimized(true, &in_use("a3f"), &both));
+        assert!(keep_minimized(true, &both, &both.clone()));
+        assert!(keep_minimized(true, &phone_only, &phone_only.clone()));
+        let mut paused = phone.clone();
+        paused.takeover = Some(TakeoverInfo {
+            session_id: "b40".into(),
+            reason: "Approve Face ID".into(),
+            expires_at: String::new(),
+        });
+        let taken = AgentStatus {
+            attached: vec![paused],
+            ..idle
+        };
+        assert!(!keep_minimized(true, &phone_only, &taken));
+        // The page renders a row with Stop for each carried device, and targets its buttons.
+        assert!(PAGE.contains("id=\"banner-more\""));
+        assert!(PAGE.contains("function bannerRows("));
     }
 
     fn in_use(session: &str) -> AgentStatus {
@@ -646,9 +1069,9 @@ mod tests {
 
     #[test]
     fn the_collapsed_banner_keeps_room_for_stop_and_the_test_environment() {
-        assert!(banner_size(true, false).width >= 250.0);
-        assert!(banner_size(true, true).width > banner_size(true, false).width);
-        assert!(banner_size(true, true).width < banner_size(false, true).width);
+        assert!(banner_size(true, false, 1).width >= 250.0);
+        assert!(banner_size(true, true, 1).width > banner_size(true, false, 1).width);
+        assert!(banner_size(true, true, 1).width < banner_size(false, true, 1).width);
         // Collapsed, the page hides only the long text and the collapse button.
         let mut css = String::new();
         let mut rest = PAGE;
@@ -672,6 +1095,12 @@ mod tests {
                 "{kept} is hidden in the collapsed banner: {hidden:?}"
             );
         }
+    }
+
+    #[test]
+    fn messages_end_in_one_full_stop() {
+        assert_eq!(sentence("Move it to Applications."), "Move it to Applications.");
+        assert_eq!(sentence("permission denied"), "permission denied.");
     }
 
     #[test]

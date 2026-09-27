@@ -1,10 +1,12 @@
 # Open gates
 
 The current list of what stands between this checkout and a released Silicon Extend, as of
-2026-09-27. The Carbon-owned [`understanding/UNDERSTANDING.md`](../understanding/UNDERSTANDING.md)
-is the product authority; nothing here changes it. An implementation, a passing mock or an emulator
-run does not close a physical-device or production gate. What was run, and on what, is in
-[`verification.md`](verification.md).
+2026-09-27 after the second round of fixes. The Carbon-owned
+[`understanding/UNDERSTANDING.md`](../understanding/UNDERSTANDING.md) is the product authority;
+nothing here changes it. An implementation, a passing mock or an emulator run does not close a
+physical-device or production gate. What was run, and on what, is in
+[`verification.md`](verification.md). Round 2 is not committed yet: it is the working tree on top of
+`5b3c578`.
 
 ## Needs the Carbon
 
@@ -27,7 +29,8 @@ Checked read-only with `gh` on 2026-09-27; nothing was pushed, created or change
   a Carbon decision, not a git step: which name this product keeps, which repository it lives in,
   and what happens to the other product's `UNDERSTANDING.md` (two `UNDERSTANDING.md` files for two
   products must not end up side by side, and agents may edit neither). Until then: no push, never a
-  force-push to any `main`, and treat `Cargo.toml`'s `repository` value as unsettled.
+  force-push to any `main`, and treat `Cargo.toml`'s `repository` value as unsettled. The website's
+  download page and `extend report` link to that repository too.
 - Names that may collide the same way and were not checked: the crates.io names
   (`silicon-extend-client`, `extend-protocol`), the Honeycomb app `extend`, and the `extend`
   command on a Silicon's `PATH`.
@@ -41,7 +44,8 @@ Checked read-only with `gh` on 2026-09-27; nothing was pushed, created or change
 - A `notarytool` Keychain profile for `NOTARY_PROFILE`. Notarization is implemented in
   `apps/desktop/macos/build-app.sh` and exercised only with stubbed Apple tools; it has never run
   against Apple.
-- The Android **release signing key** (APKs are development-signed today).
+- The Android **release signing key**: `assembleRelease` now builds an unsigned APK and signs it only
+  when `EXTEND_ANDROID_SIGNING_PROPERTIES` points at the key's properties.
 - Which Apple development team signs the iPhone/iPad runner (TECHNICAL.md open question 11).
 
 ### 3. Publishing
@@ -50,54 +54,63 @@ Nothing is deployed or published. Each needs the Carbon's go-ahead and credentia
 infrastructure must be checked before anything is changed:
 
 - The Extend service at `backend.extend.teamofsilicons.com` (one instance; `docs/deployment.md`).
-- The configuration website at `extend.teamofsilicons.com` (Vercel).
-- DNS for both.
+  `deploy/aws/` now holds a stack for one ARM64 EC2 host behind Caddy with a private RDS database,
+  and its first-deploy and release steps; it has not been deployed.
+- The configuration website at `extend.teamofsilicons.com` (Vercel), and DNS for both.
 - The CLI: tag, `release.yml`, `honeycomb releases upload` from a Carbon session.
-- Downloads of the Mac, Linux, Windows and Android apps.
+- Downloads of the Mac, Linux, Windows and Android apps (every download link on the website is a
+  placeholder page today).
 - Silicon IAM registration of Extend's OBO catalog, including Briefcase's approval of
-  `invitations.create` (critical).
+  `invitations.create` (critical), and of the webhook endpoint with its signing secret (production
+  now refuses to start without `EXTEND_IAM_WEBHOOK_SECRET`).
 - Production smoke tests after each.
 
 ### 4. Contract and product decisions
 
+- **`TECHNICAL.md`, "Carbon decisions after round 2" (C1–C9):** logout elsewhere ended by a 15 s
+  heuristic (IAM sends no logout events); self-destruct and Ting retries depending on logins held in
+  memory; the 1,000-character raw reason cap; the `activate` participant action; IAM event records
+  kept across a clean; the bug-report address (`gmail.com` in the build, `gmails.com` in
+  `UNDERSTANDING.md`); the CLI's JSON shape and `login status` exit 0; IAM's sign-up address; and
+  Carbon logout. Its numbered open questions 1–12 and 14 still stand; 13 and 15 were settled by
+  building them.
+- **Contract edits need review**, because each of these files says changes need a Carbon's
+  approval. Round 1: `cli.yaml` (`adb` arguments verbatim, `--` rules, local-file-only `install`,
+  `record start --quality`), `TECHNICAL.md`, `api.yaml` (the 8 MiB attachment total, device error
+  codes, `file keep`, file names). Round 2: `api.yaml` (the file download route, removed devices,
+  request semantics and `last_error`, `warnings`, deprecation headers and 410, the contracts matrix,
+  test-environment errors on every route, world-bound pairing codes, the lifecycle rules, close code
+  4503, the webhook rules), `cli.yaml` (the JSON shape, `login status`, `EXTEND_TEST_SECRET`,
+  `--verbose`, `config home --use-existing`, `device ls --removed`, downloads, `version`), and
+  `TECHNICAL.md` (the as-built notes of round 2).
 - **`UNDERSTANDING.md` was edited by the rename.** Commit `7af7fd5` rewrote 128 lines of the
   Carbon-owned file (Bridge → Extend, `bridge.teamofsilicons.com` → `extend.teamofsilicons.com`),
   although the file says agents must not edit it. Review the diff (`git show 7af7fd5 --
   understanding/UNDERSTANDING.md`) and keep or revert it.
-- **Contract edits made on 2026-09-26/27 need review**, because each of these files says changes
-  need a Carbon's approval: `understanding/cli.yaml` (CLI agent: `adb` arguments are verbatim, `--`
-  rules, local-file-only `install`, `record start --quality`); `understanding/TECHNICAL.md`
-  (as-built corrections, listed in its status line); `understanding/api.yaml` (the 8 MiB attachment
-  limit is a total, not per file; device error codes on `ok:false` results; `file keep` acts in
-  Extend only; a file's `name` versus its Briefcase name).
-- **TECHNICAL.md open questions 1–15**, including the new ones: Briefcase share rights
-  (Briefcase refuses `write` on files, so Extend shares read + update), downloading Briefcase files
-  through Extend, Briefcase file ids as `install`/`replay`/`display` inputs, and what
-  `--quality normal` means on Mac and Linux.
-- Linux now **refuses** `record start --quality` (before, the option was accepted); a project config
-  that sets quality now makes Linux recording fail. Refusing rather than ignoring it is the fork
-  agent's choice and needs confirming.
 - **Licences:** whether the root MIT `LICENSE` also covers the Android app, the website and the
   packaging (the Android app's notices state no licence for Extend's own code), and whether the
   LGPL-3.0 approach for spake2-android (separately loaded `.so`, unobfuscated classes, source linked,
   re-signing explained) is sufficient.
 - **Revoke wording** on the Mac: `UNDERSTANDING.md` names the action "Revoke pair"; the desktop
-  restyle kept that label and titles the confirmation "Unpair this Mac?".
+  window keeps that label and titles the confirmation "Unpair this Mac?".
 
 ## Physical devices and platforms
 
 Nothing below has run. Record the exact device, OS version and operations when it does, and keep
 simulator or mock results separate.
 
-- **Android:** physical phones and tablets (a Pixel 8 was attached to this Mac but not used),
-  Android 11–12, physical Android TV, Google TV and Fire TV (`amazon.hardware.fire_tv` detection and
-  Fire OS settings paths come from documentation), TV D-pad scrolling of the licences screen.
-- **Mac:** the GUI checks the fork and desktop agents could not run without driving the Carbon's
-  desktop (listed in `verification.md`), two displays, hidden Stage Manager windows, macOS 13–15.1,
-  the full 30-minute and 1-GiB recording caps, a notarized build installed from a download.
+- **Android:** physical phones and tablets, Android 11–12, physical Android TV, Google TV and Fire
+  TV (`amazon.hardware.fire_tv` detection and Fire OS settings paths come from documentation), TV
+  remote buttons through `input keyevent` (unit tests only), the after-restart prompt on a real
+  reboot, TalkBack, the TV D-pad on the licences screen.
+- **Mac:** the GUI checks that would drive the Carbon's desktop (listed in `verification.md`), start
+  at login after a real login, a real lock screen and display sleep, the Stop rows for carried
+  devices in a real menu bar and banner, two displays, macOS 13–15.1, the full 30-minute and 1-GiB
+  recording caps, a notarized build installed from a download.
 - **Linux:** a real X11 desktop with a compositor and reparenting window manager (GNOME, KDE,
-  picom), Tk, Java and GL/Electron apps, the tray on a real desktop, x64 packages, distributions
-  other than Debian trixie, and Wayland recording (the ScreenCast portal is not implemented).
+  picom), the one-time flicker at app-recording start, Tk, Java and GL/Electron apps, logind's
+  lock state on a real desktop, the tray, x64 packages, distributions other than Debian trixie, and
+  Wayland recording (the ScreenCast portal is not implemented).
 - **Windows:** the Windows driver and `windows/build-zip.ps1` have never run on Windows; they are
   only compile-checked and unit-tested from macOS.
 - **Hosted devices:** physical iPhone and iPad (runner signing, Trust, Developer Mode), Apple TV,
@@ -105,74 +118,102 @@ simulator or mock results separate.
 
 ## Engineering work that remains
 
-No decision needed; each has an owner area.
+No decision needed; each has an owner area. Items marked *(verifier)* were found by round 2's
+verifiers and not fixed.
 
-- **Service (Briefcase and Ting).** Register a Silicon as a Ting recipient when it joins a session
-  (`TingNotifier::register_recipient` exists; the call belongs in `routes/sessions.rs`); until then a
-  real Ting refuses requests with `recipient_not_registered` and they stay `pending`. Retry pending
-  Ting requests and self-destructs with the sender's latest authorized principal instead of only
-  while it has a running session (today a self-destruct after the session ended deletes Extend's
-  record but leaves the file in Briefcase). Keep the Briefcase name alongside the device's name.
-  `extend file get` and `screenshot --out` fail in Briefcase mode (Briefcase answers 400 to the
-  CLI's token); they need a service download route (an `api.yaml` change). Large recordings may need
-  Briefcase's staged upload (an OBO proof lives 60 s; recordings reach 1 GiB).
-- **Service (other).** Re-check session state after taking the session lock (defence in depth for
-  late commands). Stop applying agent-device's reserved-flag check to `adb` arguments, which are now
-  verbatim (`extend adb shell tool --session x` is refused with an agent-device message). The
-  enrollment limit (60 per hour per address, in memory) blocks repeated end-to-end runs against one
-  shared service; test runs should use their own instance.
+- **Release and CI.**
+  - The new CI jobs (`fork`, `android`, the named contract step) have not run on GitHub. CI still
+    doesn't run the website's real-service lane, the Swift helper tests, the Linux container lanes
+    or anything on an emulator. The fork's full vitest suite has failures that predate Extend, so CI
+    runs only the files Extend touched; `check:affected` and the layering gates can't run from this
+    nested checkout.
+- **Service: sessions, requests, files.**
+  - *(verifier)* A `not_a_team_member` refusal ends the Silicon's sessions in that team as
+    `left_team` whenever IAM doesn't confirm membership, including when IAM can't answer (no other
+    member's login held, or it expired); a Silicon still in the team whose login was approved for
+    another team would lose its sessions with the wrong reason. End only when IAM says "not a
+    member", as the logout path already does.
+  - *(verifier)* `request_send` folds a repeat before the idempotency lookup: the same key and body
+    within 60 s answer 200 through the repeat path instead of replaying the stored 201; two
+    concurrent identical sends can both be stored (as before).
+  - *(verifier)* The pending-request message says it "is sent when <sender> next uses Extend", but
+    the request fails after 6 attempts (about 2.5 minutes). The file download's 404 has no hint.
+  - A takeover released while a command runs resets the idle window to 300 s (matters only for a
+    command started within 2 s of the release with the maximum 300 s timeout).
+  - Logins used for self-destruct, Ting retries and identifying a refused Silicon are held in
+    memory: a restart forgets them (Carbon decision C2 for the durable fix).
+  - The download route holds the whole file (up to 1 GiB) in memory; stream it. Large recordings
+    may need Briefcase's staged upload (an OBO proof lives 60 s; recordings reach 1 GiB).
+  - The reserved-flag check (`--session`, `--device`, …) still applies to `adb` arguments, which are
+    verbatim (`extend adb shell tool --session x` is refused).
+  - Timestamps are serialised with microseconds, where `TECHNICAL.md` §1 says milliseconds.
+- **Service: devices.**
+  - *(verifier)* Retrying the pairing that filled a test environment, with the same
+    `Idempotency-Key` and body, answers `409 test_device_limit` instead of replaying its 201: the
+    early limit check runs before the idempotency lookup. Move it inside, after the replay, with a
+    test.
+  - A host that was offline when a device it carries was removed is never sent `attach
+    removed:true` on reconnecting, so it keeps carrying and probing that device; renaming a carried
+    device sends the host only `refresh`, so the host shows the old name until it reconnects; the
+    hub keeps a carried device's last online state after its host reconnects, until the host
+    reports again.
+  - There is no route for a host computer to revoke a device it carries (the desktop window sends
+    the Carbon to the website instead).
+- **Service: identity.** `silicon-iam-client` 4.0.0 is a vendored path copy (identical `src/` to the
+  crates.io release), and Extend parses IAM 4 events itself where the SDK rejects a non-UUID
+  aggregate id; depend on crates.io and drop the parser once an SDK release accepts them.
+- **Test infrastructure.** The service suites leave one throwaway database per test
+  (`extend_e2e_*`, `extend_core_*`, `extend_gaps_*`, `extend_contracts_*`); nothing drops them
+  automatically, so run `e2e/clean-test-dbs.sh` (which drops all four) after a run. On 2026-09-27 the
+  development PostgreSQL had collected 1,307 of them. The enrollment limit (60 per hour per address,
+  in memory) still blocks repeated end-to-end runs against one shared service.
 - **Protocol crate.** `capability.rs` still shows `install <app> <file_id|path>`; it should read
-  `install <package> <path.apk>` (the CLI overrides the usage line until then).
-- **Desktop agent.** `record start --quality normal` fails with `invalid_args` on Mac and Linux: the
-  driver passes `normal` to agent-device, which accepts `medium|high` (Mac) or no quality at all
-  (Linux), while `cli.yaml` now says `normal` works everywhere. `probe_macos::gather` still runs
-  `automationmodetool` and `xcode-select` although nothing uses the result.
-- **CLI.** A device-level `session_ended` result exits 1 instead of 6 and does not clear the
-  current session.
-- **Packaging.** `apps/desktop/runtime-entry.mjs` reads `--state-dir` past a `--`, so text a
-  Silicon types (`extend type -- --state-dir=~/notes`) can create a directory and a record file
-  there (found by the packaging verifier, not yet fixed). A first command after an upstream-release
-  update that is killed on timeout leaves no location record, so the next command restarts the
-  daemon once more. `build-package.sh` should list `libxdamage1` and `libxfixes3` in Recommends and
-  exclude `__pycache__`; the Linux `.desktop` file has no `Icon=`.
-- **Android.** Wireless-debugging discovery uses the first matching mDNS advertisement, so a stale
-  `adb-<guid>` advertisement kept the TLS reconnect lane failing on the emulator; try every
-  candidate. The app's argument parser ignores `--`; `adb shell -- ls` runs `--`;
-  `attachment:` inside `adb shell` arguments is rewritten; an HTTP 429 shows as "Can't reach
-  Extend". Large APKs above the 8 MiB attachment limit install only through the parts recipe
-  (verified with host adb, not through Extend's own ADB connection).
-- **Fork (Linux recording).** Plain Xlib windows with background `None` and no `_NET_WM_PING` can
-  still show a former cover; a second recorder on an already-redirected window can record the
-  cover (`vendor/agent-device/FORK.md`).
-- **Look.** The critics' remaining low-severity notes for the website, the desktop window and
-  banner, and the Android app (for example the update-required card has no action, a takeover still
-  shows "In use" in the desktop top bar, the Android notification has no accent colour, the TV focus
-  ring is ink rather than cobalt, and the licences screen shows 72-column hard-wrapped text).
-- **Licence texts in artifacts.** The CLI archive, the service image, the desktop packages and the
-  website do not yet ship the licence texts of their Rust crates and fonts
-  ([`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) lists them).
-- **CI.** `cargo fmt --all --check` fails on 78 files (formatting predates this work; the
-  integration step formats). CI does not run the Android, Swift helper, agent-device fork, packaging
-  or Linux recording lanes. The fork's `check:affected` and layering gates cannot run from this
-  nested checkout.
+  `install <package> <path.apk>` (the CLI overrides the usage line).
+- **CLI.** `-v` shows request ids only for failed calls (the client crate doesn't expose the
+  `x-request-id` of a successful answer).
+- **Desktop and packaging.** `probe_macos::gather` still runs `automationmodetool` and
+  `xcode-select` although nothing uses the result. `build-package.sh` doesn't exclude `__pycache__`,
+  and the Linux `.desktop` file has no `Icon=`.
+- **Android.** The app's argument parser ignores `--`; `adb shell -- ls` runs `--`; `attachment:`
+  inside `adb shell` arguments is rewritten. After `am instrument` or an app update the foreground
+  service returns only when the app is opened. APKs above the 8 MiB attachment limit install only
+  through the parts recipe. The apps don't dump their own frames for the contract fixtures yet
+  (`contracts/v1/device` is derived by hand).
+- **Website.** Sign-up guesses IAM's `/signup` address (Carbon decision C8); the built site doesn't
+  carry its fonts' and libraries' licence texts.
 
-## Done on 2026-09-26/27
+## Done in round 2 (2026-09-27)
 
-Summarised here; each item's commands and results are in `verification.md`.
+Summarised here; each item's checks are in `verification.md`, and the contracts describe the result.
 
-- **Renamed** Silicon Bridge to Silicon Extend: crates, the `extend` CLI, `EXTEND_*` settings,
-  `Extend-Device`/`Extend-Enrollment` auth schemes, `Silicon-Extend-API-Version`, `ees_`/`edc_`
-  credential prefixes, `extend.teamofsilicons.com`, the Android package
-  `com.teamofsilicons.extend`, and the `extend`/`extend_global`/`extend_test_*` schemas.
-- **New mark and restyle** of the website, the desktop window and banner, and the Android app, as a
-  sibling of Silicon Interface (IBM Plex Sans and Mono, Source Serif 4 titles, cobalt on paper,
-  risograph orange-red for Stop).
-- **Review fixes**, each re-verified by a separate agent: Android debugging (session retention,
-  ADB flow control, recording timeline, delivery retries, trust checks, notices, dependency
-  pinning); the desktop agent (named Mac apps, held-computer handling, per-device queues, stdin
-  arguments); the CLI (`adb` verbatim, local-file inputs, attachment limits); macOS and Linux
-  recording in the fork; packaging (checked downloads, signing-aware zip names, daemon replacement
-  after a move).
-- **Briefcase and Ting** exercised against real local services for the first time; three Briefcase
-  defects fixed in the service.
-- **Licensing:** `LICENSE` (MIT) and `THIRD_PARTY_NOTICES.md`; the Android app shows its notices.
+- **Service:** the idle timer holds during a command; a session ending mid-command answers at once;
+  a refused login on a session route ends the Silicon's sessions; Ting recipients are registered at
+  session start; pending requests are retried with the sender's latest login and fail with a
+  reason; self-destruct keeps its record until Briefcase confirms; a file download route; storage
+  problems reported as `warnings`; every new request reason delivered, raw.
+- **Devices:** removed devices readable to their Carbon; an atomic test device limit that can't
+  starve other requests; hosted devices tested end to end; full pages with the online filter.
+- **Test environments:** the secret checked on every route; readiness from IAM (or `activate`);
+  disable without unpairing (close code 4503); pairing codes bound to their world; the 10-slot limit
+  on every move into an active state; durable, ordered lifecycle receipts; the clean fence;
+  webhooks recorded only after they apply, in aggregate order; logout by refresh token; production
+  as the image default and the webhook secret required.
+- **Versioning:** majors side by side, deprecation and sunset with headers and 410, the matrix from
+  live state, and consumer contract fixtures replayed against a real service.
+- **CLI:** the house JSON shape, the test-environment line on every failure, `EXTEND_TEST_SECRET`,
+  full `device ls` paging and `--removed`, help that follows the connected device, strict grammar
+  with hints, `--verbose`, validated settings, `config home` moving the state, downloads through
+  Extend, attachments in the client crate, and `extend version` reading the matrix.
+- **Website:** the Removed tab and read-only removed-device page, the design critic's leftovers,
+  and sign-up through IAM.
+- **Android:** no enrollment loop, a precise 429 message, "Silicon Extend TV", the after-restart
+  prompt for Wireless debugging, every mDNS candidate tried, TV remote keys through ADB, and the
+  restyle leftovers; the old `com.teamofsilicons.bridge` app is gone from the emulator.
+- **Desktop and fork:** `--quality normal|high` on Mac and Linux, `--` respected by the runtime
+  entry and the record written before hand-off, start at login by default, locked and asleep
+  computers reported, Stop for carried devices everywhere, "Download the update", terminal-only on a
+  headless Linux box, app recording refused when isolation can't be guaranteed, packaging checks
+  (stamp errors, required entries, content-hashed dist freshness), and the Linux package's X11
+  libraries listed.
+- **Licences:** the CLI archive, the service image and the desktop packages now ship `LICENSE`,
+  `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.txt` (generated by `cargo about`).

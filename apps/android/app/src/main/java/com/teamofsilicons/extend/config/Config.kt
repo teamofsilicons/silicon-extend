@@ -69,6 +69,22 @@ class Config(context: Context) {
 object DeviceInfo {
     const val APP_VERSION: String = BuildConfig.VERSION_NAME
 
+    /** The app's name on phones and tablets. */
+    const val APP_NAME = "Silicon Extend"
+
+    /** The app's name on TVs (UNDERSTANDING.md: "Silicon Extend TV"); `res/values-television` gives the launcher the same. */
+    const val TV_APP_NAME = "Silicon Extend TV"
+
+    /** The name the app's own screens and notifications use. */
+    fun appName(tv: Boolean): String = if (tv) TV_APP_NAME else APP_NAME
+
+    /**
+     * The name Android's Settings list the app under (its label as the system resolves it: the TV
+     * name on a television), for help text that walks the Carbon through Settings.
+     */
+    fun systemLabel(context: Context): String =
+        runCatching { context.getString(com.teamofsilicons.extend.R.string.app_name) }.getOrNull()?.takeIf { it.isNotBlank() } ?: APP_NAME
+
     fun isTv(context: Context, config: Config): Boolean {
         if (config.forceTv) return true
         val ui = context.getSystemService(UiModeManager::class.java)

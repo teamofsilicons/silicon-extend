@@ -1,0 +1,28 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "upload"
+  ],
+  "kind": "http",
+  "operation": "device.artifact",
+  "request": {
+    "body_base64": "iVBORyBkZXZpY2UgY29udHJhY3QgZml4dHVyZQ==",
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "content-type": "image/png",
+      "x-content-sha256": "9ba260742208024ac7d6075abf11af217c756424cfaa99038a4f2a52045fe39d",
+      "x-file-name": "screenshot.png"
+    },
+    "method": "PUT",
+    "path": "/api/v1/device/artifacts/{upload_id}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (upload) and protocol/Frames.kt"
+}

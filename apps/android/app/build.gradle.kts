@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -10,6 +13,14 @@ plugins {
 val productionServiceUrl = "https://backend.extend.teamofsilicons.com"
 val debugServiceUrl = (project.findProperty("extendServiceUrl") as String?) ?: productionServiceUrl
 
+// The release key lives outside the repository. EXTEND_ANDROID_SIGNING_PROPERTIES names a
+// properties file with storeFile, storePassword, keyAlias and keyPassword; without it the release
+// APK is left unsigned (never debug-signed, which would install but could never be updated by the
+// published build).
+val releaseSigning: Properties? = System.getenv("EXTEND_ANDROID_SIGNING_PROPERTIES")?.takeIf { it.isNotBlank() }?.let { path ->
+    Properties().also { props -> FileInputStream(path).use { stream -> props.load(stream) } }
+}
+
 android {
     namespace = "com.teamofsilicons.extend"
     compileSdk = 36
@@ -21,6 +32,19 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseSigning != null) {
+            create("release") {
+                storeFile = file(releaseSigning.getProperty("storeFile"))
+                storePassword = releaseSigning.getProperty("storePassword")
+                keyAlias = releaseSigning.getProperty("keyAlias")
+                keyPassword = releaseSigning.getProperty("keyPassword")
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -36,9 +60,7 @@ android {
             isMinifyEnabled = false
             buildConfigField("String", "DEFAULT_SERVICE_URL", "\"$productionServiceUrl\"")
             buildConfigField("boolean", "ALLOW_TEST_OVERRIDES", "false")
-            // Signed with the debug key so the APK installs as-is; real distribution signs it
-            // with the release key outside this build.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseSigning != null) signingConfigs.getByName("release") else null
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

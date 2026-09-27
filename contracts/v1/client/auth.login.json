@@ -1,0 +1,56 @@
+{
+  "api_version": 1,
+  "call": "Client::login",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "auth.login",
+  "request": {
+    "body": {
+      "data": {
+        "slt": "{carbon_slt}"
+      },
+      "type": "login"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/auth/login"
+  },
+  "response": {
+    "non_null": [
+      "/access_token",
+      "/expires_in",
+      "/member",
+      "/member/id",
+      "/member/type",
+      "/refresh_token",
+      "/teams",
+      "/testing_environment/device_limit",
+      "/testing_environment/environment_id",
+      "/testing_environment/name",
+      "/testing_environment/paired_devices",
+      "/testing_environment/state",
+      "/token_type"
+    ],
+    "required": [
+      "/access_token",
+      "/expires_in",
+      "/member",
+      "/member/id",
+      "/member/type",
+      "/refresh_token",
+      "/teams",
+      "/testing_environment/environment_id",
+      "/testing_environment/name",
+      "/testing_environment/state",
+      "/token_type"
+    ],
+    "status": "2xx",
+    "type": "login"
+  }
+}

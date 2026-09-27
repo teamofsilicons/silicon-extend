@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { createTestEnvironment, FakeDevice, login, pairViaApi, purgeTestEnvironment, startSession, takeover } from "./service";
+import { createTestEnvironment, FakeDevice, headers, login, pairViaApi, purgeTestEnvironment, REAL, startSession, supportsRemovedDevices, takeover } from "./service";
 
 const SHOTS = "test-results/screenshots-real";
 mkdirSync(SHOTS, { recursive: true });
@@ -114,6 +114,8 @@ test("a wrong pairing code shows the service's message", async ({ page }) => {
 test("IAM consent round trip through the local stand-in", async ({ page }) => {
   // iam_login_url from GET /api/v1/iam, with app_id and redirect_uri, exactly as real IAM takes them.
   await page.goto("/");
+  // The stand-in's page isn't IAM's <auth origin>/login, so the website doesn't guess a sign-up page.
+  await expect(page.getByTestId("signup-note")).toContainText("gives Extend no sign-up page, so this opens its sign-in page");
   await page.getByTestId("sign-in-iam").click();
   await expect(page).toHaveURL(/\/dev\/iam\/login\?app_id=extend&redirect_uri=/);
   const redirect = new URL(new URL(page.url()).searchParams.get("redirect_uri")!);
@@ -150,12 +152,12 @@ test("test environment: banner, test member login, device limit, exit back to pr
 
   const token = await login("c:alice", secret);
   for (let i = 0; i < 5; i++) {
-    const d = await FakeDevice.enroll("android");
+    const d = await FakeDevice.enroll("android", secret);
     await pairViaApi(token, d.code, `Test phone ${i + 1}`, secret);
   }
   await page.goto("/devices");
   await expect(page.getByTestId("device-row")).toHaveCount(5);
-  const sixth = await FakeDevice.enroll("android");
+  const sixth = await FakeDevice.enroll("android", secret);
   await page.goto("/devices/new?kind=android");
   await page.getByTestId("wizard-next").click();
   await page.getByTestId("pairing-code-input").fill(sixth.code);
@@ -169,4 +171,47 @@ test("test environment: banner, test member login, device limit, exit back to pr
   await expect(banner).toHaveCount(0);
   await expect(page.getByTestId("member-id")).toHaveText("c:alice");
   await expect(page.getByTestId("devices-page")).not.toContainText("Test phone 1");
+});
+
+test("a removed device: the Remove dialog says what happens, then its log stays readable under Removed", async ({ page }) => {
+  const alice = await login("c:alice");
+  test.skip(!(await supportsRemovedDevices(alice)), `The service at ${REAL} predates include_removed (GET /api/v1/devices ignores it), so it can't show removed devices.`);
+  const device = await FakeDevice.enroll("android");
+  const name = `Removed Pixel ${Date.now().toString(36)}`;
+  await pairViaApi(alice, device.code, name);
+  await device.waitPaired();
+  await device.connect(true);
+  await fetch(`${REAL}/api/v1/devices/${device.deviceId}/access/si:chef`, { method: "PUT", headers: headers(alice) });
+
+  await signIn(page);
+  await page.goto(`/devices/${device.deviceId}`);
+  await expect(page.getByTestId("device-name")).toHaveText(name);
+  await page.getByTestId("remove-device").click();
+  await expect(page.getByTestId("remove-access")).toHaveText("1 Silicon loses access.");
+  await expect(page.getByTestId("remove-unpair")).toHaveText("The Extend app on it unpairs now and shows a new pairing code.");
+  await page.getByTestId("remove-confirm-input").fill(name);
+  await page.getByTestId("remove-confirm").click();
+  await expect(page).toHaveURL(/\/devices$/);
+  // What the dialog promised: the device's app was told it is unpaired.
+  await expect.poll(() => device.frames.some((f) => f.type === "unpaired"), { timeout: 5_000 }).toBe(true);
+
+  await page.getByTestId("tab-removed").click();
+  const row = page.locator(`[data-testid="removed-device-list"] [data-device-id="${device.deviceId}"]`);
+  await expect(row).toContainText("You removed it");
+  await row.click();
+  await expect(page.getByTestId("removed-why")).toContainText("You removed it.");
+  await expect(page.getByTestId("activity-summary").filter({ hasText: "Removed the device" })).toHaveCount(1);
+  await expect(page.getByTestId("activity-summary").filter({ hasText: "Gave si:chef access" })).toHaveCount(1);
+  for (const id of ["rename", "access-card", "settings-card", "danger-zone"]) await expect(page.getByTestId(id)).toHaveCount(0);
+  await page.screenshot({ path: `${SHOTS}/removed-device.png`, fullPage: true });
+
+  // The service refuses a change to it with the reason, as the page says.
+  const res = await fetch(`${REAL}/api/v1/devices/${device.deviceId}`, {
+    method: "PATCH",
+    headers: { ...headers(alice), "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "device", data: { name: "again" } }),
+  });
+  expect(res.status).toBe(404);
+  expect((await res.json()).data.message).toContain("was removed at");
+  device.close();
 });

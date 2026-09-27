@@ -1,0 +1,26 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "kind": "http",
+  "operation": "device.stop",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/device/stop"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; crates/extend-agent/src/service.rs (stop) with crates/extend-protocol types"
+}

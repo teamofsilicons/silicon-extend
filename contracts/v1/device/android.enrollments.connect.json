@@ -1,0 +1,32 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "enrollment"
+  ],
+  "kind": "enrollment_socket",
+  "operation": "enrollments.connect",
+  "reads": {
+    "code": [
+      "pairing_code",
+      "code_expires_at"
+    ],
+    "paired": [
+      "device_id",
+      "device_credential"
+    ],
+    "ping": [
+      "nonce"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Enrollment {enrollment_secret}"
+    },
+    "method": "GET",
+    "path": "/api/v1/enrollments/{enrollment_id}/connect"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (enrollment socket) and protocol/Frames.kt (decodeEnrollment)"
+}

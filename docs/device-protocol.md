@@ -21,6 +21,20 @@ POST /api/v1/enrollments
 
 `os` is one of `android`, `android_tv`, `macos`, `windows`, `linux`.
 
+An app started for a test environment sends that environment's app secret in
+`X-Testing-Application-Secret` when it creates the enrollment; its code then pairs the device only
+into that environment (and a code made without the header only into production). Send the same
+header, or none, when reading, discarding or connecting to the enrollment; another environment's
+secret is `401 testing_secret_invalid`. An unknown, revoked or disabled environment's secret is
+`401 testing_secret_invalid`, and one Honeycomb hasn't finished preparing is `503
+testing_environment_not_ready`; neither falls back to production.
+
+New enrollments are limited to 60 per hour per network address. A `429 rate_limited` carries
+`details.retry_after_s`: wait that long before creating another enrollment (the Android app waits
+at least 60 s without it and says so). Never create a new enrollment in a tight loop: pace every
+attempt with the socket's backoff (below), and reset the backoff only once an enrollment socket has
+actually opened.
+
 Show `pairing_code` large (uppercase, 6 hexadecimal characters). Then open the enrollment socket:
 
 ```
@@ -51,7 +65,17 @@ Authorization: Extend-Device <device_credential>
 
 Keep it open always. Reconnect with exponential backoff from 1 s to 60 s with full jitter. Close
 codes: `4401` credential invalid or device unpaired (forget the credential, go back to enrollment),
-`4409` superseded by a newer connection (don't reconnect), `4426` app too old.
+`4409` superseded by a newer connection (don't reconnect), `4426` app too old, and `4503` the
+device's test environment is closed for now (Honeycomb disabled it, or it is waiting for Honeycomb
+to confirm every service is ready; the reason says which, for example "test environment disabled;
+still paired, reconnect later"): **keep the credential** and reconnect with the usual backoff. A
+disable never unpairs a device, and `restore` brings the same credential back. Treat any other code
+as a dropped connection.
+
+While the environment is closed, the upgrade request and every device HTTP route answer
+`503 testing_environment_not_ready` instead of 401, with a hint that the device stays paired; keep
+the credential and retry with backoff. Only `401` (or close `4401`) means the pair ended. A clean
+of the environment does end every pair in it (`unpaired`, then `4401`).
 
 ### First frame: hello
 

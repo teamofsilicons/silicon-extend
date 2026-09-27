@@ -1,0 +1,62 @@
+{
+  "api_version": 1,
+  "call": "Authed::devices_including_removed",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "devices.list.including_removed",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/devices?scope=mine&limit=10&include_removed=true"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/device_id",
+      "/items/*/in_use/paused",
+      "/items/*/in_use/session_id",
+      "/items/*/in_use/silicon_id",
+      "/items/*/in_use/since",
+      "/items/*/kind",
+      "/items/*/missing/*/capability",
+      "/items/*/missing/*/reason",
+      "/items/*/name",
+      "/items/*/online",
+      "/items/*/os",
+      "/items/*/owner",
+      "/items/*/owner/id",
+      "/items/*/owner/type",
+      "/items/*/state",
+      "/items/*/visibility"
+    ],
+    "required": [
+      "/items",
+      "/items/*/device_id",
+      "/items/*/in_use/session_id",
+      "/items/*/in_use/silicon_id",
+      "/items/*/in_use/since",
+      "/items/*/kind",
+      "/items/*/missing/*/capability",
+      "/items/*/missing/*/reason",
+      "/items/*/name",
+      "/items/*/online",
+      "/items/*/os",
+      "/items/*/owner",
+      "/items/*/owner/id",
+      "/items/*/owner/type",
+      "/items/*/state",
+      "/items/*/visibility"
+    ],
+    "status": "2xx",
+    "type": "devices"
+  }
+}

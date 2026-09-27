@@ -154,10 +154,28 @@ pub async fn upload(
 
 pub async fn socket(State(state): State<Shared>, auth: DeviceAuth, ws: WebSocketUpgrade) -> AppResult<Response> {
     this_device(&state, &auth).await?;
+    // The fence guards the handshake only; a live socket must not hold a clean or disable back.
+    let DeviceAuth {
+        world,
+        device_id,
+        fence,
+    } = auth;
+    drop(fence);
     Ok(ws
         .max_message_size(16 << 20)
-        .on_upgrade(move |socket| run(state, auth.world, auth.device_id, socket))
+        .on_upgrade(move |socket| run(state, world, device_id, socket))
         .into_response())
+}
+
+/// Why the service dropped a device's socket, when it's because its test environment closed
+/// (the pair stays): the close reason the device gets with `close::ENVIRONMENT_UNAVAILABLE`.
+async fn closed_environment(state: &AppState, world: &World) -> Option<&'static str> {
+    let env = world.environment_id?;
+    match state.environment(env).await.ok()??.state.as_str() {
+        "disabled" => Some("test environment disabled; still paired, reconnect later"),
+        "preparing" => Some("test environment not ready; still paired, reconnect later"),
+        _ => None,
+    }
 }
 
 fn text(frame: &ServiceFrame) -> Message {
@@ -243,7 +261,14 @@ async fn run(state: Shared, world: World, device_id: String, socket: WebSocket) 
     loop {
         tokio::select! {
             out = rx.recv() => {
-                let Some(frame) = out else { break };
+                let Some(frame) = out else {
+                    // The service dropped this socket; when that's because the test environment
+                    // closed, say so with a code that keeps the pair.
+                    if let Some(reason) = closed_environment(&state, &world).await {
+                        let _ = sink.send(close_with(close::ENVIRONMENT_UNAVAILABLE, reason)).await;
+                    }
+                    break;
+                };
                 match frame {
                     ServiceFrame::Superseded => {
                         let _ = sink.send(text(&ServiceFrame::Superseded)).await;

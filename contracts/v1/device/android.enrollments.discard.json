@@ -1,0 +1,25 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "enrollment"
+  ],
+  "kind": "http",
+  "operation": "enrollments.discard",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Enrollment {enrollment_secret}"
+    },
+    "method": "DELETE",
+    "path": "/api/v1/enrollments/{enrollment_id}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (discardEnrollment) and protocol/Frames.kt"
+}

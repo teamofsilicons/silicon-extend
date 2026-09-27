@@ -75,8 +75,9 @@ pub struct IamEvent {
     pub members: Vec<String>,
     /// Team handles named in the event.
     pub teams: Vec<String>,
-    /// Memberships (`member`, `team`) the signed event itself reports as removed. IAM is the
-    /// authority for these, so Extend ends access without asking again.
+    /// Memberships (`member`, `team`) the signed event itself reports as removed. Extend asks
+    /// IAM first and uses these only when IAM can't answer (the event is newer than any event
+    /// applied for its aggregate, see routes/webhook.rs).
     pub removed: Vec<(String, String)>,
     pub testing_environment_id: Option<Uuid>,
 }
@@ -145,6 +146,33 @@ pub trait Iam: Send + Sync {
         sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof>;
     async fn verify_webhook(&self, headers: &http::HeaderMap, body: &[u8]) -> AppResult<IamEvent>;
+    /// Whose login `token` (an access or a refresh token) is, asked live before the token is
+    /// revoked. `Ok(None)` when IAM no longer accepts the token (it expired or was already revoked);
+    /// `Err` when IAM could not be asked.
+    async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
+        match self.authorize(token, None, sel).await {
+            Ok(p) => Ok(Some(p.member)),
+            Err(e) if refuses_token(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    /// The SHA-256 (hex) of IAM's test webhook key for `environment_id`, when IAM disclosed it
+    /// while confirming a test application secret. Extend stores it so signed test deliveries
+    /// still find their environment after a restart.
+    async fn test_webhook_digest(&self, _environment_id: Uuid) -> Option<String> {
+        None
+    }
+    /// Teaches the webhook verifier a test webhook key digest Extend stored earlier.
+    async fn remember_test_webhook_key(&self, _digest: &str, _environment_id: Uuid) {}
+}
+
+/// Whether an IAM answer means "this token is not (or no longer) accepted", as opposed to IAM
+/// being unreachable.
+pub fn refuses_token(e: &AppError) -> bool {
+    matches!(
+        e.code(),
+        ErrorCode::TokenExpired | ErrorCode::NotATeamMember | ErrorCode::Unauthorized | ErrorCode::SltInvalid
+    )
 }
 
 /// Caches authorization answers for at most 30 seconds.
@@ -568,12 +596,23 @@ impl Iam for SdkIam {
         let invalid = |why: String| {
             AppError::new(
                 ErrorCode::TestingSecretInvalid,
-                format!("The test application secret was refused: {why}. Nothing ran in production."),
+                format!(
+                    "Silicon IAM refused the test application secret: {why}. The secret is wrong or revoked, or \
+                     its test environment is not open yet (IAM opens it only after Honeycomb confirms every \
+                     service is ready). Nothing ran in production."
+                ),
             )
-            .hint("Check the secret from Honeycomb, or leave testing to use production.")
+            .hint(
+                "Check the app_secret in Honeycomb. If the environment was just created or restored, wait until \
+                 Honeycomb reports it ready and retry; or leave testing to use production.",
+            )
         };
         if !ids::is_secret(ids::APP_SECRET_PREFIX, secret) {
-            return Err(invalid("it must be ask_ followed by 43 characters".into()));
+            return Err(AppError::new(
+                ErrorCode::TestingSecretInvalid,
+                "The test application secret is malformed: it must be ask_ followed by 43 characters. Nothing ran in production.",
+            )
+            .hint("Copy the app_secret from Honeycomb again, or leave testing to use production."));
         }
         let client = self
             .sdk
@@ -645,6 +684,53 @@ impl Iam for SdkIam {
         })
     }
 
+    async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
+        let hint = if token.starts_with("ort_") {
+            models::TokenIntrospectionRequestTokenTypeHint::RefreshToken
+        } else {
+            models::TokenIntrospectionRequestTokenTypeHint::AccessToken
+        };
+        let inspected = self
+            .client(sel)?
+            .oauth()
+            .introspect(
+                &models::TokenIntrospectionRequest {
+                    token: token.to_owned(),
+                    token_type_hint: Some(hint),
+                },
+                None,
+            )
+            .await
+            .map_err(sdk_error)?;
+        if !inspected.active {
+            return Ok(None);
+        }
+        // A token for another application says nothing about Extend's sessions.
+        if inspected.client_id.as_ref().is_some_and(|c| c.as_str() != self.app_id) {
+            return Ok(None);
+        }
+        match inspected.public_id {
+            Some(id) => member_from_public_id(&id).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    async fn test_webhook_digest(&self, environment_id: Uuid) -> Option<String> {
+        self.test_webhook_keys
+            .read()
+            .await
+            .iter()
+            .find(|(_, env)| **env == environment_id)
+            .map(|(d, _)| d.clone())
+    }
+
+    async fn remember_test_webhook_key(&self, digest: &str, environment_id: Uuid) {
+        self.test_webhook_keys
+            .write()
+            .await
+            .insert(digest.to_ascii_lowercase(), environment_id);
+    }
+
     async fn verify_webhook(&self, headers: &http::HeaderMap, body: &[u8]) -> AppResult<IamEvent> {
         let verifier = self
             .verifier
@@ -690,8 +776,11 @@ impl Iam for SdkIam {
                 Some(found.ok_or_else(|| {
                     AppError::new(
                         ErrorCode::ServiceUnavailable,
-                        "This IAM test delivery names a test environment Extend has not selected yet; retry later.",
+                        "This signed IAM test delivery carries a test webhook key Extend doesn't know yet (no test \
+                         application secret for its environment has been confirmed with IAM since it was prepared), \
+                         so Extend can't tell which test environment it belongs to and applied nothing.",
                     )
+                    .hint("IAM retries the delivery; it routes once the environment's app_secret has been used with Extend.")
                 })?)
             }
         };
@@ -750,6 +839,11 @@ fn authenticated_event(headers: &http::HeaderMap, body: &[u8]) -> AppResult<(Str
         "data": data,
     });
     Ok((event_id, event_type, raw))
+}
+
+/// The SHA-256 (hex) of the test environment key a signed test delivery carries, if it is one.
+pub fn testing_key_digest(body: &[u8]) -> Option<String> {
+    testing_key(body).map(|k| ids::hex_lower(&Sha256::digest(k.as_bytes())))
 }
 
 /// The test environment key a signed test delivery carries, if it is one.
@@ -993,7 +1087,9 @@ impl Iam for LocalIam {
         if let Some(found) = t.remove(token)
             && found.refresh
         {
-            t.retain(|_, x| x.member != found.member);
+            // Only this world's logins: production and each test environment are separate IAM
+            // planes, so signing out of a test environment leaves the production login alone.
+            t.retain(|_, x| x.member != found.member || x.env != found.env);
         }
         Ok(())
     }
@@ -1086,15 +1182,22 @@ impl Iam for LocalIam {
 
     async fn select_testing(&self, secret: &str) -> AppResult<(Uuid, String)> {
         let invalid = || {
-            AppError::new(ErrorCode::TestingSecretInvalid, "The test application secret is not registered with any active test environment. Nothing ran in production.")
-                .hint("Check the secret, or leave testing to use production.")
+            AppError::new(
+                ErrorCode::TestingSecretInvalid,
+                "The local IAM stand-in knows no open test application with this secret: it is wrong, or its \
+                 environment isn't open yet (register it with POST /dev/iam/test-apps). Nothing ran in production.",
+            )
+            .hint("Check the secret. If the environment was just created or restored, wait until it is ready; or leave testing to use production.")
         };
         if !ids::is_secret(ids::APP_SECRET_PREFIX, secret) {
             return Err(invalid());
         }
+        // Like IAM, refuse a test application that isn't open (active) right now: IAM keeps a
+        // Honeycomb environment's applications suspended until Honeycomb confirms every service is
+        // ready, and then answers exactly as it does for a wrong secret.
         let row: Option<(Uuid, String, String)> = sqlx::query_as(
             "SELECT e.environment_id, e.name, e.state FROM extend_global.local_test_apps a
-             JOIN extend_global.test_environments e USING (environment_id) WHERE a.secret_digest = $1",
+             JOIN extend_global.test_environments e USING (environment_id) WHERE a.secret_digest = $1 AND a.active",
         )
         .bind(ids::secret_digest(secret))
         .fetch_optional(&self.pool)
@@ -1120,8 +1223,23 @@ impl Iam for LocalIam {
         })
     }
 
+    async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
+        Ok(self
+            .tokens
+            .read()
+            .await
+            .get(token)
+            .filter(|t| t.env == sel.map(|s| s.environment_id))
+            .map(|t| Member {
+                kind: ids::member_kind(&t.member).unwrap_or(MemberKind::Carbon),
+                id: t.member.clone(),
+                display_name: None,
+            }))
+    }
+
     async fn verify_webhook(&self, _headers: &http::HeaderMap, body: &[u8]) -> AppResult<IamEvent> {
-        // Local events are plain JSON: {"event_id","event_type","members":[...],"teams":[...]}.
+        // Local events are plain JSON: {"event_id","event_type","members":[...],"teams":[...]},
+        // optionally with "removed": [["si:x","acme"]] and "aggregate": {"id","version"}.
         let v: serde_json::Value =
             serde_json::from_slice(body).map_err(|e| AppError::invalid(format!("local IAM event is not JSON: {e}")))?;
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_owned();
@@ -1136,7 +1254,15 @@ impl Iam for LocalIam {
             event_type: s("event_type"),
             members: list("members"),
             teams: list("teams"),
-            removed: vec![],
+            removed: v
+                .get("removed")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|pair| Some((pair.get(0)?.as_str()?.to_owned(), pair.get(1)?.as_str()?.to_owned())))
+                        .collect()
+                })
+                .unwrap_or_default(),
             testing_environment_id: v
                 .get("environment_id")
                 .and_then(|x| x.as_str())
@@ -1254,6 +1380,120 @@ mod tests {
             obo_error(api(503, "unavailable"), "si:chef", "ting", "tings.send").code(),
             ErrorCode::ServiceUnavailable
         );
+    }
+
+    fn test_selection() -> TestingSelection {
+        TestingSelection {
+            environment_id: Uuid::new_v4(),
+            name: "checkout".into(),
+            secret: ids::new_secret(ids::APP_SECRET_PREFIX),
+        }
+    }
+
+    /// A LocalIam that never touches its (lazy) pool in these tests.
+    fn local(members: &[(&str, &[&str])]) -> LocalIam {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+            .unwrap();
+        LocalIam::new(
+            members
+                .iter()
+                .map(|(id, teams)| ((*id).to_owned(), teams.iter().map(|t| (*t).to_owned()).collect()))
+                .collect(),
+            pool,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_plane_login_refuses_unknown_and_inactive_member_ids() {
+        let iam = local(&[("c:alice", &["acme"]), ("si:chef", &["acme"])]);
+        let sel = test_selection();
+        // A known, active test member signs in with just their id.
+        let s = iam.login("si:chef", "k1", Some(&sel)).await.unwrap();
+        assert_eq!(s.member.id, "si:chef");
+        assert_eq!(s.testing_environment.unwrap().environment_id, sel.environment_id);
+        // Unknown ids are refused.
+        let e = iam.login("c:nobody", "k2", Some(&sel)).await.unwrap_err();
+        assert_eq!(e.code(), ErrorCode::SltInvalid);
+        assert!(e.0.message.contains("c:nobody"), "{}", e.0.message);
+        // So is a member who is no longer active in any team, or who was removed entirely.
+        iam.set_member("si:chef", Some(vec![])).await;
+        assert_eq!(
+            iam.login("si:chef", "k3", Some(&sel)).await.unwrap_err().code(),
+            ErrorCode::NotATeamMember
+        );
+        iam.set_member("c:alice", None).await;
+        assert_eq!(
+            iam.login("c:alice", "k4", Some(&sel)).await.unwrap_err().code(),
+            ErrorCode::SltInvalid
+        );
+        // Anything that isn't a member id is refused too.
+        assert_eq!(
+            iam.login("alice", "k5", Some(&sel)).await.unwrap_err().code(),
+            ErrorCode::SltInvalid
+        );
+    }
+
+    #[tokio::test]
+    async fn the_member_id_shortcut_never_reaches_production_iam() {
+        let sdk = SdkClient::builder("http://127.0.0.1:9")
+            .unwrap()
+            .credential(Credential::application("extend", "ask_unused"))
+            .auto_update(false)
+            .build()
+            .unwrap();
+        let iam = SdkIam {
+            sdk,
+            app_id: "extend".into(),
+            app_secret: "ask_unused".into(),
+            verifier: None,
+            test_webhook_keys: RwLock::default(),
+        };
+        // Production: refused before IAM is asked (nothing listens on :9, so asking would fail
+        // with service_unavailable instead).
+        for id in ["c:alice", "si:chef"] {
+            let e = iam.login(id, "key", None).await.unwrap_err();
+            assert_eq!(e.code(), ErrorCode::SltInvalid, "{id}");
+            assert!(e.0.message.contains("only in a test environment"), "{}", e.0.message);
+        }
+        // In a test environment the id goes to IAM, which decides (here: unreachable).
+        let e = iam.login("c:alice", "key", Some(&test_selection())).await.unwrap_err();
+        assert_ne!(e.code(), ErrorCode::SltInvalid);
+    }
+
+    #[tokio::test]
+    async fn local_identify_names_the_owner_of_a_refresh_token_in_its_world_only() {
+        let iam = local(&[("si:chef", &["acme"])]);
+        let sel = test_selection();
+        let s = iam.login("si:chef", "k", Some(&sel)).await.unwrap();
+        assert_eq!(
+            iam.identify(&s.refresh_token, Some(&sel)).await.unwrap().unwrap().id,
+            "si:chef"
+        );
+        assert_eq!(
+            iam.identify(&s.access_token, Some(&sel)).await.unwrap().unwrap().id,
+            "si:chef"
+        );
+        assert!(iam.identify(&s.refresh_token, None).await.unwrap().is_none());
+        iam.logout(&s.refresh_token, Some(&sel)).await.unwrap();
+        assert!(iam.identify(&s.refresh_token, Some(&sel)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn local_logout_in_a_test_environment_leaves_the_production_login_alone() {
+        let iam = local(&[("c:alice", &["acme"])]);
+        let sel = test_selection();
+        let prod = iam.login("c:alice", "k1", None).await.unwrap();
+        let test = iam.login("c:alice", "k2", Some(&sel)).await.unwrap();
+        iam.logout(&test.refresh_token, Some(&sel)).await.unwrap();
+        // The test login is gone…
+        assert!(iam.authorize(&test.access_token, None, Some(&sel)).await.is_err());
+        // …and the same Carbon's production login still works and still refreshes.
+        assert_eq!(
+            iam.authorize(&prod.access_token, None, None).await.unwrap().member.id,
+            "c:alice"
+        );
+        iam.refresh(&prod.refresh_token, "k3", None).await.unwrap();
     }
 
     #[test]

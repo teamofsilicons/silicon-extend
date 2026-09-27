@@ -8,6 +8,7 @@
 
 pub mod args;
 pub mod local;
+pub mod screen_lock;
 pub mod terminal;
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]

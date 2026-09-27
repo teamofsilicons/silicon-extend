@@ -1,5 +1,6 @@
-//! What a Mac can do right now: Accessibility, Screen Recording, and whether agent-device's UI
-//! testing runner can drive apps without stopping for a password.
+//! What a Mac can do right now: Accessibility, Screen Recording, whether agent-device's UI
+//! testing runner can drive apps without stopping for a password, and whether the Mac is locked
+//! or asleep (then nothing that needs the screen works, and each such capability says why).
 //!
 //! Permissions belong to the app that launched the agent (Silicon Extend.app when installed; the
 //! terminal during development), so the agent checks them in its own process with
@@ -10,6 +11,7 @@ use extend_protocol::model::{MissingCapability, Setup, SetupStep, StepStatus};
 use extend_protocol::{Capability, DeviceOs};
 
 use crate::drivers::agent_device::ProbeInput;
+use crate::drivers::screen_lock::{self, ScreenBlock};
 
 pub const ACCESSIBILITY_HELP: &str = "System Settings › Privacy & Security › Accessibility";
 pub const SCREEN_RECORDING_HELP: &str = "System Settings › Privacy & Security › Screen & System Audio Recording";
@@ -36,6 +38,8 @@ pub struct MacFacts {
     pub automation: AutomationMode,
     /// Full Xcode (not just the command line tools) is installed.
     pub xcode: bool,
+    /// Why the screen can't be used right now (locked, asleep, another account on screen).
+    pub screen: Option<ScreenBlock>,
 }
 
 /// Reads `automationmodetool`'s status output.
@@ -139,6 +143,10 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         }
     }
 
+    // Not a setup step: nothing is left to set up, and the terminal works while it is locked.
+    if let Some(block) = facts.screen {
+        screen_lock::withhold(block, &mut caps, &mut missing);
+    }
     finish(caps, missing, steps)
 }
 
@@ -217,6 +225,7 @@ pub fn gather() -> MacFacts {
         screen_recording,
         automation,
         xcode: full_xcode_installed(),
+        screen: screen_lock::current(),
     }
 }
 
@@ -261,7 +270,67 @@ mod tests {
             screen_recording: true,
             automation: AutomationMode::NoAuthentication,
             xcode: true,
+            screen: None,
         }
+    }
+
+    #[test]
+    fn a_locked_or_sleeping_mac_says_so_for_everything_that_needs_the_screen() {
+        for block in [ScreenBlock::Locked, ScreenBlock::Asleep, ScreenBlock::OtherSession] {
+            let p = build_probe(
+                &MacFacts {
+                    screen: Some(block),
+                    ..all_good()
+                },
+                &input(),
+            );
+            // The terminal (added by the local driver) and what doesn't touch the screen stay.
+            assert_eq!(
+                p.capabilities,
+                vec![Capability::AppsList, Capability::Logs, Capability::Takeover]
+            );
+            for c in [
+                Capability::ScreenRead,
+                Capability::ScreenCapture,
+                Capability::ScreenRecord,
+                Capability::InputPointer,
+                Capability::InputText,
+                Capability::AppsLaunch,
+                Capability::Clipboard,
+                Capability::Replay,
+                Capability::Links,
+                Capability::Alerts,
+            ] {
+                let m = p.missing.iter().find(|m| m.capability == c).expect("missing");
+                assert_eq!(m.reason, block.reason(), "{c:?}");
+            }
+            // Sessions still start (the terminal works), so it isn't a setup step.
+            assert_eq!(p.setup.state, SetupState::Complete);
+        }
+        if cfg!(target_os = "macos") {
+            assert!(ScreenBlock::Locked.reason().starts_with("This Mac is locked"));
+        }
+        // A permission that is off keeps its own reason: unlocking won't fix it.
+        let p = build_probe(
+            &MacFacts {
+                accessibility: false,
+                screen: Some(ScreenBlock::Locked),
+                ..all_good()
+            },
+            &input(),
+        );
+        let m = p
+            .missing
+            .iter()
+            .find(|m| m.capability == Capability::ScreenRead)
+            .unwrap();
+        assert_eq!(m.reason, ACCESSIBILITY_REASON);
+        let m = p
+            .missing
+            .iter()
+            .find(|m| m.capability == Capability::ScreenCapture)
+            .unwrap();
+        assert_eq!(m.reason, ScreenBlock::Locked.reason());
     }
 
     fn input() -> ProbeInput<'static> {

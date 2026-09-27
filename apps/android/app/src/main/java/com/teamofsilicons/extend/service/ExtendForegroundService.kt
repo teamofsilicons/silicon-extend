@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.IBinder
 import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.R
+import com.teamofsilicons.extend.adb.DebuggingAfterRestart
+import com.teamofsilicons.extend.config.DeviceInfo
 import com.teamofsilicons.extend.core.Link
 import com.teamofsilicons.extend.core.Phase
 import com.teamofsilicons.extend.core.UiState
@@ -47,6 +49,15 @@ class ExtendForegroundService : Service() {
         scope = s
         s.launch {
             extend.state.map { NotificationModel.of(it) }.distinctUntilChanged().collect { render(extend.state.value) }
+        }
+        s.launch {
+            // After a restart turned Wireless debugging off, ask the Carbon to turn it back on.
+            extend.state.map { (it.report?.debuggingAfterRestart == DebuggingAfterRestart.Status.OFF) to it.isTv }
+                .distinctUntilChanged()
+                .collect { (off, tv) ->
+                    val nm = getSystemService(NotificationManager::class.java)
+                    if (off) nm.notify(ID_DEBUGGING, debuggingOffNotification(tv)) else nm.cancel(ID_DEBUGGING)
+                }
         }
     }
 
@@ -96,15 +107,16 @@ class ExtendForegroundService : Service() {
 
     private fun connectionNotification(state: UiState): Notification {
         val env = state.environment?.let { " · Test environment: ${it.name}" } ?: ""
+        val app = DeviceInfo.appName(state.isTv)
         val (title, text) = when (state.phase) {
-            Phase.STARTING -> "Silicon Extend" to "Starting…"
+            Phase.STARTING -> app to "Starting…"
             Phase.UNPAIRED -> "Waiting to be paired" to (state.pairing.code?.let { "Pairing code $it — enter it on extend.teamofsilicons.com" } ?: "Getting a pairing code…")
             Phase.PAIRED -> when (state.link) {
-                Link.CONNECTED -> "Connected to Silicon Extend$env" to (state.device?.let { "${it.name} · paired to ${it.owner.id}" } ?: "Paired")
-                Link.CONNECTING -> "Connecting to Silicon Extend…$env" to "Paired"
-                Link.OFFLINE -> "Silicon Extend is offline$env" to (state.linkDetail ?: "Reconnecting")
-                Link.SUPERSEDED -> "Silicon Extend: connected elsewhere" to (state.linkDetail ?: "")
-                Link.UPGRADE_REQUIRED -> "Update Silicon Extend" to (state.linkDetail ?: "")
+                Link.CONNECTED -> "Connected to $app$env" to (state.device?.let { "${it.name} · paired to ${it.owner.id}" } ?: "Paired")
+                Link.CONNECTING -> "Connecting to $app…$env" to "Paired"
+                Link.OFFLINE -> "$app is offline$env" to (state.linkDetail ?: "Reconnecting")
+                Link.SUPERSEDED -> "$app: connected elsewhere" to (state.linkDetail ?: "")
+                Link.UPGRADE_REQUIRED -> "Update $app" to (state.linkDetail ?: "")
             }
         }
         val builder = Notification.Builder(this, CHANNEL_CONNECTION)
@@ -121,6 +133,8 @@ class ExtendForegroundService : Service() {
         val s = state.session!!
         val builder = Notification.Builder(this, CHANNEL_IN_USE)
             .setSmallIcon(R.drawable.ic_extend_mark)
+            // Interface's cobalt for the icon, app name and actions.
+            .setColor(getColor(R.color.extend_cobalt))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_STATUS)
@@ -140,17 +154,40 @@ class ExtendForegroundService : Service() {
         return builder.build()
     }
 
+    /** Wireless debugging went off with a restart: one tap opens its settings page. */
+    private fun debuggingOffNotification(tv: Boolean): Notification {
+        val m = DebuggingOffMessage.of(tv)
+        val open = PendingIntent.getActivity(
+            this, 3, DebuggingAfterRestart.wirelessDebuggingIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return Notification.Builder(this, CHANNEL_SETUP)
+            .setSmallIcon(R.drawable.ic_extend_mark)
+            .setColor(getColor(R.color.extend_cobalt))
+            .setContentTitle(m.title)
+            .setContentText(m.text)
+            .setStyle(Notification.BigTextStyle().bigText(m.bigText))
+            .setCategory(Notification.CATEGORY_REMINDER)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .addAction(Notification.Action.Builder(null, m.action, open).build())
+            .build()
+    }
+
     companion object {
         const val CHANNEL_CONNECTION = "connection"
         const val CHANNEL_IN_USE = "in_use"
+        const val CHANNEL_SETUP = "setup"
         const val ID_CONNECTION = 1
         const val ID_IN_USE = 2
+        const val ID_DEBUGGING = 3
 
         fun createChannels(context: Context) {
             val nm = context.getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_CONNECTION, "Connection", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "Shows that this device is connected to Silicon Extend."
+                    description = "Shows that this device is connected to Extend."
                 },
             )
             nm.createNotificationChannel(
@@ -159,12 +196,34 @@ class ExtendForegroundService : Service() {
                     setShowBadge(true)
                 },
             )
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_SETUP, "Setup needs you", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "Asks you to turn something back on, such as wireless debugging after this device restarts."
+                },
+            )
         }
 
         fun start(context: Context) {
             runCatching {
                 context.startForegroundService(Intent(context, ExtendForegroundService::class.java))
             }.onFailure { Extend.log("couldn't start the foreground service", it) }
+        }
+    }
+}
+
+/** The words of the "turn wireless debugging back on" notification. */
+data class DebuggingOffMessage(val title: String, val text: String, val bigText: String, val action: String) {
+    companion object {
+        fun of(tv: Boolean): DebuggingOffMessage {
+            val noun = if (tv) "TV" else "phone"
+            return DebuggingOffMessage(
+                title = "Turn wireless debugging back on",
+                text = "This $noun restarted, which turned wireless debugging off.",
+                bigText = "This $noun restarted, and Android turns wireless debugging off when it restarts. Silicons can still read and control the screen, " +
+                    "but until it is back on they can't install apps, read device logs, record the screen or run adb commands here. Tap to open Wireless debugging and turn it on; " +
+                    "Extend reconnects by itself.",
+                action = "Open Wireless debugging",
+            )
         }
     }
 }

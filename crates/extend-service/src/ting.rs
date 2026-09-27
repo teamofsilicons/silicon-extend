@@ -6,8 +6,10 @@
 //! Ting delivers an app's tings only to recipients that registered that app (`subscriptions.register`,
 //! with the *recipient's* own proof); a send to anyone else is refused with
 //! `recipient_not_registered`. [`Notifier::register_recipient`] makes that registration while
-//! Extend holds the Silicon's login. Extend's type (`extend.device.requested`) must be registered
-//! in Ting's catalog for the `extend` app (through Honeycomb).
+//! Extend holds the Silicon's login: when the Silicon starts a session (the Silicon using a device
+//! is the one requests go to), and again before each retry of a pending request. Extend's type
+//! (`extend.device.requested`) must be registered in Ting's catalog for the `extend` app (through
+//! Honeycomb).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -129,7 +131,7 @@ pub fn ting_error(status: u16, body: &serde_json::Value, endpoint_id: &str, reci
             ErrorCode::NoAccess,
             format!("{what}: {recipient} has not registered to receive {app_id}'s notifications in Ting yet."),
         )
-        .hint(format!("{recipient} registers when it next signs in to Extend or starts a session; the request stays pending and is retried.")),
+        .hint(format!("Extend registers {recipient} when it starts a session (and while Extend holds its login); the request stays pending and is retried.")),
         (404, _) if endpoint_id == "tings.send" => AppError::new(
             ErrorCode::ServiceUnavailable,
             format!("{what}: Ting does not know the type {app_id}.{DEVICE_REQUESTED}."),
@@ -203,6 +205,8 @@ impl Notifier for TingNotifier {
 #[derive(Default)]
 pub struct LocalNotifier {
     pub sent: tokio::sync::Mutex<Vec<serde_json::Value>>,
+    /// Recipients registered, as (test environment, team, member), once each.
+    pub registered: tokio::sync::Mutex<Vec<(Option<uuid::Uuid>, String, String)>>,
 }
 
 #[async_trait]
@@ -220,6 +224,24 @@ impl Notifier for LocalNotifier {
             "local Ting: device request"
         );
         self.sent.lock().await.push(serde_json::to_value(t).unwrap_or_default());
+        Ok(())
+    }
+
+    async fn register_recipient(&self, recipient: &Principal, sel: Option<&TestingSelection>) -> AppResult<()> {
+        let key = (
+            sel.map(|s| s.environment_id),
+            recipient.team()?.to_owned(),
+            recipient.id().to_owned(),
+        );
+        let mut registered = self.registered.lock().await;
+        if !registered.contains(&key) {
+            tracing::info!(
+                recipient = recipient.id(),
+                team = key.1,
+                "local Ting: recipient registered"
+            );
+            registered.push(key);
+        }
         Ok(())
     }
 }

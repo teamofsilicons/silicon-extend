@@ -28,6 +28,8 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 
 step() { printf '\n== %s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
+# shellcheck source=../packaging.sh
+source "$ROOT/apps/desktop/packaging.sh"
 
 if [[ -n "${NOTARY_PROFILE:-}" && "$SIGN_IDENTITY" == "-" ]]; then
   die "NOTARY_PROFILE is set but SIGN_IDENTITY isn't: Apple notarizes only Developer ID signed apps. Set SIGN_IDENTITY='Developer ID Application: …', or unset NOTARY_PROFILE for an ad-hoc build."
@@ -35,6 +37,8 @@ fi
 
 step "agent-device fork (pnpm install && pnpm build)"
 (cd "$AD" && pnpm install --frozen-lockfile && pnpm build)
+# What this dist was built from, so a later package without pnpm can check it (dist-manifest.mjs).
+node "$ROOT/apps/desktop/dist-manifest.mjs" record "$AD"
 # The macOS helper, built once and shipped signed inside the app so permissions stick to it.
 (cd "$AD" && pnpm build:macos-helper) >/dev/null
 HELPER="$(find "$AD/apple/macos-helper/.build" -type f -name agent-device-macos-helper -perm -u+x -ipath '*release*' | head -1)"
@@ -89,6 +93,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/agent-device" "$APP/Cont
 sed "s/@VERSION@/$VERSION/g" "$ROOT/apps/desktop/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 # The app icon (Finder, and the Privacy & Security lists); icon/make-icns.sh rebuilds it from AppIcon.svg.
 cp "$ROOT/apps/desktop/macos/icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/THIRD_PARTY_LICENSES.txt" "$APP/Contents/Resources/"
 plutil -replace CFBundleIconFile -string AppIcon "$APP/Contents/Info.plist"
 cp "$BIN" "$APP/Contents/MacOS/extend-agent"
 cp "$HELPER" "$APP/Contents/MacOS/agent-device-macos-helper"
@@ -107,8 +112,9 @@ mv "$RUNTIME/bin/agent-device.mjs" "$RUNTIME/bin/agent-device-cli.mjs"
 install -m 0755 "$ROOT/apps/desktop/runtime-entry.mjs" "$RUNTIME/bin/agent-device.mjs"
 # Stamp before signing: signing timestamps must not invalidate an otherwise identical runtime.
 # The stamp must be printed and in the staged manifest: an unstamped runtime would keep reusing an
-# older daemon of the same upstream version after an update.
-STAMPED="$("$BUNDLED_NODE" "$ROOT/apps/desktop/stamp-runtime.mjs" "$RUNTIME" "$APP/Contents/MacOS/agent-device-macos-helper")"
+# older daemon of the same upstream version after an update. stamp_runtime sets STAMPED, or stops
+# the build saying why (even when the stamp is killed by a signal and prints nothing).
+stamp_runtime "$BUNDLED_NODE" "$RUNTIME" "$APP/Contents/MacOS/agent-device-macos-helper"
 # Read back with plutil rather than the stamp's own code (and without launching Node again).
 MANIFEST_VERSION="$(plutil -extract version raw -o - "$RUNTIME/package.json" 2>/dev/null || true)"
 MANIFEST_DIGEST="$(plutil -extract extendRuntime.sha256 raw -o - "$RUNTIME/package.json" 2>/dev/null || true)"

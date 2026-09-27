@@ -120,6 +120,17 @@ pub struct Device {
     pub missing: Option<Vec<MissingCapability>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands: Option<Vec<String>>,
+    /// Set only on a removed device, which only the Carbon who paired it can read
+    /// (`GET /api/v1/devices?include_removed=true`, `GET /api/v1/devices/{device_id}`).
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub removed_at: Option<Timestamp>,
+    /// Why the pair ended, alongside `removed_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_reason: Option<EndReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,6 +451,12 @@ pub struct CommandResult {
     pub duration_ms: i64,
     #[serde(with = "time::serde::rfc3339::option")]
     pub idle_ends_at: Option<Timestamp>,
+    /// Things that went wrong around the command without failing it, each saying what happened,
+    /// why, and what to do: chiefly a file the device made that Extend could not store in
+    /// Briefcase, or could not share with the device's Carbon. Empty when all went well; older
+    /// services leave it out.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -525,6 +542,10 @@ pub struct RequestInfo {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: Timestamp,
     pub delivery: Delivery,
+    /// Why the last delivery attempt through Ting failed, while `delivery` is `pending` or once it
+    /// is `failed` (what happened, why, and what to do).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

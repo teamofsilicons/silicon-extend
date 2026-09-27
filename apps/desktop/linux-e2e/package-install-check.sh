@@ -32,6 +32,11 @@ SILICON_HOME=/tmp/h extend-agent --version
 env -u DISPLAY SILICON_HOME=/tmp/h extend-agent probe >/tmp/probe.txt
 python3 -c 'import gi; gi.require_version("Atspi", "2.0"); from gi.repository import Atspi'
 if [[ "$PHASE" == recommends ]]; then
+  # Listed by name, not left to arrive through GTK's own dependencies.
+  recommends="$(dpkg-deb -f /tmp/extend-package.deb Recommends)"
+  for package in libxcomposite1 libxdamage1 libxfixes3; do
+    [[ ", $recommends," == *", $package,"* ]] || { echo "FAILED: the package's Recommends don't list $package, which app recording loads (Recommends: $recommends)"; exit 1; }
+  done
   for tool in ffmpeg ffprobe xwininfo xdotool; do
     command -v "$tool" >/dev/null || { echo "FAILED: the package's Recommends do not bring $tool"; exit 1; }
   done

@@ -10,6 +10,11 @@ import tempfile
 import tarfile
 import tomllib
 
+# Shipped beside the executables: Extend's licence and every bundled component's. They go in every
+# target's root (targets/<target>/licences/), because `honeycomb pack` keeps only honeycomb.yaml and
+# the target roots and silently drops anything else.
+LICENCES = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.txt')
+
 TARGETS = {
     'linux-x86_64': ('x86_64-unknown-linux-gnu', 'extend'),
     'linux-aarch64': ('aarch64-unknown-linux-gnu', 'extend'),
@@ -72,15 +77,22 @@ def main():
             destination.parent.mkdir(parents=True)
             shutil.copyfile(args.artifacts / target / binary, destination)
             destination.chmod(0o755)
+            (stage / 'targets' / target / 'licences').mkdir()
+            for name in LICENCES:
+                shutil.copyfile(root / name, stage / 'targets' / target / 'licences' / name)
         subprocess.run([args.honeycomb, 'validate', str(stage)], check=True)
         subprocess.run([args.honeycomb, 'pack', str(stage), '--output', str(output)], check=True)
     subprocess.run([args.honeycomb, 'validate', str(output)], check=True)
-    expected = {'honeycomb.yaml'} | {f'targets/{target}/bin/{binary}' for target, (_, binary) in TARGETS.items()}
+    expected = {'honeycomb.yaml'} | {
+        f'targets/{target}/{path}'
+        for target, (_, binary) in TARGETS.items()
+        for path in [f'bin/{binary}', *(f'licences/{name}' for name in LICENCES)]
+    }
     with tarfile.open(output, 'r:gz') as archive:
         members = archive.getmembers()
         files = {member.name.removeprefix('./') for member in members if member.isfile()}
         if files != expected or any(not (member.isfile() or member.isdir()) for member in members):
-            raise SystemExit('Archive must contain only honeycomb.yaml and the six native executables')
+            raise SystemExit('Archive must contain only honeycomb.yaml, the licences and the six native executables')
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     output.with_name(output.name + '.sha256').write_text(f'{digest}  {output.name}\n')
     print(f'{output}\nSHA-256: {digest}')

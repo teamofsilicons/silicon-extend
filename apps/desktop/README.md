@@ -11,6 +11,8 @@ tools, never against Apple. Nothing has been published.
 | `macos/icon/` | The app icon (`AppIcon.svg` → `make-icns.sh` → `AppIcon.icns`), Extend's mark |
 | `runtime-entry.mjs` | Extend's entry for the packaged agent-device runtime (replaces a daemon started from another install path) |
 | `stamp-runtime.mjs` | Stamps the packaged runtime's version with a content digest |
+| `packaging.sh` | Sourced by both build scripts: the checked stamp step (`stamp_runtime`) and the dist freshness check (`require_fresh_dist`) |
+| `dist-manifest.mjs` | Records which source `vendor/agent-device/dist` was built from, and checks it before packaging a dist that can't be rebuilt |
 | `linux/build-package.sh` | Builds the Linux tarball and `.deb` layout (run it on Linux) |
 | `linux/build-in-docker.sh` | Runs `build-package.sh` in the linux-e2e image, then installs the `.deb` in a container and runs it |
 | `windows/build-zip.ps1` | Builds the Windows zip (run it on Windows) |
@@ -70,9 +72,14 @@ deleted. Assembling a new app deletes the previous app's three zip variants and 
   and (on Mac) the native helper before signing. Changed code therefore triggers the existing
   daemon takeover path; identical copied artifacts keep the same identity despite paths, mtimes or
   signing timestamps. Before writing anything, `stamp-runtime.mjs` checks the staged runtime is
-  complete (non-empty entries, every relative import resolvable, no symlinks); both build scripts
-  fail unless the printed stamp and the staged `package.json` agree. The vendor source manifest and
-  Extend's public version are not changed by packaging.
+  complete (non-empty entries, every relative import resolvable, no symlinks). The required
+  entries include every `internal/*` entry of the fork's `tsdown.config.ts` (bin, daemon, and the
+  PNG worker, Metro companion tunnel, Maestro runScript child and update check, which agent-device
+  loads by computed paths the import check can't follow); a test fails when the fork adds one
+  that isn't listed. Both build scripts stamp through `packaging.sh`'s `stamp_runtime`, which stops
+  the build with why and what to do when the stamp fails or is killed by a signal (it prints
+  nothing then), and fail unless the printed stamp and the staged `package.json` agree. The vendor
+  source manifest and Extend's public version are not changed by packaging.
 - The location is the entry's job: before each command that uses the local daemon,
   `runtime-entry.mjs` compares the runtime's real install path with the one recorded in
   `<state dir>/extend-runtime-root.json`. If a daemon of the same version was started from another
@@ -80,9 +87,14 @@ deleted. Assembling a new app deletes the previous app's three zip variants and 
   that daemon with agent-device's own `daemon stop` and agent-device starts a fresh one, which ends
   the old daemon's sessions once. A daemon of another version is left to agent-device's own rules.
   Help, `--version`, `daemon …` and remote-daemon runs are not checked. If the stop fails, stderr
-  says so with the command to run, and the next command retries. Known problem: the entry reads
-  `--state-dir` even after `--`, where agent-device does not, so text typed after `--` can choose
-  where the record is written (open, `docs/completion-work.md`).
+  says so with the command to run, and the next command retries. Flags are read only before a
+  `--`, as agent-device's parser reads them, so text typed after `--` (`type -- --state-dir=~/x`)
+  never picks the state directory, the help check or a remote daemon. The record keeps, per
+  version, the location its daemon was started from (`{"root", "roots": {"<version>": <path>}}`),
+  and it is written before agent-device runs, also when a daemon of another release is running:
+  a first command after an update that is killed (timeout, SIGKILL) still leaves it, so the next
+  command doesn't stop the daemon that location has just started. A claim for one version never
+  covers a newer daemon agent-device keeps.
 - `extend-agent` finds the bundled agent-device and Node through `../Resources`. Setting
   `EXTEND_AGENT_DEVICE` or `EXTEND_NODE` overrides them.
 - Checked on 2026-09-26: the first bundle built, `plutil -lint` passed, and
@@ -97,8 +109,10 @@ deleted. Assembling a new app deletes the previous app's three zip variants and 
   at `_dyld_start` while `syspolicyd` timed out ("ASP: Security policy would not allow process"); a
   fresh bundle path worked. If a Mac build seems to hang right after "Assemble", this is the likely
   cause.
-- Start at login: `extend-agent install-autostart` writes a LaunchAgent that points at the
-  bundle's binary.
+- Start at login: once paired, the app turns it on by itself (a LaunchAgent that points at the
+  bundle's binary) unless the Carbon turned it off (the window's switch, the menu, `run
+  --no-autostart`, `uninstall-autostart`); `extend-agent install-autostart` turns it on by hand.
+  An app opened from Downloads (App Translocation) or a disk image is never registered.
 
 ### Native Mac input and recording (2026-09-26)
 
@@ -239,12 +253,15 @@ share/applications/silicon-extend.desktop
   plus `python3-gi`, `gir1.2-atspi-2.0` and `at-spi2-core` for screen reading. The generated
   `.deb` metadata carries the exact native requirements of that build.
 - Recommended: xdotool, xclip, ImageMagick, xdg-utils, ffmpeg (with libx264 and x11grab),
-  x11-utils and libxcomposite1. App recording also loads libxdamage1 and libxfixes3; today they
-  arrive through GTK 3's own dependencies and are not listed in Recommends yet.
+  x11-utils, libxcomposite1, libxdamage1 and libxfixes3 (the last three are loaded through ctypes
+  by the X11 recorder for app recording, so `dpkg-shlibdeps` can't see them).
 - `build-package.sh` rebuilds the fork with `pnpm install --frozen-lockfile && pnpm build` when pnpm
-  is on `PATH`. Without pnpm (inside the linux-e2e container, where `build-in-docker.sh` has built
-  the fork on the host first) it refuses a missing `dist`, or one older than any of its build
-  inputs, and names the newer file.
+  is on `PATH`, then records what the dist was built from (`dist-manifest.mjs record`: the SHA-256
+  of every build input, and of the dist, in `vendor/agent-device/.extend-build-manifest.json`).
+  Without pnpm (inside the linux-e2e container, where `build-in-docker.sh` has built and recorded
+  the fork on the host first) it refuses a missing `dist`, one with no record, one rebuilt since,
+  and one whose inputs changed, were added or were deleted since, naming the files. Content
+  hashes, not timestamps, so the container's copy checks the same as the host's tree.
 - The packaged runtime's `bin/agent-device.mjs` is Extend's `runtime-entry.mjs` (see the macOS
   section); the fork's entry is `bin/agent-device-cli.mjs`. Node's `LICENSE` ships beside it.
 - `linux-e2e/package-install-check.sh` installs the `.deb` with apt into a clean `debian:trixie`
@@ -283,7 +300,7 @@ the driver's pure logic is unit-tested. The script itself hasn't run.
 ### Packaged daemon update verification
 
 ```sh
-node --test apps/desktop/stamp-runtime.test.mjs apps/desktop/runtime-entry.test.mjs
+node --test apps/desktop/*.test.mjs
 node apps/desktop/runtime-update-e2e.mjs "target/desktop/macos/Silicon Extend.app/Contents/Resources/agent-device"
 node apps/desktop/runtime-update-e2e.mjs <unpacked tarball>/lib/silicon-extend/agent-device   # Linux
 ```
@@ -333,8 +350,9 @@ supervisor SIGKILL, window/device dimensions, full decoding, nonblank frames and
 It is a manual lane, not selected by CI.
 
 The public runtime connects this worker for `record start --scope device/system`, including
-fps, hide-touches and daemon-crash recovery; `--quality` is refused on Linux (Linux exports the
-recorder's own H.264 unchanged). Extend returns a copied recording artifact and retains its export
+fps, hide-touches, quality and daemon-crash recovery. Linux exports the recorder's own H.264
+unchanged, so `--quality` picks its bit rate: medium (Extend's `normal`, the default) 8 Mbit/s,
+high 20 Mbit/s, as Android's screenrecord. Extend returns a copied recording artifact and retains its export
 for retry. App scope binds the active named app to exactly one mapped WM_CLASS matching its
 executable or desktop-file basename, waiting up to 5 s for the window to appear. It requires xdotool
 and libXcomposite, libXdamage and libXfixes with the matching X extensions (a missing one is named,
@@ -342,25 +360,35 @@ with its Debian package). Multiple matching windows are refused; unmapping, rema
 reparenting the window ends the recording (`source-ended`). Minimized-window starts and multiwindow
 apps remain unsupported.
 
-How a covered window is recorded (since 2026-09-27): at start the recorder holds the X server for a
-moment (about 2 ms for a typical app) while it redirects the window through XComposite, and learns
-which parts of it were hidden (covered or off screen). Only those parts must be redrawn by the app
-before the first frame; a window nothing covers starts at once, and the X server itself repaints
-windows that have a background (Xt, Motif, plain Xlib with a background). An app that advertises
-`_NET_WM_PING` (GTK, Qt, Chromium/Electron, SDL, Firefox) must answer a ping within 5 s, even when
-uncovered. Refused, with no video: a hidden part not redrawn within 5 s, an app that does not answer
-its ping, a window holding more than 2,048 windows, an input-only window. The part of a shaped
-window outside its shape is recorded black. Frames are stamped on the wall clock at a constant
-frame rate, so a slow capture repeats frames rather than playing back fast. Known gaps (Xvfb
-probes): a plain Xlib window with background `None` and no ping that hung while covered can show
-the former cover after the cover moves away, and a second recorder on a window another recorder
-already redirected can record the cover. Only Xvfb has been exercised, with no window manager and
+How a covered window is recorded (since 2026-09-27, revised the same day): at start the recorder
+holds the X server for a moment (about 2 ms for a typical app) while it redirects the window
+through XComposite. The off-screen copy the server seeds from the screen is never trusted, since
+where nothing covers the window now it can still show a cover that left (a window with background
+`None`, the XCreateWindow default, whose app hasn't redrawn). So the recorder has all of it drawn
+again, as if it had just been uncovered: it clears the window and every window inside it with
+exposures (`XClearArea`), so the server paints each background there is and the app gets real
+Expose events for everything, and it reads no frame until every pixel inside the window's shape
+has been drawn again, by the app or by the server. Borders (a window's bounding shape less its
+clip shape) are only ever painted by the server, so they are never someone else's pixels and are
+not waited for. The clear can show as one flicker of the window's background at record start. An
+app that advertises `_NET_WM_PING` (GTK, Qt, Chromium/Electron, SDL, Firefox) must also answer a
+ping within 5 s. Refused, with no video and "record the whole screen instead (--scope device)": a
+window not fully redrawn within 5 s (an app that isn't responding, whose windows have no
+background), an app that does not answer its ping, a window holding more than 2,048 windows, an
+input-only window. A stopped app whose windows all have backgrounds (xmessage, xev, a plain Xlib
+window with a background pixel) is recorded showing those backgrounds, since the server painted
+every pixel. The part of a shaped window outside its
+shape is recorded black. Frames are stamped on the wall clock at a constant frame rate, so a slow
+capture repeats frames rather than playing back fast. The two leaks the verifier's probes found (a
+plain Xlib window with background `None` and no ping, stopped after its cover left; a second
+recorder on a window another recorder had redirected) are refused now (`record-hung-e2e.py`'s
+`plain …` cases and the probe, 2026-09-27). Only Xvfb has been exercised, with no window manager and
 with openbox.
 
 Set `RECORD_LANE=record-app-e2e.py` to exercise public named-app open/start/stop with an already
 covered target and missing/ambiguous-target refusal. `RECORD_LANE=record-isolation-e2e.py` tests
 native isolation; add `RECORD_ISOLATION_EDGE=unmap`, `resize` or `remap` to verify finalization on
-source changes. `RECORD_LANE=record-hung-e2e.py` is the cover and redraw lane (18 cases, every pixel
+source changes. `RECORD_LANE=record-hung-e2e.py` is the cover and redraw lane (25 cases, every pixel
 of every frame checked; `RECORD_WM=openbox` adds a window manager, `RECORD_WORKER` compares another
 `screen-record.py`, `RECORD_CASES` picks cases; artifacts under `cover-recording-*`).
 `record-e2e.py` also covers an owner gone before start, a slow 3000x2000 60 fps capture keeping real

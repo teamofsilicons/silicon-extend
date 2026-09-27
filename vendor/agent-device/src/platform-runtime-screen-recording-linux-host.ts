@@ -93,6 +93,8 @@ async function startRecording(
   args.push('--owner-pid', String(process.pid));
   if (input.fps !== undefined) args.push('--fps', String(input.fps));
   if (input.appId !== undefined) args.push('--app-id', input.appId);
+  // Silicon Extend fork: the worker's encode is the export, so its quality is chosen here.
+  if (input.quality !== undefined) args.push('--quality', input.quality);
   const background = runCmdBackground('python3', args, { allowFailure: true, captureOutput: true });
   let result: HostCommandResult | undefined;
   let failure: unknown;

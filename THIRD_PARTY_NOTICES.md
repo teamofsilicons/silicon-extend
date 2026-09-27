@@ -10,13 +10,13 @@ What ships where:
 
 | Artifact | Third-party parts it carries | Where its notices are |
 |---|---|---|
-| `extend` CLI (Honeycomb archive, six targets) | Rust crates | This file. The archive does not carry the crates' licence texts yet (open gate in `docs/completion-work.md`). |
-| Extend service (container image) | Rust crates, the vendored `silicon-iam-client` | This file |
-| Mac app (`Silicon Extend.app`) | Rust crates, the agent-device fork and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/agent-device/LICENSE`, `Contents/Resources/node/LICENSE`, this file |
-| Linux tarball and `.deb` | Rust crates, the agent-device fork (including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE`, this file |
-| Windows zip | Rust crates, fonts inlined in the window (no Node.js, no agent-device) | This file |
+| `extend` CLI (Honeycomb archive, six targets) | Rust crates | `licences/` in every target of the archive (`targets/<target>/licences/`): `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
+| Extend service (container image) | Rust crates, the vendored `silicon-iam-client` | `/usr/share/doc/silicon-extend/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt` |
+| Mac app (`Silicon Extend.app`) | Rust crates, the agent-device fork and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`, `agent-device/LICENSE`, `node/LICENSE` |
+| Linux tarball and `.deb` | Rust crates, the agent-device fork (including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `share/doc/silicon-extend/` (`LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`), `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE` |
+| Windows zip | Rust crates, fonts inlined in the window (no Node.js, no agent-device) | `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt` beside the executable |
 | Android APK | libadb-android, spake2-android, Conscrypt/BoringSSL, Bouncy Castle, AndroidX/Compose, Kotlin, OkHttp/Okio, fonts | The app's **Open-source licences** screen: `apps/android/app/src/main/assets/open_source_licences.txt`, with the full licence texts |
-| Configuration website | SolidJS, Lucide icons, fonts | This file |
+| Configuration website | SolidJS, Lucide icons, fonts | This file (the built site does not carry the licence texts yet) |
 
 ## Forked and vendored components
 
@@ -232,7 +232,11 @@ By licence expression (as `cargo metadata` reports it, with `A/B` spelled `A OR 
 - **Rust crates:** regenerate the list from `cargo metadata --format-version 1 --locked`: walk the
   resolve graph from the workspace members through dependencies of kind normal or build, and group
   the `license` field of every non-workspace package. Check any new licence expression before
-  shipping it.
+  shipping it. Then regenerate the licence texts that ship with the binaries:
+  `cargo about generate about.hbs -o THIRD_PARTY_LICENSES.txt` (`about.toml` lists the accepted
+  licences; a crate under any other licence stops the generation). The CLI archive, the service
+  image and the desktop packages copy `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt`
+  (`scripts/package-cli.py`, `Dockerfile`, `apps/desktop/*/build-*`).
 - **agent-device:** after rebuilding the fork, re-read `deps.onlyBundle` in
   `vendor/agent-device/tsdown.config.ts` and the licences of those packages; record fork changes in
   `vendor/agent-device/FORK.md`.

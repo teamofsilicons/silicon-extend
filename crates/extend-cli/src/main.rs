@@ -4,264 +4,49 @@
 //! password. Every failure says what went wrong, why, and what to run next, and exits with a code
 //! from `understanding/cli.yaml`.
 
+mod args;
+mod compat;
+mod error;
 mod help;
+#[macro_use]
+mod output;
 mod store;
 
+use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Read as _, Write as _};
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use extend_protocol::capability::{self, COMMANDS};
 use extend_protocol::model::*;
-use extend_protocol::{ApiError, DeviceId, ErrorCode};
+use extend_protocol::{DeviceId, ErrorCode};
 use serde_json::{Value, json};
+use silicon_extend_client::attachments::{self as attach, AttachmentError, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS};
 use silicon_extend_client::{ActivityQuery, Client, DeviceQuery, ListQuery};
+
+use args::{Args, Globals, VERBATIM_COMMANDS, missing_value, parse_globals};
+use error::{CliError, R};
+use output::{Colors, Out, Stream};
 use store::{Auth, Plane};
 
 const DEFAULT_API: &str = "https://backend.extend.teamofsilicons.com";
-
-// ───────────────────────────── Errors ─────────────────────────────
-
-#[derive(Debug)]
-struct CliError {
-    code: ErrorCode,
-    message: String,
-    hint: Option<String>,
-    request_id: Option<String>,
-    details: Value,
-}
-
-impl CliError {
-    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            hint: None,
-            request_id: None,
-            details: Value::Null,
-        }
-    }
-    fn hint(mut self, h: impl Into<String>) -> Self {
-        self.hint = Some(h.into());
-        self
-    }
-    fn usage(message: impl Into<String>) -> Self {
-        Self::new(ErrorCode::InvalidInput, message)
-    }
-    fn exit(&self) -> i32 {
-        self.code.exit_code()
-    }
-}
-
-impl From<silicon_extend_client::Error> for CliError {
-    fn from(e: silicon_extend_client::Error) -> Self {
-        match e {
-            silicon_extend_client::Error::Api { error, .. } => {
-                let ApiError {
-                    code,
-                    message,
-                    hint,
-                    request_id,
-                    details,
-                    ..
-                } = *error;
-                Self {
-                    code,
-                    message,
-                    hint,
-                    request_id: Some(request_id).filter(|r| !r.is_empty()),
-                    details,
-                }
-            }
-            silicon_extend_client::Error::Transport { url, source } => Self::new(
-                ErrorCode::ServiceUnavailable,
-                format!("Could not reach Silicon Extend at {url}: {source}"),
-            )
-            .hint("Check your network, or the api_url setting (`extend config get api_url`)."),
-            silicon_extend_client::Error::Decode { status, detail } => Self::new(
-                ErrorCode::Internal,
-                format!("Extend answered {status} with something this CLI can't read: {detail}"),
-            )
-            .hint("Update the CLI with `honeycomb install 'extend'`; if it persists, `extend report` it."),
-            silicon_extend_client::Error::Invalid(m) => Self::usage(m),
-        }
-    }
-}
-
-impl From<anyhow::Error> for CliError {
-    fn from(e: anyhow::Error) -> Self {
-        Self::new(ErrorCode::InvalidInput, format!("{e:#}"))
-    }
-}
-
-type R<T> = Result<T, CliError>;
-
-// ───────────────────────────── Arguments ─────────────────────────────
-
-#[derive(Debug, Default, Clone)]
-struct Globals {
-    json: bool,
-    test: Option<String>,
-    session: Option<String>,
-    team: Option<String>,
-    timeout: Option<u64>,
-    help: bool,
-    version: bool,
-    verbose: bool,
-}
-
-/// Device commands whose arguments are a command line for the device itself (`adb shell df -h`).
-/// Extend reads its own flags only between the command name and the device's first argument; from
-/// that argument on, every token is sent exactly as typed, so `-h`, `-v`, `--json` and `--out`
-/// reach the device. A `--` directly after the command name ends Extend's flags and is not sent.
-const VERBATIM_COMMANDS: &[&str] = &["adb"];
-
-/// Extend's own flags for device commands that make files, and whether each takes a value.
-const FILE_FLAGS: &[(&str, bool)] = &[("--ttl", true), ("--keep", false), ("--out", true)];
-
-fn file_flag_takes_value(token: &str) -> Option<bool> {
-    FILE_FLAGS.iter().find(|(f, _)| *f == token).map(|(_, v)| *v)
-}
-
-fn missing_value(name: &str) -> CliError {
-    match name {
-        "--ttl" => CliError::usage("--ttl needs a duration, like 7d"),
-        "--out" => CliError::usage("--out needs a local path"),
-        _ => CliError::usage(format!("{name} needs a value")),
-    }
-}
-
-/// Takes the global flags out of argv. They may come anywhere before a `--`, except inside a
-/// verbatim command's own arguments (see [`VERBATIM_COMMANDS`]).
-fn parse_globals(argv: Vec<String>) -> R<(Globals, Vec<String>)> {
-    let mut g = Globals::default();
-    let mut rest = Vec::new();
-    let mut it = argv.into_iter();
-    let mut passthrough = false;
-    // Between a verbatim command's name and its first argument, where only Extend's flags go.
-    let mut leading = false;
-    while let Some(a) = it.next() {
-        if passthrough {
-            rest.push(a);
-            continue;
-        }
-        let mut value = |name: &str| it.next().ok_or_else(|| missing_value(name));
-        match a.as_str() {
-            "--" => {
-                passthrough = true;
-                rest.push(a);
-            }
-            "--json" => g.json = true,
-            "-h" | "--help" => g.help = true,
-            "-V" | "--version" => g.version = true,
-            "-v" | "--verbose" => g.verbose = true,
-            "--test" => g.test = Some(value("--test")?),
-            "--session" => g.session = Some(value("--session")?),
-            "--team" => g.team = Some(value("--team")?),
-            "--timeout" => {
-                let v = value("--timeout")?;
-                g.timeout = Some(
-                    v.parse()
-                        .map_err(|_| CliError::usage(format!("--timeout takes milliseconds, got {v:?}")))?,
-                );
-            }
-            _ if a.starts_with("--test=") => g.test = Some(a["--test=".len()..].to_owned()),
-            _ if a.starts_with("--session=") => g.session = Some(a["--session=".len()..].to_owned()),
-            _ if a.starts_with("--team=") => g.team = Some(a["--team=".len()..].to_owned()),
-            // `--ttl`, `--keep` and `--out` stay in place for `device_command`, with their values,
-            // so a value is never mistaken for the device's first argument.
-            _ if leading && file_flag_takes_value(&a).is_some() => {
-                let v = if file_flag_takes_value(&a) == Some(true) {
-                    Some(value(&a)?)
-                } else {
-                    None
-                };
-                rest.push(a);
-                rest.extend(v);
-            }
-            _ => {
-                if leading {
-                    // The device's command line starts here; nothing after this is Extend's.
-                    passthrough = true;
-                } else if rest.is_empty() && VERBATIM_COMMANDS.contains(&a.as_str()) {
-                    leading = true;
-                }
-                rest.push(a);
-            }
-        }
-    }
-    Ok((g, rest))
-}
-
-/// Pulls `--flag value` / `--flag` out of a command's own arguments.
-struct Args {
-    pos: Vec<String>,
-    flags: Vec<(String, Option<String>)>,
-}
-
-impl Args {
-    fn parse(argv: &[String], takes_value: &[&str]) -> Self {
-        let mut pos = Vec::new();
-        let mut flags = Vec::new();
-        let mut i = 0;
-        while i < argv.len() {
-            let a = &argv[i];
-            if a == "--" {
-                // Everything after `--` is positional, even if it looks like a flag.
-                pos.extend(argv[i + 1..].iter().cloned());
-                break;
-            }
-            if let Some((k, v)) = a.split_once('=').filter(|_| a.starts_with("--")) {
-                flags.push((k.to_owned(), Some(v.to_owned())));
-            } else if a.starts_with("--") && a.len() > 2 {
-                if takes_value.contains(&a.as_str()) && i + 1 < argv.len() {
-                    flags.push((a.clone(), Some(argv[i + 1].clone())));
-                    i += 1;
-                } else {
-                    flags.push((a.clone(), None));
-                }
-            } else {
-                pos.push(a.clone());
-            }
-            i += 1;
-        }
-        Self { pos, flags }
-    }
-    fn flag(&self, name: &str) -> bool {
-        self.flags.iter().any(|(k, _)| k == name)
-    }
-    fn value(&self, name: &str) -> Option<String> {
-        self.flags
-            .iter()
-            .rev()
-            .find(|(k, _)| k == name)
-            .and_then(|(_, v)| v.clone())
-    }
-    fn values(&self, name: &str) -> Vec<String> {
-        self.flags
-            .iter()
-            .filter(|(k, _)| k == name)
-            .filter_map(|(_, v)| v.clone())
-            .collect()
-    }
-    fn req(&self, i: usize, what: &str, usage: &str) -> R<String> {
-        self.pos
-            .get(i)
-            .cloned()
-            .ok_or_else(|| CliError::usage(format!("missing {what}")).hint(format!("Usage: {usage}")))
-    }
-}
 
 // ───────────────────────────── Context ─────────────────────────────
 
 struct Ctx {
     g: Globals,
     plane: Plane,
-    cfg: std::collections::BTreeMap<String, String>,
+    cfg: BTreeMap<String, String>,
     client: Option<Client>,
     auth: Option<Auth>,
     test_name: Option<String>,
+    out: Out,
+    /// The test secret came from `EXTEND_TEST_SECRET` and hasn't been checked against `--test`'s id.
+    verify_env_secret: bool,
+}
+
+fn ms(t: Instant) -> u128 {
+    t.elapsed().as_millis()
 }
 
 impl Ctx {
@@ -281,20 +66,103 @@ impl Ctx {
         v != "off"
     }
 
+    fn verbose_failure(&self, label: &str, e: &CliError, t: Instant) {
+        self.out.verbose(|| {
+            format!(
+                "{label}: {}{} in {} ms{}",
+                e.status.map(|s| format!("{s} ")).unwrap_or_default(),
+                e.code.as_str(),
+                ms(t),
+                e.request_id
+                    .as_ref()
+                    .map(|r| format!(", request {r}"))
+                    .unwrap_or_default()
+            )
+        });
+    }
+
+    fn timed<T>(&self, label: &str, t: Instant, r: Result<T, silicon_extend_client::Error>) -> R<T> {
+        match r {
+            Ok(v) => {
+                self.out.verbose(|| format!("{label}: ok in {} ms", ms(t)));
+                Ok(v)
+            }
+            Err(e) => {
+                let e = CliError::from(e);
+                self.verbose_failure(label, &e, t);
+                Err(e)
+            }
+        }
+    }
+
     async fn client(&mut self) -> R<Client> {
         if let Some(c) = &self.client {
             return Ok(c.clone());
         }
-        let mut b = Client::builder(self.api_url())
+        // A script that sets EXTEND_TEST_SECRET means a test environment; without --test the
+        // command would reach production instead, so nothing is sent.
+        if !self.plane.is_test() && std::env::var("EXTEND_TEST_SECRET").is_ok_and(|s| !s.trim().is_empty()) {
+            return Err(CliError::usage(
+                "EXTEND_TEST_SECRET is set, but this command has no --test <test_id>, so it would run in production. Nothing was sent.",
+                "Add --test <test_id> (the environment the secret belongs to), or unset EXTEND_TEST_SECRET to use production.",
+            ));
+        }
+        let url = self.api_url();
+        let mut b = Client::builder(url.clone())
             .user_agent(concat!("extend-cli/", env!("CARGO_PKG_VERSION")))
             .telemetry(self.telemetry_on())
             .isi(std::env::var("ISI").ok());
         if let Plane::Test { secret, .. } = &self.plane {
             b = b.testing_secret(secret.clone());
         }
-        let c = b.connect().await?;
+        let t = Instant::now();
+        let c = match b.connect().await {
+            Ok(c) => {
+                self.out
+                    .verbose(|| format!("GET {url}/api/version: API v{} in {} ms", c.api_version(), ms(t)));
+                c
+            }
+            Err(e) => {
+                let e = CliError::from(e);
+                self.verbose_failure(&format!("GET {url}/api/version"), &e, t);
+                return Err(e);
+            }
+        };
+        if self.verify_env_secret {
+            self.check_env_secret(&c).await?;
+        }
         self.client = Some(c.clone());
         Ok(c)
+    }
+
+    /// `EXTEND_TEST_SECRET` must belong to the environment `--test` names; once it does, that is
+    /// remembered (by digest, never the secret) so later runs skip the check.
+    async fn check_env_secret(&mut self, c: &Client) -> R<()> {
+        let Plane::Test { id, secret } = self.plane.clone() else {
+            return Ok(());
+        };
+        let t = Instant::now();
+        let env = self.timed("GET /api/v1/testing-environment", t, c.testing_environment().await)?;
+        if uuid::Uuid::parse_str(&id).ok() != Some(env.environment_id) {
+            return Err(CliError::new(
+                ErrorCode::TestingSecretInvalid,
+                format!(
+                    "EXTEND_TEST_SECRET belongs to test environment \"{}\" ({}), not {id}, so nothing ran.",
+                    env.name, env.environment_id
+                ),
+            )
+            .hint(format!(
+                "Run with --test {}, or set EXTEND_TEST_SECRET to the app secret of {id}.",
+                env.environment_id
+            )));
+        }
+        let mut saved = store::find_test(&id)?.unwrap_or_default();
+        saved.verified_env_secret = Some(extend_protocol::ids::secret_digest(&secret));
+        saved.name = Some(env.name.clone());
+        store::save_test(&id, &saved)?;
+        self.test_name = Some(env.name);
+        self.verify_env_secret = false;
+        Ok(())
     }
 
     fn team(&self) -> Option<String> {
@@ -317,8 +185,9 @@ impl Ctx {
         })
     }
 
-    /// Runs an authenticated call, refreshing the access token once if it expired.
-    async fn call<T, F, Fut>(&mut self, f: F) -> R<T>
+    /// Runs an authenticated call, refreshing the access token once if it expired. `label` names
+    /// the call for `-v`.
+    async fn call<T, F, Fut>(&mut self, label: &str, f: F) -> R<T>
     where
         F: Fn(Client, String, Option<String>) -> Fut,
         Fut: std::future::Future<Output = Result<T, silicon_extend_client::Error>>,
@@ -326,12 +195,16 @@ impl Ctx {
         let client = self.client().await?;
         let auth = self.require_auth()?;
         let team = self.team();
+        let t = Instant::now();
         match f(client.clone(), auth.access_token.clone(), team.clone()).await {
             Err(e) if silicon_extend_client::needs_refresh(&e) => {
+                self.verbose_failure(label, &CliError::from(e), t);
                 let fresh = self.refresh(&client).await?;
-                Ok(f(client, fresh.access_token, team).await?)
+                let t = Instant::now();
+                let r = f(client, fresh.access_token, team).await;
+                self.timed(label, t, r)
             }
-            other => Ok(other?),
+            other => self.timed(label, t, other),
         }
     }
 
@@ -349,12 +222,18 @@ impl Ctx {
             "refresh-{}",
             &extend_protocol::ids::secret_digest(&auth.refresh_token)[..32]
         );
-        let s = client.refresh(&auth.refresh_token, &key).await.map_err(|e| {
-            let mut c = CliError::from(e);
-            c.code = ErrorCode::TokenExpired;
-            c.hint = Some("Your login ended. Get a new short-lived token and run `extend login <slt>`.".into());
-            c
-        })?;
+        let t = Instant::now();
+        let s = self
+            .timed(
+                "POST /api/v1/auth/refresh",
+                t,
+                client.refresh(&auth.refresh_token, &key).await,
+            )
+            .map_err(|mut c| {
+                c.code = ErrorCode::TokenExpired;
+                c.hint = Some("Your login ended. Get a new short-lived token and run `extend login <slt>`.".into());
+                c
+            })?;
         let fresh = Auth {
             access_token: s.access_token,
             refresh_token: s.refresh_token,
@@ -382,39 +261,27 @@ impl Ctx {
                     .hint("Run `extend session new <device_id> --connect`, or pass --session <session_id>.")
             })
     }
+
+    fn emit(&self, data: Value, text: impl FnOnce() -> String) {
+        self.out.emit(data, text);
+    }
 }
 
 fn now_s() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
-// ───────────────────────────── Output ─────────────────────────────
-
-fn emit(ctx: &Ctx, data: Value, text: impl FnOnce() -> String) {
-    if ctx.g.json || ctx.cfg.get("output").is_some_and(|o| o == "json") {
-        println!(
-            "{}",
-            serde_json::to_string(&json!({"ok": true, "data": data})).unwrap_or_default()
-        );
-    } else {
-        let t = text();
-        if !t.is_empty() {
-            println!("{}", t.trim_end());
-        }
-    }
-}
+// ───────────────────────────── Output helpers ─────────────────────────────
 
 fn to_json<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
 fn fmt_time(t: &time::OffsetDateTime) -> String {
-    let local = *t;
-    local
-        .format(&time::macros::format_description!(
-            "[year]-[month]-[day] [hour]:[minute]:[second]Z"
-        ))
-        .unwrap_or_default()
+    t.format(&time::macros::format_description!(
+        "[year]-[month]-[day] [hour]:[minute]:[second]Z"
+    ))
+    .unwrap_or_default()
 }
 
 fn ago(t: &time::OffsetDateTime) -> String {
@@ -467,80 +334,138 @@ async fn main() {
     std::process::exit(code);
 }
 
+/// The last line on stderr whenever a test environment was asked for, even when the command failed
+/// before it started.
+fn test_trailer(out: &Out, id: &str, name: Option<&str>, who: Option<&str>, nothing_ran: bool) {
+    errln!(
+        "{}",
+        out.colors.paint(
+            Stream::Err,
+            "2",
+            &format!(
+                "[test environment: {} ({id}) as {}{}]",
+                name.unwrap_or("unknown"),
+                who.unwrap_or("not signed in"),
+                if nothing_ran { "; nothing ran" } else { "" }
+            )
+        )
+    );
+}
+
 async fn run(argv: Vec<String>) -> i32 {
-    let (g, rest) = match parse_globals(argv) {
+    let cfg = store::load_config();
+    let colors = Colors::detect(cfg.get("color").map(String::as_str));
+    let json_setting = cfg.get("output").is_some_and(|o| o == "json");
+    let (g, rest) = match parse_globals(argv.clone()) {
         Ok(v) => v,
-        Err(e) => return fail(false, &e, None),
-    };
-    let json = g.json;
-    let mut plane = Plane::Production;
-    let mut test_name = None;
-    if let Some(id) = &g.test {
-        match store::load_test(id) {
-            Ok(env) => {
-                test_name = env.name.clone();
-                plane = Plane::Test {
-                    id: id.clone(),
-                    secret: env.secret.clone(),
-                };
+        Err(failed) => {
+            let (g, e) = *failed;
+            let out = Out {
+                json: g.json || json_setting,
+                colors,
+                verbose: g.verbose,
+            };
+            let code = out.fail(&e);
+            if let Some(id) = g.test.clone().or_else(|| args::find_test_id(&argv)) {
+                let name = store::find_test(&id).ok().flatten().and_then(|t| t.name);
+                test_trailer(&out, &id, name.as_deref(), None, true);
             }
-            Err(e) => {
-                let err = CliError::new(ErrorCode::TestingSecretInvalid, format!("{e:#}"))
-                    .hint(format!("printf %s \"$TEST_APP_SECRET\" | extend config test add {id}"));
-                return fail(json, &err, Some(id));
-            }
+            return code;
         }
-    }
-    let auth = store::load_auth(&plane);
+    };
+    let out = Out {
+        json: g.json || json_setting,
+        colors,
+        verbose: g.verbose,
+    };
     let mut ctx = Ctx {
         g,
-        plane,
-        cfg: store::load_config(),
+        plane: Plane::Production,
+        cfg,
         client: None,
-        auth,
-        test_name,
+        auth: None,
+        test_name: None,
+        out,
+        verify_env_secret: false,
     };
-    let started = std::time::Instant::now();
+    if let Some(id) = ctx.g.test.clone()
+        && let Err(e) = select_test(&mut ctx, &id)
+    {
+        let code = ctx.out.fail(&e);
+        test_trailer(&ctx.out, &id, ctx.test_name.as_deref(), None, true);
+        return code;
+    }
+    ctx.auth = store::load_auth(&ctx.plane);
+    let started = Instant::now();
     let result = dispatch(&mut ctx, rest.clone()).await;
     let code = match &result {
         Ok(c) => *c,
-        Err(e) => fail(ctx.g.json, e, None),
+        Err(e) => ctx.out.fail(e),
     };
     telemetry(&mut ctx, &rest, &result, started.elapsed()).await;
+    ctx.out
+        .verbose(|| format!("finished in {} ms with exit code {code}", ms(started)));
     if let Plane::Test { id, .. } = &ctx.plane {
-        let who = ctx
-            .auth
-            .as_ref()
-            .map(|a| a.member_id.clone())
-            .unwrap_or_else(|| "not signed in".into());
-        let name = ctx.test_name.clone().unwrap_or_else(|| id.clone());
-        eprintln!("[test environment: {name} ({id}) as {who}]");
+        let who = ctx.auth.as_ref().map(|a| a.member_id.clone());
+        test_trailer(&ctx.out, id, ctx.test_name.as_deref(), who.as_deref(), false);
     }
     code
 }
 
-fn fail(json: bool, e: &CliError, _test: Option<&str>) -> i32 {
-    if json {
-        let err = json!({"code": e.code.as_str(), "message": e.message, "hint": e.hint, "request_id": e.request_id, "details": e.details, "exit_code": e.exit()});
-        println!("{}", json!({"ok": false, "error": err}));
-    } else {
-        let mut err = std::io::stderr();
-        let _ = writeln!(err, "error: {}", e.message);
-        if let Some(h) = &e.hint {
-            let _ = writeln!(err, "  hint: {h}");
-        }
-        let _ = writeln!(
-            err,
-            "  code: {} (exit {}){}",
-            e.code.as_str(),
-            e.exit(),
-            e.request_id
-                .as_ref()
-                .map(|r| format!(", request {r}"))
-                .unwrap_or_default()
-        );
+/// Chooses the test environment `--test <id>` names: its secret from `EXTEND_TEST_SECRET`, else the
+/// one `extend config test add` saved.
+fn select_test(ctx: &mut Ctx, id: &str) -> R<()> {
+    if uuid::Uuid::parse_str(id).is_err() {
+        return Err(CliError::usage(
+            format!("{id:?} is not a test id; test ids are the Honeycomb environment UUID."),
+            "Use the environment_id Honeycomb gave you: extend --test 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c <command>. `extend config test ls` lists the ones added here.",
+        ));
     }
-    e.exit()
+    let saved = store::find_test(id)?;
+    ctx.test_name = saved.as_ref().and_then(|t| t.name.clone());
+    let from_env = std::env::var("EXTEND_TEST_SECRET")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let secret = match (from_env, &saved) {
+        (Some(s), _) => {
+            if !extend_protocol::ids::is_secret(extend_protocol::ids::APP_SECRET_PREFIX, &s) {
+                return Err(CliError::new(
+                    ErrorCode::TestingSecretInvalid,
+                    "EXTEND_TEST_SECRET is not a test application secret: expected ask_ followed by 43 characters. Nothing ran.",
+                )
+                .hint("Set it to the environment's app secret from Honeycomb, or unset it to use the one saved with `extend config test add`."));
+            }
+            let digest = extend_protocol::ids::secret_digest(&s);
+            ctx.verify_env_secret =
+                saved.as_ref().and_then(|t| t.verified_env_secret.as_deref()) != Some(digest.as_str());
+            s
+        }
+        (None, Some(t)) if !t.secret.is_empty() => t.secret.clone(),
+        (None, Some(_)) => {
+            return Err(CliError::new(
+                ErrorCode::TestingSecretInvalid,
+                format!("Test environment {id} was used with EXTEND_TEST_SECRET, which is not set now, and no secret is saved for it. Nothing ran."),
+            )
+            .hint(format!(
+                "Set EXTEND_TEST_SECRET to its app secret again, or save it once: printf %s \"$TEST_APP_SECRET\" | extend config test add {id}"
+            )));
+        }
+        (None, None) => {
+            return Err(CliError::new(
+                ErrorCode::TestingSecretInvalid,
+                format!("Test environment {id} is not added to this CLI, so nothing ran."),
+            )
+            .hint(format!(
+                "Add it once: printf %s \"$TEST_APP_SECRET\" | extend config test add {id}. Or give the secret for this command only: EXTEND_TEST_SECRET=<secret> extend --test {id} <command>."
+            )));
+        }
+    };
+    ctx.plane = Plane::Test {
+        id: id.to_owned(),
+        secret,
+    };
+    Ok(())
 }
 
 async fn telemetry(ctx: &mut Ctx, rest: &[String], result: &R<i32>, took: Duration) {
@@ -667,36 +592,86 @@ fn telemetry_step(rest: &[String]) -> (String, String) {
     }
 }
 
+/// The session `--help` describes: the one commands would run in, if its device is cached.
+fn connected_cache(ctx: &Ctx) -> Option<store::SessionCache> {
+    let sid = ctx.session_id().ok()?;
+    store::load_session_cache(&ctx.plane, &sid)
+}
+
+fn with_connected<T>(ctx: &Ctx, f: impl FnOnce(Option<&help::Connected>) -> T) -> T {
+    match connected_cache(ctx) {
+        Some(c) => f(Some(&help::Connected {
+            session_id: &c.session_id,
+            device: &c.device_name,
+            os: &c.os,
+            commands: &c.commands,
+            missing: &c.missing,
+            refreshed_at: c.refreshed_at,
+        })),
+        None => f(None),
+    }
+}
+
+fn top_help(ctx: &Ctx) -> String {
+    with_connected(ctx, help::render_top)
+}
+
+/// `extend <words> --help`.
+fn help_for(ctx: &Ctx, words: &[String]) -> String {
+    let words: Vec<&str> = words
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !w.starts_with('-'))
+        .collect();
+    let Some(first) = words.first() else {
+        return top_help(ctx);
+    };
+    if let Some(sub) = words.get(1)
+        && let Some(n) = help::find(&format!("{first} {sub}"))
+    {
+        return help::render_node(n);
+    }
+    if let Some(n) = help::find(first) {
+        return help::render_node(n);
+    }
+    if let Some(t) = with_connected(ctx, |on| help::render_device_command(first, on)) {
+        return t;
+    }
+    top_help(ctx)
+}
+
 async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
     if ctx.g.version && rest.is_empty() {
-        return version(ctx).await;
+        return version(ctx, &[]).await;
     }
     let Some(cmd) = rest.first().cloned() else {
-        print!("{}", top_help(ctx));
+        out!("{}", top_help(ctx));
         return Ok(0);
     };
-    let args = rest[1..].to_vec();
-    let sub = args.first().cloned().unwrap_or_default();
     if ctx.g.help {
-        let two = format!("{cmd} {sub}");
-        if let Some(n) = help::find(&two).or_else(|| help::find(&cmd)) {
-            print!("{}", help::render_node(n));
-        } else if let Some(t) = help::render_device_command(&cmd) {
-            print!("{t}");
-        } else {
-            print!("{}", top_help(ctx));
-        }
+        out!("{}", help_for(ctx, &rest));
         return Ok(0);
     }
+    if cmd.len() > 1 && cmd.starts_with('-') {
+        return Err(CliError::usage(
+            format!("{cmd} is not a global flag, and a command comes before its own flags"),
+            format!(
+                "Global flags: {}. Put a command's own flags after it, like `extend device ls --online`.",
+                args::GLOBAL_FLAG_NAMES.join(", ")
+            ),
+        ));
+    }
+    let args = rest[1..].to_vec();
+    let sub = args.first().cloned().unwrap_or_default();
     match cmd.as_str() {
         "help" => {
-            print!("{}", top_help(ctx));
+            out!("{}", help_for(ctx, &args));
             Ok(0)
         }
-        "login" if sub == "status" => login_status(ctx).await,
+        "login" if sub == "status" => login_status(ctx, &args[1..]).await,
         "login" => login(ctx, &args).await,
-        "logout" => logout(ctx).await,
-        "iam" => iam(ctx).await,
+        "logout" => logout(ctx, &args).await,
+        "iam" => iam(ctx, &args).await,
         "team" => team(ctx, &args).await,
         "config" => config(ctx, &args).await,
         "device" => device(ctx, &args).await,
@@ -706,10 +681,10 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
         "file" => file(ctx, &args).await,
         "report" => report(ctx, &args).await,
         "env" => env_cmd(ctx, &args).await,
-        "version" => version(ctx).await,
+        "version" => version(ctx, &args).await,
         "docs" => {
-            emit(
-                ctx,
+            Args::parse(&args, "docs")?.at_most(0)?;
+            ctx.emit(
                 json!({"repository": help::REPO, "docs": help::DOCS, "website": help::WEBSITE, "crate": help::CRATE, "state": store::root()}),
                 || {
                     format!(
@@ -727,15 +702,14 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
         other if capability::command(other).is_some() => device_command(ctx, other, args).await,
         other => {
             if let Some(repl) = capability::not_exposed(other) {
-                let mut e = CliError::new(
+                let e = CliError::new(
                     ErrorCode::UnknownCommand,
                     format!("`{other}` is an agent-device command Extend doesn't relay."),
                 );
-                e = match repl {
+                return Err(match repl {
                     Some(r) => e.hint(format!("Use `{r}` instead.")),
                     None => e.hint("Extend leaves out agent-device's tools for app developers (simulators, emulators, React Native, web)."),
-                };
-                return Err(e);
+                });
             }
             let near: Vec<&str> = help::NODES
                 .iter()
@@ -765,24 +739,45 @@ fn strsim(a: &str, b: &str) -> bool {
     common >= 3
 }
 
-fn top_help(ctx: &Ctx) -> String {
-    let sid = ctx.g.session.clone().or_else(|| store::current_session(&ctx.plane));
-    let cache = sid.and_then(|s| store::load_session_cache(&ctx.plane, &s));
-    match &cache {
-        Some(c) => help::render_top(Some((&c.session_id, &c.device_name, &c.os, &c.commands))),
-        None => help::render_top(None),
+/// Splits `args` into a sub-command and its arguments; `default` when the first word is a flag or
+/// missing.
+fn sub_and_rest<'a>(args: &'a [String], default: &str) -> (String, &'a [String]) {
+    match args.first() {
+        Some(s) if !s.starts_with('-') => (s.clone(), &args[1..]),
+        _ => (default.to_owned(), args),
     }
+}
+
+fn unknown_sub(parent: &str, sub: &str) -> CliError {
+    let subs: Vec<&str> = args::SPECS
+        .iter()
+        .filter_map(|s| s.path.strip_prefix(&format!("{parent} ")))
+        .filter(|s| !s.contains(' '))
+        .collect();
+    CliError::new(
+        ErrorCode::UnknownCommand,
+        format!("`extend {parent} {sub}` is not a command."),
+    )
+    .hint(format!(
+        "`extend {parent}` has: {}. See `extend {parent} --help`.",
+        subs.join(", ")
+    ))
 }
 
 // ───────────────────────────── Getting started ─────────────────────────────
 
 async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let slt = args.first().cloned().filter(|s| !s.is_empty()).ok_or_else(|| {
-        CliError::usage("missing the short-lived token")
-            .hint("Usage: extend login <slt>. Generate one with the IAM CLI for app_id `extend` (see `extend iam`).")
+    let a = Args::parse(args, "login")?;
+    a.at_most(1)?;
+    let slt = a.pos.first().cloned().filter(|s| !s.is_empty()).ok_or_else(|| {
+        CliError::usage(
+            "missing the short-lived token",
+            "Usage: extend login <slt>. Generate one with the IAM CLI for app_id `extend` (see `extend iam`).",
+        )
     })?;
     let client = ctx.client().await?;
-    let s = client.login(&slt).await?;
+    let t = Instant::now();
+    let s = ctx.timed("POST /api/v1/auth/login", t, client.login(&slt).await)?;
     let team = ctx
         .cfg
         .get("team")
@@ -806,7 +801,7 @@ async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     store::save_auth(&ctx.plane, Some(&auth))?;
     ctx.auth = Some(auth);
     if let (Plane::Test { id, .. }, Some(env)) = (&ctx.plane, &s.testing_environment) {
-        let mut t = store::load_test(id)?;
+        let mut t = store::find_test(id)?.unwrap_or_default();
         t.name = Some(env.name.clone());
         store::save_test(id, &t)?;
         ctx.test_name = Some(env.name.clone());
@@ -816,9 +811,8 @@ async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     } else {
         "Carbon"
     };
-    emit(
-        ctx,
-        json!({"authenticated": true, "member": s.member, "teams": s.teams, "team": team}),
+    ctx.emit(
+        json!({"authenticated": true, "member": s.member, "teams": s.teams, "team": team, "testing_environment": s.testing_environment}),
         || {
             format!(
                 "Signed in as {} ({kind}) in teams: {}. Default team: {}.",
@@ -831,21 +825,24 @@ async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     Ok(0)
 }
 
-async fn login_status(ctx: &mut Ctx) -> R<i32> {
+/// Exits 0 whether or not a login works: the check itself succeeded (the Team CLIs' convention).
+async fn login_status(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    Args::parse(args, "login status")?.at_most(0)?;
     if ctx.auth.is_none() {
-        let reason = "not signed in";
-        if ctx.g.json {
-            println!(
-                "{}",
-                json!({"ok": true, "data": {"authenticated": false, "reason": reason}})
-            );
+        let reason = if ctx.plane.is_test() {
+            "No saved login in this test environment."
         } else {
-            println!("Not signed in. Run `extend login <slt>` with a short-lived token from Silicon IAM.");
-        }
-        return Ok(3);
+            "No saved login."
+        };
+        ctx.emit(json!({"authenticated": false, "reason": reason}), || {
+            format!("Not signed in: {reason} Run `extend login <slt>` with a short-lived token from Silicon IAM.")
+        });
+        return Ok(0);
     }
     match ctx
-        .call(|c, t, team| async move { c.authed(&t, team.as_deref()).me().await })
+        .call("GET /api/v1/auth/me", |c, t, team| async move {
+            c.authed(&t, team.as_deref()).me().await
+        })
         .await
     {
         Ok(me) => {
@@ -854,7 +851,7 @@ async fn login_status(ctx: &mut Ctx) -> R<i32> {
             } else {
                 "Carbon"
             };
-            emit(ctx, to_json(&me), || {
+            ctx.emit(to_json(&me), || {
                 format!(
                     "Authenticated as {} ({kind}) in team {}. Teams: {}.",
                     me.member.id,
@@ -867,39 +864,41 @@ async fn login_status(ctx: &mut Ctx) -> R<i32> {
         Err(e)
             if matches!(
                 e.code,
-                ErrorCode::TokenExpired | ErrorCode::NotSignedIn | ErrorCode::Unauthorized
+                ErrorCode::TokenExpired | ErrorCode::NotSignedIn | ErrorCode::Unauthorized | ErrorCode::SltInvalid
             ) =>
         {
-            if ctx.g.json {
-                println!(
-                    "{}",
-                    json!({"ok": true, "data": {"authenticated": false, "reason": e.message}})
-                );
-            } else {
-                println!("Not signed in: {} Run `extend login <slt>`.", e.message);
-            }
-            Ok(3)
+            ctx.emit(
+                json!({"authenticated": false, "reason": e.message, "code": e.code.as_str()}),
+                || format!("Not signed in: {} Run `extend login <slt>`.", e.message),
+            );
+            Ok(0)
         }
         Err(e) => Err(e),
     }
 }
 
-async fn logout(ctx: &mut Ctx) -> R<i32> {
+async fn logout(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    Args::parse(args, "logout")?.at_most(0)?;
     let auth = ctx.require_auth()?;
     let client = ctx.client().await?;
-    let _ = client.logout(&auth.refresh_token, Some(&auth.access_token)).await;
+    let t = Instant::now();
+    let r = client.logout(&auth.refresh_token, Some(&auth.access_token)).await;
+    let _ = ctx.timed("POST /api/v1/auth/logout", t, r);
     store::save_auth(&ctx.plane, None)?;
     store::set_current_session(&ctx.plane, None)?;
     ctx.auth = None;
-    emit(ctx, json!({"signed_out": auth.member_id}), || {
+    ctx.emit(json!({"authenticated": false, "signed_out": auth.member_id}), || {
         format!("Signed out {}.", auth.member_id)
     });
     Ok(0)
 }
 
-async fn iam(ctx: &mut Ctx) -> R<i32> {
-    let info = ctx.client().await?.iam().await?;
-    emit(ctx, to_json(&info), || {
+async fn iam(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    Args::parse(args, "iam")?.at_most(0)?;
+    let client = ctx.client().await?;
+    let t = Instant::now();
+    let info = ctx.timed("GET /api/v1/iam", t, client.iam().await)?;
+    ctx.emit(to_json(&info), || {
         format!(
             "app_id   {}\nIAM      {}\nAPI      {}\nWebsite  {}\nDocs     {}",
             info.app_id, info.iam_base_url, info.api_base_url, info.website_url, info.docs_url
@@ -908,34 +907,106 @@ async fn iam(ctx: &mut Ctx) -> R<i32> {
     Ok(0)
 }
 
-async fn version(ctx: &mut Ctx) -> R<i32> {
-    let api = match ctx.client().await {
-        Ok(c) => Some(c.api_version()),
-        Err(_) => None,
+/// Local versions, the negotiated API version, and what Extend's compatibility matrix says about
+/// them. Exits 0 even when Extend can't be asked; `status` says `unknown` then.
+async fn version(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    Args::parse(args, "version")?.at_most(0)?;
+    let cli = env!("CARGO_PKG_VERSION");
+    let (api, status, service) = match ctx.client().await {
+        Ok(c) => {
+            let t = Instant::now();
+            match ctx.timed("GET /api/v1/contracts", t, c.contracts().await) {
+                Ok(matrix) => (
+                    Some(c.api_version()),
+                    compat::evaluate(&matrix, c.api_version(), cli),
+                    matrix["service_version"].as_str().map(str::to_owned),
+                ),
+                Err(e) => (
+                    Some(c.api_version()),
+                    compat::Status::unknown(format!(
+                        "Extend didn't give its compatibility matrix: {} ({})",
+                        e.message,
+                        e.code.as_str()
+                    )),
+                    None,
+                ),
+            }
+        }
+        Err(e) if e.code == ErrorCode::ApiVersionSunset => (
+            None,
+            compat::Status {
+                status: "sunset",
+                message: format!("{} {}", e.message, e.hint.clone().unwrap_or_default())
+                    .trim()
+                    .to_owned(),
+                ..compat::Status::unknown("")
+            },
+            None,
+        ),
+        Err(e) if e.code == ErrorCode::ApiVersionUnsupported => (
+            None,
+            compat::Status {
+                status: "unsupported",
+                message: format!("{} {}", e.message, e.hint.clone().unwrap_or_default())
+                    .trim()
+                    .to_owned(),
+                ..compat::Status::unknown("")
+            },
+            None,
+        ),
+        Err(e) => (
+            None,
+            compat::Status::unknown(format!("Extend at {} couldn't be asked: {}", ctx.api_url(), e.message)),
+            None,
+        ),
     };
-    emit(
-        ctx,
-        json!({"cli": env!("CARGO_PKG_VERSION"), "client_crate": env!("CARGO_PKG_VERSION"), "api_version": api, "api_url": ctx.api_url()}),
-        || {
-            format!(
-                "extend {} (silicon-extend-client {}), API {} at {}",
-                env!("CARGO_PKG_VERSION"),
-                env!("CARGO_PKG_VERSION"),
-                api.map_or("unreachable".to_owned(), |v| format!("v{v}")),
-                ctx.api_url()
-            )
-        },
-    );
+    let mut data = json!({
+        "cli": cli, "client_crate": cli, "api_version": api, "api_url": ctx.api_url(), "service_version": service,
+    });
+    if let (Some(d), Value::Object(s)) = (data.as_object_mut(), status.to_json()) {
+        d.extend(s);
+    }
+    let paint = match status.status {
+        "current" => "32",
+        "deprecated" => "33",
+        "sunset" | "unsupported" => "31",
+        _ => "2",
+    };
+    let label = ctx.out.colors.paint(Stream::Out, paint, status.status);
+    ctx.emit(data, || {
+        format!(
+            "extend {cli} (silicon-extend-client {cli}), API {} at {}{}\nStatus: {label}. {}",
+            api.map_or("unreachable".to_owned(), |v| format!("v{v}")),
+            ctx.api_url(),
+            service
+                .as_deref()
+                .map(|s| format!(" (service {s})"))
+                .unwrap_or_default(),
+            status.message
+        )
+    });
     Ok(0)
 }
 
 async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    let (sub, rest) = sub_and_rest(args, "ls");
+    let path = format!("team {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("team", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
     let mut auth = ctx.require_auth()?;
-    match args.first().map(String::as_str) {
-        None | Some("ls") => {
-            let me = ctx.call(|c, t, _| async move { c.authed(&t, None).me().await }).await?;
+    match sub.as_str() {
+        "ls" => {
+            a.at_most(0)?;
+            let me = ctx
+                .call(
+                    "GET /api/v1/auth/me",
+                    |c, t, _| async move { c.authed(&t, None).me().await },
+                )
+                .await?;
             let default = ctx.team();
-            emit(ctx, json!({"teams": me.teams, "default": default}), || {
+            ctx.emit(json!({"teams": me.teams, "default": default}), || {
                 me.teams
                     .iter()
                     .map(|t| {
@@ -949,11 +1020,14 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     .join("\n")
             });
         }
-        Some("silicons") => {
+        "silicons" => {
+            a.at_most(0)?;
             let list = ctx
-                .call(|c, t, team| async move { c.authed(&t, team.as_deref()).team_silicons().await })
+                .call("GET /api/v1/team/silicons", |c, t, team| async move {
+                    c.authed(&t, team.as_deref()).team_silicons().await
+                })
                 .await?;
-            emit(ctx, json!({"items": list}), || {
+            ctx.emit(json!({"items": list}), || {
                 if list.is_empty() {
                     "No Silicons in this team.".into()
                 } else {
@@ -967,171 +1041,433 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 }
             });
         }
-        Some("use") => {
-            let t = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| CliError::usage("missing team handle").hint("Usage: extend team use <handle>"))?;
+        _ => {
+            a.at_most(1)?;
+            let t = a.req(0, "team handle")?;
             if !auth.teams.contains(&t) {
                 return Err(CliError::new(
                     ErrorCode::NotATeamMember,
                     format!("This login doesn't reach team {t:?}."),
                 )
-                .hint(format!("Teams: {}", auth.teams.join(", "))));
+                .hint(format!(
+                    "Teams this login reaches: {}. Sign in as a member of {t} to use it.",
+                    auth.teams.join(", ")
+                )));
             }
             auth.team = Some(t.clone());
             store::save_auth(&ctx.plane, Some(&auth))?;
             ctx.auth = Some(auth);
-            emit(ctx, json!({"default": t}), || format!("Default team is now {t}."));
-        }
-        Some(other) => {
-            return Err(CliError::usage(format!("unknown `extend team {other}`"))
-                .hint("Usage: extend team ls | extend team silicons | extend team use <handle>"));
+            ctx.emit(json!({"default": t}), || format!("Default team is now {t}."));
         }
     }
     Ok(0)
 }
 
+// ───────────────────────────── Settings ─────────────────────────────
+
+fn unknown_setting(k: &str) -> CliError {
+    CliError::usage(
+        format!("unknown setting {k:?}"),
+        format!(
+            "Settings: {}. `extend config ls` shows each with its values and default.",
+            store::SETTINGS.iter().map(|s| s.key).collect::<Vec<_>>().join(", ")
+        ),
+    )
+}
+
+/// Checks a setting's value against what it takes, and returns it as saved.
+fn validate_setting(key: &str, v: &str) -> R<String> {
+    let bad = |why: &str, hint: &str| CliError::usage(format!("{key} can't be {v:?}: {why}"), hint.to_owned());
+    let one_of = |choices: &[&str]| -> R<String> {
+        if choices.contains(&v) {
+            Ok(v.to_owned())
+        } else {
+            Err(bad(
+                &format!("it is one of {}", choices.join(", ")),
+                &format!("Example: extend config set {key} {}", choices[0]),
+            ))
+        }
+    };
+    match key {
+        "api_url" => {
+            let local = [
+                "http://127.0.0.1",
+                "http://localhost",
+                "http://[::1]",
+                "http://10.0.2.2",
+            ];
+            let is_local = local.iter().any(|p| {
+                v.strip_prefix(p)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(':') || rest.starts_with('/'))
+            });
+            let https = v
+                .strip_prefix("https://")
+                .is_some_and(|h| !h.is_empty() && !h.starts_with('/'));
+            if https || is_local {
+                Ok(v.trim_end_matches('/').to_owned())
+            } else {
+                Err(bad(
+                    "it must be an https URL; plain http is allowed only for a local address (127.0.0.1, localhost, [::1], 10.0.2.2)",
+                    "Example: extend config set api_url https://backend.extend.teamofsilicons.com",
+                ))
+            }
+        }
+        "telemetry" => one_of(&["on", "off"]),
+        "output" => one_of(&["text", "json"]),
+        "color" => one_of(&["auto", "always", "never"]),
+        "team" => {
+            if !v.is_empty() && v.len() <= 64 && v.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:".contains(c)) {
+                Ok(v.to_owned())
+            } else {
+                Err(bad(
+                    "a team handle is 1–64 letters, digits, '-', '_', '.' or ':'",
+                    "`extend team ls` lists the teams this login reaches; `extend team use <handle>` sets the default for this login.",
+                ))
+            }
+        }
+        "screenshot_scale" => match v.parse::<f64>() {
+            Ok(x) if x.is_finite() && (0.01..=1.0).contains(&x) => Ok(v.to_owned()),
+            _ => Err(bad(
+                "it is a number from 0.01 to 1 (the fraction of full size)",
+                "Example: extend config set screenshot_scale 0.5",
+            )),
+        },
+        "self_destruct" => {
+            parse_ttl(v)?;
+            Ok(v.to_owned())
+        }
+        "download_dir" => {
+            let p = Path::new(v);
+            if !p.is_dir() {
+                return Err(bad(
+                    "it is not an existing directory",
+                    "Create it first (mkdir -p <dir>), then set it again.",
+                ));
+            }
+            Ok(p.canonicalize()
+                .map_or_else(|_| v.to_owned(), |p| p.display().to_string()))
+        }
+        _ => Err(unknown_setting(key)),
+    }
+}
+
 async fn config(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let a = Args::parse(args, &[]);
-    match a.pos.first().map(String::as_str) {
-        None | Some("ls") => {
+    let (sub, rest) = sub_and_rest(args, "ls");
+    if sub == "test" {
+        return config_test(ctx, rest).await;
+    }
+    let path = format!("config {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("config", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
+    match sub.as_str() {
+        "ls" => {
+            a.at_most(0)?;
             let cfg = ctx.cfg.clone();
-            emit(
-                ctx,
-                json!({"settings": cfg, "state_dir": store::root(), "keys": store::CONFIG_KEYS.iter().map(|(k, d)| json!({"key": k, "about": d})).collect::<Vec<_>>()}),
+            ctx.emit(
+                json!({
+                    "settings": cfg,
+                    "state_dir": store::root(),
+                    "keys": store::SETTINGS.iter().map(|s| json!({"key": s.key, "about": s.about, "default": s.default, "value": cfg.get(s.key)})).collect::<Vec<_>>(),
+                }),
                 || {
                     let mut s = format!("State: {}\n", store::root().display());
-                    for (k, d) in store::CONFIG_KEYS {
-                        s.push_str(&format!(
-                            "{k:<18} {:<30} {d}\n",
-                            cfg.get(*k).cloned().unwrap_or_else(|| "(default)".into())
-                        ));
+                    for st in store::SETTINGS {
+                        let value = cfg
+                            .get(st.key)
+                            .cloned()
+                            .unwrap_or_else(|| format!("(default: {})", st.default));
+                        s.push_str(&format!("{:<18} {value:<36} {}\n", st.key, st.about));
                     }
                     s
                 },
             );
         }
-        Some("get") => {
-            let k = a.req(1, "key", "extend config get <key>")?;
+        "get" => {
+            a.at_most(1)?;
+            let k = a.req(0, "setting")?;
+            let st = store::setting(&k).ok_or_else(|| unknown_setting(&k))?;
             let v = ctx.cfg.get(&k).cloned();
-            emit(ctx, json!({"key": k, "value": v}), || {
-                v.clone().unwrap_or_else(|| "(default)".into())
-            });
+            let effective = v.clone().unwrap_or_else(|| st.default.to_owned());
+            ctx.emit(
+                json!({"key": k, "value": v, "default": st.default, "effective": effective}),
+                || match &v {
+                    Some(v) => v.clone(),
+                    None => format!("{} (default)", st.default),
+                },
+            );
         }
-        Some("set") => {
-            let k = a.req(1, "key", "extend config set <key> <value>")?;
-            let v = a.req(2, "value", "extend config set <key> <value>")?;
-            if !store::CONFIG_KEYS.iter().any(|(x, _)| *x == k) {
-                return Err(CliError::usage(format!("unknown setting {k:?}")).hint(format!(
-                    "Settings: {}",
-                    store::CONFIG_KEYS
-                        .iter()
-                        .map(|(k, _)| *k)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )));
-            }
-            match k.as_str() {
-                "telemetry" if v != "on" && v != "off" => return Err(CliError::usage("telemetry is on or off")),
-                "output" if v != "text" && v != "json" => return Err(CliError::usage("output is text or json")),
-                "self_destruct" => {
-                    parse_ttl(&v)?;
-                }
-                _ => {}
-            }
+        "set" => {
+            a.at_most(2)?;
+            let k = a.req(0, "setting")?;
+            let v = a.req(1, "value")?;
+            let v = validate_setting(&k, &v)?;
             ctx.cfg.insert(k.clone(), v.clone());
             store::save_config(&ctx.cfg)?;
-            emit(ctx, json!({"key": k, "value": v}), || format!("{k} = {v}"));
+            ctx.emit(json!({"key": k, "value": v}), || format!("{k} = {v}"));
         }
-        Some("unset") => {
-            let k = a.req(1, "key", "extend config unset <key>")?;
+        "unset" => {
+            a.at_most(1)?;
+            let k = a.req(0, "setting")?;
+            let st = store::setting(&k).ok_or_else(|| unknown_setting(&k))?;
             ctx.cfg.remove(&k);
             store::save_config(&ctx.cfg)?;
-            emit(ctx, json!({"key": k, "value": null}), || {
-                format!("{k} is back to its default.")
+            ctx.emit(json!({"key": k, "value": null, "default": st.default}), || {
+                format!("{k} is back to its default ({}).", st.default)
             });
         }
-        Some("home") => {
-            let d = a.req(1, "directory", "extend config home <dir>")?;
-            let root = store::set_home(&PathBuf::from(&d)).map_err(|e| CliError::usage(e.to_string()))?;
-            emit(ctx, json!({"state_dir": root}), || {
-                format!("Extend state now lives in {}", root.display())
-            });
+        _ => {
+            a.at_most(1)?;
+            config_home(ctx, &a)?;
         }
-        Some("test") => match a.pos.get(1).map(String::as_str) {
-            Some("add") => {
-                let id = a.req(2, "test id", "extend config test add <test_id>  (secret on stdin)")?;
-                if uuid::Uuid::parse_str(&id).is_err() {
-                    return Err(CliError::usage(format!(
-                        "{id:?} is not a test id; test ids are the Honeycomb environment UUID."
-                    )));
-                }
-                let mut secret = String::new();
-                if std::io::stdin().is_terminal() {
-                    eprint!("Paste the test application secret (ask_...): ");
-                }
-                std::io::stdin()
-                    .read_to_string(&mut secret)
-                    .map_err(|e| CliError::usage(format!("reading stdin: {e}")))?;
-                let secret = secret.trim().to_owned();
-                if !extend_protocol::ids::is_secret(extend_protocol::ids::APP_SECRET_PREFIX, &secret) {
-                    return Err(CliError::new(
-                        ErrorCode::TestingSecretInvalid,
-                        "That is not a test application secret: expected ask_ followed by 43 characters.",
+    }
+    Ok(0)
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// `extend config home <dir>`: moves the state to `<dir>/.extend`, so the login and settings come
+/// along; refuses when `<dir>` already holds state, unless `--use-existing` switches to it.
+fn config_home(ctx: &mut Ctx, a: &Args) -> R<()> {
+    let d = a.req(0, "directory")?;
+    let new_root = store::root_for_home(Path::new(&d)).map_err(|_| {
+        CliError::usage(
+            format!("not a directory: {d}"),
+            "Give an existing directory (create it first with `mkdir -p <dir>`); Extend keeps its state in <dir>/.extend.",
+        )
+    })?;
+    let old_root = store::root();
+    if same_dir(&old_root, &new_root) {
+        ctx.emit(json!({"state_dir": new_root, "moved": []}), || {
+            format!("Extend state already lives in {}.", new_root.display())
+        });
+        return Ok(());
+    }
+    let here = store::state_in(&old_root);
+    let there = store::state_in(&new_root);
+    if a.flag("--use-existing") {
+        store::point_to(&new_root)?;
+        ctx.emit(
+            json!({"state_dir": new_root, "moved": [], "left_in": old_root, "left": here}),
+            || {
+                let mut s = format!(
+                    "Extend state now lives in {}, using what was already there ({}).",
+                    new_root.display(),
+                    if there.is_empty() {
+                        "nothing yet".to_owned()
+                    } else {
+                        there.join(", ")
+                    }
+                );
+                if !here.is_empty() {
+                    s.push_str(&format!(
+                        " The state in {} ({}) stays there; `extend config home {}` switches back.",
+                        old_root.display(),
+                        here.join(", "),
+                        old_root
+                            .parent()
+                            .map_or_else(|| old_root.display().to_string(), |p| p.display().to_string())
                     ));
                 }
-                let client = Client::builder(ctx.api_url())
-                    .testing_secret(secret.clone())
-                    .connect()
-                    .await?;
-                let env = client.testing_environment().await?;
-                store::save_test(
-                    &id,
-                    &store::TestEnv {
-                        secret,
-                        name: Some(env.name.clone()),
-                        auth: None,
-                    },
-                )?;
-                emit(ctx, json!({"test_id": id, "environment": env}), || {
-                    format!(
-                        "Added test environment {:?} ({id}). Use: extend --test {id} <command>",
-                        env.name
-                    )
-                });
+                s
+            },
+        );
+        return Ok(());
+    }
+    if !there.is_empty() {
+        return Err(CliError::usage(
+            format!(
+                "{} already holds Extend state ({}); moving this CLI's state there would overwrite it.",
+                new_root.display(),
+                there.join(", ")
+            ),
+            format!(
+                "To use the state already there and leave this one in {}, run `extend config home {d} --use-existing`. To move this state there instead, remove {} first.",
+                old_root.display(),
+                new_root.display()
+            ),
+        ));
+    }
+    let login = store::load_auth(&Plane::Production).map(|a| a.member_id);
+    let tests = store::list_tests().len();
+    let settings = ctx.cfg.len();
+    let copied = store::copy_state(&old_root, &new_root)?;
+    if let Err(e) = store::point_to(&new_root) {
+        let _ = store::remove_state(&new_root, &copied);
+        return Err(e.into());
+    }
+    let left_behind = store::remove_state(&old_root, &copied).err();
+    let mut moved = Vec::new();
+    if let Some(m) = &login {
+        moved.push(format!("the login for {m}"));
+    }
+    if settings > 0 {
+        moved.push(format!("{settings} setting(s)"));
+    }
+    if tests > 0 {
+        moved.push(format!("{tests} test environment(s)"));
+    }
+    if copied.contains(&"sessions") {
+        moved.push("sessions".into());
+    }
+    ctx.emit(
+        json!({"state_dir": new_root, "moved_from": old_root, "moved": copied, "login": login}),
+        || {
+            let mut s = if moved.is_empty() {
+                format!(
+                    "Extend state now lives in {} (there was nothing to move).",
+                    new_root.display()
+                )
+            } else {
+                format!(
+                    "Moved {} from {} to {}. Extend state now lives there.",
+                    moved.join(", "),
+                    old_root.display(),
+                    new_root.display()
+                )
+            };
+            if let Some(e) = &left_behind {
+                s.push_str(&format!(
+                    " The old copy in {} could not be deleted ({e:#}); delete it yourself.",
+                    old_root.display()
+                ));
             }
-            Some("ls") | None => {
-                let list = store::list_tests();
-                emit(ctx, json!(list.iter().map(|(id, e)| json!({"test_id": id, "name": e.name, "signed_in_as": e.auth.as_ref().map(|a| a.member_id.clone())})).collect::<Vec<_>>()), || {
+            s
+        },
+    );
+    Ok(())
+}
+
+async fn config_test(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    let (sub, rest) = sub_and_rest(args, "ls");
+    let path = format!("config test {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(CliError::new(
+            ErrorCode::UnknownCommand,
+            format!("`extend config test {sub}` is not a command."),
+        )
+        .hint("`extend config test` has: add <test_id> (secret on stdin), ls, rm <test_id>."));
+    }
+    let a = Args::parse(rest, &path)?;
+    match sub.as_str() {
+        "add" => {
+            a.at_most(1)?;
+            let id = a.req(0, "test id")?;
+            let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+                return Err(CliError::usage(
+                    format!("{id:?} is not a test id; test ids are the Honeycomb environment UUID."),
+                    "Use the environment_id Honeycomb gave you: printf %s \"$SECRET\" | extend config test add 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c",
+                ));
+            };
+            let mut secret = String::new();
+            if std::io::stdin().is_terminal() {
+                errout!("Paste the test application secret (ask_...): ");
+            }
+            std::io::stdin().read_to_string(&mut secret).map_err(|e| {
+                CliError::usage(
+                    format!("Could not read the secret from stdin: {e}"),
+                    "Pipe it in: printf %s \"$TEST_APP_SECRET\" | extend config test add <test_id>",
+                )
+            })?;
+            let secret = secret.trim().to_owned();
+            if !extend_protocol::ids::is_secret(extend_protocol::ids::APP_SECRET_PREFIX, &secret) {
+                return Err(CliError::new(
+                    ErrorCode::TestingSecretInvalid,
+                    "That is not a test application secret: expected ask_ followed by 43 characters.",
+                )
+                .hint("Pipe in the environment's app secret from Honeycomb: printf %s \"$TEST_APP_SECRET\" | extend config test add <test_id>"));
+            }
+            let client = Client::builder(ctx.api_url())
+                .testing_secret(secret.clone())
+                .connect()
+                .await?;
+            let t = Instant::now();
+            let env = ctx.timed("GET /api/v1/testing-environment", t, client.testing_environment().await)?;
+            if env.environment_id != uuid {
+                return Err(CliError::new(
+                    ErrorCode::TestingSecretInvalid,
+                    format!(
+                        "That secret belongs to test environment \"{}\" ({}), not {id}, so it was not saved.",
+                        env.name, env.environment_id
+                    ),
+                )
+                .hint(format!(
+                    "Add it under its own id (extend config test add {}), or pipe in the secret of {id}.",
+                    env.environment_id
+                )));
+            }
+            let mut saved = store::find_test(&id)?.unwrap_or_default();
+            saved.secret = secret;
+            saved.name = Some(env.name.clone());
+            store::save_test(&id, &saved)?;
+            ctx.emit(json!({"test_id": id, "environment": env}), || {
+                format!(
+                    "Added test environment {:?} ({id}). Use: extend --test {id} <command>",
+                    env.name
+                )
+            });
+        }
+        "ls" => {
+            a.at_most(0)?;
+            let list = store::list_tests();
+            ctx.emit(
+                json!({"items": list.iter().map(|(id, e)| json!({"test_id": id, "name": e.name, "secret_saved": !e.secret.is_empty(), "signed_in_as": e.auth.as_ref().map(|a| a.member_id.clone())})).collect::<Vec<_>>()}),
+                || {
                     if list.is_empty() {
                         "No test environments added. Add one with `extend config test add <test_id>` (secret on stdin).".into()
                     } else {
-                        list.iter().map(|(id, e)| format!("{id}  {}  {}", e.name.clone().unwrap_or_default(), e.auth.as_ref().map(|a| a.member_id.clone()).unwrap_or_else(|| "not signed in".into()))).collect::<Vec<_>>().join("\n")
+                        list.iter()
+                            .map(|(id, e)| {
+                                format!(
+                                    "{id}  {}  {}{}",
+                                    e.name.clone().unwrap_or_default(),
+                                    e.auth
+                                        .as_ref()
+                                        .map(|a| a.member_id.clone())
+                                        .unwrap_or_else(|| "not signed in".into()),
+                                    if e.secret.is_empty() {
+                                        "  (secret from EXTEND_TEST_SECRET)"
+                                    } else {
+                                        ""
+                                    }
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     }
-                });
-            }
-            Some("rm") => {
-                let id = a.req(2, "test id", "extend config test rm <test_id>")?;
-                let _ = std::fs::remove_file(store::root().join("test").join(format!("{id}.json")));
-                emit(ctx, json!({"removed": id}), || {
+                },
+            );
+        }
+        _ => {
+            a.at_most(1)?;
+            let id = a.req(0, "test id")?;
+            let removed = store::remove_test(&id);
+            ctx.emit(json!({"removed": id, "was_added": removed}), || {
+                if removed {
                     format!("Removed test environment {id} from this CLI.")
-                });
-            }
-            Some(o) => {
-                return Err(CliError::usage(format!("unknown `extend config test {o}`"))
-                    .hint("Usage: extend config test add|ls|rm"));
-            }
-        },
-        Some(o) => {
-            return Err(CliError::usage(format!("unknown `extend config {o}`"))
-                .hint("Usage: extend config ls|get|set|unset|home|test"));
+                } else {
+                    format!("Test environment {id} was not added here; nothing to remove.")
+                }
+            });
         }
     }
     Ok(0)
 }
 
 async fn env_cmd(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    let a = Args::parse(args, "env")?;
+    a.at_most(1)?;
+    if a.pos.first().is_some_and(|s| s != "show") {
+        return Err(
+            unknown_sub("env", &a.pos[0]).hint("`extend env` has: show. Usage: extend --test <test_id> env show")
+        );
+    }
     if !ctx.plane.is_test() {
         return Err(CliError::new(
             ErrorCode::TestOnly,
@@ -1139,12 +1475,11 @@ async fn env_cmd(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         )
         .hint("Add --test <test_id>, e.g. `extend --test <test_id> env show`."));
     }
-    if args.first().map(String::as_str).is_some_and(|s| s != "show") {
-        return Err(CliError::usage("Usage: extend --test <test_id> env show"));
-    }
-    let env = ctx.client().await?.testing_environment().await?;
+    let client = ctx.client().await?;
+    let t = Instant::now();
+    let env = ctx.timed("GET /api/v1/testing-environment", t, client.testing_environment().await)?;
     let who = ctx.auth.as_ref().map(|a| a.member_id.clone());
-    emit(ctx, json!({"environment": env, "signed_in_as": who}), || {
+    ctx.emit(json!({"environment": env, "signed_in_as": who}), || {
         format!(
             "Test environment {} ({})\nState: {}\nSigned in as: {}\nPaired devices: {} of {}",
             env.name,
@@ -1160,110 +1495,180 @@ async fn env_cmd(ctx: &mut Ctx, args: &[String]) -> R<i32> {
 
 // ───────────────────────────── Devices ─────────────────────────────
 
-fn device_line(d: &Device) -> Vec<String> {
+fn device_line(d: &Device, removed_column: bool) -> Vec<String> {
     let in_use = d.in_use.as_ref().map_or("—".to_owned(), |u| {
         format!("{} ({}, {})", u.silicon_id, u.session_id, ago(&u.since))
     });
-    vec![
+    let mut row = vec![
         d.device_id.to_string(),
         d.name.clone(),
         d.os.as_str().to_owned(),
-        if d.online { "yes".into() } else { "no".into() },
+        if d.removed_at.is_some() {
+            "removed".into()
+        } else if d.online {
+            "yes".into()
+        } else {
+            "no".into()
+        },
         in_use,
         d.days_left.map_or("—".into(), |x| x.to_string()),
-    ]
+    ];
+    if removed_column {
+        row.push(d.removed_at.map_or("—".into(), |t| {
+            format!(
+                "{} ({})",
+                fmt_time(&t),
+                d.removed_reason.map_or("unknown", EndReason::as_str)
+            )
+        }));
+    }
+    row
 }
 
 fn parse_device_id(s: &str) -> R<DeviceId> {
     s.parse().map_err(|_| {
-        CliError::usage(format!(
-            "{s:?} is not a device id; device ids are 8 lowercase hexadecimal characters, like 7c1e09ab."
-        ))
-        .hint("List devices with `extend device ls`.")
+        CliError::usage(
+            format!("{s:?} is not a device id; device ids are 8 lowercase hexadecimal characters, like 7c1e09ab."),
+            "List devices with `extend device ls`.",
+        )
     })
 }
 
+/// Pages `extend device ls` reads at most (100 devices each).
+const DEVICE_PAGES: usize = 100;
+
+/// Every device the query matches, following `next_cursor`. The second value is the cursor where
+/// it stopped, when it had to stop early.
+async fn all_devices(ctx: &mut Ctx, mut q: DeviceQuery, removed: bool) -> R<(Vec<Device>, Option<String>)> {
+    let mut items = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..DEVICE_PAGES {
+        let page = ctx
+            .call("GET /api/v1/devices", |c, t, team| {
+                let q = q.clone();
+                async move {
+                    let a = c.authed(&t, team.as_deref());
+                    if removed {
+                        a.devices_including_removed(q).await
+                    } else {
+                        a.devices(q).await
+                    }
+                }
+            })
+            .await?;
+        items.extend(page.items);
+        match page.next_cursor {
+            None => return Ok((items, None)),
+            // A cursor seen before would read the same pages again.
+            Some(c) if !seen.insert(c.clone()) => return Ok((items, Some(c))),
+            Some(c) => q.cursor = Some(c),
+        }
+    }
+    Ok((items, q.cursor))
+}
+
 async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let sub = args.first().cloned().unwrap_or_else(|| "ls".into());
-    let a = Args::parse(
-        &args[args.len().min(1)..],
-        &[
-            "--os",
-            "--name",
-            "--visibility",
-            "--ttl-days",
-            "--access",
-            "--address",
-            "--silicon",
-            "--session",
-            "--since",
-            "--until",
-            "--limit",
-        ],
-    );
+    let (sub, rest) = sub_and_rest(args, "ls");
+    let path = format!("device {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("device", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
     match sub.as_str() {
         "ls" => {
-            let scope = if a.flag("--team-visible") {
-                Some("team".to_owned())
-            } else {
-                None
-            };
+            a.at_most(0)?;
+            let removed = a.flag("--removed");
+            if removed && a.flag("--team-visible") {
+                return Err(CliError::usage(
+                    "--removed lists your own removed devices, so it can't be combined with --team-visible",
+                    "Run them separately: `extend device ls --removed`, and `extend device ls --team-visible`.",
+                ));
+            }
+            let online = a.flag("--online");
             let q = DeviceQuery {
-                scope,
-                online: a.flag("--online").then_some(true),
+                scope: a.flag("--team-visible").then(|| "team".to_owned()),
+                online: online.then_some(true),
                 os: a.value("--os"),
                 limit: Some(100),
                 cursor: None,
             };
-            let page = ctx
-                .call(|c, t, team| {
-                    let q = q.clone();
-                    async move { c.authed(&t, team.as_deref()).devices(q).await }
-                })
-                .await?;
-            emit(ctx, to_json(&page), || {
-                if page.items.is_empty() {
-                    return "No devices. A Carbon pairs one at extend.teamofsilicons.com or with `extend device pair <code> --name <name>`; a Silicon needs its Carbon to grant access.".into();
+            let (mut items, stopped_at) = all_devices(ctx, q, removed).await?;
+            if online {
+                // The filter is the service's; this keeps an older service's pages honest too.
+                items.retain(|d| d.online);
+            }
+            ctx.emit(json!({"items": items, "next_cursor": stopped_at}), || {
+                if items.is_empty() {
+                    return if online || a.value("--os").is_some() {
+                        "No devices match. Drop --online or --os to see all of them.".into()
+                    } else {
+                        "No devices. A Carbon pairs one at extend.teamofsilicons.com or with `extend device pair <code> --name <name>`; a Silicon needs its Carbon to grant access.".into()
+                    };
                 }
-                let mut rows = vec![vec![
+                let mut head = vec![
                     "ID".into(),
                     "NAME".into(),
                     "OS".into(),
                     "ONLINE".into(),
                     "IN USE BY".into(),
                     "DAYS LEFT".into(),
-                ]];
-                rows.extend(page.items.iter().map(device_line));
-                table(rows)
+                ];
+                if removed {
+                    head.push("REMOVED".into());
+                }
+                let mut rows = vec![head];
+                rows.extend(items.iter().map(|d| device_line(d, removed)));
+                let mut s = table(rows);
+                if let Some(c) = &stopped_at {
+                    s.push_str(&format!(
+                        "\n\nThis list is incomplete: it shows the first {} devices, and Extend has more (the next page starts after {c}). Narrow it with --online or --os.",
+                        items.len()
+                    ));
+                }
+                s
             });
         }
         "show" => {
-            let id = a.req(0, "device id", "extend device show <device_id>")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             parse_device_id(&id)?;
             let d = ctx
-                .call(|c, t, team| {
+                .call(&format!("GET /api/v1/devices/{id}"), |c, t, team| {
                     let id = id.clone();
                     async move { c.authed(&t, team.as_deref()).device(&id).await }
                 })
                 .await?;
-            emit(ctx, to_json(&d), || device_text(&d));
+            ctx.emit(to_json(&d), || device_text(&d));
         }
         "pair" => {
-            let code = a.req(0, "pairing code", "extend device pair <pairing_code> --name <name>")?;
+            a.at_most(1)?;
+            let code = a.req(0, "pairing code")?;
             let name = a.value("--name").ok_or_else(|| {
-                CliError::usage("--name is required").hint("extend device pair <pairing_code> --name \"Saket's Pixel\"")
+                CliError::usage(
+                    "--name is required",
+                    "Name the device: extend device pair <pairing_code> --name \"Saket's Pixel\"",
+                )
             })?;
             let visibility = match a.value("--visibility").as_deref() {
                 None => None,
                 Some("team") => Some(Visibility::Team),
                 Some("personal") => Some(Visibility::Personal),
-                Some(o) => return Err(CliError::usage(format!("--visibility is team or personal, got {o:?}"))),
+                Some(o) => {
+                    return Err(CliError::usage(
+                        format!("--visibility is team or personal, got {o:?}"),
+                        "team (the default) lets other Carbons in the team see it exists; personal hides it.",
+                    ));
+                }
             };
             let ttl = a
                 .value("--ttl-days")
                 .map(|v| {
-                    v.parse::<i32>()
-                        .map_err(|_| CliError::usage("--ttl-days takes a number of days, 1–30"))
+                    v.parse::<i32>().map_err(|_| {
+                        CliError::usage(
+                            format!("--ttl-days takes a number of days, 1–30, got {v:?}"),
+                            "Example: --ttl-days 14 (the default).",
+                        )
+                    })
                 })
                 .transpose()?;
             let claim = PairingClaim {
@@ -1274,12 +1679,12 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 silicon_ids: a.values("--access"),
             };
             let d = ctx
-                .call(|c, t, team| {
+                .call("POST /api/v1/pairings", |c, t, team| {
                     let claim = claim.clone();
                     async move { c.authed(&t, team.as_deref()).pair(&claim).await }
                 })
                 .await?;
-            emit(ctx, to_json(&d), || {
+            ctx.emit(to_json(&d), || {
                 format!(
                     "Paired {} \"{}\" ({}). Next: finish the device's own setup — watch it with `extend device setup {} --watch`.",
                     d.device_id,
@@ -1290,17 +1695,23 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             });
         }
         "attach" => {
-            let host = a.req(
-                0,
-                "host device id",
-                "extend device attach <host_device_id> --os ios --name <name>",
-            )?;
-            let os_raw = a
-                .value("--os")
-                .ok_or_else(|| CliError::usage("--os is required: ios, ipados, tvos, samsung_tv or lg_tv"))?;
-            let os: extend_protocol::DeviceOs = serde_json::from_value(json!(os_raw))
-                .map_err(|_| CliError::usage(format!("unknown --os {os_raw:?}")))?;
-            let name = a.value("--name").ok_or_else(|| CliError::usage("--name is required"))?;
+            a.at_most(1)?;
+            let host = a.req(0, "host device id")?;
+            let os_raw = a.value("--os").ok_or_else(|| {
+                CliError::usage(
+                    "--os is required",
+                    "Say what you're attaching: --os ios, ipados, tvos, samsung_tv or lg_tv.",
+                )
+            })?;
+            let os: extend_protocol::DeviceOs = serde_json::from_value(json!(os_raw)).map_err(|_| {
+                CliError::usage(
+                    format!("unknown --os {os_raw:?}"),
+                    "Devices attach through a computer: --os ios, ipados, tvos, samsung_tv or lg_tv.",
+                )
+            })?;
+            let name = a
+                .value("--name")
+                .ok_or_else(|| CliError::usage("--name is required", "Name the device: --name \"Saket's iPhone\""))?;
             let input = AttachmentCreate {
                 os,
                 name,
@@ -1309,12 +1720,12 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 address: a.value("--address"),
             };
             let d = ctx
-                .call(|c, t, team| {
+                .call(&format!("POST /api/v1/devices/{host}/attachments"), |c, t, team| {
                     let (host, input) = (host.clone(), input.clone());
                     async move { c.authed(&t, team.as_deref()).attach(&host, &input).await }
                 })
                 .await?;
-            emit(ctx, to_json(&d), || {
+            ctx.emit(to_json(&d), || {
                 format!(
                     "Created {} \"{}\" through {host}. Follow setup with `extend device setup {} --watch`.",
                     d.device_id, d.name, d.device_id
@@ -1322,38 +1733,46 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             });
         }
         "setup" => {
-            let id = a.req(0, "device id", "extend device setup <device_id> [--watch]")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             loop {
                 let s = ctx
-                    .call(|c, t, team| {
+                    .call(&format!("GET /api/v1/devices/{id}/setup"), |c, t, team| {
                         let id = id.clone();
                         async move { c.authed(&t, team.as_deref()).setup(&id).await }
                     })
                     .await?;
                 let done = s.state == SetupState::Complete;
-                if !a.flag("--watch") || done || ctx.g.json {
-                    emit(ctx, to_json(&s), || setup_text(&s));
+                if !a.flag("--watch") || done || ctx.out.json {
+                    let colors = ctx.out.colors;
+                    ctx.emit(to_json(&s), || setup_text(&s, colors));
                     break;
                 }
-                print!("\x1b[2J\x1b[H{}\n(watching; Ctrl-C to stop)\n", setup_text(&s));
+                out!(
+                    "\x1b[2J\x1b[H{}\n(watching; Ctrl-C to stop)\n",
+                    setup_text(&s, ctx.out.colors)
+                );
                 let _ = std::io::stdout().flush();
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
         "setup-code" => {
-            let id = a.req(0, "device id", "extend device setup-code <device_id> <code>")?;
-            let code = a.req(1, "code", "extend device setup-code <device_id> <code>")?;
+            a.at_most(2)?;
+            let id = a.req(0, "device id")?;
+            let code = a.req(1, "code")?;
             let s = ctx
-                .call(|c, t, team| {
+                .call(&format!("POST /api/v1/devices/{id}/setup/code"), |c, t, team| {
                     let (id, code) = (id.clone(), code.clone());
                     async move { c.authed(&t, team.as_deref()).setup_code(&id, &code).await }
                 })
                 .await?;
-            emit(ctx, to_json(&s), || format!("Code sent.\n{}", setup_text(&s)));
+            let colors = ctx.out.colors;
+            ctx.emit(to_json(&s), || format!("Code sent.\n{}", setup_text(&s, colors)));
         }
         "rename" | "visibility" | "ttl" => {
-            let id = a.req(0, "device id", &format!("extend device {sub} <device_id> <value>"))?;
-            let v = a.req(1, "value", &format!("extend device {sub} <device_id> <value>"))?;
+            a.at_most(2)?;
+            let id = a.req(0, "device id")?;
+            let v = a.req(1, if sub == "rename" { "name" } else { "value" })?;
             let patch = match sub.as_str() {
                 "rename" => DevicePatch {
                     name: Some(v),
@@ -1363,25 +1782,32 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     visibility: Some(match v.as_str() {
                         "team" => Visibility::Team,
                         "personal" => Visibility::Personal,
-                        o => return Err(CliError::usage(format!("visibility is team or personal, got {o:?}"))),
+                        o => {
+                            return Err(CliError::usage(
+                                format!("visibility is team or personal, got {o:?}"),
+                                format!("extend device visibility {id} team"),
+                            ));
+                        }
                     }),
                     ..Default::default()
                 },
                 _ => DevicePatch {
-                    pair_ttl_days: Some(
-                        v.parse()
-                            .map_err(|_| CliError::usage("ttl takes a number of days, 1–30"))?,
-                    ),
+                    pair_ttl_days: Some(v.parse().map_err(|_| {
+                        CliError::usage(
+                            format!("ttl takes a number of days, 1–30, got {v:?}"),
+                            format!("extend device ttl {id} 14"),
+                        )
+                    })?),
                     ..Default::default()
                 },
             };
             let d = ctx
-                .call(|c, t, team| {
+                .call(&format!("PATCH /api/v1/devices/{id}"), |c, t, team| {
                     let (id, patch) = (id.clone(), patch.clone());
                     async move { c.authed(&t, team.as_deref()).update_device(&id, None, &patch).await }
                 })
                 .await?;
-            emit(ctx, to_json(&d), || match sub.as_str() {
+            ctx.emit(to_json(&d), || match sub.as_str() {
                 "ttl" => format!(
                     "{} stays paired until {} unless used ({} days without activity).",
                     d.name,
@@ -1393,21 +1819,23 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             });
         }
         "stop" => {
-            let id = a.req(0, "device id", "extend device stop <device_id>")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             let s = ctx
-                .call(|c, t, team| {
+                .call(&format!("POST /api/v1/devices/{id}/stop"), |c, t, team| {
                     let id = id.clone();
                     async move { c.authed(&t, team.as_deref()).stop_device(&id).await }
                 })
                 .await?;
-            emit(ctx, to_json(&s), || {
+            ctx.emit(to_json(&s), || {
                 format!("Stopped {} (session {}).", s.silicon_id, s.session_id)
             });
         }
         "rm" => {
-            let id = a.req(0, "device id", "extend device rm <device_id> --yes")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             let d = ctx
-                .call(|c, t, team| {
+                .call(&format!("GET /api/v1/devices/{id}"), |c, t, team| {
                     let id = id.clone();
                     async move { c.authed(&t, team.as_deref()).device(&id).await }
                 })
@@ -1428,109 +1856,124 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 .hint(format!("Run `extend device rm {id} --yes` to confirm.")));
             }
             let version = d.version;
-            ctx.call(|c, t, team| {
+            ctx.call(&format!("DELETE /api/v1/devices/{id}"), |c, t, team| {
                 let id = id.clone();
                 async move { c.authed(&t, team.as_deref()).remove_device(&id, version).await }
             })
             .await?;
-            emit(ctx, json!({"removed": id}), || {
-                format!("Removed {id} (\"{}\").", d.name)
+            ctx.emit(json!({"removed": id}), || {
+                format!(
+                    "Removed {id} (\"{}\"). Its activity stays readable: extend device activity {id}",
+                    d.name
+                )
             });
         }
         "access" => {
             let op = a.pos.first().cloned().unwrap_or_else(|| "ls".into());
-            let id = a.req(
-                1,
-                "device id",
-                "extend device access ls|grant|revoke <device_id> [<silicon_id>...]",
-            )?;
-            match op.as_str() {
-                "ls" => {
-                    let list = ctx
-                        .call(|c, t, team| {
-                            let id = id.clone();
-                            async move { c.authed(&t, team.as_deref()).access(&id).await }
+            if !["ls", "grant", "revoke"].contains(&op.as_str()) {
+                return Err(CliError::usage(
+                    format!("unknown `extend device access {op}`"),
+                    "Usage: extend device access ls <device_id> | grant <device_id> <silicon_id>... | revoke <device_id> <silicon_id>...",
+                ));
+            }
+            let id = a.req(1, "device id")?;
+            if op == "ls" {
+                a.at_most(2)?;
+                let list = ctx
+                    .call(&format!("GET /api/v1/devices/{id}/access"), |c, t, team| {
+                        let id = id.clone();
+                        async move { c.authed(&t, team.as_deref()).access(&id).await }
+                    })
+                    .await?;
+                ctx.emit(json!({"items": list}), || {
+                    if list.is_empty() {
+                        return format!(
+                            "No Silicon has access yet. Grant it with `extend device access grant {id} <silicon_id>`."
+                        );
+                    }
+                    let mut rows = vec![vec![
+                        "SILICON".into(),
+                        "GRANTED BY".into(),
+                        "GRANTED".into(),
+                        "LAST USED".into(),
+                    ]];
+                    rows.extend(list.iter().map(|g| {
+                        vec![
+                            g.silicon_id.clone(),
+                            g.granted_by.clone(),
+                            fmt_time(&g.granted_at),
+                            g.last_used_at.map(|t| fmt_time(&t)).unwrap_or_else(|| "—".into()),
+                        ]
+                    }));
+                    table(rows)
+                });
+            } else {
+                let silicons: Vec<String> = a.pos[2..].to_vec();
+                if silicons.is_empty() {
+                    return Err(CliError::usage(
+                        "name at least one Silicon",
+                        format!("extend device access {op} {id} si:chef (see `extend team silicons`)"),
+                    ));
+                }
+                for s in &silicons {
+                    let label = format!(
+                        "{} /api/v1/devices/{id}/access/{s}",
+                        if op == "grant" { "PUT" } else { "DELETE" }
+                    );
+                    if op == "grant" {
+                        ctx.call(&label, |c, t, team| {
+                            let (id, s) = (id.clone(), s.clone());
+                            async move { c.authed(&t, team.as_deref()).grant(&id, &s).await }
                         })
                         .await?;
-                    emit(ctx, json!({"items": list}), || {
-                        if list.is_empty() {
-                            return format!(
-                                "No Silicon has access yet. Grant it with `extend device access grant {id} <silicon_id>`."
-                            );
-                        }
-                        let mut rows = vec![vec![
-                            "SILICON".into(),
-                            "GRANTED BY".into(),
-                            "GRANTED".into(),
-                            "LAST USED".into(),
-                        ]];
-                        rows.extend(list.iter().map(|g| {
-                            vec![
-                                g.silicon_id.clone(),
-                                g.granted_by.clone(),
-                                fmt_time(&g.granted_at),
-                                g.last_used_at.map(|t| fmt_time(&t)).unwrap_or_else(|| "—".into()),
-                            ]
-                        }));
-                        table(rows)
-                    });
-                }
-                "grant" | "revoke" => {
-                    let silicons: Vec<String> = a.pos[2..].to_vec();
-                    if silicons.is_empty() {
-                        return Err(CliError::usage("name at least one Silicon")
-                            .hint(format!("extend device access {op} {id} si:chef")));
+                    } else {
+                        ctx.call(&label, |c, t, team| {
+                            let (id, s) = (id.clone(), s.clone());
+                            async move { c.authed(&t, team.as_deref()).revoke(&id, &s).await }
+                        })
+                        .await?;
                     }
-                    for s in &silicons {
-                        if op == "grant" {
-                            ctx.call(|c, t, team| {
-                                let (id, s) = (id.clone(), s.clone());
-                                async move { c.authed(&t, team.as_deref()).grant(&id, &s).await }
-                            })
-                            .await?;
-                        } else {
-                            ctx.call(|c, t, team| {
-                                let (id, s) = (id.clone(), s.clone());
-                                async move { c.authed(&t, team.as_deref()).revoke(&id, &s).await }
-                            })
-                            .await?;
-                        }
+                }
+                ctx.emit(json!({"device_id": id, op.clone(): silicons}), || {
+                    if op == "grant" {
+                        format!("Granted {} access to {id}.", silicons.join(", "))
+                    } else {
+                        format!(
+                            "Revoked access for {} on {id}; any running session of theirs there has ended.",
+                            silicons.join(", ")
+                        )
                     }
-                    emit(ctx, json!({"device_id": id, op.clone(): silicons}), || {
-                        if op == "grant" {
-                            format!("Granted {} access to {id}.", silicons.join(", "))
-                        } else {
-                            format!(
-                                "Revoked access for {} on {id}; any running session of theirs there has ended.",
-                                silicons.join(", ")
-                            )
-                        }
-                    });
-                }
-                o => {
-                    return Err(
-                        CliError::usage(format!("unknown `extend device access {o}`")).hint("ls, grant or revoke")
-                    );
-                }
+                });
             }
         }
         "activity" => {
-            let id = a.req(0, "device id", "extend device activity <device_id>")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
+            let limit = match a.value("--limit") {
+                None => Some(50),
+                Some(l) => Some(l.parse::<u32>().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| {
+                    CliError::usage(
+                        format!("--limit takes a number of entries, 1–100, got {l:?}"),
+                        "Example: --limit 100. Use --since/--until to reach older entries.",
+                    )
+                })?),
+            };
             let q = ActivityQuery {
                 silicon_id: a.value("--silicon"),
-                session_id: a.value("--session"),
+                // `--session` is the global flag; here it filters.
+                session_id: ctx.g.session.clone(),
                 since: a.value("--since").map(|s| relative_time(&s)).transpose()?,
                 until: a.value("--until").map(|s| relative_time(&s)).transpose()?,
-                limit: a.value("--limit").and_then(|l| l.parse().ok()).or(Some(50)),
+                limit,
                 cursor: None,
             };
             let page = ctx
-                .call(|c, t, team| {
+                .call(&format!("GET /api/v1/devices/{id}/activity"), |c, t, team| {
                     let (id, q) = (id.clone(), q.clone());
                     async move { c.authed(&t, team.as_deref()).activity(&id, q).await }
                 })
                 .await?;
-            emit(ctx, to_json(&page), || {
+            ctx.emit(to_json(&page), || {
                 let mut rows = vec![vec![
                     "TIME".into(),
                     "WHO".into(),
@@ -1557,10 +2000,11 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 table(rows)
             });
         }
-        "requests" => {
-            let id = a.req(0, "device id", "extend device requests <device_id>")?;
+        _ => {
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             let page = ctx
-                .call(|c, t, team| {
+                .call(&format!("GET /api/v1/devices/{id}/requests"), |c, t, team| {
                     let id = id.clone();
                     async move {
                         c.authed(&t, team.as_deref())
@@ -1569,11 +2013,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     }
                 })
                 .await?;
-            emit(ctx, to_json(&page), || requests_table(&page.items));
-        }
-        o => {
-            return Err(CliError::new(ErrorCode::UnknownCommand, format!("`extend device {o}` is not a command."))
-                .hint("Commands: ls, show, pair, attach, setup, setup-code, rename, visibility, ttl, stop, rm, access, activity, requests"));
+            ctx.emit(to_json(&page), || requests_table(&page.items));
         }
     }
     Ok(0)
@@ -1596,34 +2036,50 @@ fn relative_time(s: &str) -> R<String> {
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default());
     }
-    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
-        .map_err(|_| CliError::usage(format!("{s:?} is not a time; use RFC 3339 or 30m, 2h, 3d")))?;
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).map_err(|_| {
+        CliError::usage(
+            format!("{s:?} is not a time"),
+            "Use RFC 3339 (2026-09-27T10:00:00Z) or a time ago: 30m, 2h, 3d.",
+        )
+    })?;
     Ok(s.to_owned())
 }
 
 fn device_text(d: &Device) -> String {
     let mut s = format!(
-        "{} ({})\n  OS:        {}{}\n  Owner:     {}\n  Online:    {}\n  In use:    {}\n  Pairing:   {} day(s) left of {}\n",
+        "{} ({})\n  OS:        {}{}\n  Owner:     {}\n",
         d.name,
         d.device_id,
         d.os.as_str(),
         d.os_version.as_ref().map(|v| format!(" {v}")).unwrap_or_default(),
         d.owner.id,
-        if d.online { "yes" } else { "no" },
-        d.in_use.as_ref().map_or("no".to_owned(), |u| format!(
-            "{} in session {} since {}{}",
-            u.silicon_id,
-            u.session_id,
-            fmt_time(&u.since),
-            if u.paused { " (paused for takeover)" } else { "" }
-        )),
-        d.days_left.unwrap_or(0),
-        d.pair_ttl_days.unwrap_or(0),
     );
+    if let Some(at) = &d.removed_at {
+        s.push_str(&format!(
+            "  Removed:   {} — {}. Nothing works on it any more; its activity stays readable with `extend device activity {}`.\n",
+            fmt_time(at),
+            d.removed_reason.map_or("reason unknown", EndReason::explain),
+            d.device_id
+        ));
+    } else {
+        s.push_str(&format!(
+            "  Online:    {}\n  In use:    {}\n  Pairing:   {} day(s) left of {}\n",
+            if d.online { "yes" } else { "no" },
+            d.in_use.as_ref().map_or("no".to_owned(), |u| format!(
+                "{} in session {} since {}{}",
+                u.silicon_id,
+                u.session_id,
+                fmt_time(&u.since),
+                if u.paused { " (paused for takeover)" } else { "" }
+            )),
+            d.days_left.unwrap_or(0),
+            d.pair_ttl_days.unwrap_or(0),
+        ));
+    }
     if let Some(h) = &d.host_device_id {
         s.push_str(&format!("  Through:   {h}\n"));
     }
-    if let Some(cmds) = &d.commands {
+    if let Some(cmds) = d.commands.as_ref().filter(|c| !c.is_empty()) {
         s.push_str("\nYou can:\n");
         for c in COMMANDS.iter().filter(|c| cmds.iter().any(|x| x == c.name)) {
             s.push_str(&format!("  {:<14} {}\n", c.name, c.summary));
@@ -1638,7 +2094,7 @@ fn device_text(d: &Device) -> String {
     s
 }
 
-fn setup_text(s: &Setup) -> String {
+fn setup_text(s: &Setup, colors: Colors) -> String {
     let mut out = format!(
         "Setup: {}\n",
         match s.state {
@@ -1651,14 +2107,14 @@ fn setup_text(s: &Setup) -> String {
         out.push_str("  Waiting for the device to connect and report its setup.\n");
     }
     for st in &s.steps {
-        let mark = match st.status {
-            StepStatus::Done => "✓",
-            StepStatus::InProgress => "…",
-            StepStatus::NeedsCarbon => "!",
-            StepStatus::Failed => "✗",
-            StepStatus::Todo => " ",
+        let (mark, sgr) = match st.status {
+            StepStatus::Done => ("✓", "32"),
+            StepStatus::InProgress => ("…", "36"),
+            StepStatus::NeedsCarbon => ("!", "33"),
+            StepStatus::Failed => ("✗", "31"),
+            StepStatus::Todo => (" ", "0"),
         };
-        out.push_str(&format!("  {mark} {}", st.title));
+        out.push_str(&format!("  {} {}", colors.paint(Stream::Out, sgr, mark), st.title));
         if st.status != StepStatus::Done {
             if let Some(h) = &st.help {
                 out.push_str(&format!(" — {h}"));
@@ -1694,34 +2150,39 @@ fn requests_table(items: &[RequestInfo]) -> String {
             r.reason.clone(),
         ]
     }));
-    table(rows)
+    let mut s = table(rows);
+    for r in items.iter().filter(|r| r.last_error.is_some()) {
+        s.push_str(&format!(
+            "\n{} to {}: {}",
+            r.request_id,
+            r.to,
+            r.last_error.as_deref().unwrap_or_default()
+        ));
+    }
+    s
 }
 
 // ───────────────────────────── Sessions ─────────────────────────────
 
-async fn connect_session(ctx: &mut Ctx, id: &str) -> R<Session> {
-    let s = ctx
-        .call(|c, t, team| {
-            let id = id.to_owned();
-            async move { c.authed(&t, team.as_deref()).session(&id).await }
-        })
-        .await?;
+/// Keeps what `extend --help` lists in step with the session as Extend last described it: saved
+/// for the connected session (or one already cached, or `connect`), and forgotten once it ended.
+fn remember_session(ctx: &Ctx, s: &Session, connect: bool) -> R<()> {
+    let sid = s.session_id.to_string();
     if s.state == SessionState::Ended {
-        return Err(CliError::new(
-            ErrorCode::SessionEnded,
-            format!(
-                "Session {id} has ended ({}).",
-                s.end_reason.map_or("unknown reason", EndReason::explain)
-            ),
-        )
-        .hint(format!("Start a new one: extend session new {}", s.device_id)));
+        forget_session(ctx, &sid);
+        return Ok(());
     }
-    let d = s.device.clone();
+    let current = store::current_session(&ctx.plane);
+    let cached = store::load_session_cache(&ctx.plane, &sid).is_some();
+    if !(connect || cached || current.as_deref() == Some(sid.as_str())) {
+        return Ok(());
+    }
+    let d = s.device.as_deref();
     let cache = store::SessionCache {
-        session_id: s.session_id.to_string(),
+        session_id: sid.clone(),
         device_id: s.device_id.to_string(),
-        device_name: d.as_ref().map(|d| d.name.clone()).unwrap_or_default(),
-        os: d.as_ref().map(|d| d.os.as_str().to_owned()).unwrap_or_default(),
+        device_name: d.map(|d| d.name.clone()).unwrap_or_default(),
+        os: d.map(|d| d.os.as_str().to_owned()).unwrap_or_default(),
         capabilities: s
             .capabilities
             .clone()
@@ -1734,21 +2195,76 @@ async fn connect_session(ctx: &mut Ctx, id: &str) -> R<Session> {
             Plane::Test { id, .. } => Some(id.clone()),
             Plane::Production => None,
         },
+        missing: d
+            .and_then(|d| d.missing.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| store::MissingNote {
+                capability: m.capability.as_str().to_owned(),
+                reason: m.reason,
+            })
+            .collect(),
+        refreshed_at: now_s(),
     };
     store::save_session_cache(&ctx.plane, &cache)?;
-    store::set_current_session(&ctx.plane, Some(id))?;
+    if connect {
+        store::set_current_session(&ctx.plane, Some(&sid))?;
+    }
+    Ok(())
+}
+
+/// The session ended or is gone: stop listing its device's commands, and disconnect from it.
+fn forget_session(ctx: &Ctx, sid: &str) {
+    store::remove_session_cache(&ctx.plane, sid);
+    if store::current_session(&ctx.plane).as_deref() == Some(sid) {
+        let _ = store::set_current_session(&ctx.plane, None);
+    }
+}
+
+async fn read_session(ctx: &mut Ctx, id: &str) -> R<Session> {
+    ctx.call(&format!("GET /api/v1/sessions/{id}"), |c, t, team| {
+        let id = id.to_owned();
+        async move { c.authed(&t, team.as_deref()).session(&id).await }
+    })
+    .await
+    .inspect_err(|e| {
+        if e.code == ErrorCode::SessionNotFound {
+            forget_session(ctx, id);
+        }
+    })
+}
+
+async fn connect_session(ctx: &mut Ctx, id: &str) -> R<Session> {
+    let s = read_session(ctx, id).await?;
+    if s.state == SessionState::Ended {
+        forget_session(ctx, id);
+        return Err(CliError::new(
+            ErrorCode::SessionEnded,
+            format!(
+                "Session {id} has ended ({}).",
+                s.end_reason.map_or("unknown reason", EndReason::explain)
+            ),
+        )
+        .hint(format!("Start a new one: extend session new {}", s.device_id)));
+    }
+    remember_session(ctx, &s, true)?;
     Ok(s)
 }
 
 async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let sub = args.first().cloned().unwrap_or_else(|| "status".into());
-    let a = Args::parse(&args[args.len().min(1)..], &["--device", "--state"]);
+    let (sub, rest) = sub_and_rest(args, "status");
+    let path = format!("session {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("session", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
     match sub.as_str() {
         "new" => {
-            let id = a.req(0, "device id", "extend session new <device_id> [--connect]")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             let did = parse_device_id(&id)?;
             let s = ctx
-                .call(|c, t, team| {
+                .call("POST /api/v1/sessions", |c, t, team| {
                     let did = did.clone();
                     async move { c.authed(&t, team.as_deref()).start_session(&did).await }
                 })
@@ -1757,11 +2273,11 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             if a.flag("--connect") {
                 connect_session(ctx, &sid).await?;
             }
-            if ctx.g.json {
-                emit(ctx, to_json(&s), String::new);
+            if ctx.out.json {
+                ctx.emit(to_json(&s), String::new);
             } else {
-                println!("{sid}");
-                eprintln!(
+                outln!("{sid}");
+                errln!(
                     "Started session {sid} on {id}.{} It ends after 5 minutes without a command; end it with `extend session end {sid}`.",
                     if a.flag("--connect") {
                         " Connected — try `extend snapshot -i`.".to_owned()
@@ -1772,10 +2288,11 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             }
         }
         "connect" => {
-            let id = a.req(0, "session id", "extend session connect <session_id>")?;
+            a.at_most(1)?;
+            let id = a.req(0, "session id")?;
             let s = connect_session(ctx, &id).await?;
             let d = s.device.clone();
-            emit(ctx, to_json(&s), || {
+            ctx.emit(to_json(&s), || {
                 format!(
                     "Connected to {id} on {} ({}). `extend --help` now lists only what works there. Try: extend snapshot -i",
                     d.as_ref().map(|d| d.name.clone()).unwrap_or_default(),
@@ -1784,20 +2301,18 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             });
         }
         "disconnect" => {
+            a.at_most(0)?;
             store::set_current_session(&ctx.plane, None)?;
-            emit(ctx, json!({"connected": null}), || {
+            ctx.emit(json!({"connected": null}), || {
                 "Disconnected. The session keeps running until it's ended or idle for 5 minutes.".into()
             });
         }
         "status" => {
+            a.at_most(1)?;
             let id = a.pos.first().cloned().map_or_else(|| ctx.session_id(), Ok)?;
-            let s = ctx
-                .call(|c, t, team| {
-                    let id = id.clone();
-                    async move { c.authed(&t, team.as_deref()).session(&id).await }
-                })
-                .await?;
-            emit(ctx, to_json(&s), || {
+            let s = read_session(ctx, &id).await?;
+            remember_session(ctx, &s, false)?;
+            ctx.emit(to_json(&s), || {
                 let dev = s
                     .device
                     .as_ref()
@@ -1811,7 +2326,7 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                         s.end_reason.map_or("unknown", EndReason::explain)
                     ),
                     st => format!(
-                        "{} {} on {dev} since {}, {} command(s), ends if idle at {}",
+                        "{} {} on {dev} since {}, {} command(s), ends if idle at {}. {} command(s) work there now.",
                         s.session_id,
                         if st == SessionState::Paused {
                             "paused (takeover)"
@@ -1820,12 +2335,14 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                         },
                         fmt_time(&s.started_at),
                         s.command_count,
-                        s.idle_ends_at.map(|t| fmt_time(&t)).unwrap_or_default()
+                        s.idle_ends_at.map(|t| fmt_time(&t)).unwrap_or_default(),
+                        s.commands.as_ref().map_or(0, Vec::len)
                     ),
                 }
             });
         }
         "ls" => {
+            a.at_most(0)?;
             let q = ListQuery {
                 device_id: a.value("--device"),
                 state: a.value("--state"),
@@ -1833,12 +2350,12 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 ..Default::default()
             };
             let page = ctx
-                .call(|c, t, team| {
+                .call("GET /api/v1/sessions", |c, t, team| {
                     let q = q.clone();
                     async move { c.authed(&t, team.as_deref()).sessions(q).await }
                 })
                 .await?;
-            emit(ctx, to_json(&page), || {
+            ctx.emit(to_json(&page), || {
                 if page.items.is_empty() {
                     return "No sessions.".into();
                 }
@@ -1865,51 +2382,46 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 table(rows)
             });
         }
-        "end" => {
+        _ => {
+            a.at_most(1)?;
             let id = a.pos.first().cloned().map_or_else(|| ctx.session_id(), Ok)?;
             let s = ctx
-                .call(|c, t, team| {
+                .call(&format!("POST /api/v1/sessions/{id}/end"), |c, t, team| {
                     let id = id.clone();
                     async move { c.authed(&t, team.as_deref()).end_session(&id).await }
                 })
                 .await?;
-            if store::current_session(&ctx.plane).as_deref() == Some(id.as_str()) {
-                store::set_current_session(&ctx.plane, None)?;
-            }
-            emit(ctx, to_json(&s), || {
+            forget_session(ctx, &id);
+            ctx.emit(to_json(&s), || {
                 format!(
                     "Ended {} after {} command(s). {} is free for other Silicons.",
                     s.session_id, s.command_count, s.device_id
                 )
             });
         }
-        o => {
-            return Err(CliError::new(
-                ErrorCode::UnknownCommand,
-                format!("`extend session {o}` is not a command."),
-            )
-            .hint("new, connect, disconnect, status, ls, end"));
-        }
     }
     Ok(0)
 }
 
 async fn takeover(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let a = Args::parse(args, &["--reason"]);
+    let a = Args::parse(args, "takeover")?;
+    a.at_most(1)?;
     let sid = ctx.session_id()?;
     match a.pos.first().map(String::as_str) {
         None => {
             let reason = a.value("--reason").ok_or_else(|| {
-                CliError::usage("--reason is required")
-                    .hint("extend takeover --reason \"Please approve the Face ID prompt\"")
+                CliError::usage(
+                    "--reason is required",
+                    "Tell the Carbon what to do: extend takeover --reason \"Please approve the Face ID prompt\"",
+                )
             })?;
             let t = ctx
-                .call(|c, tok, team| {
+                .call(&format!("POST /api/v1/sessions/{sid}/takeover"), |c, tok, team| {
                     let (sid, reason) = (sid.clone(), reason.clone());
                     async move { c.authed(&tok, team.as_deref()).takeover(&sid, &reason).await }
                 })
                 .await?;
-            emit(ctx, to_json(&t), || {
+            ctx.emit(to_json(&t), || {
                 format!(
                     "Session {sid} is paused; the device shows your reason and a Done button. Commands wait until the Carbon taps Done (by {}).",
                     fmt_time(&t.expires_at)
@@ -1918,12 +2430,12 @@ async fn takeover(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         }
         Some("status") => {
             let t = ctx
-                .call(|c, tok, team| {
+                .call(&format!("GET /api/v1/sessions/{sid}/takeover"), |c, tok, team| {
                     let sid = sid.clone();
                     async move { c.authed(&tok, team.as_deref()).takeover_status(&sid).await }
                 })
                 .await?;
-            emit(ctx, to_json(&t), || match &t {
+            ctx.emit(to_json(&t), || match &t {
                 Some(t) => format!(
                     "Paused since {}: {} (ends by {}).",
                     fmt_time(&t.started_at),
@@ -1934,47 +2446,56 @@ async fn takeover(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             });
         }
         Some("release") => {
-            ctx.call(|c, tok, team| {
+            ctx.call(&format!("DELETE /api/v1/sessions/{sid}/takeover"), |c, tok, team| {
                 let sid = sid.clone();
                 async move { c.authed(&tok, team.as_deref()).release_takeover(&sid).await }
             })
             .await?;
-            emit(ctx, json!({"released": sid}), || {
-                format!("Session {sid} is active again.")
-            });
+            ctx.emit(json!({"released": sid}), || format!("Session {sid} is active again."));
         }
         Some(o) => {
-            return Err(CliError::usage(format!("unknown `extend takeover {o}`"))
-                .hint("extend takeover --reason \"...\" | status | release"));
+            return Err(CliError::usage(
+                format!("unknown `extend takeover {o}`"),
+                "Usage: extend takeover --reason \"...\" | extend takeover status | extend takeover release",
+            ));
         }
     }
     Ok(0)
 }
 
 async fn request(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let sub = args.first().cloned().unwrap_or_else(|| "ls".into());
-    let a = Args::parse(&args[args.len().min(1)..], &["--reason", "--device"]);
+    let (sub, rest) = sub_and_rest(args, "ls");
+    let path = format!("request {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("request", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
     match sub.as_str() {
         "send" => {
-            let id = a.req(0, "device id", "extend request send <device_id> --reason \"...\"")?;
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
             parse_device_id(&id)?;
-            let reason = a
-                .value("--reason")
-                .ok_or_else(|| CliError::usage("--reason is required (1–300 characters)"))?;
+            let reason = a.value("--reason").ok_or_else(|| {
+                CliError::usage(
+                    "--reason is required (1–300 characters)",
+                    format!("Say why you need it: extend request send {id} --reason \"Need 2 minutes to read an OTP\""),
+                )
+            })?;
             let n = reason.trim().chars().count();
-            if n == 0 || n > 300 {
-                return Err(CliError::usage(format!(
-                    "--reason must be 1–300 characters; it is {n}."
-                )));
+            if n == 0 || n > extend_protocol::REASON_MAX_CHARS {
+                return Err(CliError::usage(
+                    format!("--reason must be 1–300 characters; it is {n}."),
+                    "The Silicon using the device reads it as written; keep it to one or two sentences.",
+                ));
             }
             let r = ctx
-                .call(|c, t, team| {
+                .call(&format!("POST /api/v1/devices/{id}/requests"), |c, t, team| {
                     let (id, reason) = (id.clone(), reason.clone());
                     async move { c.authed(&t, team.as_deref()).send_request(&id, &reason).await }
                 })
                 .await?;
-            emit(ctx, to_json(&r), || {
-                format!(
+            ctx.emit(to_json(&r), || {
+                let mut s = format!(
                     "Sent to {} (using {}{}). Delivery: {}.",
                     r.to,
                     r.device_id,
@@ -1983,16 +2504,25 @@ async fn request(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                         .map(|s| format!(" in session {s}"))
                         .unwrap_or_default(),
                     format!("{:?}", r.delivery).to_lowercase()
-                )
+                );
+                if let Some(e) = &r.last_error {
+                    s.push_str(&format!(" {e}"));
+                }
+                s
             });
         }
-        "ls" => {
-            let direction = if a.flag("--sent") {
-                Some("sent".into())
-            } else if a.flag("--received") {
-                Some("received".into())
-            } else {
-                None
+        _ => {
+            a.at_most(0)?;
+            let direction = match (a.flag("--sent"), a.flag("--received")) {
+                (true, true) => {
+                    return Err(CliError::usage(
+                        "--sent and --received can't be used together",
+                        "Leave both out to list requests in both directions.",
+                    ));
+                }
+                (true, false) => Some("sent".into()),
+                (false, true) => Some("received".into()),
+                (false, false) => None,
             };
             let q = ListQuery {
                 direction,
@@ -2001,40 +2531,44 @@ async fn request(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 ..Default::default()
             };
             let page = ctx
-                .call(|c, t, team| {
+                .call("GET /api/v1/requests", |c, t, team| {
                     let q = q.clone();
                     async move { c.authed(&t, team.as_deref()).requests(q).await }
                 })
                 .await?;
-            emit(ctx, to_json(&page), || requests_table(&page.items));
+            ctx.emit(to_json(&page), || requests_table(&page.items));
         }
-        o => return Err(CliError::usage(format!("unknown `extend request {o}`")).hint("send or ls")),
     }
     Ok(0)
 }
 
+// ───────────────────────────── Files ─────────────────────────────
+
 async fn file(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let sub = args.first().cloned().unwrap_or_else(|| "ls".into());
-    let a = Args::parse(
-        &args[args.len().min(1)..],
-        &["--session", "--device", "--kind", "--out"],
-    );
+    let (sub, rest) = sub_and_rest(args, "ls");
+    let path = format!("file {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("file", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
     match sub.as_str() {
         "ls" => {
+            a.at_most(0)?;
             let q = ListQuery {
-                session_id: a.value("--session"),
+                // `--session` is the global flag; here it filters.
+                session_id: ctx.g.session.clone(),
                 device_id: a.value("--device"),
                 kind: a.value("--kind"),
                 limit: Some(100),
                 ..Default::default()
             };
             let page = ctx
-                .call(|c, t, team| {
+                .call("GET /api/v1/files", |c, t, team| {
                     let q = q.clone();
                     async move { c.authed(&t, team.as_deref()).files(q).await }
                 })
                 .await?;
-            emit(ctx, to_json(&page), || {
+            ctx.emit(to_json(&page), || {
                 if page.items.is_empty() {
                     return "No files.".into();
                 }
@@ -2049,7 +2583,7 @@ async fn file(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     vec![
                         f.file_id.to_string(),
                         f.kind.as_str().into(),
-                        human_size(f.size_bytes),
+                        readable_size(f.size_bytes),
                         f.self_destruct_at.map_or("never".into(), |t| fmt_time(&t)),
                         f.url.clone(),
                     ]
@@ -2057,36 +2591,46 @@ async fn file(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 table(rows)
             });
         }
-        "show" | "keep" | "get" => {
-            let id = a.req(0, "file id", &format!("extend file {sub} <file_id>"))?;
+        _ => {
+            a.at_most(1)?;
+            let id = a.req(0, "file id")?;
             let f = if sub == "keep" {
-                ctx.call(|c, t, team| {
+                ctx.call(&format!("POST /api/v1/files/{id}/keep"), |c, t, team| {
                     let id = id.clone();
                     async move { c.authed(&t, team.as_deref()).keep_file(&id).await }
                 })
                 .await?
             } else {
-                ctx.call(|c, t, team| {
+                ctx.call(&format!("GET /api/v1/files/{id}"), |c, t, team| {
                     let id = id.clone();
                     async move { c.authed(&t, team.as_deref()).file(&id).await }
                 })
                 .await?
             };
             if sub == "get" {
-                let path = save_file(ctx, &f, a.value("--out")).await?;
-                emit(ctx, json!({"file": f, "saved_to": path}), || {
-                    format!("Saved {} to {}", f.name, path.display())
+                // The link first, so it's there even if the download fails.
+                if !ctx.out.json {
+                    outln!("{}", file_line(&f));
+                    let _ = std::io::stdout().flush();
+                }
+                let out = a.value("--out");
+                let saved = save_file(ctx, &f, out.as_deref(), 0).await?;
+                ctx.emit(json!({"file": f, "saved_to": saved.path, "bytes": saved.bytes}), || {
+                    format!(
+                        "Saved to {} ({})",
+                        saved.path.display(),
+                        readable_size(saved.bytes as i64)
+                    )
                 });
             } else {
-                emit(ctx, to_json(&f), || file_line(&f));
+                ctx.emit(to_json(&f), || file_line(&f));
             }
         }
-        o => return Err(CliError::usage(format!("unknown `extend file {o}`")).hint("ls, show, get, keep")),
     }
     Ok(0)
 }
 
-fn human_size(b: i64) -> String {
+fn readable_size(b: i64) -> String {
     match b {
         0..=1023 => format!("{b} B"),
         1024..=1_048_575 => format!("{:.1} KiB", b as f64 / 1024.0),
@@ -2100,7 +2644,7 @@ fn file_line(f: &FileInfo) -> String {
         "{} {} ({}, {}) {}\n  {}",
         f.kind.as_str(),
         f.name,
-        human_size(f.size_bytes),
+        readable_size(f.size_bytes),
         f.self_destruct_at
             .map_or("permanent".into(), |t| format!("self-destructs {}", fmt_time(&t))),
         f.file_id,
@@ -2108,32 +2652,138 @@ fn file_line(f: &FileInfo) -> String {
     )
 }
 
-async fn save_file(ctx: &mut Ctx, f: &FileInfo, out: Option<String>) -> R<PathBuf> {
-    let client = ctx.client().await?;
-    let auth = ctx.require_auth()?;
-    let bytes = client.download(&f.url, &auth.access_token).await?;
-    let dir = ctx
-        .cfg
-        .get("download_dir")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let path = match out {
-        Some(p) => {
-            let p = PathBuf::from(p);
-            if p.is_dir() { p.join(&f.name) } else { p }
-        }
-        None => dir.join(&f.name),
+/// A file name that stays inside the directory it's saved to.
+fn safe_name(f: &FileInfo) -> String {
+    Path::new(&f.name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty() && n != "." && n != "..")
+        .unwrap_or_else(|| f.file_id.to_string())
+}
+
+/// `shot.png` → `shot-2.png`, for the second of several files saved to one `--out` path.
+fn numbered(p: &Path, n: usize) -> PathBuf {
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = match p.extension() {
+        Some(e) => format!("{stem}-{n}.{}", e.to_string_lossy()),
+        None => format!("{stem}-{n}"),
     };
-    std::fs::write(&path, bytes).map_err(|e| CliError::usage(format!("writing {}: {e}", path.display())))?;
-    Ok(path)
+    p.with_file_name(name)
+}
+
+struct Saved {
+    path: PathBuf,
+    bytes: u64,
+}
+
+/// Where a file goes: `--out` (a directory, or a path; the `index`th of several files gets a
+/// numbered name), else `download_dir`, else here.
+fn save_path(ctx: &Ctx, f: &FileInfo, out: Option<&str>, index: usize) -> R<PathBuf> {
+    let name = safe_name(f);
+    Ok(match out {
+        Some(o) => {
+            let p = PathBuf::from(o);
+            if o.ends_with('/') || o.ends_with(std::path::MAIN_SEPARATOR) || p.is_dir() {
+                std::fs::create_dir_all(&p).map_err(|e| {
+                    CliError::usage(
+                        format!("Could not create the directory {o}: {e}"),
+                        "Give --out a directory this user can write, or a file path.",
+                    )
+                })?;
+                p.join(name)
+            } else if index == 0 {
+                p
+            } else {
+                numbered(&p, index + 1)
+            }
+        }
+        None => ctx
+            .cfg
+            .get("download_dir")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(name),
+    })
+}
+
+/// Downloads a file through Extend (`GET /api/v1/files/{file_id}/content`), which reads it from
+/// Briefcase as the caller, and streams it to disk.
+async fn save_file(ctx: &mut Ctx, f: &FileInfo, out: Option<&str>, index: usize) -> R<Saved> {
+    let path = save_path(ctx, f, out, index)?;
+    let id = f.file_id.to_string();
+    let failed = |e: CliError| -> CliError {
+        let hint = format!(
+            "{}The file is still in Briefcase: {}",
+            e.hint.as_deref().map(|h| format!("{h} ")).unwrap_or_default(),
+            f.url
+        );
+        CliError {
+            message: format!("Could not download {} ({}): {}", f.name, f.file_id, e.message),
+            hint: Some(hint),
+            details: Box::new(json!({"file_id": f.file_id, "url": f.url, "details": e.details})),
+            ..e
+        }
+    };
+    let t = Instant::now();
+    let mut dl = ctx
+        .call(&format!("GET /api/v1/files/{id}/content"), |c, tok, team| {
+            let id = id.clone();
+            async move { c.authed(&tok, team.as_deref()).file_download(&id, None).await }
+        })
+        .await
+        .map_err(failed)?;
+    let write_failed = |e: std::io::Error| {
+        CliError::usage(
+            format!("Could not write {}: {e}", path.display()),
+            format!(
+                "Check the directory exists and this user can write it, or pass another --out. The file is still in Briefcase: {}",
+                f.url
+            ),
+        )
+    };
+    let file_name = path
+        .file_name()
+        .map_or_else(|| "download".into(), |n| n.to_string_lossy().into_owned());
+    let tmp = path.with_file_name(format!(".{file_name}.part{}", std::process::id()));
+    let mut file = std::fs::File::create(&tmp).map_err(write_failed)?;
+    let mut bytes = 0u64;
+    loop {
+        match dl.chunk().await {
+            Ok(Some(chunk)) => {
+                if let Err(e) = file.write_all(&chunk) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(write_failed(e));
+                }
+                bytes += chunk.len() as u64;
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(failed(e.into()));
+            }
+        }
+    }
+    let finish = file.sync_all().and_then(|()| std::fs::rename(&tmp, &path));
+    if let Err(e) = finish {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(write_failed(e));
+    }
+    ctx.out
+        .verbose(|| format!("saved {bytes} bytes to {} in {} ms", path.display(), ms(t)));
+    Ok(Saved { path, bytes })
 }
 
 async fn report(ctx: &mut Ctx, args: &[String]) -> R<i32> {
-    let a = Args::parse(args, &["--pr"]);
+    let a = Args::parse(args, "report")?;
     let message = a.pos.join(" ");
     if message.trim().is_empty() {
-        return Err(CliError::usage("describe the bug")
-            .hint("extend report \"what happened, what you expected, how to reproduce\" [--pr <link>]"));
+        return Err(CliError::usage(
+            "describe the bug",
+            "extend report \"what happened, what you expected, how to reproduce\" [--pr <link>]",
+        ));
     }
     let context = json!({
         "os": std::env::consts::OS,
@@ -2149,13 +2799,13 @@ async fn report(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         context,
     };
     let r = ctx
-        .call(|c, t, team| {
+        .call("POST /api/v1/reports", |c, t, team| {
             let input = input.clone();
             async move { c.authed(&t, team.as_deref()).report(&input).await }
         })
         .await?;
     let pr = input.pr.is_some();
-    emit(ctx, to_json(&r), || {
+    ctx.emit(to_json(&r), || {
         let mut s = format!(
             "Report {} sent to the Extend team (email {}).",
             r.report_id, r.notification
@@ -2172,19 +2822,28 @@ async fn report(ctx: &mut Ctx, args: &[String]) -> R<i32> {
 
 fn parse_ttl(s: &str) -> R<u32> {
     let (n, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
+    let example = "Use a duration from 1m to 30d: 90m, 12h, 7d.";
     let n: u32 = n
         .parse()
-        .map_err(|_| CliError::usage(format!("{s:?} is not a duration; use 90m, 12h, 7d")))?;
+        .map_err(|_| CliError::usage(format!("{s:?} is not a duration"), example))?;
     let minutes = match unit {
-        "m" | "min" => n,
-        "h" => n * 60,
-        "d" | "" => n * 1440,
-        _ => return Err(CliError::usage(format!("{s:?}: use m, h or d, like 90m, 12h, 7d"))),
+        "m" | "min" => Some(n),
+        "h" => n.checked_mul(60),
+        "d" | "" => n.checked_mul(1440),
+        _ => {
+            return Err(CliError::usage(
+                format!("{s:?} has an unknown unit {unit:?}"),
+                "Units are m (minutes), h (hours) and d (days): 90m, 12h, 7d.",
+            ));
+        }
     };
-    if !(1..=43_200).contains(&minutes) {
-        return Err(CliError::usage(format!("{s:?} is outside 1 minute to 30 days")));
+    match minutes {
+        Some(m) if (1..=extend_protocol::SELF_DESTRUCT_MAX_MIN).contains(&m) => Ok(m),
+        _ => Err(CliError::usage(
+            format!("{s:?} is outside 1 minute to 30 days"),
+            format!("{example} To keep a file for good, use --keep (or `extend file keep <file_id>`)."),
+        )),
     }
-    Ok(minutes)
 }
 
 /// A device command's arguments with Extend's own flags taken out.
@@ -2263,52 +2922,18 @@ fn take_adb_pull_destination(d: &mut DeviceArgs) -> R<()> {
         locals.extend(rest.pop());
     }
     if locals.len() > 1 {
-        return Err(CliError::usage(format!(
-            "`extend adb pull` was given {} local paths to save to ({}); it saves one pulled file to one place.",
-            locals.len(),
-            locals.join(", ")
-        ))
-        .hint(format!("Give the local path once: {ADB_PULL_EXAMPLE}")));
+        return Err(CliError::usage(
+            format!(
+                "`extend adb pull` was given {} local paths to save to ({}); it saves one pulled file to one place.",
+                locals.len(),
+                locals.join(", ")
+            ),
+            format!("Give the local path once: {ADB_PULL_EXAMPLE}"),
+        ));
     }
     d.out = locals.pop();
     d.args.extend(rest);
     Ok(())
-}
-
-/// Local files travel inside the command request; the service takes at most this many of them…
-const ATTACHMENT_FILES: usize = 8;
-/// …and at most this many bytes in total.
-const ATTACHMENT_BYTES: u64 = 8 << 20;
-
-/// How a device command's argument relates to a file on this computer.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum LocalInput {
-    /// The device's own argument, sent as typed (shell arguments, device paths, package names).
-    No,
-    /// Sent along when it names a local file; otherwise it's the device's (a link, say).
-    IfFile,
-    /// Must name a local file: the device takes this input only as a file sent with the command.
-    Required,
-}
-
-/// Whether `args[i]` names a local file this command sends along with it.
-fn local_input(name: &str, args: &[String], i: usize) -> LocalInput {
-    let prev = i.checked_sub(1).map(|p| args[p].as_str());
-    match name {
-        // Only push's source and install's APK are local; shell and pull paths are the device's.
-        "adb" => match args.first().map(String::as_str) {
-            Some("push") if i == 1 => LocalInput::Required,
-            Some("install") if i > 0 && i + 1 == args.len() && !args[i].starts_with('-') => LocalInput::Required,
-            _ => LocalInput::No,
-        },
-        // install <package> <path.apk>: the package name is never read as a file.
-        "install" | "reinstall" if i == 1 => LocalInput::Required,
-        "replay" | "test" | "display" | "batch" if matches!(prev, Some("--image" | "--video" | "--steps-file")) => {
-            LocalInput::IfFile
-        }
-        "replay" | "test" if !args[i].starts_with('-') => LocalInput::IfFile,
-        _ => LocalInput::No,
-    }
 }
 
 /// `extend adb push` / `extend adb install` / `extend install`, for messages.
@@ -2334,22 +2959,31 @@ fn check_local_input_shape(name: &str, args: &[String]) -> R<()> {
     );
     match (name, args.first().map(String::as_str)) {
         ("adb", Some("push")) if args.len() != 3 || args[1..].iter().any(|a| a.starts_with('-')) => {
-            Err(CliError::usage(format!("`{label}` takes one local file and one device path, and got {got}."))
-                .hint("Push one file per command, without adb push options: extend adb push ./photo.jpg /sdcard/Download/photo.jpg"))
+            Err(CliError::usage(
+                format!("`{label}` takes one local file and one device path, and got {got}."),
+                "Push one file per command, without adb push options: extend adb push ./photo.jpg /sdcard/Download/photo.jpg",
+            ))
         }
         ("adb", Some("install")) => {
             let rest = &args[1..];
-            let apks = if rest.first().map(String::as_str) == Some("-r") { &rest[1..] } else { rest };
+            let apks = if rest.first().map(String::as_str) == Some("-r") {
+                &rest[1..]
+            } else {
+                rest
+            };
             if apks.len() == 1 && !apks[0].starts_with('-') {
                 return Ok(());
             }
-            Err(CliError::usage(format!("`{label}` takes an optional -r and one local .apk, and got {got}.")).hint(
+            Err(CliError::usage(
+                format!("`{label}` takes an optional -r and one local .apk, and got {got}."),
                 "Run extend adb install -r ./app.apk. For other pm install options, push the APK first \
                  (extend adb push ./app.apk /data/local/tmp/app.apk), then run extend adb shell pm install <options> /data/local/tmp/app.apk.",
             ))
         }
-        ("install" | "reinstall", _) if args.len() != 2 => Err(CliError::usage(format!("`{label}` takes a package name and a local .apk, and got {got}."))
-            .hint(format!("Run {label} com.example.app ./app.apk, with the package name the APK declares."))),
+        ("install" | "reinstall", _) if args.len() != 2 => Err(CliError::usage(
+            format!("`{label}` takes a package name and a local .apk, and got {got}."),
+            format!("Run {label} com.example.app ./app.apk, with the package name the APK declares."),
+        )),
         _ => Ok(()),
     }
 }
@@ -2379,106 +3013,91 @@ fn not_a_local_file(name: &str, args: &[String], a: &str) -> CliError {
     } else {
         "sends the APK from this computer with the command"
     };
-    let path = std::path::Path::new(a);
+    let path = Path::new(a);
     if a.contains("://") {
-        CliError::usage(format!("`{label}` got a link, {a}, but it {sends} and can't fetch links or Briefcase files yet."))
-            .hint(format!("Download it first (`extend file get <file_id> --out {local}` for a Briefcase file, or `curl -L -o {local} '{a}'`), then run `{retry}`."))
+        CliError::usage(
+            format!("`{label}` got a link, {a}, but it {sends} and can't fetch links or Briefcase files yet."),
+            format!(
+                "Download it first (`extend file get <file_id> --out {local}` for a Briefcase file, or `curl -L -o {local} '{a}'`), then run `{retry}`."
+            ),
+        )
     } else if path.is_dir() {
         if push {
             let dir = path
                 .file_name()
                 .map_or_else(|| "files".to_owned(), |f| f.to_string_lossy().into_owned());
-            CliError::usage(format!("{a} is a directory; `{label}` sends one file from this computer per command.")).hint(format!(
-                "Push its files one at a time, or pack it into one file (`tar -cf {dir}.tar -C {a} .`), push that, and unpack it on the device: \
+            CliError::usage(
+                format!("{a} is a directory; `{label}` sends one file from this computer per command."),
+                format!(
+                    "Push its files one at a time, or pack it into one file (`tar -cf {dir}.tar -C {a} .`), push that, and unpack it on the device: \
                  `extend adb shell 'mkdir -p /data/local/tmp/{dir} && tar -xf /data/local/tmp/{dir}.tar -C /data/local/tmp/{dir}'`."
-            ))
+                ),
+            )
         } else {
-            CliError::usage(format!("{a} is a directory, not an APK; `{label}` {sends}."))
-                .hint("Pass the .apk file itself, for example app/build/outputs/apk/release/app-release.apk.")
+            CliError::usage(
+                format!("{a} is a directory, not an APK; `{label}` {sends}."),
+                "Pass the .apk file itself, for example app/build/outputs/apk/release/app-release.apk.",
+            )
         }
     } else if path.exists() {
-        CliError::usage(format!(
-            "{a} is not a regular file (it may be a device or a pipe); `{label}` {sends}."
-        ))
-        .hint(format!("Copy it into a regular file first, then run `{retry}`."))
+        CliError::usage(
+            format!("{a} is not a regular file (it may be a device or a pipe); `{label}` {sends}."),
+            format!("Copy it into a regular file first, then run `{retry}`."),
+        )
     } else if uuid::Uuid::parse_str(a).is_ok() {
-        CliError::usage(format!("There is no file named {a} here, and it looks like a Briefcase file id; `{label}` {sends} and can't take Briefcase files yet."))
-            .hint(format!("Download it first with `extend file get {a} --out {local}`, then run `{retry}`."))
+        CliError::usage(
+            format!(
+                "There is no file named {a} here, and it looks like a Briefcase file id; `{label}` {sends} and can't take Briefcase files yet."
+            ),
+            format!("Download it first with `extend file get {a} --out {local}`, then run `{retry}`."),
+        )
     } else {
         let cwd =
             std::env::current_dir().map_or_else(|_| "the current directory".to_owned(), |d| d.display().to_string());
-        CliError::usage(format!("There is no file at {a} on this computer; `{label}` {sends}, so it needs a local path."))
-            .hint(format!("Check the path (a relative path starts at {cwd}). A Briefcase link or file id isn't accepted in its place yet: download it first with `extend file get <file_id> --out {local}`."))
+        CliError::usage(
+            format!("There is no file at {a} on this computer; `{label}` {sends}, so it needs a local path."),
+            format!(
+                "Check the path (a relative path starts at {cwd}). A Briefcase link or file id isn't accepted in its place yet: download it first with `extend file get <file_id> --out {local}`."
+            ),
+        )
     }
 }
 
-/// Reads the local files a command names, replacing each argument with `attachment:<name>`.
-/// Sizes are checked before anything is read, so a huge file is refused without loading it.
+/// Reads the local files a command names (silicon-extend-client's `attachments`), replacing each
+/// argument with `attachment:<name>`, and explains a refusal in terms of this command.
 fn attach_local_files(name: &str, args: &mut [String]) -> R<Vec<Attachment>> {
     check_local_input_shape(name, args)?;
-    let mut attachments: Vec<Attachment> = Vec::new();
-    let mut total = 0u64;
-    for i in 0..args.len() {
-        let a = args[i].clone();
-        let path = std::path::Path::new(&a);
-        match local_input(name, args, i) {
-            LocalInput::No => continue,
-            LocalInput::IfFile if !path.is_file() => continue,
-            LocalInput::Required if !path.is_file() => return Err(not_a_local_file(name, args, &a)),
-            LocalInput::Required
-                if !(name == "adb" && args[0] == "push") && a.to_ascii_lowercase().ends_with(".aab") =>
-            {
-                return Err(CliError::usage(format!("{a} is an Android App Bundle (.aab); Android installs APKs, and Extend can't turn a bundle into one.")).hint(format!(
-                    "Build a universal APK from it on this computer (`bundletool build-apks --bundle={a} --output=app.apks --mode=universal && unzip -o app.apks universal.apk`), then run `{}`.",
-                    retry_with(name, args, "./universal.apk")
-                )));
-            }
-            LocalInput::IfFile | LocalInput::Required => {}
-        }
-        if attachments.len() == ATTACHMENT_FILES {
-            return Err(CliError::usage(format!("`extend {name}` names more than {ATTACHMENT_FILES} local files; a command can carry at most {ATTACHMENT_FILES}."))
-                .hint("Send them in several commands with fewer files each."));
-        }
-        let size = std::fs::metadata(path)
-            .map_err(|e| CliError::usage(format!("Could not read {a}: {e}.")))?
-            .len();
-        let budget = ATTACHMENT_BYTES - total;
-        let too_big = |size: u64| too_big_error(name, args, &a, size, total);
-        if size > budget {
-            return Err(too_big(size));
-        }
-        // Read at most one byte past the budget, in case the file grew since it was measured.
-        let mut bytes = Vec::with_capacity(size as usize);
-        std::fs::File::open(path)
-            .and_then(|f| f.take(budget + 1).read_to_end(&mut bytes))
-            .map_err(|e| CliError::usage(format!("Could not read {a}: {e}.")))?;
-        if bytes.len() as u64 > budget {
-            return Err(too_big(bytes.len() as u64));
-        }
-        total += bytes.len() as u64;
-        let fname = path
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".into());
-        attachments.push(Attachment {
-            name: fname.clone(),
-            content_type: guess_type(&fname).into(),
-            content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        });
-        args[i] = format!("attachment:{fname}");
-    }
-    Ok(attachments)
+    let before = args.to_vec();
+    attach::attach_local_files(name, args).map_err(|e| match e {
+        AttachmentError::NotAFile { path, .. } => not_a_local_file(name, &before, &path),
+        AttachmentError::TooLarge { path, size, already } => too_big_error(name, &before, &path, size, already),
+        AttachmentError::TooMany { .. } => CliError::usage(
+            format!("`extend {name}` names more than {MAX_ATTACHMENTS} local files; a command can carry at most {MAX_ATTACHMENTS}."),
+            "Send them in several commands with fewer files each.",
+        ),
+        AttachmentError::AppBundle { path } => CliError::usage(
+            format!("{path} is an Android App Bundle (.aab); Android installs APKs, and Extend can't turn a bundle into one."),
+            format!(
+                "Build a universal APK from it on this computer (`bundletool build-apks --bundle={path} --output=app.apks --mode=universal && unzip -o app.apks universal.apk`), then run `{}`.",
+                retry_with(name, &before, "./universal.apk")
+            ),
+        ),
+        AttachmentError::Unreadable { path, error } => CliError::usage(
+            format!("Could not read {path}: {error}."),
+            "Check that the file exists and this user can read it (ls -l).",
+        ),
+    })
 }
 
 /// Says why a local file can't be sent, and what works instead for this command.
 fn too_big_error(name: &str, args: &[String], local: &str, size: u64, already: u64) -> CliError {
-    let limit = format!("8 MiB ({ATTACHMENT_BYTES} bytes)");
+    let limit = format!("8 MiB ({MAX_ATTACHMENT_BYTES} bytes)");
     // Exact bytes where rounding would make a size look like the limit itself.
     let size_text = |b: u64| {
-        if human_size(b as i64) == human_size(ATTACHMENT_BYTES as i64) {
+        if readable_size(b as i64) == readable_size(MAX_ATTACHMENT_BYTES as i64) {
             format!("{b} bytes")
         } else {
-            human_size(b as i64)
+            readable_size(b as i64)
         }
     };
     let message = if already == 0 {
@@ -2493,7 +3112,7 @@ fn too_big_error(name: &str, args: &[String], local: &str, size: u64, already: u
             size_text(already + size)
         )
     };
-    let file = std::path::Path::new(local)
+    let file = Path::new(local)
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "file".into());
@@ -2508,7 +3127,7 @@ fn too_big_error(name: &str, args: &[String], local: &str, size: u64, already: u
         ("display", _) => "Pass an http(s) link to it instead (`--image https://…` or `--video https://…`); the device loads it itself.".into(),
         _ => "Split the steps across smaller scripts, or send fewer files per command.".into(),
     };
-    CliError::usage(message).hint(hint)
+    CliError::usage(message, hint)
 }
 
 async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
@@ -2542,31 +3161,66 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
         permanent: keep,
         attachments,
     };
-    let result = ctx
-        .call(|c, t, team| {
-            let (sid, req) = (sid.clone(), req.clone());
-            async move { c.authed(&t, team.as_deref()).run(&sid, &req).await }
-        })
-        .await;
+    // While the command runs, re-read the session, so `extend --help` lists what its device can
+    // do now (a permission granted since connecting, a device that came online).
+    let watch = store::current_session(&ctx.plane).as_deref() == Some(sid.as_str())
+        || store::load_session_cache(&ctx.plane, &sid).is_some();
+    let peek = {
+        let client = ctx.client().await?;
+        let token = ctx.require_auth()?.access_token;
+        let (team, sid) = (ctx.team(), sid.clone());
+        async move {
+            if watch {
+                client.authed(&token, team.as_deref()).session(&sid).await.ok()
+            } else {
+                None
+            }
+        }
+    };
+    let label = format!("POST /api/v1/sessions/{sid}/commands");
+    let run = ctx.call(&label, |c, t, team| {
+        let (sid, req) = (sid.clone(), req.clone());
+        async move { c.authed(&t, team.as_deref()).run(&sid, &req).await }
+    });
+    let (result, fresh) = tokio::join!(run, peek);
+    if let Some(s) = &fresh {
+        let _ = remember_session(ctx, s, false);
+    }
     let result = match result {
         Ok(r) => r,
-        Err(e) if e.code == ErrorCode::SessionEnded => {
-            if store::current_session(&ctx.plane).as_deref() == Some(sid.as_str()) {
-                store::set_current_session(&ctx.plane, None)?;
+        Err(e) => {
+            if matches!(e.code, ErrorCode::SessionEnded | ErrorCode::SessionNotFound) {
+                forget_session(ctx, &sid);
             }
             return Err(e);
         }
-        Err(e) => return Err(e),
     };
-    let mut saved = Vec::new();
-    if let Some(o) = &out {
-        for f in &result.files {
-            saved.push(save_file(ctx, f, Some(o.clone())).await?);
-        }
+    if result.error.as_ref().is_some_and(|e| e.code == "session_ended") {
+        forget_session(ctx, &sid);
     }
-    if ctx.g.json {
-        emit(ctx, json!({"result": result, "saved_to": saved}), String::new);
+    let files = result.files.clone();
+    if ctx.out.json {
+        // One document at the end, so download first.
+        let mut saved: Vec<PathBuf> = Vec::new();
+        if let Some(o) = &out {
+            for (i, f) in files.iter().enumerate() {
+                match save_file(ctx, f, Some(o), i).await {
+                    Ok(s) => saved.push(s.path),
+                    Err(e) => {
+                        let details = json!({"result": result, "saved_to": saved, "file": e.details});
+                        return Err(e.details(details));
+                    }
+                }
+            }
+        }
+        let mut doc = to_json(&result);
+        if out.is_some() {
+            doc["saved_to"] = json!(saved);
+        }
+        ctx.emit(doc, String::new);
     } else {
+        // What the device said and each file's Briefcase link come first, so they're there even
+        // if a download fails.
         let mut text = result.text.clone().unwrap_or_else(|| {
             if result.output.is_null() {
                 String::new()
@@ -2574,43 +3228,34 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
                 serde_json::to_string_pretty(&result.output).unwrap_or_default()
             }
         });
-        for f in &result.files {
+        for f in &files {
             text.push_str(&format!("\n{}", file_line(f)));
         }
-        for p in &saved {
-            text.push_str(&format!("\nSaved to {}", p.display()));
+        if !text.trim().is_empty() {
+            outln!("{}", text.trim_end());
         }
-        if result.ok {
-            if !text.trim().is_empty() {
-                println!("{}", text.trim_end());
-            }
-        } else {
-            if !text.trim().is_empty() {
-                println!("{}", text.trim_end());
-            }
-            if let Some(e) = &result.error {
-                eprintln!("error: {} ({})", e.message, e.code);
+        let _ = std::io::stdout().flush();
+        for w in &result.warnings {
+            ctx.out.warn(w);
+        }
+        if !result.ok
+            && let Some(e) = &result.error
+        {
+            errln!(
+                "{} {} ({})",
+                ctx.out.colors.paint(Stream::Err, "1;31", "error:"),
+                e.message,
+                e.code
+            );
+        }
+        if let Some(o) = &out {
+            for (i, f) in files.iter().enumerate() {
+                let s = save_file(ctx, f, Some(o), i).await?;
+                outln!("Saved {} to {}", f.name, s.path.display());
             }
         }
     }
     Ok(if result.ok { 0 } else { 1 })
-}
-
-fn guess_type(name: &str) -> &'static str {
-    let lower = name.to_lowercase();
-    match lower.rsplit('.').next().unwrap_or_default() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "webm" => "video/webm",
-        "apk" => "application/vnd.android.package-archive",
-        "json" => "application/json",
-        "ad" | "txt" | "yaml" | "yml" => "text/plain",
-        _ => "application/octet-stream",
-    }
 }
 
 #[cfg(test)]
@@ -2791,7 +3436,7 @@ mod tests {
         assert_eq!(d.args, strings(&["home", "--", "--keep"]));
 
         // Extend's own commands: everything after `--` is positional.
-        let a = Args::parse(&strings(&["7c1e09ab", "--", "--name", "-x"]), &["--name"]);
+        let a = Args::parse(&strings(&["7c1e09ab", "--", "--name", "-x"]), "device rename").unwrap();
         assert_eq!(a.pos, strings(&["7c1e09ab", "--name", "-x"]));
         assert!(a.flags.is_empty());
     }
@@ -3026,28 +3671,6 @@ mod tests {
     }
 
     #[test]
-    fn only_local_inputs_are_read_as_files() {
-        use LocalInput::*;
-        let at = |name: &str, items: &[&str], i: usize| local_input(name, &strings(items), i);
-        assert_eq!(at("adb", &["push", "file.bin", "/sdcard/file.bin"], 1), Required);
-        assert_eq!(at("adb", &["push", "file.bin", "/sdcard/file.bin"], 2), No);
-        assert_eq!(at("adb", &["install", "-r", "app.apk"], 2), Required);
-        assert_eq!(at("adb", &["install", "-r", "app.apk"], 1), No);
-        assert_eq!(at("adb", &["shell", "cat", "file.bin"], 2), No);
-        assert_eq!(at("adb", &["pull", "/sdcard/file.bin"], 1), No);
-        assert_eq!(at("adb", &["shell", "tool", "--image", "a.png"], 3), No);
-        // The package name is never read as a file, even if a file has that name.
-        assert_eq!(at("install", &["com.example.app", "app.apk"], 0), No);
-        assert_eq!(at("install", &["com.example.app", "app.apk"], 1), Required);
-        assert_eq!(at("reinstall", &["com.example.app", "app.apk"], 1), Required);
-        assert_eq!(
-            at("display", &["show", "--image", "https://example.com/a.png"], 2),
-            IfFile
-        );
-        assert_eq!(at("replay", &["flow.ad"], 0), IfFile);
-    }
-
-    #[test]
     fn install_and_push_refuse_what_is_not_a_local_file() {
         let dir = scratch("not-local");
         let apk = dir.join("app.apk");
@@ -3151,6 +3774,8 @@ mod tests {
         assert_eq!(parse_ttl("30d").unwrap(), 43_200);
         assert!(parse_ttl("31d").is_err());
         assert!(parse_ttl("0m").is_err());
+        assert!(parse_ttl("99999999d").is_err(), "no overflow");
+        assert!(parse_ttl("7w").unwrap_err().hint.unwrap().contains("Units are m"));
     }
 
     #[test]
@@ -3164,10 +3789,81 @@ mod tests {
                 "si:a".into(),
                 "--access=si:b".into(),
             ],
-            &["--name", "--access"],
-        );
+            "device pair",
+        )
+        .unwrap();
         assert_eq!(a.pos, vec!["4f9c2a"]);
         assert_eq!(a.value("--name").as_deref(), Some("Pixel"));
         assert_eq!(a.values("--access"), vec!["si:a", "si:b"]);
+    }
+
+    #[test]
+    fn settings_are_checked_against_their_ranges() {
+        for (k, v) in [
+            ("color", "purple"),
+            ("screenshot_scale", "7"),
+            ("screenshot_scale", "0"),
+            ("screenshot_scale", "NaN"),
+            ("api_url", "ftp://x"),
+            ("api_url", "http://example.com"),
+            ("api_url", "http://localhost.evil.com"),
+            ("telemetry", "maybe"),
+            ("output", "yaml"),
+            ("self_destruct", "31d"),
+            ("team", "has space"),
+            ("download_dir", "/definitely/not/here"),
+        ] {
+            let e = validate_setting(k, v).expect_err(&format!("{k} = {v} was accepted"));
+            assert!(e.hint.is_some(), "{k} = {v}: no hint");
+        }
+        for (k, v) in [
+            ("color", "never"),
+            ("screenshot_scale", "0.01"),
+            ("screenshot_scale", "1"),
+            ("api_url", "https://backend.extend.teamofsilicons.com"),
+            ("api_url", "http://127.0.0.1:8480"),
+            ("telemetry", "off"),
+            ("output", "json"),
+            ("self_destruct", "90m"),
+            ("team", "acme"),
+        ] {
+            assert!(validate_setting(k, v).is_ok(), "{k} = {v} was refused");
+        }
+        assert_eq!(
+            validate_setting("api_url", "https://x.example/").unwrap(),
+            "https://x.example"
+        );
+        assert!(
+            validate_setting("bogus", "1")
+                .unwrap_err()
+                .hint
+                .unwrap()
+                .contains("screenshot_scale")
+        );
+    }
+
+    #[test]
+    fn saved_files_stay_inside_the_directory() {
+        let f = |name: &str| FileInfo {
+            file_id: uuid::Uuid::nil(),
+            name: name.into(),
+            kind: FileKind::Screenshot,
+            content_type: "image/png".into(),
+            size_bytes: 1,
+            url: "https://briefcase.example/f/1".into(),
+            self_destruct_at: None,
+            permanent: false,
+            session_id: None,
+            device_id: None,
+            command_id: None,
+            created_by: None,
+            shared_with: None,
+            created_at: None,
+        };
+        assert_eq!(safe_name(&f("shot.png")), "shot.png");
+        assert_eq!(safe_name(&f("../../etc/passwd")), "passwd");
+        assert_eq!(safe_name(&f("..")), uuid::Uuid::nil().to_string());
+        assert_eq!(numbered(Path::new("out/shot.png"), 2), PathBuf::from("out/shot-2.png"));
+        assert_eq!(numbered(Path::new("shot"), 3), PathBuf::from("shot-3"));
     }
 }

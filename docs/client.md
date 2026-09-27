@@ -43,13 +43,36 @@ me.end_session(&sid).await?;
 
 A command that ran but failed on the device returns `Ok(result)` with `result.ok == false` and
 `result.error`. Everything the service refused is an `Err(Error::Api { error, .. })` with a stable
-`error.code`, a `message` that says what and why, and a `hint` saying what to do.
+`error.code`, a `message` that says what and why, and a `hint` saying what to do. A session that
+ended while the command ran is `Err` with code `session_ended` and `details.may_have_run: true`.
+`result.warnings` lists what went wrong around the command without failing it, such as a file
+Briefcase refused to store (an older service leaves it out; it reads as empty).
+
+## Files
+
+```rust
+let id = snap.files[0].file_id.to_string();                // each file also has its Briefcase link (`url`)
+let whole = me.file_content(&id).await?;                   // bytes, content_type, name
+let mut dl = me.file_download(&id, Some((0, Some(1023)))).await?;   // one range (or None), in chunks
+while let Some(chunk) = dl.chunk().await? { /* write it */ }
+```
+
+Both read the file through Extend (`GET /api/v1/files/{file_id}/content`), which reads it from
+Briefcase as the caller: the Silicon that made it, or the Carbon whose device made it.
+
+## Local files sent with a command
+
+`silicon_extend_client::attachments` builds a command's `attachments` the way the CLI does:
+`Attachment::from_path` for one file, or `attach_local_files(command, &mut args)` to read every
+argument that names a local file and replace it with `attachment:<name>`. It enforces the limits
+(`MAX_ATTACHMENTS` = 8 files, `MAX_ATTACHMENT_BYTES` = 8 MiB in total) before reading anything.
 
 ## Manage devices (as a Carbon)
 
 `pair`, `attach`, `update_device` (with the version from `device()` for optimistic concurrency),
 `remove_device`, `stop_device`, `access`/`grant`/`revoke`, `activity`, `device_requests`,
-`team_silicons`, `setup`, `setup_code`.
+`team_silicons`, `setup`, `setup_code`. `devices_including_removed` also lists the Carbon's removed
+devices (with `removed_at` and `removed_reason`), whose `device()` and `activity()` stay readable.
 
 ## Tokens
 
@@ -60,4 +83,13 @@ store the new pair atomically; reusing a spent refresh token revokes the family 
 ## Building a device app
 
 The same crate has the device side: `enroll`, `enrollment`, `device_self`, `revoke_pair`,
-`upload_artifact` and `ws_url`. The socket protocol is [device-protocol.md](device-protocol.md).
+`device_stop`, `upload_artifact` and `ws_url`. The socket protocol is
+[device-protocol.md](device-protocol.md).
+
+## Contract fixtures
+
+Every public call is recorded as a fixture in `contracts/v1/client/` by the crate's
+`contract_fixtures` test, and the service's CI replays them against a real service, so a service
+change that would break this crate fails before it ships (`contracts/README.md`). After an intended
+change to what a call sends, rewrite them with
+`EXTEND_CONTRACTS_WRITE=1 cargo test -p silicon-extend-client --test contract_fixtures`.

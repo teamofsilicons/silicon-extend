@@ -41,6 +41,7 @@ pub struct DeviceRow {
     pub missing: serde_json::Value,
     pub app_version: Option<String>,
     pub removed_at: Option<OffsetDateTime>,
+    pub removed_reason: Option<String>,
     pub in_use_session: Option<String>,
     pub in_use_silicon: Option<String>,
     pub in_use_since: Option<OffsetDateTime>,
@@ -74,13 +75,20 @@ impl DeviceRow {
     pub fn is_owner(&self, p: &Principal) -> bool {
         p.is_carbon() && self.owner_id == p.id() && p.team.as_deref() == Some(self.team.as_str())
     }
+    /// Whether the pair ended. A removed device keeps its row and activity log, read-only.
+    pub fn is_removed(&self) -> bool {
+        self.removed_at.is_some()
+    }
+    pub fn removed_reason(&self) -> Option<EndReason> {
+        self.removed_reason.as_deref().and_then(EndReason::parse)
+    }
 }
 
 pub fn device_select(world: &World) -> String {
     format!(
         "SELECT d.device_id, d.team, d.owner_id, d.name, d.os, d.os_version, d.model, d.address, d.visibility, d.pair_ttl_days,
                 d.paired_at, d.last_activity_at, d.last_used_at, d.last_seen_at, d.version, d.host_device_id, d.state, d.setup,
-                d.capabilities, d.missing, d.app_version, d.removed_at,
+                d.capabilities, d.missing, d.app_version, d.removed_at, d.removed_reason,
                 s.session_id AS in_use_session, s.silicon_id AS in_use_silicon, s.started_at AS in_use_since, s.state AS in_use_state,
                 (SELECT count(*) FROM {access} a WHERE a.device_id = d.device_id) AS access_count
          FROM {devices} d
@@ -93,11 +101,31 @@ pub fn device_select(world: &World) -> String {
     )
 }
 
+/// Loads a paired device; a removed one reads as absent.
 pub async fn load_device(state: &AppState, world: &World, device_id: &str) -> AppResult<Option<DeviceRow>> {
+    load_device_in(&state.pool, world, device_id).await
+}
+
+/// [`load_device`] through `db`: the pool, or a transaction that has to see its own writes (a
+/// device it just inserted) without taking a second connection.
+pub async fn load_device_in<'c>(
+    db: impl sqlx::PgExecutor<'c>,
+    world: &World,
+    device_id: &str,
+) -> AppResult<Option<DeviceRow>> {
     let sql = format!(
         "{} WHERE d.device_id = $1 AND d.removed_at IS NULL",
         device_select(world)
     );
+    Ok(sqlx::query_as::<_, DeviceRow>(sqlx::AssertSqlSafe(sql.clone()))
+        .bind(device_id)
+        .fetch_optional(db)
+        .await?)
+}
+
+/// Loads a device whether or not its pair has ended.
+pub async fn load_device_any(state: &AppState, world: &World, device_id: &str) -> AppResult<Option<DeviceRow>> {
+    let sql = format!("{} WHERE d.device_id = $1", device_select(world));
     Ok(sqlx::query_as::<_, DeviceRow>(sqlx::AssertSqlSafe(sql.clone()))
         .bind(device_id)
         .fetch_optional(&state.pool)
@@ -110,6 +138,36 @@ pub fn device_not_found(device_id: &str) -> AppError {
         format!("No device {device_id} is visible to you in this team and environment."),
     )
     .hint("List the devices you can see with `extend device ls`.")
+}
+
+/// What the Carbon who paired a removed device hears when they try to change or use it. Everyone
+/// else gets [`device_not_found`], so nobody else learns the device existed.
+pub fn device_removed(d: &DeviceRow) -> AppError {
+    let when = d
+        .removed_at
+        .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_default();
+    let reason = d.removed_reason();
+    let why = match reason {
+        Some(EndReason::DeviceRemoved) | None => "its Carbon removed it",
+        Some(EndReason::PairRevoked) => "the pair was revoked on the device",
+        Some(EndReason::PairExpired) => "it went unused for longer than its pairing lasts",
+        Some(EndReason::LeftTeam) => "its Carbon left the team",
+        Some(r) => r.explain(),
+    };
+    AppError::new(
+        ErrorCode::DeviceNotFound,
+        format!(
+            "Device {} ({}) was removed at {when}: {why}. A removed device can't be changed or used.",
+            d.device_id, d.name
+        ),
+    )
+    .hint(format!(
+        "Its activity log stays readable: `extend device activity {}`, or the device's page on the website. \
+         To use the device again, pair it again.",
+        d.device_id
+    ))
+    .details(serde_json::json!({"removed_at": when, "removed_reason": reason.map(EndReason::as_str)}))
 }
 
 /// What a member may do with a device.
@@ -142,29 +200,66 @@ pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Princ
     Ok((d.visibility == "team").then_some(Access::TeamViewer))
 }
 
-/// Loads a device the caller can see, with the access they have.
+fn check_device_id(device_id: &str) -> AppResult<()> {
+    if device_id.parse::<extend_protocol::DeviceId>().is_err() {
+        return Err(AppError::invalid(format!(
+            "{device_id:?} is not a device id; device ids are 8 lowercase hexadecimal characters, like 7c1e09ab."
+        )));
+    }
+    Ok(())
+}
+
+/// Loads a paired device the caller can see, with the access they have. A removed device answers
+/// device_not_found: with what happened for the Carbon who paired it, plainly for everyone else.
 pub async fn visible_device(
     state: &AppState,
     world: &World,
     device_id: &str,
     p: &Principal,
 ) -> AppResult<(DeviceRow, Access)> {
-    if device_id.parse::<extend_protocol::DeviceId>().is_err() {
-        return Err(AppError::invalid(format!(
-            "{device_id:?} is not a device id; device ids are 8 lowercase hexadecimal characters, like 7c1e09ab."
-        )));
-    }
-    let d = load_device(state, world, device_id)
+    check_device_id(device_id)?;
+    let d = load_device_any(state, world, device_id)
         .await?
         .ok_or_else(|| device_not_found(device_id))?;
+    if d.is_removed() {
+        return Err(if d.is_owner(p) {
+            device_removed(&d)
+        } else {
+            device_not_found(device_id)
+        });
+    }
     let access = access_of(state, world, &d, p)
         .await?
         .ok_or_else(|| device_not_found(device_id))?;
     Ok((d, access))
 }
 
-pub async fn owned_device(state: &AppState, world: &World, device_id: &str, p: &Principal) -> AppResult<DeviceRow> {
-    let (d, access) = visible_device(state, world, device_id, p).await?;
+/// Like [`visible_device`], for reads: the Carbon who paired a removed device can still read it and
+/// its activity log. Nobody else can see a removed device.
+pub async fn readable_device(
+    state: &AppState,
+    world: &World,
+    device_id: &str,
+    p: &Principal,
+) -> AppResult<(DeviceRow, Access)> {
+    check_device_id(device_id)?;
+    let d = load_device_any(state, world, device_id)
+        .await?
+        .ok_or_else(|| device_not_found(device_id))?;
+    if d.is_removed() {
+        return if d.is_owner(p) {
+            Ok((d, Access::Owner))
+        } else {
+            Err(device_not_found(device_id))
+        };
+    }
+    let access = access_of(state, world, &d, p)
+        .await?
+        .ok_or_else(|| device_not_found(device_id))?;
+    Ok((d, access))
+}
+
+fn require_owner(d: DeviceRow, access: Access) -> AppResult<DeviceRow> {
     if access != Access::Owner {
         return Err(AppError::new(
             ErrorCode::NotOwner,
@@ -172,6 +267,23 @@ pub async fn owned_device(state: &AppState, world: &World, device_id: &str, p: &
         ));
     }
     Ok(d)
+}
+
+/// A paired device the caller owns, for changing it.
+pub async fn owned_device(state: &AppState, world: &World, device_id: &str, p: &Principal) -> AppResult<DeviceRow> {
+    let (d, access) = visible_device(state, world, device_id, p).await?;
+    require_owner(d, access)
+}
+
+/// A device the caller owns, paired or removed, for reading its record and logs.
+pub async fn owned_readable_device(
+    state: &AppState,
+    world: &World,
+    device_id: &str,
+    p: &Principal,
+) -> AppResult<DeviceRow> {
+    let (d, access) = readable_device(state, world, device_id, p).await?;
+    require_owner(d, access)
 }
 
 pub async fn is_online(state: &AppState, world: &World, d: &DeviceRow) -> bool {
@@ -187,7 +299,9 @@ pub async fn is_online(state: &AppState, world: &World, d: &DeviceRow) -> bool {
 
 pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access: Access, detail: bool) -> Device {
     let os = d.os();
-    let online = is_online(state, world, d).await;
+    // A removed device's host may still be connected; the device itself is gone.
+    let removed = d.is_removed();
+    let online = !removed && is_online(state, world, d).await;
     let owner = Member {
         kind: MemberKind::Carbon,
         id: d.owner_id.clone(),
@@ -230,6 +344,8 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access:
         capabilities: None,
         missing: None,
         commands: None,
+        removed_at: d.removed_at,
+        removed_reason: d.removed_reason(),
     };
     if access == Access::TeamViewer {
         return base;
@@ -260,15 +376,25 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access:
         last_used_at: d.last_used_at,
         paired_at: Some(d.paired_at),
         pair_ttl_days: Some(d.pair_ttl_days),
-        pair_expires_at: Some(expires),
-        days_left: Some(days_left),
+        // A removed device's pair no longer runs out; it already ended.
+        pair_expires_at: (!removed).then_some(expires),
+        days_left: (!removed).then_some(days_left),
         access_count: Some(d.access_count),
         app_version: d.app_version.clone(),
         version: Some(d.version),
         capabilities: detail.then(|| caps.clone()),
         missing: detail.then(|| {
             let mut m = d.missing();
-            if !online {
+            if removed {
+                m.insert(
+                    0,
+                    MissingCapability {
+                        capability: Capability::ScreenRead,
+                        reason: "The device was removed, so nothing works on it any more. Pair it again to use it."
+                            .into(),
+                    },
+                );
+            } else if !online {
                 m.insert(
                     0,
                     MissingCapability {

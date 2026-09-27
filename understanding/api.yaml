@@ -1,5 +1,7 @@
 # Contract file. Agents: propose changes to a Carbon and get approval before editing.
 # Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Identifier formats and flows: TECHNICAL.md.
+# Brought up to date with the build after round 2 of fixes (2026-09-27): every route and field below is what the
+# service answers today. The additions of that round await a Carbon's review like the rest of the file.
 # Wire names `org_id` and `X-Org-ID` are Silicon IAM's names for a Team handle and are kept as IAM defines them.
 
 openapi: 3.1.0
@@ -16,12 +18,26 @@ info:
       `code` is stable and machine-readable; `message` says what happened and why; `hint` says what to do next.
     - Timestamps are RFC 3339 UTC with milliseconds. Durations carry their unit in the field name.
     - Every response carries `X-Request-ID` and `Silicon-Extend-API-Version`.
-    - Lists are paged with `limit` and `cursor`; the response gives `next_cursor`, null on the last page.
-    - Retry a POST after an uncertain result with the same `Idempotency-Key` and the identical body.
-    - Test environments: send the test application's `app_secret` in `X-Testing-Application-Secret`.
-      Omit it for production. An invalid secret is an error, never a silent fall back to production.
-    - Browsers: CORS mirrors the request's origin, methods and headers, and exposes `ETag`, `X-Request-ID` and
-      `Silicon-Extend-API-Version`.
+    - Lists are paged with `limit` and `cursor`; the response gives `next_cursor`, null on the last page. A page that
+      has a `next_cursor` is always full; only the last page can be short.
+    - Retry a POST after an uncertain result with the same `Idempotency-Key` and the identical body. The same key with
+      a different body is `409 conflict`.
+    - API majors (TECHNICAL.md section 10). Every `/api/v{n}/` request is checked before anything else: a major this
+      service doesn't serve is `400 api_version_unsupported`; a `Silicon-Extend-API-Version` pin naming another major
+      than the path is `400 api_version_mismatch`; a sunset major is `410 api_version_sunset`, whose hint says how to
+      update and whose `details` carry `{api_version, sunset_at, supported}`. Every response on a deprecated major
+      carries `Deprecation: @<unix seconds>` (RFC 9745, when it was deprecated) and `Sunset: <HTTP-date>` (RFC 8594,
+      the soonest it can be sunset: 7 consecutive days with zero requests after the later of its deprecation and its
+      last request).
+    - Test environments: send the test application's `app_secret` in `X-Testing-Application-Secret`. Omit it for
+      production. The header is checked on every `/api/v{n}/` route, including the ones that sign nobody in
+      (enrollments, `/api/v1/iam`, `/api/v1/contracts`, reports, telemetry). A header that is empty, blank, sent more
+      than once, not printable, unknown or revoked, or that belongs to a disabled or permanently removed environment,
+      is `401 testing_secret_invalid`. An environment Honeycomb is still preparing (or restoring), one being cleaned,
+      and one IAM knows but Extend was never prepared for, is `503 testing_environment_not_ready`. Neither ever falls
+      back to production. `GET /api/version`, `/live`, `/ready`, `/webhook/` and `/internal/…` take no secret.
+    - Browsers: CORS mirrors the request's origin, methods and headers, and exposes `ETag`, `X-Request-ID`,
+      `Silicon-Extend-API-Version`, `Content-Disposition`, `Content-Range`, `Deprecation` and `Sunset`.
 servers:
   - url: https://backend.extend.teamofsilicons.com
 security:
@@ -69,13 +85,16 @@ paths:
       summary: Agree an API major version
       description: |
         Unversioned so an old client can always reach it. The client lists every major it supports; the
-        service answers with the highest both support. The client then pins that version on every request
-        with `Silicon-Extend-API-Version`. No common version is `400 api_version_unsupported` listing both sides.
+        service answers with the highest both support that is not sunset. The client then pins that version on every
+        request with `Silicon-Extend-API-Version`. No common version is `400 api_version_unsupported` listing both sides.
+        A client that speaks only majors Extend has retired gets `410 api_version_sunset`, saying when and why and what
+        to update. When the agreed major is deprecated, the answer carries `Deprecation` and `Sunset` headers.
       security: []
       parameters:
         - name: Silicon-Extend-Supported-API-Versions
           in: header
-          required: true
+          required: false
+          description: Every major the client supports. A client too old to send it is taken to support 1.
           schema: {type: string, pattern: '^[1-9][0-9]*(, ?[1-9][0-9]*)*$'}
           example: '1, 2'
       responses:
@@ -84,6 +103,8 @@ paths:
           headers:
             Silicon-Extend-API-Version: {schema: {type: string}, description: The agreed major}
             Vary: {schema: {type: string, const: Silicon-Extend-Supported-API-Versions}}
+            Deprecation: {$ref: '#/components/headers/Deprecation'}
+            Sunset: {$ref: '#/components/headers/Sunset'}
           content:
             application/json:
               schema:
@@ -96,21 +117,35 @@ paths:
                     required: [api_version, supported, service_version]
                     properties:
                       api_version: {type: integer, example: 1}
-                      supported: {type: array, items: {type: integer}, example: [1]}
+                      supported: {type: array, items: {type: integer}, example: [1], description: Majors a client can agree on (served and not sunset)}
                       service_version: {type: string, example: 1.0.0}
-                      deprecated: {type: array, items: {type: integer}}
+                      deprecated: {type: array, items: {type: integer}, description: The supported majors that are deprecated}
         '400': {$ref: '#/components/responses/Error'}
+        '410': {description: 'api_version_sunset: every major the client speaks is retired', $ref: '#/components/responses/Error'}
   /api/v1/contracts:
     get:
       tags: [System]
       operationId: contracts
       summary: Compatibility matrix and deprecation state
+      description: |
+        Built from live state, not a fixed list. Each major's lifecycle (`current` → `deprecated` → `sunset`) is kept in
+        `extend_global.api_versions`, shared by every instance: configuration deprecates a major
+        (`EXTEND_DEPRECATED_API_VERSIONS`, applied when an instance starts; the newest served major can't be
+        deprecated), and a deprecated major is sunset automatically after 7 consecutive days with zero requests
+        (requests are counted per major and UTC day; an instance re-checks every 5 minutes). Sunset is final. The client
+        crate and CLI ranges come from `EXTEND_API_V{n}_CLIENT_CRATE` and `EXTEND_API_V{n}_CLI` (default
+        `>={n}.0.0, <{n+1}.0.0`), and `device_app_min` from `EXTEND_DEVICE_APP_MIN_VERSION`. Retired majors stay listed
+        after their routes are gone. A request to this route counts as a request today for the major it came in on.
+        `extend version` reads this to say whether the CLI is current, deprecated or sunset.
       security: []
       parameters:
         - {$ref: '#/components/parameters/TestingSecret'}
       responses:
         '200':
           description: Every API major, its state, and the client, CLI and app versions that work with it
+          headers:
+            Deprecation: {$ref: '#/components/headers/Deprecation'}
+            Sunset: {$ref: '#/components/headers/Sunset'}
           content:
             application/json:
               schema:
@@ -120,24 +155,57 @@ paths:
                   type: {const: contracts}
                   data:
                     type: object
-                    required: [versions]
+                    required: [service_version, current, supported, deprecated, sunset_rule, versions]
                     properties:
+                      service_version: {type: string, example: 1.0.0}
+                      current: {type: integer, example: 1, description: The newest major a client can agree on}
+                      supported: {type: array, items: {type: integer}, example: [1], description: Majors served and not sunset}
+                      deprecated: {type: array, items: {type: integer}, example: []}
+                      sunset_rule: {type: string, example: 'Sunset after 7 consecutive days with zero requests'}
                       versions:
                         type: array
+                        description: Every major with a lifecycle record, oldest first, including retired ones
                         items:
                           type: object
-                          required: [api_version, state]
+                          required: [api_version, state, deprecated_at, sunset_at, sunset_earliest_at, last_request_on, sunset_rule, compatible]
                           properties:
                             api_version: {type: integer}
                             state: {type: string, enum: [current, deprecated, sunset]}
                             deprecated_at: {type: [string, 'null'], format: date-time}
+                            sunset_at: {type: [string, 'null'], format: date-time, description: When the sunset rule was met}
+                            sunset_earliest_at:
+                              type: [string, 'null']
+                              format: date-time
+                              description: 'Deprecated majors only: the soonest it can be sunset if no request arrives (the Sunset header)'
+                            last_request_on: {type: [string, 'null'], format: date, description: The last UTC day with a request}
                             sunset_rule: {type: string, example: 'Sunset after 7 consecutive days with zero requests'}
                             compatible:
                               type: object
+                              required: [client_crate, cli, device_app_min]
                               properties:
                                 client_crate: {type: string, example: '>=1.0.0, <2.0.0'}
                                 cli: {type: string, example: '>=1.0.0, <2.0.0'}
                                 device_app_min: {type: string, example: 1.0.0}
+              example:
+                type: contracts
+                data:
+                  service_version: 1.0.0
+                  current: 1
+                  supported: [1]
+                  deprecated: []
+                  sunset_rule: Sunset after 7 consecutive days with zero requests
+                  versions:
+                    - api_version: 1
+                      state: current
+                      deprecated_at: null
+                      sunset_at: null
+                      sunset_earliest_at: null
+                      last_request_on: '2026-09-27'
+                      sunset_rule: Sunset after 7 consecutive days with zero requests
+                      compatible: {client_crate: '>=1.0.0, <2.0.0', cli: '>=1.0.0, <2.0.0', device_app_min: 1.0.0}
+        '401': {description: testing_secret_invalid, $ref: '#/components/responses/Error'}
+        '410': {description: 'api_version_sunset: the path''s major is retired', $ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready, $ref: '#/components/responses/Error'}
   /api/v1/iam:
     get:
       tags: [System]
@@ -173,7 +241,8 @@ paths:
                       docs_url: {type: string, format: uri}
                       repository_url: {type: string, format: uri}
                       testing_environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
-        '401': {$ref: '#/components/responses/Error'}
+        '401': {description: testing_secret_invalid, $ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready, $ref: '#/components/responses/Error'}
 
   # ───────────────────────────── Auth ─────────────────────────────
   /api/v1/auth/login:
@@ -261,8 +330,15 @@ paths:
       tags: [Auth]
       operationId: logout
       summary: Sign out
-      description: With the refresh token, revokes the whole family. A Silicon signing out ends its running sessions (`silicon_logged_out`).
-      security: []
+      description: |
+        `token` is the login to revoke: the refresh token (revokes the whole family) or an access token. A Silicon
+        signing out ends its running sessions in this world (`silicon_logged_out`), so Extend first asks IAM whose login
+        `token` is (introspection; a refresh token works on its own, with no Authorization header), falling back to the
+        access token in `Authorization` when one is sent. If IAM can't be asked, nothing is revoked and the error says
+        so (with IAM's own code, usually `503 service_unavailable`); retry. An empty `token` is `422 invalid_input`.
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - {$ref: '#/components/parameters/IdempotencyKey'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -280,10 +356,12 @@ paths:
                   additionalProperties: false
                   required: [token]
                   properties:
-                    token: {type: string, writeOnly: true}
+                    token: {type: string, writeOnly: true, minLength: 1, description: 'The refresh token (ort_…) or an access token (oat_…)'}
       responses:
         '204': {description: Signed out}
         '401': {$ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input: empty token', $ref: '#/components/responses/Error'}
+        '503': {description: 'IAM could not be asked whose login it is; nothing was revoked', $ref: '#/components/responses/Error'}
   /api/v1/auth/me:
     get:
       tags: [Auth]
@@ -321,10 +399,19 @@ paths:
       operationId: createEnrollment
       summary: An unpaired Extend app asks for a pairing code
       description: |
-        No login. Rate-limited per IP. The app keeps `enrollment_secret` in memory or its secret store and shows
-        `pairing_code`. The code rotates every 300 s; the app follows rotations on the enrollment WebSocket or by
-        polling `GET /api/v1/enrollments/{enrollment_id}`.
+        No login. At most 60 new enrollments per hour per client address (`429 rate_limited` with
+        `details.retry_after_s`; behind a proxy listed in `EXTEND_TRUSTED_PROXY_CIDRS` the address is read from
+        `X-Forwarded-For`). The app keeps `enrollment_secret` in memory or its secret store and shows `pairing_code`.
+        The code rotates every 300 s; the app follows rotations on the enrollment WebSocket or by polling
+        `GET /api/v1/enrollments/{enrollment_id}`.
+
+        The enrollment is bound to the world the request selects: an app started with a test environment's
+        `X-Testing-Application-Secret` gets a code that pairs it only into that environment, and one started without
+        gets a production code (see `POST /api/v1/pairings`). A clean or permanent removal of the environment deletes
+        its waiting enrollments.
       security: []
+      parameters:
+        - {$ref: '#/components/parameters/TestingSecret'}
       requestBody:
         required: true
         content:
@@ -371,18 +458,24 @@ paths:
                   pairing_code: 4F9C2A
                   code_expires_at: '2026-09-26T10:05:00.000Z'
                   rotates_every_s: 300
+        '401': {description: testing_secret_invalid, $ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input, for example an OS that pairs through a host (ios, tvos, samsung_tv…)', $ref: '#/components/responses/Error'}
         '426': {$ref: '#/components/responses/Error'}
         '429': {$ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready, $ref: '#/components/responses/Error'}
   /api/v1/enrollments/{enrollment_id}:
     parameters:
       - {$ref: '#/components/parameters/EnrollmentId'}
+      - {$ref: '#/components/parameters/TestingSecret'}
     get:
       tags: [Enrollment]
       operationId: getEnrollment
       summary: Current code, or the device credential once paired
       description: |
         `state: waiting` returns the live code. `state: paired` returns `device_id` and `device_credential`
-        exactly once; the enrollment is then gone and later reads are 404.
+        exactly once; the enrollment is then gone and later reads are 404. When `X-Testing-Application-Secret` is sent
+        here (and on `DELETE` and `/connect`), it must select the world the enrollment was started in; another world is
+        `401 testing_secret_invalid`. Sending none is always accepted.
       security:
         - enrollmentSecret: []
       responses:
@@ -434,8 +527,19 @@ paths:
         Carbons only. Creates the device in the team named by X-Org-ID and in the selected world (production, or the
         test environment named by X-Testing-Application-Secret), owned by the caller. The code works once.
         A wrong code never reveals whether it existed. Rate-limited to 5 failures per Carbon per 10 minutes.
+
+        A code pairs only into the world its enrollment was started in. A signed-in Carbon of a team who enters a live
+        code from another world gets `404 pairing_code_invalid` naming the direction (a test code into production, a
+        production code into a test environment, or another test environment's code) with a hint; those answers are
+        limited to 20 per Carbon per 15 minutes. Anyone else (not signed in, a refused token, a Silicon, no team) gets
+        the same answer a code that doesn't exist gets. The database backs the rule with a constraint.
+
         In a test environment with 5 devices already paired, answers 409 `test_device_limit` with the message
-        `In test environment you are limited to 5 paired devices per environment.`
+        `In test environment you are limited to 5 paired devices per environment.` The count and the insert happen
+        under one lock per environment, so concurrent claims never exceed 5. Adds to one test environment take turns;
+        one that waits more than 10 s for its turn in the service (or 5 s on the database lock) is refused with
+        `429 rate_limited` ("This test environment is busy adding other devices…", `details.retry_after_s: 2`). A
+        claim whose device was committed always answers 201.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -479,10 +583,12 @@ paths:
                   type: {const: device}
                   data: {$ref: '#/components/schemas/Device'}
         '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
         '403': {$ref: '#/components/responses/Error'}
-        '404': {$ref: '#/components/responses/Error'}
-        '409': {$ref: '#/components/responses/Error'}
-        '429': {$ref: '#/components/responses/Error'}
+        '404': {description: 'pairing_code_invalid: wrong, expired or used, or made in another world (named for a signed-in Carbon)', $ref: '#/components/responses/Error'}
+        '409': {description: test_device_limit, $ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {description: 'rate_limited: too many wrong codes, or the test environment is busy adding other devices', $ref: '#/components/responses/Error'}
   /api/v1/devices/{device_id}/attachments:
     parameters:
       - {$ref: '#/components/parameters/DeviceId'}
@@ -493,7 +599,11 @@ paths:
       description: |
         `device_id` is the host: a paired Mac (for iPhone, iPad and Apple TV) or any paired computer (for Samsung and
         LG TVs), owned by the caller and online. Creates the new device in `setup` with `host_device_id` set; the
-        host's app then walks the setup and reports each step. Counts toward the test environment limit.
+        host receives an `attach` frame, walks the setup and reports the device with `attached`. Counts toward the test
+        environment limit, under the same per-environment turn as `POST /api/v1/pairings` (so `429 rate_limited` when
+        the environment is busy adding other devices). Refused with `422 invalid_input` and a hint: an OS that runs the
+        Extend app itself, the wrong host OS for it, and a host that is itself paired through a computer; an offline
+        host is `503 device_offline`; a removed or unknown host is `404 device_not_found`.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -528,9 +638,11 @@ paths:
                   type: {const: device}
                   data: {$ref: '#/components/schemas/Device'}
         '403': {$ref: '#/components/responses/Error'}
-        '409': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {description: test_device_limit, $ref: '#/components/responses/Error'}
         '422': {$ref: '#/components/responses/Error'}
-        '503': {$ref: '#/components/responses/Error'}
+        '429': {description: 'rate_limited: the test environment is busy adding other devices', $ref: '#/components/responses/Error'}
+        '503': {description: device_offline (the host), $ref: '#/components/responses/Error'}
   /api/v1/devices/{device_id}/setup:
     parameters:
       - {$ref: '#/components/parameters/DeviceId'}
@@ -538,6 +650,7 @@ paths:
       tags: [Pairing]
       operationId: getSetup
       summary: The device's setup steps and where each one stands
+      description: Owner only. Also answers for a removed device the caller paired (read-only).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -561,6 +674,12 @@ paths:
       tags: [Pairing]
       operationId: enterSetupCode
       summary: Enter the code an Apple TV shows during setup
+      description: |
+        Owner only. The code is relayed to the Mac that carries the Apple TV. Checked in this order, each refusal with a
+        hint: the caller owns the device (a removed one is `404 device_not_found`); it is paired through a computer (a
+        device that runs the Extend app takes no code: `422 invalid_input`); it is an Apple TV (another carried device
+        takes no code: `422`); the code is 4 digits after trimming (`422`, echoing what was sent); the host is online
+        (`503 device_offline`, "The computer … pairs through is offline, so the code could not reach it.").
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -590,8 +709,10 @@ paths:
                 properties:
                   type: {const: setup}
                   data: {$ref: '#/components/schemas/Setup'}
-        '409': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
         '422': {$ref: '#/components/responses/Error'}
+        '503': {description: device_offline (the host), $ref: '#/components/responses/Error'}
 
   # ───────────────────────────── Devices ─────────────────────────────
   /api/v1/devices:
@@ -603,6 +724,15 @@ paths:
         `scope` defaults to `mine` for a Carbon (devices they paired) and `accessible` for a Silicon (devices it has
         access to; this is `extend device ls`). `team` lists other Carbons' team-visible devices, read-only, with
         limited fields.
+
+        Pages are in device-id order and `next_cursor` is opaque. `online` is applied before paging (the service reads
+        on until the page is full), so a page with a `next_cursor` always holds exactly `limit` devices. Within a page,
+        online devices come first, then paired before removed, then by name.
+
+        `include_removed=true` (only with `scope=mine`) also lists the Carbon's removed devices in this team and world,
+        each with `removed_at` and `removed_reason`, so their activity logs stay reachable. Any other scope with
+        `include_removed=true`, or a value other than `true` or `false`, is `422 invalid_input` with a hint. An `os`
+        Extend doesn't know is `422` naming the ones it does.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -615,6 +745,10 @@ paths:
         - name: os
           in: query
           schema: {$ref: '#/components/schemas/DeviceOs'}
+        - name: include_removed
+          in: query
+          description: With scope=mine, also list the caller's removed devices
+          schema: {type: boolean, default: false}
         - {$ref: '#/components/parameters/Limit'}
         - {$ref: '#/components/parameters/Cursor'}
       responses:
@@ -655,6 +789,7 @@ paths:
                   next_cursor: null
         '401': {$ref: '#/components/responses/Error'}
         '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
   /api/v1/devices/{device_id}:
     parameters:
       - {$ref: '#/components/parameters/DeviceId'}
@@ -662,6 +797,21 @@ paths:
       tags: [Devices]
       operationId: getDevice
       summary: One device, with what a Silicon can do on it (`extend device show`)
+      description: |
+        The owner, a Silicon with access, or (with limited fields) another Carbon of the team for a team-visible device.
+
+        A removed device stays readable, read-only, for the Carbon who paired it (in the same team): `removed_at` and
+        `removed_reason` are set, `online` is false, `in_use`, `pair_expires_at` and `days_left` are left out,
+        `capabilities` and `commands` are empty, and `missing[0]` is `{capability: screen.read, reason: "The device was
+        removed, so nothing works on it any more. Pair it again to use it."}`. The same Carbon can also read its
+        `/activity`, `/requests`, `/access` (now empty) and `/setup`. For anyone else a removed device is
+        `404 device_not_found` with the plain not-found message.
+
+        Every change to a removed device (`PATCH`, `DELETE` again, `/stop`, `/attachments`, `/setup/code`,
+        `PUT`/`DELETE /access/{silicon_id}`, a Silicon's `POST /api/v1/sessions` or `/requests`) is
+        `404 device_not_found`. For the Carbon who paired it the message is "Device <id> (<name>) was removed at
+        <time>: <why>. A removed device can't be changed or used.", the hint points to
+        `extend device activity <id>` and says to pair it again, and `details` are `{removed_at, removed_reason}`.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -743,9 +893,11 @@ paths:
       operationId: removeDevice
       summary: Remove the device (dangerous)
       description: |
-        Owner only. Ends any running session (`device_removed`), removes every Silicon's access, unpairs the device,
-        and keeps the activity log readable. Clients must confirm with the Carbon first; the CLI needs `--yes`.
-        For a host computer, also removes every device paired through it.
+        Owner only. Ends any running session (`device_removed`; a command in flight answers `409 session_ended` at
+        once), removes every Silicon's access, unpairs the device, and keeps it readable to its owner as a removed
+        device (see `GET /api/v1/devices/{device_id}`), with its activity log. Clients must confirm with the Carbon
+        first; the CLI needs `--yes`. For a host computer, also removes every device paired through it. Removing a
+        removed device again is `404 device_not_found`, not 204.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -753,6 +905,7 @@ paths:
       responses:
         '204': {description: Removed}
         '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
         '412': {$ref: '#/components/responses/Error'}
   /api/v1/devices/{device_id}/stop:
     parameters:
@@ -761,7 +914,9 @@ paths:
       tags: [Devices]
       operationId: stopDevice
       summary: Stop the Silicon using the device now
-      description: Owner only. Ends the running session with `stopped_by_carbon`. No running session is 409 `device_not_in_use`.
+      description: |
+        Owner only. Ends the running session with `stopped_by_carbon`; a command in flight answers `409 session_ended`
+        at once and the device gets `cancel` for it. No running session is 409 `device_not_in_use`.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -777,6 +932,7 @@ paths:
                   type: {const: session}
                   data: {$ref: '#/components/schemas/Session'}
         '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
         '409': {$ref: '#/components/responses/Error'}
 
   # ───────────────────────────── Access ─────────────────────────────
@@ -787,7 +943,7 @@ paths:
       tags: [Access]
       operationId: listAccess
       summary: Silicons that can use the device
-      description: Owner only.
+      description: Owner only. A removed device the caller paired answers with no grants.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -831,18 +987,22 @@ paths:
                   type: {const: access_grant}
                   data: {$ref: '#/components/schemas/AccessGrant'}
         '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
         '422': {$ref: '#/components/responses/Error'}
     delete:
       tags: [Access]
       operationId: revokeAccess
       summary: Take a Silicon's access away
-      description: Owner only. If that Silicon is using the device, its session ends at once (`access_removed`).
+      description: |
+        Owner only. If that Silicon is using the device, its session ends at once (`access_removed`): a command in
+        flight answers `409 session_ended` and the device gets `cancel` for it (the device stays paired).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
       responses:
         '204': {description: 'Revoked, or there was no grant'}
         '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
 
   /api/v1/team/silicons:
     get:
@@ -885,7 +1045,19 @@ paths:
       description: |
         Silicons only; the caller needs access and the device must be online and set up. Takes the device's lock:
         only one Silicon at a time. If another Silicon holds it, 409 `device_in_use` with `details.in_use` naming it,
-        and `hint` giving the `extend request send` command. The session ends on its own after 300 s without a command.
+        and `hint` giving the `extend request send` command. The session ends on its own after 300 s without a command
+        (a command in flight holds the timer). Starting a session also registers the Silicon as a Ting recipient, in
+        the background (a failure is logged and the session goes on), so requests for the device can reach it.
+
+        A refused login ends access on every session route (`POST`/`GET /api/v1/sessions`, `GET /sessions/{id}`,
+        `/end`, `/takeover`, `/commands`), even when no IAM webhook arrives. This works when Extend can tell which
+        Silicon the refused token belonged to (a login it saw that Silicon use in this world since it started):
+        - `403 not_a_team_member` for the `X-Org-ID` team where the Silicon has running sessions: unless IAM confirms
+          it is still an active member there, those sessions end at once as `left_team`, and the message adds
+          "Its running session(s) <ids> in <team> ended (left_team)."
+        - `401 token_expired`: 15 s later, unless IAM accepts another login of that Silicon that Extend has seen, all
+          its running sessions in this world end as `silicon_logged_out` (a refreshed token keeps them). If IAM can't
+          answer, nothing ends.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -971,6 +1143,7 @@ paths:
       tags: [Sessions]
       operationId: getSession
       summary: One session (used by `extend session connect` and `status`)
+      description: While a command runs, `idle_ends_at` is held at least 300 s after the command's deadline.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1108,12 +1281,29 @@ paths:
 
         Before running, Extend re-checks with IAM that the caller still has access, that the session is theirs and
         `active`, that the device is online, and that the command is in the device's capabilities. Commands in one
-        session run one at a time, in order. Resets the idle timer.
+        session run one at a time, in order; a command that waited behind another checks the session again when its
+        turn comes (`409 session_ended` or `423 session_paused`, never relayed). While the command runs,
+        `idle_ends_at` is held at `timeout_ms` + 2 s + 300 s from its start; when the answer comes (or the command times
+        out, or the device drops), the 300 s idle window restarts from then.
+
+        If the session ends while the command runs (the device removed, the pair revoked, access removed, the Carbon's
+        Stop, a logout, leaving the team, the test environment disabled or cleaned), the caller gets
+        `409 session_ended` at once (within about 200 ms), not at the deadline: "Session <id> ended while `<command>` was
+        running on <device>: <why>. `<command>` may have run.", a hint for that end reason, and
+        `details: {end_reason, command_id, may_have_run: true}`. The device gets `cancel` for it if still connected, and
+        the activity log records the outcome as `unknown`. A dropped socket or a passed deadline whose session had
+        ended answers the same way instead of `device_offline` or `command_timeout`.
 
         Files the command makes are stored in Briefcase for the Silicon, shared with the device's owner, and returned
         in `files`. `self_destruct_minutes` (1 to 43,200; default 1,440) applies to every file this command makes;
         `permanent: true` keeps them. Small inputs a command reads from the caller's machine (a replay script, an
         image to show on a TV, an APK to install) travel in `attachments`: at most 8 and 8 MiB in total.
+
+        A file that can't be kept doesn't fail the command: `ok` is unchanged and `warnings` gets one entry per
+        problem, each saying what happened, why and what to do (a file the device listed under an upload id not issued
+        for this command, or never uploaded; Briefcase refused to store it; it was stored but not shared with the
+        device's Carbon; it was stored but Extend could not record it, in which case the warning gives its link and it
+        won't be listed or self-destruct). Warnings also go to the command's activity entry (`details.warnings`).
 
         A result with `ok: false` ran on the device and failed there; `error.code` says how. Besides agent-device's own
         codes, a device answers `command_failed` (a shell exited non-zero; `details.exit_code`), `action_failed`,
@@ -1193,9 +1383,11 @@ paths:
                   started_at: '2026-09-26T10:04:12.001Z'
                   duration_ms: 390
                   idle_ends_at: '2026-09-26T10:09:12.391Z'
-        '403': {description: 'access_removed, not_session_owner', $ref: '#/components/responses/Error'}
+                  warnings: []
+        '401': {description: 'token_expired, not_signed_in (see startSession: a refused Silicon''s sessions may end)', $ref: '#/components/responses/Error'}
+        '403': {description: 'access_removed, not_session_owner, not_a_team_member', $ref: '#/components/responses/Error'}
         '404': {description: 'unknown_command (names the Extend replacement if any), session_not_found', $ref: '#/components/responses/Error'}
-        '409': {description: session_ended (details.end_reason), $ref: '#/components/responses/Error'}
+        '409': {description: 'session_ended (details.end_reason; when it ended mid-command also command_id and may_have_run)', $ref: '#/components/responses/Error'}
         '422': {description: 'invalid_input, unsupported_on_device (names the missing capability)', $ref: '#/components/responses/Error'}
         '423': {description: session_paused, $ref: '#/components/responses/Error'}
         '503': {description: device_offline, $ref: '#/components/responses/Error'}
@@ -1212,9 +1404,21 @@ paths:
       description: |
         Silicons with access only, and only while another Silicon is using the device (otherwise 409
         `device_not_in_use` with a hint to start a session). Delivered through Ting to the Silicon using the device,
-        with the reason exactly as sent. One open request per Silicon per device per 60 s; a repeat inside that
-        window returns the existing request (200). If Ting is unreachable the request is stored with `delivery: pending`
-        and retried in the background (up to 6 attempts), so the answer is still 201.
+        with the reason exactly as sent: surrounding whitespace included, it is stored, returned, logged and sent
+        unchanged. Its length is counted without the surrounding whitespace (1–300 Unicode scalar values), and the raw
+        text may be at most 1,000 including it; either refusal is `422 invalid_input` with a hint.
+
+        Every new reason is a new request (201) and is delivered. Only a repeat is folded: the byte-identical reason
+        from the same Silicon, for the same device and the same session on it, within 60 s returns the existing request
+        (200) and sends nothing. The same `Idempotency-Key` with the same body replays its request; with a different
+        body it is `409 conflict`.
+
+        If Ting refuses or can't be reached, the request is stored with `delivery: pending` and `last_error` saying why,
+        and the answer is still 201. Extend retries every 30 s, acting with the sender's latest login in that team and
+        world (no running session needed), first registering the recipient with Ting when Extend holds its login. After 6 attempts, the
+        first send included, it becomes `failed` with `last_error` ending "Extend gave up after 6 attempts; send the
+        request again with `extend request send …`", and the device's activity log gets `request_failed`. An attempt
+        made while Extend holds no login for the sender still counts.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1233,11 +1437,25 @@ paths:
                   additionalProperties: false
                   required: [reason]
                   properties:
-                    reason: {type: string, minLength: 1, maxLength: 300, description: Counted in Unicode scalar values after trimming}
+                    reason:
+                      type: string
+                      minLength: 1
+                      maxLength: 1000
+                      description: 1–300 Unicode scalar values after trimming; at most 1,000 with the surrounding whitespace, which is kept
             example: {type: request, data: {reason: 'I need to check the order confirmation in the Swiggy app, 2 minutes'}}
       responses:
+        '200':
+          description: A repeat of the same reason within 60 s; the existing request, nothing sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: request}
+                  data: {$ref: '#/components/schemas/Request'}
         '201':
-          description: Sent
+          description: Sent, or stored as pending with last_error
           content:
             application/json:
               schema:
@@ -1247,13 +1465,14 @@ paths:
                   type: {const: request}
                   data: {$ref: '#/components/schemas/Request'}
         '403': {$ref: '#/components/responses/Error'}
-        '409': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {description: 'device_not_in_use; conflict (you are the one using it, or an Idempotency-Key reused with another body)', $ref: '#/components/responses/Error'}
         '422': {$ref: '#/components/responses/Error'}
     get:
       tags: [Requests]
       operationId: listDeviceRequests
       summary: Requests Silicons sent for this device, with reasons (device page)
-      description: Owner only.
+      description: Owner only. Also answers for a removed device the caller paired.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1296,7 +1515,9 @@ paths:
       tags: [Activity]
       operationId: listActivity
       summary: Every action on the device, which Silicon did it, and when
-      description: Owner only. Typed text and clipboard writes are redacted to `[redacted N chars]`.
+      description: |
+        Owner only. Typed text and clipboard writes are redacted to `[redacted N chars]`. The log of a removed device
+        stays readable to the Carbon who paired it (find it with `GET /api/v1/devices?include_removed=true`).
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1354,7 +1575,10 @@ paths:
         - {$ref: '#/components/parameters/Cursor'}
       responses:
         '200':
-          description: Files, newest first; files that already self-destructed are omitted
+          description: |
+            Files, newest first. A file whose self-destruct time has passed is omitted at once, also while Extend is
+            still deleting it from Briefcase (its record stays until Briefcase confirms the deletion; failures are
+            retried, backing off from 1 minute to 1 hour).
           content:
             application/json:
               schema:
@@ -1419,6 +1643,77 @@ paths:
         '403': {$ref: '#/components/responses/Error'}
         '404': {$ref: '#/components/responses/Error'}
         '409': {$ref: '#/components/responses/Error'}
+  /api/v1/files/{file_id}/content:
+    parameters:
+      - {$ref: '#/components/parameters/FileId'}
+    get:
+      tags: [Files]
+      operationId: fileContent
+      summary: Download a file's bytes (`extend file get`, and every `--out`)
+      description: |
+        The Silicon that made the file (`created_by`), or the Carbon who owns the file's device, in the file's team,
+        until its self-destruct time passes: the same check as `GET /api/v1/files/{file_id}`. The bytes are read from
+        the file store as the caller: Briefcase's `briefcase.files.read` over OBO in production, so Briefcase's own
+        sharing applies too (local disk in development). `HEAD` answers the same headers without the body.
+
+        One byte range is honoured: `Range: bytes=F-L`, `bytes=F-` or `bytes=-N` answers 206; a range that starts past
+        the end answers 416. Several ranges, other units, malformed ranges, or L before F are ignored and the whole file
+        is served. The service holds the whole file in memory while it answers (files are at most 1 GiB).
+
+        Refusals: `404 file_not_found` for a file that is unknown, not visible to the caller, or already
+        self-destructed. Briefcase's own refusals keep their codes (`403 no_access`, `404 file_not_found`,
+        `429 rate_limited`, `503 service_unavailable`); for the device's Carbon, when sharing the file with them failed
+        when it was made, the hint says "Ask <creator> to share it with you in Briefcase."
+      parameters:
+        - {$ref: '#/components/parameters/TeamHeader'}
+        - {$ref: '#/components/parameters/TestingSecret'}
+        - name: Range
+          in: header
+          required: false
+          schema: {type: string, example: bytes=0-1023}
+      responses:
+        '200':
+          description: The whole file
+          headers:
+            Content-Type: {schema: {type: string}, description: 'The type the device reported when the file was made (else the store''s)'}
+            Content-Length: {schema: {type: integer}}
+            Content-Disposition:
+              schema: {type: string}
+              description: "attachment; filename=\"<name, with non-ASCII characters, quotes and backslashes as _>\"; filename*=UTF-8''<percent-encoded name> (RFC 8187)"
+              example: "attachment; filename=\"screenshot.png\"; filename*=UTF-8''screenshot.png"
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            Cache-Control: {schema: {type: string, const: 'private, no-store'}}
+            X-Content-Type-Options: {schema: {type: string, const: nosniff}}
+            Content-Security-Policy: {schema: {type: string, const: "sandbox; default-src 'none'"}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '206':
+          description: The requested range, with the same headers
+          headers:
+            Content-Range: {schema: {type: string}, example: bytes 0-7/67}
+            Content-Length: {schema: {type: integer}}
+            Content-Disposition: {schema: {type: string}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {description: 'not_a_team_member; no_access (Briefcase)', $ref: '#/components/responses/Error'}
+        '404': {description: file_not_found, $ref: '#/components/responses/Error'}
+        '416':
+          description: 'The range starts past the end. Error envelope with code invalid_input and a hint about the Range header.'
+          headers:
+            Content-Range: {schema: {type: string}, example: bytes */67}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: error}
+                  data: {$ref: '#/components/schemas/Error'}
+        '429': {description: rate_limited (Briefcase), $ref: '#/components/responses/Error'}
+        '503': {description: service_unavailable (Briefcase), $ref: '#/components/responses/Error'}
 
   # ───────────────────────────── Device app ─────────────────────────────
   /api/v1/device:
@@ -1426,6 +1721,12 @@ paths:
       tags: [Device app]
       operationId: deviceSelf
       summary: What the Extend app shows once paired
+      description: |
+        Every device endpoint (this one, `DELETE`, `/stop`, `/connect`, `/artifacts/…`) finds the device's world from its
+        credential. For a device in a test environment that is disabled, being prepared or restored, or being cleaned,
+        they answer `503 testing_environment_not_ready`, not 401: the pair is kept, and the hint says the app reconnects
+        by itself once the environment is open again (a clean unpairs every device in it). If the request also sends
+        `X-Testing-Application-Secret` for another world, it is `401 testing_secret_invalid`.
       security:
         - deviceCredential: []
       responses:
@@ -1451,25 +1752,37 @@ paths:
                       setup: {$ref: '#/components/schemas/Setup'}
                       environment: {oneOf: [{$ref: '#/components/schemas/TestingEnvironment'}, {type: 'null'}]}
         '401': {$ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
     delete:
       tags: [Device app]
       operationId: revokePair
       summary: Revoke pair, from the device (dangerous)
-      description: Removes the device from the Carbon's account and ends every Silicon's access. The app confirms with the Carbon first.
+      description: |
+        Removes the device from the Carbon's account and ends every Silicon's access (`pair_revoked`; a command in
+        flight answers its caller `409 session_ended` at once). The device stays readable to its Carbon as a removed
+        device. The app confirms with the Carbon first. There is no route yet for a host computer to revoke a device it
+        carries; its Carbon removes that one on the website or with `extend device rm`.
       security:
         - deviceCredential: []
       responses:
         '204': {description: Unpaired; the credential no longer works}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
   /api/v1/device/stop:
     post:
       tags: [Device app]
       operationId: deviceStop
       summary: The Carbon tapped Stop on the device
-      description: Same as the Stop frame on the socket, for when the socket is down.
+      description: |
+        Same as the `stop` frame on the socket, for when the socket is down: ends the running session with
+        `stopped_by_carbon` (a command in flight answers `409 session_ended` at once). A no-op when nothing runs. Client:
+        `Client::device_stop`.
       security:
         - deviceCredential: []
       responses:
         '204': {description: 'Stopped, or nothing was running'}
+        '401': {description: 'unauthorized: the credential is not paired', $ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
   /api/v1/device/connect:
     get:
       tags: [Device app]
@@ -1479,13 +1792,17 @@ paths:
         Upgrade to WebSocket with `Authorization: Extend-Device <device_credential>`. Flat JSON frames
         `{"type": ..., <fields>}`; every frame and field is in docs/device-protocol.md (Rust: extend-protocol frames.rs). Ping every 15 s; offline after 45 s
         without a pong. Close codes: 4401 credential invalid or unpaired, 4409 superseded by a newer connection,
-        4426 app too old (upgrade required).
+        4426 app too old (upgrade required), 4503 the device's test environment closed (disabled, or waiting for
+        Honeycomb's readiness; reason "test environment disabled; still paired, reconnect later"): the pair is kept and
+        the app reconnects with its usual backoff. The handshake itself answers 503 `testing_environment_not_ready` for
+        such an environment.
       security:
         - deviceCredential: []
       responses:
         '101': {description: Switching protocols}
         '401': {$ref: '#/components/responses/Error'}
         '426': {$ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready (the pair is kept; reconnect with backoff), $ref: '#/components/responses/Error'}
   /api/v1/device/artifacts/{upload_id}:
     put:
       tags: [Device app]
@@ -1530,6 +1847,12 @@ paths:
       tags: [Testing]
       operationId: currentTestingEnvironment
       summary: The test environment the secret selects (for the banner)
+      description: |
+        `extend config test add` checks with this that a secret belongs to the environment id it is saved under. Test
+        access opens only once Honeycomb has confirmed every service of the environment is ready: Extend takes Silicon
+        IAM accepting the secret as that confirmation (IAM refuses it until Honeycomb's activate phase), or Honeycomb's
+        participant `activate` instruction. Until then the answer is `503 testing_environment_not_ready`, saying why
+        and what to wait for.
       security: []
       parameters:
         - name: X-Testing-Application-Secret
@@ -1547,6 +1870,7 @@ paths:
                 properties:
                   type: {const: testing_environment}
                   data: {$ref: '#/components/schemas/TestingEnvironment'}
+        '400': {description: 'test_only: no secret was sent', $ref: '#/components/responses/Error'}
         '401': {description: testing_secret_invalid, $ref: '#/components/responses/Error'}
         '503': {description: testing_environment_not_ready, $ref: '#/components/responses/Error'}
   /internal/honeycomb/organizations/{org_id}/testing-environments/{environment_id}/operations/{operation_id}:
@@ -1559,9 +1883,47 @@ paths:
       operationId: applyHoneycombLifecycle
       summary: Apply a Honeycomb lifecycle instruction
       description: |
-        Plain JSON, no envelope, matching the other services. Safe to retry with the identical body. Works while the
-        environment is disabled. `clean` blocks access, ends sessions, unpairs every device in the environment and
-        clears its data; completes only when that is done. Stale `environment_revision` or `generation` is 409.
+        Plain JSON, no envelope, matching the other services. Operations on one environment run one at a time. Before
+        any effect a `pending` receipt is stored (with the environment's new revision); it becomes `completed` or
+        `failed` (`error` is "<code>: <message>"), so a crash mid-operation leaves a receipt to retry.
+
+        Replays: the identical instruction returns the stored `completed` receipt, whatever the state; a `pending` or
+        `failed` one is finished again only while its operation is the environment's latest. A retry of an operation a
+        later one superseded is `409 conflict` ("… was superseded by a later operation, so it won't run now."). A
+        different instruction under the same `operation_id` is 409.
+
+        Ordering: `environment_revision` must be newer than or equal to the environment's; only an older one is stale
+        (409 "Stale instruction: revision N is older than …"). Only `clean` advances `generation` and a new clean must
+        advance it; only `rotate-key` advances `key_version` and a new rotate-key must advance it; an older generation or
+        key version is 409. `app_id` must be Extend's (400 otherwise).
+
+        What each action does, and the receipt's `target_state`:
+        - `prepare` (or an `import` that arrives first): creates the schema and takes one of the 10 active slots;
+          `preparing`. Test access opens only once Honeycomb confirms readiness (IAM accepts the secret, or `activate`).
+        - `activate`: `ready`. Honeycomb itself confirms readiness only to IAM today; this participant action is an
+          Extend extension (TECHNICAL.md open questions).
+        - `disable`: `disabled`. Access is blocked at once, every running session ends (`environment_disabled`), and
+          every device socket closes with 4503; no device is unpaired, and the data is kept.
+        - `restore`: from `disabled`, takes a free slot and goes back to `preparing` (so access waits for readiness
+          again). Can't undo a clean.
+        - `clean`: blocks access, ends sessions, unpairs every device, deletes waiting pairing codes, waits for
+          requests and background work admitted before it, clears the data, then returns to the state it had. A
+          disabled environment stays `disabled` and never enters `cleaning`. IAM event ids and aggregate versions are
+          kept.
+        - `rotate-key`, `import`, `refresh-import`: acknowledged; the state is unchanged.
+        - `retire-applications`: when `retired_apps` names Extend, clears Extend's data like a clean and `disabled`;
+          otherwise acknowledged.
+        - `purge`: ends everything, drops the schema, forgets the environment's secrets and pairing codes; `removed`.
+          A purge of an id Extend never saw records it as removed. A removed environment accepts only `purge` (harmless
+          again); anything else, even the retry of an operation accepted before the purge, is 409 "… was permanently
+          removed; it can't be …" with the hint to create a new environment in Honeycomb.
+
+        Other refusals (409 with a hint): an instruction other than `prepare`, `import` or `purge` for an environment
+        Extend was never prepared for; `prepare` or `activate` of a disabled environment (send `restore`); anything but
+        a retry of the pending clean, a new clean or a purge while a clean is unfinished; an environment of another
+        team. At most 10 environments are active (`preparing`, `ready`, `cleaning`) across the deployment: a `prepare`
+        or `restore` with no free slot is `409 test_environment_limit`, leaves a `failed` receipt, and succeeds when
+        the identical instruction is retried after a slot frees up.
       security:
         - honeycombService: []
       requestBody:
@@ -1575,9 +1937,9 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/HoneycombReceipt'}
-        '400': {description: Invalid instruction or path/body mismatch}
+        '400': {description: 'Invalid instruction, an application other than Extend, or a path/body mismatch'}
         '401': {description: Missing or invalid service credential}
-        '409': {description: 'Stale revision, conflicting retry, no free slot of the 10 active environments, or incompatible transition'}
+        '409': {description: 'Stale revision, generation or key version; a superseded or conflicting retry; a removed environment; no free slot of the 10 active environments (test_environment_limit); or an incompatible transition'}
         '500': {description: Failed; inspect the receipt and retry the identical instruction}
     get:
       tags: [Testing]
@@ -1602,11 +1964,19 @@ paths:
       summary: Signed events from Silicon IAM
       description: |
         Verified with the official IAM client over the exact raw body (1 MiB limit, five-minute timestamp window,
-        key version from the header). Test deliveries are routed to their environment after verification.
-        De-duplicated on event id and applied only if newer than the last applied version. Extend confirms with IAM
-        introspection before ending access. The raw body and any `testing_key` are never stored.
+        key version from the header) before anything else is trusted. Test deliveries are routed to their environment
+        after verification (IAM's test webhook key digest is stored, so routing survives a restart), and only while
+        that environment is `ready` or `preparing`; for any other environment (cleaning, disabled, removed, unknown) the
+        delivery is acknowledged with 204 and dropped, and never recreates its data.
+
+        De-duplicated on event id. Events about one aggregate (`aggregate: {type, id, version}`, in a plain event or a
+        signed test envelope) apply in order: one whose version is not newer than the newest applied is acknowledged
+        and dropped. An event is recorded as applied only after its effects succeed, in the same transaction; if
+        applying fails, the answer is 5xx and IAM's retry applies it again. Extend confirms with IAM (the Silicon's live
+        authorization, then membership) before ending access; a removal the event reports is used only when IAM can't
+        answer. The raw body and any `testing_key` are never stored.
         Handled: session revoked or logged out, membership removed, member deleted, application consent revoked,
-        test environment cleaned.
+        test environment cleaned. (IAM sends applications no logout events today; see TECHNICAL.md section 9.)
       security: []
       parameters:
         - {name: X-Silicon-IAM-Event-ID, in: header, required: true, schema: {type: string}}
@@ -1619,8 +1989,9 @@ paths:
           application/json:
             schema: {type: object, additionalProperties: true, description: 'IAM WebhookEvent, or a signed test envelope'}
       responses:
-        '204': {description: 'Applied, or a duplicate acknowledged'}
+        '204': {description: 'Applied; or a duplicate, an out-of-order event, or a delivery for a test environment that isn''t open, acknowledged and dropped'}
         '401': {description: Signature invalid}
+        '500': {description: 'Applying failed; nothing was recorded, so IAM''s retry applies it again'}
 
   # ───────────────────────────── Operations ─────────────────────────────
   /api/v1/reports:
@@ -1796,6 +2167,14 @@ components:
       description: Briefcase entry id
       schema: {type: string, format: uuid}
 
+  headers:
+    Deprecation:
+      description: 'On a deprecated API major only: when it was deprecated, as @<unix seconds> (RFC 9745)'
+      schema: {type: string, pattern: '^@[0-9]+$', example: '@1790000000'}
+    Sunset:
+      description: 'On a deprecated API major only: the soonest it can be sunset, as an HTTP-date (RFC 8594)'
+      schema: {type: string, example: 'Thu, 01 Oct 2026 00:00:00 GMT'}
+
   responses:
     Error:
       description: Error
@@ -1882,10 +2261,19 @@ components:
         since: {type: string, format: date-time}
         paused: {type: boolean, default: false}
 
+    EndReason:
+      type: string
+      description: Why a session ended, or (as `removed_reason`) why a pair ended
+      enum: [ended_by_silicon, idle_timeout, stopped_by_carbon, access_removed, device_removed, pair_revoked, pair_expired,
+        silicon_logged_out, left_team, device_offline, environment_disabled, environment_cleaned]
+
     Device:
       type: object
       required: [device_id, name, os, kind, owner, visibility, online, state]
-      description: Other Carbons listing `scope=team` receive only device_id, name, os, kind, owner, visibility and online.
+      description: |
+        Other Carbons listing `scope=team` receive only device_id, name, os, kind, owner, visibility and online. A
+        removed device (readable only by the Carbon who paired it) has `removed_at` and `removed_reason`, `online`
+        false, and no `in_use`, `pair_expires_at` or `days_left`.
       properties:
         device_id: {$ref: '#/components/schemas/DeviceIdValue'}
         name: {$ref: '#/components/schemas/DeviceName'}
@@ -1909,6 +2297,10 @@ components:
         access_count: {type: integer, minimum: 0}
         app_version: {type: [string, 'null']}
         version: {type: integer, minimum: 1}
+        removed_at: {type: string, format: date-time, description: 'Removed devices only: when the pair ended'}
+        removed_reason:
+          allOf: [{$ref: '#/components/schemas/EndReason'}]
+          description: 'Removed devices only: why the pair ended (device_removed, pair_revoked, pair_expired, left_team, environment_cleaned…)'
 
     Setup:
       type: object
@@ -2005,6 +2397,16 @@ components:
         started_at: {type: string, format: date-time}
         duration_ms: {type: integer}
         idle_ends_at: {type: string, format: date-time}
+        warnings:
+          type: array
+          items: {type: string}
+          default: []
+          description: |
+            What went wrong around the command without failing it, one entry per problem, each saying what happened,
+            why and what to do: chiefly a file the device made that Extend couldn't store in Briefcase, share with the
+            device's Carbon, or record. The service always sends it (empty when all went well); older services leave it
+            out, so read a missing one as empty. `ok` does not change because of a warning.
+          example: ['screenshot.png was not stored: Saket''s Pixel made it but never uploaded it (the upload failed or was cut off). Run the command again; if it keeps happening, report it with `extend report`.']
 
     File:
       type: object
@@ -2034,9 +2436,12 @@ components:
         from: {$ref: '#/components/schemas/SiliconId'}
         to: {$ref: '#/components/schemas/SiliconId'}
         session_id: {$ref: '#/components/schemas/SessionIdValue'}
-        reason: {type: string, maxLength: 300}
+        reason: {type: string, maxLength: 1000, description: 'Exactly as sent, surrounding whitespace included'}
         created_at: {type: string, format: date-time}
         delivery: {type: string, enum: [pending, delivered, failed]}
+        last_error:
+          type: string
+          description: 'While pending, or once failed: why the last delivery through Ting failed, and what to do. Left out once delivered.'
     RequestPage:
       type: object
       required: [type, data]
@@ -2061,13 +2466,16 @@ components:
           description: A command name, or one of the device events
           example: click
           examples: [paired, renamed, access_granted, access_revoked, session_started, session_ended, command, takeover_started,
-            takeover_released, stopped, request_sent, pair_revoked, removed, pair_expired]
+            takeover_released, stopped, request_sent, request_failed, pair_revoked, removed, pair_expired]
         session_id: {oneOf: [{$ref: '#/components/schemas/SessionIdValue'}, {type: 'null'}]}
         command: {type: [string, 'null']}
         args: {type: [array, "null"], items: {type: string}, description: Redacted}
         outcome: {type: [string, 'null'], enum: [ok, failed, timeout, unknown, null]}
         files: {type: array, items: {type: string, format: uuid}}
-        details: {type: object, additionalProperties: true}
+        details:
+          type: object
+          additionalProperties: true
+          description: 'For a command: `warnings` when the result had any, `error` (for example session_ended with outcome unknown). For request_failed: {request_id, from, to, error}.'
 
     TestingEnvironment:
       type: object
@@ -2082,22 +2490,32 @@ components:
     HoneycombOperation:
       type: object
       additionalProperties: false
+      description: Honeycomb's participant instruction. An unknown field is refused (400).
       required: [operation_id, environment_id, org_id, app_id, environment_revision, generation, key_version, action, testing_key]
       properties:
         operation_id: {type: string, format: uuid}
         environment_id: {type: string, format: uuid}
         org_id: {type: string, minLength: 1, maxLength: 128}
-        app_id: {type: string}
-        environment_revision: {type: integer, minimum: 1}
-        generation: {type: integer, minimum: 1}
-        key_version: {type: integer, minimum: 1}
-        action: {type: string, enum: [prepare, rotate-key, clean, disable, restore, purge]}
+        app_id: {type: string, description: Must be Extend's application id}
+        environment_revision: {type: integer, minimum: 1, description: Newer than or equal to the environment's; older is stale (409)}
+        generation: {type: integer, minimum: 1, description: Only clean advances it}
+        key_version: {type: integer, minimum: 1, description: Only rotate-key advances it}
+        action:
+          type: string
+          enum: [prepare, activate, rotate-key, clean, disable, restore, purge, import, refresh-import, retire-applications]
+          description: '`activate` is an Extend extension (Honeycomb confirms readiness to IAM); the import actions concern IAM''s application records and are acknowledged'
         testing_key: {type: string, pattern: '^[A-Za-z0-9]{32}$', writeOnly: true}
         name: {type: [string, 'null'], minLength: 1, maxLength: 128}
-        reason: {type: string}
+        description: {type: [string, 'null']}
+        snapshot: {description: 'Accepted with import instructions; Extend keeps nothing from it'}
+        reason: {type: [string, 'null']}
+        retired_apps:
+          type: [array, 'null']
+          items: {type: string}
+          description: 'With retire-applications: the applications leaving the environment. Naming Extend clears Extend''s data and disables the environment.'
     HoneycombReceipt:
       type: object
-      required: [operation_id, environment_id, app_id, environment_revision, generation, key_version, state]
+      required: [operation_id, environment_id, app_id, environment_revision, generation, key_version, state, target_state, retired_apps, error]
       properties:
         operation_id: {type: string, format: uuid}
         environment_id: {type: string, format: uuid}
@@ -2106,5 +2524,9 @@ components:
         generation: {type: integer, minimum: 1}
         key_version: {type: integer, minimum: 1}
         state: {type: string, enum: [pending, completed, failed]}
-        target_state: {type: string}
-        error: {type: [string, 'null']}
+        target_state:
+          type: string
+          enum: [preparing, ready, cleaning, disabled, removed]
+          description: 'The state the environment is in once the operation completes (see applyHoneycombLifecycle)'
+        retired_apps: {type: array, items: {type: string}, description: Echoes the instruction's retired_apps (empty when none)}
+        error: {type: [string, 'null'], description: 'When failed: "<code>: <message>"'}

@@ -5,8 +5,8 @@ import { ifMatchValue, toApiError, type ApiError } from "../lib/api";
 import type { AccessGrant, ActivityEntry, ExtendRequest, Device, DeviceDetail, Takeover, Visibility } from "../lib/types";
 import { usePoll } from "../lib/poll";
 import { Link, navigate } from "../lib/router";
-import { OS_LABEL, POLL_MS } from "../config";
-import { activitySummary, clock, dateTime, day, duration, plural, relativeTime } from "../lib/format";
+import { DEVICE_KINDS, OS_LABEL, POLL_MS } from "../config";
+import { activitySummary, clock, dateTime, day, duration, plural, relativeTime, removedWhy } from "../lib/format";
 import { Button, DeviceIcon, ErrorNote, MemberTag, memberType, Modal, OnlineDot, Spinner, StatusDot, toast } from "../components/ui";
 import { devicesChanged } from "../lib/refresh";
 import { TtlSlider } from "../components/TtlSlider";
@@ -35,7 +35,8 @@ export default function DevicePage(props: { id: string }) {
     setDevice(null);
     load();
   }));
-  usePoll(load, POLL_MS);
+  // A removed device never changes again, so its page stops polling.
+  usePoll(load, POLL_MS, () => !device()?.removed_at);
 
   /** Sends a settings change with If-Match; on a stale version, reloads so the Carbon sees what changed. */
   async function patch(change: { name?: string; visibility?: Visibility; pair_ttl_days?: number }): Promise<ApiError | null> {
@@ -58,14 +59,14 @@ export default function DevicePage(props: { id: string }) {
   }
 
   return (
-    <section class="page device-page" data-testid="device-page">
+    <section class={`page device-page ${device()?.removed_at ? "removed" : ""}`} data-testid="device-page">
       <Link href="/devices" class="back-link">
         <ArrowLeft size={15} aria-hidden="true" /> All devices
       </Link>
       <ErrorNote error={loadError()} testid="device-load-error" />
       <Show when={device()} fallback={<Show when={!loadError()}><Spinner label="Loading the device…" /></Show>}>
         {(d) => (
-          <>
+          <Show when={!d().removed_at} fallback={<RemovedDevice device={d()} />}>
             <Header device={d()} patch={patch} />
             <Show when={d().state === "setup"}>
               <div class="card">
@@ -81,14 +82,14 @@ export default function DevicePage(props: { id: string }) {
             <Activity device={d()} />
             <Requests device={d()} />
             <DangerZone device={d()} etag={etag()} />
-          </>
+          </Show>
         )}
       </Show>
     </section>
   );
 }
 
-function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => Promise<ApiError | null> }) {
+function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => Promise<ApiError | null> }) {
   const [editing, setEditing] = createSignal(false);
   const [name, setName] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -101,6 +102,7 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
       setEditing(false);
       return;
     }
+    if (!props.patch) return;
     setBusy(true);
     const err = await props.patch({ name: value });
     setBusy(false);
@@ -115,16 +117,19 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
       <DeviceIcon device={d()} size={26} />
       <div class="device-header-main">
         <p class="eyebrow">
-          {d().kind === "tv" ? "TV" : d().kind === "computer" ? "Computer" : d().kind === "tablet" ? "Tablet" : "Phone"} · {d().visibility === "personal" ? "Only you see it" : `Visible in ${d().team ?? "the team"}`}
+          {d().kind === "tv" ? "TV" : d().kind === "computer" ? "Computer" : d().kind === "tablet" ? "Tablet" : "Phone"} ·{" "}
+          {d().removed_at ? "Removed" : d().visibility === "personal" ? "Only you see it" : `Visible in ${d().team ?? "the team"}`}
         </p>
         <Show
           when={editing()}
           fallback={
             <h1 class="page-title device-title">
               <span data-testid="device-name">{d().name}</span>
-              <button class="icon-button" aria-label="Rename" title="Rename" data-testid="rename" onClick={() => (setName(d().name), setEditing(true), setError(null))}>
-                <Pencil size={16} />
-              </button>
+              <Show when={props.patch}>
+                <button class="icon-button" aria-label="Rename" title="Rename" data-testid="rename" onClick={() => (setName(d().name), setEditing(true), setError(null))}>
+                  <Pencil size={16} />
+                </button>
+              </Show>
             </h1>
           }
         >
@@ -139,7 +144,9 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
           </form>
         </Show>
         <p class="device-meta">
-          <OnlineDot online={d().online} inUse={!!d().in_use} />
+          <Show when={!d().removed_at} fallback={<span class="badge muted" data-testid="removed-badge">Removed</span>}>
+            <OnlineDot online={d().online} inUse={!!d().in_use} paused={!!d().in_use?.paused} />
+          </Show>
           <span>
             {OS_LABEL[d().os] ?? d().os}
             {d().os_version ? ` ${d().os_version}` : ""}
@@ -151,13 +158,43 @@ function Header(props: { device: DeviceDetail; patch: (c: { name: string }) => P
               through <Link href={`/devices/${d().host_device_id}`}>{d().host_device_id}</Link>
             </span>
           </Show>
-          <Show when={!d().online && d().last_seen_at}>
+          <Show when={!d().removed_at && !d().online && d().last_seen_at}>
             <span>last seen {relativeTime(d().last_seen_at)}</span>
           </Show>
         </p>
         <ErrorNote error={error()} compact />
       </div>
     </header>
+  );
+}
+
+/**
+ * A removed device, as the Carbon who paired it still sees it: when and why it was removed, and its
+ * activity log and requests, read-only. Every change to it is refused by Extend, so none is offered.
+ */
+function RemovedDevice(props: { device: DeviceDetail }) {
+  const d = () => props.device;
+  const kind = () => DEVICE_KINDS.find((k) => k.os === d().os);
+  return (
+    <>
+      <Header device={d()} />
+      <div class="card removed-card" data-testid="removed-card">
+        <p class="eyebrow">Removed</p>
+        <p class="removed-line" data-testid="removed-why">
+          Removed on {dateTime(d().removed_at)} ({relativeTime(d().removed_at)}). {removedWhy(d())}.
+        </p>
+        <p class="fine">
+          Nothing on it can be changed or used any more, and no Silicon can reach it. Its activity log and requests below stay readable. To use the device again, pair it again.
+        </p>
+        <div class="removed-actions">
+          <Link href={kind() ? `/devices/new?kind=${kind()!.id}` : "/devices/new"} class="button secondary" data-testid="pair-again">
+            Pair it again
+          </Link>
+        </div>
+      </div>
+      <Activity device={d()} />
+      <Requests device={d()} />
+    </>
   );
 }
 
@@ -604,8 +641,11 @@ function Activity(props: { device: DeviceDetail }) {
                       {relativeTime(a.at)}
                     </time>
                     <span class="actor">
-                      <MemberTag type={a.actor.type} />
-                      <span>{a.actor.id}</span>
+                      {/* Extend itself (id "extend") acts for no member, e.g. when a pair expires: no Carbon tag. */}
+                      <Show when={a.actor.id !== "extend"} fallback={<span data-testid="actor-extend">Silicon Extend</span>}>
+                        <MemberTag type={a.actor.type} />
+                        <span>{a.actor.id}</span>
+                      </Show>
                     </span>
                     <span class="action">
                       {a.action === "command" && a.command ? (
@@ -695,6 +735,12 @@ function Requests(props: { device: DeviceDetail }) {
   );
 }
 
+/**
+ * Remove device. The copy says exactly what DELETE /devices/{id} does (domain::unpair): the running
+ * session ends, every Silicon's access goes, devices paired through it are removed with it, a device
+ * with its own Extend app is told to unpair (at once, or when it next connects), a device paired
+ * through a computer is dropped by that computer, and the activity log stays readable under Removed.
+ */
 function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
   const s = session();
   const [open, setOpen] = createSignal(false);
@@ -702,7 +748,9 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [children, setChildren] = createSignal<Device[]>([]);
+  const [hostName, setHostName] = createSignal<string | null>(null);
   const matches = () => typed().trim() === props.device.name.trim();
+  const d = () => props.device;
 
   async function openDialog() {
     setTyped("");
@@ -710,7 +758,8 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
     setOpen(true);
     try {
       const page = await s.client().listDevices({ scope: "mine", limit: 100 });
-      setChildren(page.items.filter((d) => d.host_device_id === props.device.device_id));
+      setChildren(page.items.filter((x) => x.host_device_id === d().device_id));
+      setHostName(page.items.find((x) => x.device_id === d().host_device_id)?.name ?? null);
     } catch {
       setChildren([]);
     }
@@ -720,9 +769,9 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
     setBusy(true);
     setError(null);
     try {
-      await s.client().removeDevice(props.device.device_id, ifMatchValue(props.etag, props.device.version));
+      await s.client().removeDevice(d().device_id, ifMatchValue(props.etag, d().version));
       setOpen(false);
-      toast(`Removed ${props.device.name}`);
+      toast(`Removed ${d().name}. Its activity log is under Removed.`);
       devicesChanged();
       navigate("/devices", { replace: true });
     } catch (e) {
@@ -732,27 +781,48 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
     }
   }
 
+  const access = () => d().access_count ?? 0;
+
   return (
     <div class="card danger" data-testid="danger-zone">
       <h2 class="card-title">Remove device.</h2>
-      <p class="fine">Ends any session, takes access away from every Silicon and unpairs the device. The activity log stays readable. To use it again you pair it again.</p>
+      <p class="fine">
+        Ends any session, takes access away from every Silicon and unpairs the device, and any device paired through it. Its activity log stays readable under Removed. To use it
+        again, pair it again.
+      </p>
       <Button variant="danger" class="quiet" onClick={openDialog} data-testid="remove-device">
-        <Trash2 size={16} aria-hidden="true" /> Remove {props.device.name}
+        <Trash2 size={16} aria-hidden="true" /> Remove {d().name}
       </Button>
-      <Modal open={open()} title={`Remove ${props.device.name}?`} onClose={() => setOpen(false)} testid="remove-dialog">
-        <ul class="consequences">
-          <Show when={props.device.in_use}>
-            <li>
-              <strong>{props.device.in_use!.silicon_id}</strong> is using it now; its session ends immediately.
-            </li>
+      <Modal open={open()} title={`Remove ${d().name}?`} onClose={() => setOpen(false)} testid="remove-dialog">
+        <ul class="consequences" data-testid="remove-consequences">
+          <Show when={d().in_use}>
+            {(u) => (
+              <li>
+                <strong>{u().silicon_id}</strong> {u().paused ? "handed it to you and is waiting" : "is using it now"}; its session ends immediately.
+              </li>
+            )}
           </Show>
-          <li>{props.device.access_count ? `${plural(props.device.access_count, "Silicon")} lose access.` : "Every Silicon loses access."}</li>
-          <li>The device unpairs and returns to its pairing screen.</li>
+          <Show when={access() > 0}>
+            <li data-testid="remove-access">{access() === 1 ? "1 Silicon loses access." : `${access()} Silicons lose access.`}</li>
+          </Show>
+          <Show
+            when={d().host_device_id}
+            fallback={
+              <li data-testid="remove-unpair">
+                {d().online
+                  ? "The Extend app on it unpairs now and shows a new pairing code."
+                  : "It's offline, so the Extend app on it unpairs the next time it connects, then shows a new pairing code."}
+              </li>
+            }
+          >
+            <li data-testid="remove-unpair">Extend stops reaching it through {hostName() ?? d().host_device_id}.</li>
+          </Show>
           <Show when={children().length}>
-            <li>
+            <li data-testid="remove-children">
               Also removed, because they pair through it: <strong>{children().map((c) => c.name).join(", ")}</strong>.
             </li>
           </Show>
+          <li>Its activity log stays readable: find it under Removed in your device list. To use the device again, pair it again.</li>
         </ul>
         <form
           onSubmit={(e) => {
@@ -761,7 +831,7 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
           }}
         >
           <label for="confirm-name">
-            Type <strong class="mono">{props.device.name}</strong> to confirm
+            Type <strong class="mono">{d().name}</strong> to confirm
           </label>
           <input id="confirm-name" autocomplete="off" value={typed()} onInput={(e) => setTyped(e.currentTarget.value)} data-testid="remove-confirm-input" />
           <ErrorNote error={error()} compact />

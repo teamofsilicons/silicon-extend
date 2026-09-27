@@ -261,7 +261,7 @@ class CommandExecutor(
     private fun a11y(): ExtendAccessibilityService = ExtendAccessibilityService.instance
         ?: throw CommandFailure(
             CommandFailure.NOT_READY,
-            "Silicon Extend's accessibility service isn't running. The Carbon turns it on in Settings › Accessibility › Silicon Extend.",
+            "Silicon Extend's accessibility service isn't running. The Carbon turns it on in Settings › Accessibility › ${com.teamofsilicons.extend.config.DeviceInfo.systemLabel(extend.context)}.",
         )
 
     private fun capture(): Capture = a11y().capture()
@@ -1051,7 +1051,36 @@ class CommandExecutor(
     }.getOrNull()
 
     private suspend fun tvRemote(cmd: Cmd.TvRemote): Outcome {
-        val a = a11y()
+        val b = cmd.button
+        if (b == "power") throw CommandFailure.unsupported(TvRemoteKeys.POWER_REFUSAL)
+        // With Android debugging connected every button is a real key press, so Menu works and
+        // so do TVs older than Android 13. Accessibility is the fallback.
+        var adbProblem: String? = null
+        if (extend.adb.connected) {
+            val command = TvRemoteKeys.command(b, cmd.longPress, cmd.durationMs, android.os.Build.VERSION.SDK_INT)
+            try {
+                val r = extend.adb.shell(command, check = false)
+                if (r.exitCode != 0) throw CommandFailure(
+                    CommandFailure.ACTION_FAILED,
+                    "Android's input command didn't press $b (exit ${r.exitCode}: ${r.text.trim().take(500).ifEmpty { "no output" }}). Try again; if it keeps failing, reconnect Android debugging in the Extend app.",
+                )
+                return Outcome(
+                    buildJsonObject {
+                        put("button", b); put("longpress", cmd.longPress); put("method", "adb_keyevent")
+                        put("keycode", TvRemoteKeys.KEYCODES.getValue(b))
+                    },
+                    "${if (cmd.longPress) "Long-pressed" else "Pressed"} $b",
+                )
+            } catch (e: java.io.IOException) {
+                Extend.log("tv-remote $b through Android debugging failed; trying accessibility", e)
+                adbProblem = e.message ?: e.javaClass.simpleName
+            }
+        }
+        val a = ExtendAccessibilityService.instance ?: throw CommandFailure(
+            CommandFailure.NOT_READY,
+            (adbProblem?.let { "Android debugging failed while pressing $b ($it), and " } ?: "") +
+                "Silicon Extend's accessibility service isn't running. The Carbon turns it on in Settings › Accessibility › ${com.teamofsilicons.extend.config.DeviceInfo.systemLabel(extend.context)}, or connects Android debugging in the Extend app.",
+        )
         val dpad = mapOf(
             "up" to AccessibilityService.GLOBAL_ACTION_DPAD_UP,
             "down" to AccessibilityService.GLOBAL_ACTION_DPAD_DOWN,
@@ -1059,7 +1088,6 @@ class CommandExecutor(
             "right" to AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT,
             "select" to AccessibilityService.GLOBAL_ACTION_DPAD_CENTER,
         )
-        val b = cmd.button
         fun done(method: String) = Outcome(
             buildJsonObject { put("button", b); put("longpress", cmd.longPress); put("method", method) },
             "${if (cmd.longPress) "Long-pressed" else "Pressed"} $b",
@@ -1073,13 +1101,15 @@ class CommandExecutor(
                 throw CommandFailure(CommandFailure.ACTION_FAILED, "Nothing focused on screen accepts a long press of select.")
             }
             throw CommandFailure.unsupported(
-                "Android lets the Extend app press $b but not hold it (an accessibility service can't send held keys); use tv-remote press $b.",
+                "Holding $b needs Android debugging (an accessibility service can't send held keys). Connect Android debugging in the Extend app's setup, or use tv-remote press $b.",
             )
         }
         when (b) {
             in dpad -> {
                 if (!ExtendAccessibilityService.dpadSupported) {
-                    throw CommandFailure.unsupported("D-pad buttons need Android 13 or later on the TV.")
+                    throw CommandFailure.unsupported(
+                        "D-pad buttons need Android debugging on this TV (Android ${android.os.Build.VERSION.RELEASE}; accessibility has D-pad actions only from Android 13). Connect Android debugging in the Extend app's setup.",
+                    )
                 }
                 if (!a.global(dpad.getValue(b))) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the $b button.")
                 return done("global_action")
@@ -1103,10 +1133,8 @@ class CommandExecutor(
                 return done("audio_manager")
             }
             "menu" -> throw CommandFailure.unsupported(
-                "Android doesn't let an accessibility service send the Menu key; it needs Android debugging, which this version of the app doesn't include.",
-            )
-            "power" -> throw CommandFailure.unsupported(
-                "The Extend app won't press power: it could turn the TV off, and nothing on the TV could turn it back on without Android debugging.",
+                (adbProblem?.let { "Android debugging failed while pressing menu ($it). " } ?: "") +
+                    "The Menu key needs Android debugging (an accessibility service can't send it). Connect Android debugging in the Extend app's setup, then try again.",
             )
         }
         throw CommandFailure.invalid("Unknown remote button $b")

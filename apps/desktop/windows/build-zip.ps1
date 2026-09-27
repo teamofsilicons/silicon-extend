@@ -5,6 +5,7 @@
 # Layout:
 #   Silicon Extend\extend-agent.exe     the app (tray icon; `extend-agent.exe run --headless` for servers)
 #   Silicon Extend\README.txt
+#   Silicon Extend\LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt
 #
 # Windows uses Extend's own driver (UI Automation, SendInput, GDI capture), so no Node or
 # agent-device ships with it. The window uses WebView2, which Windows 10 and 11 already have.
@@ -34,6 +35,7 @@ Silicon Extend $Version for Windows
 
 A Silicon can't use this computer while it is locked, and admin prompts always need you.
 "@ | Set-Content -Encoding UTF8 (Join-Path $Stage "README.txt")
+foreach ($Name in "LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt") { Copy-Item (Join-Path $Root $Name) $Stage }
 
 $Zip = Join-Path $Out "Silicon-Extend-$Version-windows-$Arch.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue

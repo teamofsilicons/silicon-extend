@@ -19,7 +19,11 @@ and readable only by the user.
 ## iPhone and iPad (`ios.rs`)
 
 Each command runs `<agent_device argv> <command> <args> --platform ios --udid <udid> --json --session extend-<session id>`.
+The flags Extend adds go before a `--` in the Silicon's arguments, since agent-device reads every
+token after it as text (`type -- --json` types "--json").
 
+- `record start --quality normal|high` (`cli.yaml`) is passed as agent-device's `medium|high`
+  (`medium` is accepted too); anything else is refused with the two values to use.
 - Refuses agent-device's reserved flags (`--udid`, `--platform`, `--session`, …) and the commands
   Extend doesn't expose (`devices` → "use `extend device ls`", code `unknown_command`).
 - Files come back as `LocalFile`s by handing agent-device explicit paths in the workdir:

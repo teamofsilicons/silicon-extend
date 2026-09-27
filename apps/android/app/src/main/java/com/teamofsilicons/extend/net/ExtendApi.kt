@@ -22,8 +22,20 @@ import okhttp3.Response
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
-/** An HTTP answer that wasn't a success, with the service's error `code` when it sent one. */
-class ApiException(val status: Int, val code: String?, message: String) : Exception(message)
+/**
+ * An HTTP answer that wasn't a success, with the service's error `code`, its `hint` and, for
+ * `rate_limited`, how long to wait (`details.retry_after_s`, or a `Retry-After` header).
+ */
+class ApiException(
+    val status: Int,
+    val code: String?,
+    message: String,
+    val hint: String? = null,
+    val retryAfterS: Long? = null,
+) : Exception(message) {
+    /** Extend (or something in front of it) answered 429: it was reachable, and is limiting requests. */
+    val rateLimited: Boolean get() = status == 429 || code == "rate_limited"
+}
 
 /** The HTTP endpoints an Extend app uses (`docs/device-protocol.md` sections 1–3). */
 class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = defaultClient()) {
@@ -154,14 +166,7 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
 
     private fun toApiException(response: Response): ApiException {
         val body = runCatching { response.body?.string() }.getOrNull().orEmpty()
-        val obj = Frames.parseObject(body)
-        val code = (obj?.get("code") as? JsonPrimitive)?.contentOrNull
-        val message = (obj?.get("message") as? JsonPrimitive)?.contentOrNull
-        return ApiException(
-            response.code,
-            code,
-            message ?: "HTTP ${response.code} from ${response.request.method} ${response.request.url.encodedPath}",
-        )
+        return errorOf(response.code, body, response.header("Retry-After"), "${response.request.method} ${response.request.url.encodedPath}")
     }
 
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
@@ -184,6 +189,25 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
         fun headerSafeName(name: String): String {
             val safe = name.map { c -> if (c in ' '..'~' && c != '/' && c != '\\') c else '_' }.joinToString("").trim().take(255)
             return safe.ifEmpty { "file" }
+        }
+
+        /**
+         * The service's error envelope (`{"type":"error","data":{code,message,hint,details}}`) as an
+         * [ApiException]. [retryAfterHeader] is used when the body gives no `details.retry_after_s`.
+         */
+        fun errorOf(status: Int, body: String, retryAfterHeader: String?, what: String): ApiException {
+            val obj = Frames.parseObject(body)
+            fun text(o: JsonObject?, key: String) = (o?.get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            val details = obj?.get("details") as? JsonObject
+            val retry = (details?.get("retry_after_s") as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.let { kotlin.math.ceil(it).toLong() }
+                ?: retryAfterHeader?.trim()?.toLongOrNull()
+            return ApiException(
+                status,
+                text(obj, "code"),
+                text(obj, "message") ?: "HTTP $status from $what",
+                text(obj, "hint"),
+                retry?.takeIf { it >= 0 },
+            )
         }
 
         fun sha256Hex(bytes: ByteArray): String =

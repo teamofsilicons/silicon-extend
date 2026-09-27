@@ -132,7 +132,7 @@ fun LicencesScreen(onClose: () -> Unit) {
         ) {
             item {
                 Column(Modifier.widthIn(max = s.column).fillMaxWidth().padding(bottom = 10.dp)) {
-                    Eyebrow("Silicon Extend ${com.teamofsilicons.extend.BuildConfig.VERSION_NAME}")
+                    Eyebrow("${com.teamofsilicons.extend.config.DeviceInfo.appName(s.tv)} ${com.teamofsilicons.extend.BuildConfig.VERSION_NAME}")
                     Gap(8.dp)
                     Title("Open-source licences")
                     Gap(6.dp)

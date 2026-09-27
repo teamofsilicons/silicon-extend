@@ -33,7 +33,9 @@ class MainActivity : ComponentActivity() {
         val scrim = Tokens.Paper.copy(alpha = 0.9f).toArgb()
         enableEdgeToEdge(SystemBarStyle.light(paper, paper), SystemBarStyle.light(scrim, scrim))
         super.onCreate(savedInstanceState)
-        applyTestOverrides(intent)
+        // Only for a fresh launch: when the activity is recreated (rotation, a density or font
+        // change) its launch intent would otherwise re-apply `forget_pair` and unpair the device.
+        if (savedInstanceState == null) applyTestOverrides(intent)
         ExtendForegroundService.createChannels(this)
         ExtendForegroundService.start(this)
         setContent {
@@ -62,6 +64,8 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         applyTestOverrides(intent)
+        // Consumed: a later recreation must not apply it again.
+        setIntent(Intent(intent).apply { replaceExtras(Bundle()) })
     }
 
     override fun onResume() {

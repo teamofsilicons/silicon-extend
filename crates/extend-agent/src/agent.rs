@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::config::{APP_VERSION, Config};
 use crate::credential::{CredentialStore, StoredCredential, load_for};
 use crate::dispatch::{Dispatcher, DriverLookup, Outbox, Uploader};
+use crate::drivers::screen_lock::ScreenBlock;
 use crate::enroll::{self, EnrollOutcome, sleep_or_shutdown};
 use crate::hosted::{AttachRecord, DriverFactory, HostedRegistry};
 use crate::service::ServiceClient;
@@ -40,6 +41,13 @@ pub enum UiAction {
     Reprobe,
 }
 
+/// Says whether this computer's screen can be used right now
+/// ([`crate::drivers::screen_lock::current`]).
+pub type ScreenWatch = Arc<dyn Fn() -> Option<ScreenBlock> + Send + Sync>;
+
+/// How often the agent asks [`ScreenWatch`] whether the screen was locked or unlocked.
+pub const SCREEN_WATCH_EVERY: Duration = Duration::from_secs(3);
+
 pub struct AgentDeps {
     pub config: Config,
     pub local: Arc<dyn Driver>,
@@ -47,6 +55,10 @@ pub struct AgentDeps {
     pub credentials: Arc<dyn CredentialStore>,
     /// How often capabilities are re-checked (30 s; faster while setup is incomplete).
     pub probe_interval: Duration,
+    /// Checked every [`SCREEN_WATCH_EVERY`]: when the screen is locked, unlocked, falls asleep or
+    /// wakes, this computer is checked again at once, so Extend hears within seconds what a
+    /// Silicon can do now. `None` checks only on the probe interval.
+    pub screen_watch: Option<ScreenWatch>,
 }
 
 /// What the UI keeps to talk to the agent.
@@ -70,8 +82,10 @@ pub struct Agent {
     actions: mpsc::UnboundedReceiver<UiAction>,
     shutdown: CancellationToken,
     probe_interval: Duration,
-    /// Set when this computer should be checked again now (a session's setup or cleanup ran).
+    /// Set when this computer should be checked again now (a session's setup or cleanup ran, or
+    /// the screen was locked or unlocked).
     reprobe: Arc<tokio::sync::Notify>,
+    screen_watch: Option<ScreenWatch>,
 }
 
 /// How a paired stretch ended.
@@ -133,6 +147,7 @@ impl Agent {
             hosted_factory,
             credentials,
             probe_interval,
+            screen_watch,
         } = deps;
         let service = ServiceClient::new(config.service_url.clone());
         let status = StatusHandle::new(AgentStatus {
@@ -182,6 +197,7 @@ impl Agent {
             shutdown,
             probe_interval,
             reprobe: Arc::new(tokio::sync::Notify::new()),
+            screen_watch,
         };
         (agent, handle)
     }
@@ -190,6 +206,14 @@ impl Agent {
     pub async fn run(mut self) {
         let _ = tokio::fs::remove_dir_all(self.config.work_dir()).await;
         tokio::spawn(crate::status::persist(self.status.clone(), self.config.status_path()));
+        if let Some(watch) = self.screen_watch.clone() {
+            tokio::spawn(watch_screen(
+                watch,
+                self.reprobe.clone(),
+                self.shutdown.clone(),
+                SCREEN_WATCH_EVERY,
+            ));
+        }
         self.hosted.restore();
         // The first probe fills in what the window shows while pairing.
         let probe = self.probe_local().await;
@@ -875,6 +899,39 @@ impl Agent {
             s.missing = p.missing.clone();
             s.setup = Some(p.setup.clone());
         });
+    }
+}
+
+/// Asks `watch` every `every` whether the screen can be used, and has this computer checked again
+/// whenever the answer changes (locked, unlocked, asleep, awake).
+async fn watch_screen(
+    watch: ScreenWatch,
+    reprobe: Arc<tokio::sync::Notify>,
+    shutdown: CancellationToken,
+    every: Duration,
+) {
+    let read = |w: ScreenWatch| async move { tokio::task::spawn_blocking(move || w()).await.ok().flatten() };
+    let mut last = read(watch.clone()).await;
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = tokio::time::sleep(every) => {}
+        }
+        let now = read(watch.clone()).await;
+        if now != last {
+            tracing::info!("screen: {} → {}", describe_screen(last), describe_screen(now));
+            last = now;
+            reprobe.notify_one();
+        }
+    }
+}
+
+fn describe_screen(s: Option<ScreenBlock>) -> &'static str {
+    match s {
+        None => "usable",
+        Some(ScreenBlock::Locked) => "locked",
+        Some(ScreenBlock::OtherSession) => "another account",
+        Some(ScreenBlock::Asleep) => "asleep",
     }
 }
 

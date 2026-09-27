@@ -14,7 +14,8 @@ interface Command {
   summary: string | null;
   takes: Json;
   gives: Json;
-  errors: string[] | null;
+  /** Error codes, a sentence, or both: scripts/docs-model.mjs normalises every shape cli.yaml uses. */
+  errors: { codes: string[]; note: string | null } | null;
   api: string | null;
   notes: string | null;
   device: boolean;
@@ -139,6 +140,10 @@ function Start() {
       </p>
 
       <h2 id="carbons">If you are a Carbon</h2>
+      <p>
+        Sign in on this website with Silicon IAM. New to Silicon IAM? Choose <strong>Create an account</strong> on the sign-in page: IAM checks your email and phone, creates your account and
+        signs you in with a code, then asks you to approve Extend and sends you back here.
+      </p>
       <h3>1. Pair a device</h3>
       <ol class="numbered">
         <li>
@@ -164,7 +169,10 @@ function Start() {
       <ul>
         <li>Take a Silicon's access away at any time. If it is using the device, its session ends at once.</li>
         <li>A device unpairs itself after 1 to 30 days without activity (14 by default). Set this per device.</li>
-        <li>Remove a device from its page, or choose Revoke pair in the Extend app on the device.</li>
+        <li>
+          Remove a device from its page, or choose Revoke pair in the Extend app on the device. Nothing on a removed device can be changed or used, but its activity log stays readable under{" "}
+          <strong>Removed</strong> in your device list. To use it again, pair it again.
+        </li>
       </ul>
 
       <h2 id="silicons">If you are a Silicon</h2>
@@ -305,7 +313,7 @@ function CliReference() {
     environment: Record<string, string>;
     state_files: string[];
     exit_codes: Record<string, string>;
-    errors: { code: string; exit: number; meaning: string }[];
+    errors: { code: string; exit: number | null; meaning: string }[];
     groups: { title: string; device: boolean; commands: Command[] }[];
     not_exposed: { summary: string; replaced: Record<string, string>; left_out: string[] };
     examples: Record<string, string>;
@@ -427,9 +435,18 @@ function CliReference() {
                     </div>
                   </Show>
                   <Show when={c.errors}>
-                    <p class="fine">
-                      Errors: <code>{c.errors!.join(", ")}</code>
-                    </p>
+                    {(e) => (
+                      <p class="fine" data-testid="cli-command-errors">
+                        Errors:{" "}
+                        <Show when={e().codes.length}>
+                          <code>{e().codes.join(", ")}</code>
+                          <Show when={e().note}>. </Show>
+                        </Show>
+                        <Show when={e().note}>
+                          <Inline text={e().note!} />
+                        </Show>
+                      </p>
+                    )}
                   </Show>
                   <Show when={c.notes}>
                     <p class="fine">
@@ -470,7 +487,7 @@ function CliReference() {
                   <td>
                     <code>{e.code}</code>
                   </td>
-                  <td>{e.exit}</td>
+                  <td>{e.exit ?? "—"}</td>
                   <td>
                     <Inline text={e.meaning} />
                   </td>

@@ -1,14 +1,18 @@
 //! Health, version negotiation, contract discovery and public IAM details.
 
+use std::sync::Arc;
+
+use axum::Extension;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use extend_protocol::model::{IamInfo, TestingEnvironment, VersionInfo};
-use extend_protocol::{API_VERSION, API_VERSION_HEADER, ErrorCode, SUPPORTED_VERSIONS_HEADER, TESTING_SECRET_HEADER};
+use extend_protocol::{API_VERSION_HEADER, ErrorCode, SUPPORTED_VERSIONS_HEADER, TESTING_SECRET_HEADER};
 
 use super::ok;
 use crate::error::{AppError, AppResult};
 use crate::state::Shared;
+use crate::versions::{Lifecycle, Registry, path_major};
 
 pub async fn live() -> StatusCode {
     StatusCode::NO_CONTENT
@@ -24,53 +28,70 @@ pub async fn ready(State(state): State<Shared>) -> Response {
     }
 }
 
-pub async fn negotiate(headers: HeaderMap) -> AppResult<Response> {
+pub async fn negotiate(Extension(versions): Extension<Arc<Registry>>, headers: HeaderMap) -> AppResult<Response> {
+    // A client too old to send the header predates every major after 1.
     let raw = headers
         .get(SUPPORTED_VERSIONS_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("1");
     let theirs: Vec<u32> = raw.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    let ours = [API_VERSION];
-    let agreed = theirs
-        .iter()
-        .copied()
-        .filter(|v| ours.contains(v))
-        .max()
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ApiVersionUnsupported,
-                format!("No API version in common: the client supports {theirs:?}, Extend supports {ours:?}."),
-            )
-            .hint("Update the CLI with `honeycomb install 'extend'`.")
-            .details(serde_json::json!({"client": theirs, "service": ours}))
-        })?;
+    let ours = versions.negotiable();
+    let Some(agreed) = theirs.iter().copied().filter(|v| ours.contains(v)).max() else {
+        // A client that only speaks retired majors is told why and what to do.
+        if let Some(m) = theirs
+            .iter()
+            .filter_map(|v| versions.majors().iter().find(|m| m.api_version == *v).cloned())
+            .filter(|m| m.state == Lifecycle::Sunset)
+            .max_by_key(|m| m.api_version)
+        {
+            let theirs_list = theirs.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+            let mut resp = versions
+                .sunset_error(
+                    &m,
+                    &format!("Extend no longer offers it. This client speaks only {theirs_list}."),
+                )
+                .into_response();
+            resp.headers_mut()
+                .insert("vary", HeaderValue::from_static(SUPPORTED_VERSIONS_HEADER));
+            return Ok(resp);
+        }
+        return Err(AppError::new(
+            ErrorCode::ApiVersionUnsupported,
+            format!("No API version in common: the client supports {theirs:?}, Extend supports {ours:?}."),
+        )
+        .hint("Update the CLI with `honeycomb install 'extend'`.")
+        .details(serde_json::json!({"client": theirs, "service": ours})));
+    };
     let mut resp = ok(
         "version",
         VersionInfo {
             api_version: agreed,
-            supported: ours.to_vec(),
+            supported: ours,
             service_version: env!("CARGO_PKG_VERSION").into(),
-            deprecated: vec![],
+            deprecated: versions.deprecated(),
         },
     );
     resp.headers_mut().insert(API_VERSION_HEADER, HeaderValue::from(agreed));
     resp.headers_mut()
         .insert("vary", HeaderValue::from_static(SUPPORTED_VERSIONS_HEADER));
+    if let Some(m) = versions.major(agreed) {
+        for (name, value) in versions.deprecation_headers(&m) {
+            resp.headers_mut().insert(name, value);
+        }
+    }
     Ok(resp)
 }
 
-pub async fn contracts() -> Response {
+/// The compatibility matrix, built from the lifecycle state and configuration (see
+/// `crate::versions`): every major with its state, and the client, CLI and app versions that work.
+pub async fn contracts(
+    State(state): State<Shared>,
+    Extension(versions): Extension<Arc<Registry>>,
+    uri: Uri,
+) -> Response {
     ok(
         "contracts",
-        serde_json::json!({
-            "versions": [{
-                "api_version": API_VERSION,
-                "state": "current",
-                "deprecated_at": null,
-                "sunset_rule": "Sunset after 7 consecutive days with zero requests",
-                "compatible": {"client_crate": ">=1.0.0, <2.0.0", "cli": ">=1.0.0, <2.0.0", "device_app_min": "1.0.0"}
-            }]
-        }),
+        versions.matrix(&state.cfg.device_app_min_version, path_major(uri.path())),
     )
 }
 

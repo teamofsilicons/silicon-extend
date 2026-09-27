@@ -86,4 +86,9 @@ object Capabilities {
     const val RECORD_REASON = "Connect Android debugging in the Extend app's setup to enable screen recording."
     const val ADB_REASON = "{what} needs Android debugging. Turn on Wireless or Network debugging, then connect it in the Extend app's setup."
     fun adbReason(what: String) = ADB_REASON.replace("{what}", what)
+
+    /** Debugging was connected, then the device restarted and Android turned Wireless debugging off. */
+    fun afterRestartReason(what: String, tv: Boolean) =
+        "$what needs Android debugging, and Android turned Wireless debugging off when this ${if (tv) "TV" else "phone"} restarted. " +
+            "The Carbon turns it back on in Settings › System › Developer options › Wireless debugging; Extend then reconnects by itself."
 }

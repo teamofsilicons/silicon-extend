@@ -1,7 +1,8 @@
 //! Everything the CLI keeps on disk, under `{home}/.extend/` (`understanding/cli.yaml`, state_files).
 //!
 //! `home` is `$SILICON_HOME`, else the user's home directory. `extend config home <dir>` moves the
-//! state; the chosen directory is recorded in `{default}/.extend/home` so later runs find it.
+//! state to `<dir>/.extend`; the chosen directory is recorded in `{default}/.extend/home` so later
+//! runs find it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -26,32 +27,113 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The file in the default state directory that says where state lives instead.
+fn pointer() -> PathBuf {
+    default_root().join("home")
+}
+
 /// The directory state actually lives in.
 pub fn root() -> PathBuf {
-    let default = default_root();
-    match fs::read_to_string(default.join("home")) {
+    match fs::read_to_string(pointer()) {
         Ok(p) if !p.trim().is_empty() => PathBuf::from(p.trim()).join(".extend"),
-        _ => default,
+        _ => default_root(),
     }
 }
 
-pub fn set_home(dir: &Path) -> anyhow::Result<PathBuf> {
+/// Where state would live for home directory `dir`, which must exist.
+pub fn root_for_home(dir: &Path) -> anyhow::Result<PathBuf> {
     if !dir.is_dir() {
         bail!("not a directory: {}", dir.display());
     }
-    let dir = dir.canonicalize()?;
+    Ok(dir
+        .canonicalize()
+        .with_context(|| format!("reading {}", dir.display()))?
+        .join(".extend"))
+}
+
+/// Makes `new_root` (a `<dir>/.extend`) where later runs keep state.
+pub fn point_to(new_root: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(new_root).with_context(|| format!("creating {}", new_root.display()))?;
     let default = default_root();
-    fs::create_dir_all(&default)?;
-    write_private(&default.join("home"), dir.to_string_lossy().as_bytes())?;
-    let new_root = dir.join(".extend");
-    fs::create_dir_all(&new_root)?;
-    Ok(new_root)
+    let same = |a: &Path, b: &Path| {
+        a.canonicalize()
+            .ok()
+            .zip(b.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b)
+    };
+    if same(new_root, &default) {
+        // Back to the default: no pointer needed.
+        let _ = fs::remove_file(pointer());
+        return Ok(());
+    }
+    let home = new_root.parent().context("a state directory has a parent")?;
+    write_private(&pointer(), home.to_string_lossy().as_bytes())
+}
+
+/// The state files and directories, relative to the state directory.
+pub const STATE_ENTRIES: &[&str] = &["auth.json", "config.toml", "test", "sessions"];
+
+/// Which of [`STATE_ENTRIES`] exist in `root`.
+pub fn state_in(root: &Path) -> Vec<&'static str> {
+    STATE_ENTRIES
+        .iter()
+        .copied()
+        .filter(|e| root.join(e).exists())
+        .collect()
+}
+
+/// Copies the state in `from` to `to` (files stay private to the user). Returns what it copied.
+pub fn copy_state(from: &Path, to: &Path) -> anyhow::Result<Vec<&'static str>> {
+    let entries = state_in(from);
+    for e in &entries {
+        copy_tree(&from.join(e), &to.join(e))?;
+    }
+    Ok(entries)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<()> {
+    if from.is_dir() {
+        fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = fs::set_permissions(to, fs::Permissions::from_mode(0o700));
+        }
+        for entry in fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            // Unfinished writes and locks belong to the running process only.
+            if name.to_string_lossy().contains(".tmp") || name.to_string_lossy().ends_with(".lock") {
+                continue;
+            }
+            copy_tree(&entry.path(), &to.join(name))?;
+        }
+        Ok(())
+    } else {
+        let bytes = fs::read(from).with_context(|| format!("reading {}", from.display()))?;
+        write_private(to, &bytes)
+    }
+}
+
+/// Deletes `entries` from `root`, and `root` itself if nothing else is left in it.
+pub fn remove_state(root: &Path, entries: &[&str]) -> anyhow::Result<()> {
+    for e in entries {
+        let p = root.join(e);
+        if p.is_dir() {
+            fs::remove_dir_all(&p).with_context(|| format!("removing {}", p.display()))?;
+        } else if p.exists() {
+            fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
+        }
+    }
+    // Only succeeds when it's empty; the default directory keeps the pointer file.
+    let _ = fs::remove_dir(root);
+    Ok(())
 }
 
 /// Writes a file readable only by the user, atomically (write, sync, rename).
 pub fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -71,7 +153,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    fs::rename(&tmp, path)?;
+    fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
@@ -97,16 +179,22 @@ pub enum Plane {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TestEnv {
+    /// Saved by `extend config test add`. Empty when the environment is used through
+    /// `EXTEND_TEST_SECRET`, which is never written to disk.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub secret: String,
     pub name: Option<String>,
     pub auth: Option<Auth>,
+    /// Digest of an `EXTEND_TEST_SECRET` already checked to belong to this environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_env_secret: Option<String>,
 }
 
 impl Plane {
     pub fn auth_path(&self) -> PathBuf {
         match self {
             Plane::Production => root().join("auth.json"),
-            Plane::Test { id, .. } => root().join("test").join(format!("{id}.json")),
+            Plane::Test { id, .. } => test_path(id),
         }
     }
     pub fn is_test(&self) -> bool {
@@ -114,19 +202,28 @@ impl Plane {
     }
 }
 
-pub fn load_test(id: &str) -> anyhow::Result<TestEnv> {
-    let path = root().join("test").join(format!("{id}.json"));
-    let raw = fs::read(&path).with_context(|| {
-        format!("test environment {id} is not added (run `extend config test add {id}` and paste its app secret)")
-    })?;
-    Ok(serde_json::from_slice(&raw)?)
+fn test_path(id: &str) -> PathBuf {
+    root().join("test").join(format!("{id}.json"))
+}
+
+/// The saved test environment `id`, or `None` when it was never added or used.
+pub fn find_test(id: &str) -> anyhow::Result<Option<TestEnv>> {
+    let path = test_path(id);
+    match fs::read(&path) {
+        Ok(raw) => Ok(Some(
+            serde_json::from_slice(&raw).with_context(|| format!("reading {}", path.display()))?,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
 }
 
 pub fn save_test(id: &str, env: &TestEnv) -> anyhow::Result<()> {
-    write_private(
-        &root().join("test").join(format!("{id}.json")),
-        &serde_json::to_vec_pretty(env)?,
-    )
+    write_private(&test_path(id), &serde_json::to_vec_pretty(env)?)
+}
+
+pub fn remove_test(id: &str) -> bool {
+    fs::remove_file(test_path(id)).is_ok()
 }
 
 pub fn list_tests() -> Vec<(String, TestEnv)> {
@@ -149,7 +246,7 @@ pub fn list_tests() -> Vec<(String, TestEnv)> {
 pub fn load_auth(plane: &Plane) -> Option<Auth> {
     match plane {
         Plane::Production => serde_json::from_slice(&fs::read(plane.auth_path()).ok()?).ok(),
-        Plane::Test { id, .. } => load_test(id).ok()?.auth,
+        Plane::Test { id, .. } => find_test(id).ok()??.auth,
     }
 }
 
@@ -163,7 +260,7 @@ pub fn save_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
             }
         },
         Plane::Test { id, .. } => {
-            let mut env = load_test(id)?;
+            let mut env = find_test(id)?.unwrap_or_default();
             env.auth = auth.cloned();
             save_test(id, &env)
         }
@@ -206,22 +303,59 @@ impl Drop for Lock {
 
 // ── config.toml: flat `key = "value"` lines ──
 
-pub const CONFIG_KEYS: &[(&str, &str)] = &[
-    (
-        "api_url",
-        "Extend service URL (default https://backend.extend.teamofsilicons.com)",
-    ),
-    ("telemetry", "on|off (default on)"),
-    ("output", "text|json (default text)"),
-    ("team", "default team handle"),
-    ("screenshot_scale", "0.01–1, used when screenshot has no --scale"),
-    (
-        "self_destruct",
-        "default file self-destruct, like 1d, 90m, 30d (1m–30d, default 1d)",
-    ),
-    ("download_dir", "where --out and `extend file get` save by default"),
-    ("color", "auto|always|never"),
+/// One setting: its key, what it does and takes, and its default.
+pub struct Setting {
+    pub key: &'static str,
+    pub about: &'static str,
+    pub default: &'static str,
+}
+
+pub const SETTINGS: &[Setting] = &[
+    Setting {
+        key: "api_url",
+        about: "Extend service URL: https, or http for a local address only",
+        default: "https://backend.extend.teamofsilicons.com",
+    },
+    Setting {
+        key: "telemetry",
+        about: "on|off",
+        default: "on",
+    },
+    Setting {
+        key: "output",
+        about: "text|json; json makes --json the default",
+        default: "text",
+    },
+    Setting {
+        key: "team",
+        about: "default team handle (a team this login reaches)",
+        default: "the first team of the login",
+    },
+    Setting {
+        key: "screenshot_scale",
+        about: "0.01–1, used when screenshot has no --scale",
+        default: "1",
+    },
+    Setting {
+        key: "self_destruct",
+        about: "default file self-destruct, 1m–30d, like 90m, 12h, 7d",
+        default: "1d",
+    },
+    Setting {
+        key: "download_dir",
+        about: "an existing directory where `extend file get` saves without --out",
+        default: "the current directory",
+    },
+    Setting {
+        key: "color",
+        about: "auto|always|never; auto colours a terminal unless NO_COLOR is set",
+        default: "auto",
+    },
 ];
+
+pub fn setting(key: &str) -> Option<&'static Setting> {
+    SETTINGS.iter().find(|s| s.key == key)
+}
 
 pub fn load_config() -> BTreeMap<String, String> {
     let Ok(raw) = fs::read_to_string(root().join("config.toml")) else {
@@ -249,6 +383,13 @@ pub fn save_config(cfg: &BTreeMap<String, String>) -> anyhow::Result<()> {
 
 // ── Sessions ──
 
+/// Why the connected device can't do something, as the service said at the last refresh.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MissingNote {
+    pub capability: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCache {
     pub session_id: String,
@@ -258,6 +399,11 @@ pub struct SessionCache {
     pub capabilities: Vec<String>,
     pub commands: Vec<String>,
     pub test_id: Option<String>,
+    #[serde(default)]
+    pub missing: Vec<MissingNote>,
+    /// Unix seconds of the last refresh from the service.
+    #[serde(default)]
+    pub refreshed_at: i64,
 }
 
 fn sessions_dir(plane: &Plane) -> PathBuf {
@@ -294,4 +440,49 @@ pub fn save_session_cache(plane: &Plane, c: &SessionCache) -> anyhow::Result<()>
 
 pub fn load_session_cache(plane: &Plane, id: &str) -> Option<SessionCache> {
     serde_json::from_slice(&fs::read(sessions_dir(plane).join(format!("{id}.json"))).ok()?).ok()
+}
+
+pub fn remove_session_cache(plane: &Plane, id: &str) {
+    let _ = fs::remove_file(sessions_dir(plane).join(format!("{id}.json")));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_state_moves_login_settings_tests_and_sessions_but_not_locks() {
+        let base = std::env::temp_dir().join(format!("extend-store-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (from, to) = (base.join("old/.extend"), base.join("new/.extend"));
+        write_private(&from.join("auth.json"), b"{\"member_id\":\"si:chef\"}").unwrap();
+        write_private(&from.join("config.toml"), b"telemetry = \"off\"\n").unwrap();
+        write_private(&from.join("test/9b3e.json"), b"{}").unwrap();
+        write_private(&from.join("sessions/current"), b"a3f").unwrap();
+        write_private(&from.join("sessions/test-9b3e/current"), b"b4c").unwrap();
+        fs::write(from.join("refresh.lock"), b"").unwrap();
+        fs::write(from.join("home"), b"/elsewhere").unwrap();
+
+        let copied = copy_state(&from, &to).unwrap();
+        assert_eq!(copied, vec!["auth.json", "config.toml", "test", "sessions"]);
+        assert_eq!(
+            fs::read_to_string(to.join("config.toml")).unwrap(),
+            "telemetry = \"off\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(to.join("sessions/test-9b3e/current")).unwrap(),
+            "b4c"
+        );
+        assert!(!to.join("refresh.lock").exists() && !to.join("home").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(to.join("auth.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        remove_state(&from, &copied).unwrap();
+        assert!(state_in(&from).is_empty());
+        assert!(from.join("home").exists(), "the pointer file is not state");
+        let _ = fs::remove_dir_all(base);
+    }
 }

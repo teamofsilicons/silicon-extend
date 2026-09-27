@@ -15,6 +15,20 @@ env = dict(os.environ, AGENT_DEVICE_STATE_DIR=str(work/'daemon'))
 cli = ['node', str(root/'vendor/agent-device/bin/agent-device.mjs'), '--state-dir', str(work/'daemon'), '--session', 'linux-recording', '--platform', 'linux']
 fixture = subprocess.Popen(['python3', str(root/'apps/desktop/linux-e2e/record-fixture.py')])
 
+def encoder_bit_rate(under):
+    """The -b:v the running recorder's encoder was started with (from its status file)."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for status in Path(under).rglob('*.status.json'):
+            try:
+                pid = json.loads(status.read_text())['encoderPid']
+                argv = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+            except (OSError, ValueError, KeyError):
+                continue
+            return argv[argv.index(b'-b:v') + 1].decode()
+        time.sleep(.1)
+    raise AssertionError(f'no running recorder under {under}')
+
 def command(*args):
     result = subprocess.run([*cli,*args,'--json'], env=env,capture_output=True,text=True,timeout=60)
     print(' '.join(args), result.stdout.strip(), result.stderr.strip(), flush=True)
@@ -35,12 +49,14 @@ try:
     assert not output.with_name('public.native.mp4').exists(), 'native recording was not retired after export'
     assert not list(work.glob('*.status.json')), 'the worker status file was left beside the recording'
     print('PASS public Linux record start/stop, dimensions, full decode and native artifact retirement',flush=True)
-    # --quality only tunes the macOS overlay re-encode; Linux refuses it instead of ignoring it.
-    refused = subprocess.run([*cli,'record','start',str(work/'quality.mp4'),'--scope','device','--quality','high','--json'],env=env,capture_output=True,text=True,timeout=60)
-    error = json.loads(refused.stdout or refused.stderr)['error']
-    assert refused.returncode != 0 and error['code'] == 'INVALID_ARGS' and '--quality' in error['message'], refused
-    assert not (work/'quality.native.mp4').exists(), 'a refused recording started a recorder'
-    print('PASS --quality refused on Linux:', error['message'], flush=True)
+    # Linux exports the recorder's own encode, so --quality picks its bit rate (high: 20 Mbit/s).
+    quality = work/'quality.mp4'
+    command('record','start',str(quality),'--scope','device','--fps','12','--quality','high')
+    assert encoder_bit_rate(work) == '20M', 'record start --quality high did not reach the encoder'
+    time.sleep(1)
+    command('record','stop')
+    subprocess.run(['ffmpeg','-v','error','-i',str(quality),'-f','null','-'],check=True)
+    print('PASS --quality high records on Linux, encoded at 20 Mbit/s',flush=True)
     recovered = work/'recovered.mp4'
     command('record','start',str(recovered),'--scope','system','--fps','12')
     time.sleep(1)
@@ -76,7 +92,9 @@ try:
             assert result.returncode==0 and data['ok'],data
             return data
         try:
-            driver('record','start','driver','--scope','device','--fps','12','--hide-touches')
+            # cli.yaml's `--quality normal` is agent-device's medium (8 Mbit/s here).
+            driver('record','start','driver','--scope','device','--fps','12','--hide-touches','--quality','normal')
+            assert encoder_bit_rate(work/'extend-home') == '8M', 'record start --quality normal did not reach the encoder as medium'
             time.sleep(1)
             result=driver('record','stop')
             assert len(result['files'])==1,result

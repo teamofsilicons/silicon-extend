@@ -107,29 +107,49 @@ class LocalAdb(private val context: Context) {
         }
     }
 
-    /** Connects to [port], or discovers this device's Wireless debugging port when it is 0. */
+    /**
+     * Connects to [port], or discovers this device's Wireless debugging port when it is 0. Discovery
+     * can return several advertisements (a stale one, or another app imitating Android): each is
+     * tried in turn, and each must start TLS and pass the shell proof before it is used.
+     */
     suspend fun connect(port: Int = 0): Boolean = connectLock.withLock {
         require(port in 0..65535) { "The connection port must be between 1 and 65535." }
         val m = identity()
         if (verified && m.isConnected) return@withLock true
         verified = false
         val discovered = port == 0
-        val resolvedPort = if (discovered) AdbDiscovery.port(context, prefs.getString("guid", null)) else port
-        if (resolvedPort == null) {
-            lastError = if (wirelessDebuggingOff) "Wireless debugging is off. Turn it on in Developer options, then connect again."
-            else "Could not find this device's debugging port. Enter the connection port shown in Wireless debugging."
-            return@withLock false
-        }
         val requireTls = discovered || pairedWithCode
         try {
-            val ok = runInterruptible(Dispatchers.IO) {
-                m.disconnect()
-                m.setRequireTls(requireTls)
-                m.connect("127.0.0.1", resolvedPort)
+            if (discovered) {
+                val ports = AdbDiscovery.ports(context, prefs.getString("guid", null))
+                if (ports.isEmpty()) {
+                    lastError = if (wirelessDebuggingOff) "Wireless debugging is off. Turn it on in Developer options, then connect again."
+                    else "Could not find this device's debugging port. Enter the connection port shown in Wireless debugging."
+                    return@withLock false
+                }
+                val failures = ArrayList<Pair<Int, String>>()
+                val chosen = AdbDiscovery.firstTrusted(ports, failures) { p -> attach(m, p, requireTls = true) }
+                if (chosen == null) {
+                    lastError = discoveryFailure(failures)
+                    return@withLock false
+                }
+            } else {
+                try {
+                    attach(m, port, requireTls)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    var message = e.message ?: e.javaClass.simpleName
+                    if (requireTls && "TLS" in message) {
+                        message += " If this is a TV's network debugging port (usually 5555), tap Disconnect Android debugging first, then connect with that port."
+                    }
+                    lastError = message
+                    return@withLock false
+                }
             }
-            if (!ok) throw IOException("Android debugging did not connect on port $resolvedPort within 8 seconds. Check Wireless debugging and its connection port, and approve Android's debugging prompt if it shows one.")
-            provePeer(resolvedPort)
-            check(prefs.edit().putBoolean("enabled", true).putInt("port", port).commit()) { "Could not save Android debugging settings." }
+            check(prefs.edit().putBoolean("enabled", true).putInt("port", port).putInt(KEY_CONNECTED_BOOT, bootCount(context)).commit()) {
+                "Could not save Android debugging settings."
+            }
             verified = true
             lastError = null
             true
@@ -137,13 +157,33 @@ class LocalAdb(private val context: Context) {
             withContext(NonCancellable) { runCatching { runInterruptible(Dispatchers.IO) { m.disconnect() } } }
             throw e
         } catch (e: Exception) {
-            var message = e.message ?: e.cause?.let { "Could not reach the debugging port $resolvedPort: ${it.message ?: it.javaClass.simpleName}" } ?: e.javaClass.simpleName
-            if (requireTls && !discovered && "TLS" in message) {
-                message += " If this is a TV's network debugging port (usually 5555), tap Disconnect Android debugging first, then connect with that port."
-            }
-            lastError = message
+            lastError = e.message ?: e.javaClass.simpleName
             runCatching { runInterruptible(Dispatchers.IO) { m.disconnect() } }
             false
+        }
+    }
+
+    /** Opens the transport to [port] and has the peer prove it is Android's shell; throws (disconnected) otherwise. */
+    private suspend fun attach(m: Manager, port: Int, requireTls: Boolean) {
+        try {
+            val ok = try {
+                runInterruptible(Dispatchers.IO) {
+                    m.disconnect()
+                    m.setRequireTls(requireTls)
+                    m.connect("127.0.0.1", port)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                throw IOException(e.message ?: e.cause?.let { "Could not reach the debugging port $port: ${it.message ?: it.javaClass.simpleName}" } ?: e.javaClass.simpleName, e)
+            }
+            if (!ok) throw IOException("Android debugging did not connect on port $port within 8 seconds. Check Wireless debugging and its connection port, and approve Android's debugging prompt if it shows one.")
+            provePeer(port)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            runCatching { runInterruptible(Dispatchers.IO) { m.disconnect() } }
+            throw e
         }
     }
 
@@ -188,7 +228,7 @@ class LocalAdb(private val context: Context) {
         verified = false
         runInterruptible(Dispatchers.IO) {
             manager?.disconnect()
-            check(prefs.edit().putBoolean("enabled", false).remove("mode").remove("guid").commit()) { "Could not save Android debugging settings." }
+            check(prefs.edit().putBoolean("enabled", false).remove("mode").remove("guid").remove(KEY_CONNECTED_BOOT).commit()) { "Could not save Android debugging settings." }
         }
     }
     private suspend fun <T> stream(service: String, unverified: Boolean = false, block: (AdbStream) -> T): T = try {
@@ -283,8 +323,24 @@ class LocalAdb(private val context: Context) {
         }
     }
 
+    /** The boot (Settings.Global.BOOT_COUNT) in which Android debugging last connected, or null if it never did. */
+    val lastConnectedBoot: Int? get() = prefs.getInt(KEY_CONNECTED_BOOT, -1).takeIf { it >= 0 }
+
     companion object {
         const val PULL_LIMIT = 256L * 1024 * 1024
+        private const val KEY_CONNECTED_BOOT = "connected_boot"
+
+        /** Counts the device's boots; -1 when Android doesn't say. */
+        fun bootCount(context: Context): Int =
+            runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1) }.getOrDefault(-1)
+
+        /** Every discovered candidate failed: say which and why, and what to do. */
+        fun discoveryFailure(failures: List<Pair<Int, String>>): String {
+            val each = failures.joinToString("; ") { (p, why) -> "port $p: ${why.trimEnd('.')}" }
+            return "Found ${failures.size} Wireless debugging ${if (failures.size == 1) "advertisement" else "advertisements"} on this device, " +
+                "and none was Android's own debugging service ($each). " +
+                "Open Wireless debugging and enter the connection port it shows, then tap Connect."
+        }
         private const val MODE_TLS = "tls"
         const val PROOF_ACTION = "com.teamofsilicons.extend.action.ADB_PEER_PROOF"
         /** Held by Android's shell (the debugging service's user) and grantable to apps only through it. */

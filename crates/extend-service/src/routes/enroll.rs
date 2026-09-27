@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{Body, created, no_content, ok};
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, Shared};
+use crate::state::{AppState, Sel, Selection, Shared};
 
 pub const APP_OSES: [DeviceOs; 5] = [
     DeviceOs::Android,
@@ -38,14 +38,20 @@ pub fn version_at_least(v: &str, min: &str) -> bool {
     parse(v) >= parse(min)
 }
 
+/// Starts an enrollment in the world the request selects: an app started with a test
+/// environment's app_secret gets a code that pairs it only into that environment (and one started
+/// without gets a production code).
 pub async fn create(
     State(state): State<Shared>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Sel { world, .. }: Sel,
     Body(input): Body<EnrollmentCreate>,
 ) -> AppResult<Response> {
+    let client = crate::config::client_ip(addr.ip(), &headers, &state.cfg.trusted_proxies);
     state
         .rate_limit(
-            format!("enroll:{}", addr.ip()),
+            format!("enroll:{client}"),
             60,
             Duration::from_secs(3600),
             "new enrollments from this address",
@@ -74,8 +80,9 @@ pub async fn create(
     for attempt in 0..8 {
         let res = sqlx::query(
             "INSERT INTO extend_global.enrollments
-             (enrollment_id, secret_digest, os, os_version, model, app_version, agent_device_version, pairing_code, code_expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             (enrollment_id, secret_digest, os, os_version, model, app_version, agent_device_version, pairing_code, code_expires_at,
+              world_schema, environment_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(id)
         .bind(ids::secret_digest(&secret))
@@ -86,6 +93,8 @@ pub async fn create(
         .bind(&input.agent_device_version)
         .bind(code.as_str())
         .bind(expires)
+        .bind(&world.schema)
+        .bind(world.environment_id)
         .execute(&state.pool)
         .await;
         match res {
@@ -128,12 +137,16 @@ struct Row {
     paired_device_id: Option<String>,
     paired_credential: Option<String>,
     paired_environment: Option<serde_json::Value>,
+    world_schema: String,
+    environment_id: Option<Uuid>,
 }
 
-async fn load(state: &AppState, id: Uuid, secret: &str) -> AppResult<Row> {
-    sqlx::query_as::<_, Row>(
+/// Loads an enrollment by its secret. A request that also selects a world (with
+/// `X-Testing-Application-Secret`) must select the one the enrollment was started in.
+async fn load(state: &AppState, id: Uuid, secret: &str, sel: &Sel) -> AppResult<Row> {
+    let row = sqlx::query_as::<_, Row>(
         "UPDATE extend_global.enrollments SET last_seen_at = now() WHERE enrollment_id = $1 AND secret_digest = $2
-         RETURNING pairing_code, code_expires_at, paired_device_id, paired_credential, paired_environment",
+         RETURNING pairing_code, code_expires_at, paired_device_id, paired_credential, paired_environment, world_schema, environment_id",
     )
     .bind(id)
     .bind(ids::secret_digest(secret))
@@ -142,10 +155,75 @@ async fn load(state: &AppState, id: Uuid, secret: &str) -> AppResult<Row> {
     .ok_or_else(|| {
         AppError::new(
             ErrorCode::EnrollmentNotFound,
-            "This enrollment no longer exists (it was discarded, expired, or already paired).",
+            "This enrollment no longer exists (it was discarded, expired, or already paired, or its test environment was cleaned or removed).",
         )
         .hint("Start a new enrollment with POST /api/v1/enrollments.")
-    })
+    })?;
+    if sel.sel.is_some() && sel.world.schema != row.world_schema {
+        return Err(AppError::new(
+            ErrorCode::TestingSecretInvalid,
+            format!(
+                "This enrollment was started in {}, but the X-Testing-Application-Secret header selects {}.",
+                world_word(row.environment_id),
+                world_word(sel.world.environment_id)
+            ),
+        )
+        .hint("Send the same X-Testing-Application-Secret (or none) you started the enrollment with, or start a new enrollment."));
+    }
+    Ok(row)
+}
+
+fn world_word(environment_id: Option<Uuid>) -> String {
+    environment_id.map_or_else(|| "production".into(), |id| format!("test environment {id}"))
+}
+
+/// Refuses a claim of a pairing code made in another world (production or a test environment),
+/// before the claim runs. The world is fixed when the enrollment starts, so checking first is
+/// sound; `enrollments_claimed_in_own_world` in the database backs it up. A code that isn't live
+/// is left for the claim to refuse. Only called for a signed-in Carbon (`member`): the answer says
+/// a code exists, so nobody else hears it, and it counts against that member's own limit.
+pub async fn claim_world_check(state: &AppState, selection: &Selection, body: &[u8], member: &str) -> AppResult<()> {
+    let Some(code) = crate::state::claimed_code(body) else {
+        return Ok(());
+    };
+    let made_in: Option<(String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT world_schema, environment_id FROM extend_global.enrollments
+         WHERE pairing_code = $1 AND code_expires_at > now() AND paired_device_id IS NULL",
+    )
+    .bind(code.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((schema, _)) = made_in else {
+        return Ok(());
+    };
+    if schema == selection.world.schema {
+        return Ok(());
+    }
+    // Answering "this code exists elsewhere" is a hint about codes, so it counts like a guess, per
+    // member (a peer address is shared by everyone behind the load balancer).
+    state
+        .rate_limit(
+            format!("pair-world:{member}"),
+            20,
+            Duration::from_secs(15 * 60),
+            "pairing codes from another environment",
+        )
+        .await?;
+    let (message, hint) = match (&selection.sel, schema == "extend") {
+        (None, _) => (
+            format!("Pairing code {code} was made by an Extend app that is pairing into a test environment, so it can't pair the device into production."),
+            "Select that test environment (send its app_secret in X-Testing-Application-Secret, or use `extend --test <id>`) and enter the code again, or restart pairing on the device without a test environment.".to_owned(),
+        ),
+        (Some(s), true) => (
+            format!("Pairing code {code} was made by an Extend app pairing into production, so it can't pair the device into test environment {}.", s.name),
+            format!("Leave testing to pair the device into production, or start the device's pairing from inside test environment {}.", s.name),
+        ),
+        (Some(s), false) => (
+            format!("Pairing code {code} was made by an Extend app pairing into a different test environment, not {}.", s.name),
+            "Select the test environment the device's pairing was started in and enter the code again.".to_owned(),
+        ),
+    };
+    Err(AppError::new(ErrorCode::PairingCodeInvalid, message).hint(hint))
 }
 
 /// Rotates the code if it has expired; returns the live code.
@@ -199,9 +277,14 @@ async fn forget(state: &AppState, id: Uuid) {
         .await;
 }
 
-pub async fn get(State(state): State<Shared>, Path(id): Path<Uuid>, headers: HeaderMap) -> AppResult<Response> {
+pub async fn get(
+    State(state): State<Shared>,
+    Path(id): Path<Uuid>,
+    sel: Sel,
+    headers: HeaderMap,
+) -> AppResult<Response> {
     let secret = enrollment_secret(&headers)?;
-    let row = load(&state, id, &secret).await?;
+    let row = load(&state, id, &secret, &sel).await?;
     if let Some(paired) = paired_state(&row) {
         forget(&state, id).await;
         return Ok(ok("enrollment", paired));
@@ -219,9 +302,14 @@ pub async fn get(State(state): State<Shared>, Path(id): Path<Uuid>, headers: Hea
     ))
 }
 
-pub async fn discard(State(state): State<Shared>, Path(id): Path<Uuid>, headers: HeaderMap) -> AppResult<Response> {
+pub async fn discard(
+    State(state): State<Shared>,
+    Path(id): Path<Uuid>,
+    sel: Sel,
+    headers: HeaderMap,
+) -> AppResult<Response> {
     let secret = enrollment_secret(&headers)?;
-    load(&state, id, &secret).await?;
+    load(&state, id, &secret, &sel).await?;
     forget(&state, id).await;
     Ok(no_content())
 }
@@ -229,11 +317,12 @@ pub async fn discard(State(state): State<Shared>, Path(id): Path<Uuid>, headers:
 pub async fn socket(
     State(state): State<Shared>,
     Path(id): Path<Uuid>,
+    sel: Sel,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> AppResult<Response> {
     let secret = enrollment_secret(&headers)?;
-    let row = load(&state, id, &secret).await?;
+    let row = load(&state, id, &secret, &sel).await?;
     Ok(ws
         .on_upgrade(move |socket| run_socket(state, id, row, socket))
         .into_response())

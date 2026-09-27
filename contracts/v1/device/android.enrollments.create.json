@@ -1,0 +1,41 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [],
+  "kind": "http",
+  "operation": "enrollments.create",
+  "request": {
+    "body": {
+      "data": {
+        "app_version": "1.0.0",
+        "model": "Pixel 9",
+        "os": "android",
+        "os_version": "15"
+      },
+      "type": "enrollment"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8"
+    },
+    "method": "POST",
+    "path": "/api/v1/enrollments"
+  },
+  "response": {
+    "non_null": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code"
+    ],
+    "required": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code"
+    ],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (createEnrollment) and protocol/Frames.kt"
+}

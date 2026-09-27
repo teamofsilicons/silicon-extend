@@ -8,17 +8,27 @@ the app, or the server, repaints them. An app that stops handling events while c
 showing the cover after it leaves. Outside a shaped window's bounding shape the copy holds
 whatever the screen shows there, and nobody ever repaints it.
 
-Every case checks every pixel of every frame for the green peer window, not an average:
+The recorder therefore trusts none of the seeded copy: it clears each of the app's windows with
+exposures (the server repaints any background, the app gets Expose events for all of it) and
+reads no frame until every pixel has been drawn again. Every case checks every pixel of every frame for the green peer window, not an
+average:
   gtk               GTK window that repaints every 80 ms (-static: only when exposed)
   gtk-native-child  the same, drawing into a native child window that fills its client area
   xmessage          Xaw app whose widgets are bordered child windows (public --app-id path)
   xev               Xlib app with one bordered 50x50 child window
+  plain             plain Xlib window with no background (None) and no _NET_WM_PING (plainxlib.c;
+                    plain-bg: with a background pixel)
 covered by the peer, uncovered, or left by it (covered while the app stops, then uncovered),
-responding or not (GTK hangs its main loop and stops answering _NET_WM_PING; xmessage and xev
-get SIGSTOP, and the X server repaints their window backgrounds and borders itself):
+responding or not (GTK hangs its main loop and stops answering _NET_WM_PING; the others get
+SIGSTOP):
   recorded        every frame shows the app and never the peer
   not responding  refused because the app does not answer a ping: no video is written at all
-A shaped GTK window above the peer is recorded with the part outside its shape black.
+  did not redraw  refused because nobody redrew the whole window: no video is written
+A stopped app is recorded only where the X server itself repaints every pixel, that is where its
+windows have backgrounds (xmessage, xev, plain-bg: the frames then show those backgrounds); a
+stopped window with no background (plain) is refused, since X11 can't show it is the app's own,
+and the refusal says to record the whole screen instead. A shaped GTK window above the peer is
+recorded with the part outside its shape black.
 
 Run by record-e2e.sh with RECORD_LANE=record-hung-e2e.py. RECORD_WM=openbox adds a reparenting
 window manager; RECORD_WORKER points at another screen-record.py to compare; RECORD_CASES runs
@@ -83,6 +93,21 @@ def is_target(color):
     return 50 < color[1] < 110 and color[2] > 125
 
 
+def is_red(color):
+    """plainxlib paints 0xd02020."""
+    return color[0] > 150 and color[1] < 90 and color[2] < 90
+
+
+def is_plain_background(color):
+    """plainxlib --bg's background, 0x3050a0, which the server paints while the app is stopped."""
+    return color[0] < 90 and 50 < color[1] < 120 and color[2] > 120
+
+
+plain_app = Path('/tmp/plainxlib')
+subprocess.run(['cc', '-O1', '-o', str(plain_app), str(root / 'apps/desktop/linux-e2e/plainxlib.c'), '-lX11'],
+               check=True)
+
+
 def frames(video):
     info = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
                                                'stream=width,height', '-of', 'json', str(video)]))['streams'][0]
@@ -128,6 +153,12 @@ def launch(kind, hung):
         command += (['--static'] if kind.endswith('-static') else []) + (['--hang-after', '1500'] if hung else [])
         process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
         return process, wait(lambda: find('--name', '^Extend Recording Fixture$'))
+    if kind.startswith('plain'):
+        process = subprocess.Popen([str(plain_app)] + (['--bg'] if kind == 'plain-bg' else []),
+                                   stdout=subprocess.PIPE, text=True)
+        xid = wait(lambda: find('--name', '^Plain Xlib Probe$'))
+        assert process.stdout.readline().strip() == 'painted'
+        return process, xid
     if kind == 'xmessage':
         process = subprocess.Popen(['xmessage', '-buttons', 'Okay,Cancel',
                                     'Silicon Extend: this text is recorded, never the window above it'])
@@ -190,8 +221,9 @@ def run_case(name, kind, cover, hung, expected):
             time.sleep(.5)
         x, y, width, height = geometry(xid)
         on_screen = screen(x, y, width, height)
-        if cover == 'left' and kind.startswith('gtk'):
-            # GTK windows have no X11 background, so the screen still shows the peer where it was.
+        if cover == 'left' and (kind.startswith('gtk') or (kind == 'plain' and hung)):
+            # GTK windows and plainxlib's have no X11 background, so the screen still shows the
+            # peer where it was until the app redraws (a stopped one never does).
             assert peer_pixels(on_screen) > .5 * width * height, (name, 'no leftovers of the peer on screen')
         elif cover == 'covered':
             # Covered on screen (GTK leaves a few corner pixels), so any leak shows up as green.
@@ -224,6 +256,10 @@ def run_case(name, kind, cover, hung, expected):
                 assert max(mean(half(frame, width, height, right=True))) < 16, (name, 'outside the shape is not black', index)
             elif kind.startswith('gtk'):
                 assert is_target(mean(frame)), (name, 'frame does not show the target', index, mean(frame))
+            elif kind.startswith('plain'):
+                shown = mean(frame)
+                assert is_red(shown) or (kind == 'plain-bg' and hung and is_plain_background(shown)), (
+                    name, 'frame does not show the app', index, shown)
             else:
                 assert min(mean(frame)) > 120, (name, 'frame does not show the app', index, mean(frame))
         print(f'PASS {name}: {len(video)} frames, every pixel of every frame is the app, none the peer', flush=True)
@@ -250,11 +286,22 @@ cases = [
     ('gtk native child covered not responding', 'gtk-native-child', 'covered', True, 'not responding'),
     ('xmessage uncovered', 'xmessage', 'uncovered', False, 'recorded'),
     ('xmessage covered', 'xmessage', 'covered', False, 'recorded'),
+    # Stopped, but the X server repaints all of these windows itself (their backgrounds and
+    # borders), so every pixel is drawn again and nothing is refused.
     ('xmessage covered stopped', 'xmessage', 'covered', True, 'recorded'),
     ('xmessage left by its cover stopped', 'xmessage', 'left', True, 'recorded'),
     ('xev uncovered', 'xev', 'uncovered', False, 'recorded'),
     ('xev covered', 'xev', 'covered', False, 'recorded'),
     ('xev covered stopped', 'xev', 'covered', True, 'recorded'),
+    ('plain uncovered', 'plain', 'uncovered', False, 'recorded'),
+    ('plain covered', 'plain', 'covered', False, 'recorded'),
+    ('plain left by its cover', 'plain', 'left', False, 'recorded'),
+    # The leak this lane exists for: no background, no ping, stopped while its cover left.
+    ('plain left by its cover stopped', 'plain', 'left', True, 'did not redraw'),
+    ('plain covered stopped', 'plain', 'covered', True, 'did not redraw'),
+    # Stopped, but its window has a background, which the server paints: recorded as that.
+    ('plain with a background left by its cover stopped', 'plain-bg', 'left', True, 'recorded'),
+    ('plain uncovered stopped', 'plain', 'uncovered', True, 'did not redraw'),
     ('gtk shaped above the peer', 'gtk-shaped', 'uncovered', False, 'recorded'),
 ]
 only = os.environ.get('RECORD_CASES')

@@ -72,6 +72,7 @@ async fn start() -> Env {
             ("si:stranger".into(), vec!["labs".into()]),
         ],
         web_dir: None,
+        trusted_proxies: vec![],
     };
     let state = extend_service::build(cfg).await.unwrap();
     let pool = state.pool.clone();
@@ -636,7 +637,11 @@ async fn pairing_rules_and_device_management() {
     // Device-side revoke pair.
     let d3 = Device::pair(&env, "c:bob", DeviceOs::Linux, &["si:chef"], None).await;
     env.client.revoke_pair(&d3.credential).await.unwrap();
-    assert_eq!(code_of(b.device(&d3.id).await), ErrorCode::DeviceNotFound);
+    // Its owner can still read it, marked removed (tests/devices_gaps.rs covers the rest).
+    assert_eq!(
+        b.device(&d3.id).await.unwrap().removed_reason,
+        Some(EndReason::PairRevoked)
+    );
 
     // Session ids grow once all 3-character ids are used.
     let d4 = Device::pair(&env, "c:bob", DeviceOs::Linux, &["si:chef"], None).await;

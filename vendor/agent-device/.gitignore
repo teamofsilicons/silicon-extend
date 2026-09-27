@@ -54,3 +54,6 @@ packages/*/dist-types/
 
 # Reproducible AX bridge captures are published on the evidence branch.
 docs/evidence/ios-simulator-ax-bridge-*.json.gz
+
+# Silicon Extend: which source dist/ was built from (apps/desktop/dist-manifest.mjs)
+/.extend-build-manifest.json

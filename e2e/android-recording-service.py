@@ -38,11 +38,12 @@ def cli(who, *command, json_output=True):
         cmd.append('--json')
     result = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=100)
     assert result.returncode == 0, (command, result.stderr)
-    return json.loads(result.stdout)['data'] if json_output else result.stdout.strip()
+    # `extend --json` prints the data itself on stdout, with no wrapper.
+    return json.loads(result.stdout) if json_output else result.stdout.strip()
 
 
 def remote(*command):
-    result = cli('chef', *command)['result']
+    result = cli('chef', *command)  # a device command prints its CommandResult
     assert result['ok'], result.get('error')
     return result
 

@@ -1,0 +1,44 @@
+{
+  "api_version": 1,
+  "call": "Authed::activity",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "devices.activity",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/devices/{device_id}/activity?silicon_id=si%3Asentinel-silicon&limit=20"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/action",
+      "/items/*/actor",
+      "/items/*/actor/id",
+      "/items/*/actor/type",
+      "/items/*/at",
+      "/items/*/files",
+      "/items/*/id"
+    ],
+    "required": [
+      "/items",
+      "/items/*/action",
+      "/items/*/actor",
+      "/items/*/actor/id",
+      "/items/*/actor/type",
+      "/items/*/at",
+      "/items/*/id"
+    ],
+    "status": "2xx",
+    "type": "activity"
+  }
+}

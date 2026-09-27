@@ -328,6 +328,28 @@ pub(crate) fn safe_name(requested: Option<&str>, default: &str, ext: &str) -> St
     }
 }
 
+/// agent-device's name for a recording quality Extend's CLI offers (`normal` or `high`).
+fn recording_quality(requested: &str) -> Result<&'static str, String> {
+    match requested.trim().to_ascii_lowercase().as_str() {
+        "normal" | "medium" => Ok("medium"),
+        "high" => Ok("high"),
+        _ => Err(format!(
+            "--quality {requested:?} isn't a recording quality. Use --quality normal (the default) or --quality high, or leave it out."
+        )),
+    }
+}
+
+/// The command, its arguments and the flags Extend adds, with those flags ahead of a `--`: after
+/// it agent-device reads every token as text, so flags appended there would be typed.
+fn with_extend_flags(command: &str, args: &[String], flags: &[&str]) -> Vec<String> {
+    let mut full = vec![command.to_owned()];
+    let at = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    full.extend_from_slice(&args[..at]);
+    full.extend(flags.iter().map(|f| (*f).to_owned()));
+    full.extend_from_slice(&args[at..]);
+    full
+}
+
 /// Index of the first positional argument, skipping the values of flags that take one.
 fn first_positional(args: &[String], start: usize, value_flags: &[&str]) -> Option<usize> {
     let mut i = start;
@@ -421,6 +443,23 @@ pub(crate) fn plan(
         "record" => match args.first().map(String::as_str) {
             Some("start") => {
                 let at = first_positional(&args, 1, &["--scope", "--fps", "--quality"]);
+                // `cli.yaml` offers normal (the default) and high; agent-device calls normal "medium".
+                for i in 0..args.len() {
+                    let (value_at, value) = if args[i] == "--quality" {
+                        (i + 1, args.get(i + 1).cloned())
+                    } else if let Some(v) = args[i].strip_prefix("--quality=") {
+                        (i, Some(v.to_owned()))
+                    } else {
+                        continue;
+                    };
+                    let value = value.ok_or("--quality needs a value: normal or high")?;
+                    let mapped = recording_quality(&value)?;
+                    args[value_at] = if value_at == i {
+                        format!("--quality={mapped}")
+                    } else {
+                        mapped.to_owned()
+                    };
+                }
                 let name = safe_name(at.map(|i| args[i].as_str()), "recording", "mp4");
                 let path = record_dir.join(name);
                 match at {
@@ -844,9 +883,11 @@ impl Inner {
         inv: Option<&Invocation<'_>>,
     ) -> Result<(String, String, bool), String> {
         let mut cmd = self.base_command();
-        cmd.arg(command)
-            .args(args)
-            .args(["--platform", "ios", "--udid", udid, "--json", "--session", session]);
+        cmd.args(with_extend_flags(
+            command,
+            args,
+            &["--platform", "ios", "--udid", udid, "--json", "--session", session],
+        ));
         let child = cmd
             .spawn()
             .map_err(|e| format!("couldn't start agent-device ({}): {e}", self.device.agent_device[0]))?;
@@ -1377,6 +1418,23 @@ mod tests {
         let p = plan("record", &s(&["start", "--fps", "30"]), &[], w, r).unwrap();
         assert_eq!(p.args, s(&["start", "/r/recording.mp4", "--fps", "30"]));
         assert_eq!(p.record_to, Some(PathBuf::from("/r/recording.mp4")));
+        // `cli.yaml`'s normal is agent-device's medium; high passes as it is.
+        let p = plan("record", &s(&["start", "--quality", "normal"]), &[], w, r).unwrap();
+        assert_eq!(p.args, s(&["start", "/r/recording.mp4", "--quality", "medium"]));
+        let p = plan("record", &s(&["start", "clip", "--quality=high"]), &[], w, r).unwrap();
+        assert_eq!(p.args, s(&["start", "/r/clip.mp4", "--quality=high"]));
+        let why = plan("record", &s(&["start", "--quality", "ultra"]), &[], w, r).unwrap_err();
+        assert!(why.contains("--quality normal") && why.contains("high"), "{why}");
+        assert!(plan("record", &s(&["start", "--quality"]), &[], w, r).is_err());
+        // Extend's own flags stay ahead of a `--`, where agent-device would type them.
+        assert_eq!(
+            with_extend_flags("type", &s(&["--", "--json"]), &["--platform", "ios"]),
+            s(&["type", "--platform", "ios", "--", "--json"])
+        );
+        assert_eq!(
+            with_extend_flags("snapshot", &s(&["-i"]), &["--platform", "ios"]),
+            s(&["snapshot", "-i", "--platform", "ios"])
+        );
         assert!(plan("record", &s(&["stop"]), &[], w, r).unwrap().record_stop);
 
         let p = plan("close", &s(&["--save-script"]), &[], w, r).unwrap();

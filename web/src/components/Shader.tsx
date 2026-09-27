@@ -106,7 +106,8 @@ export default function Shader(props: { variant?: ShaderVariant; class?: string;
             scatter=mix(order,scatter,.35);
           }else if(variant<1.5){
             vec2 p=(uv-.5)*vec2(resolution.x/resolution.y,1.);
-            cover=1.-smoothstep(.16,.5,length(p));
+            // A rounder, denser core than a plain radial falloff, so a fine cell doesn't read as a burst.
+            cover=1.-smoothstep(.2,.48,length(p));
           }else{
             float along=resolution.x>resolution.y*1.6?uv.y:1.-uv.x;
             cover=smoothstep(0.,.42,along);
@@ -221,5 +222,5 @@ export default function Shader(props: { variant?: ShaderVariant; class?: string;
       release();
     });
   });
-  return <canvas ref={canvas} class={`shader shader-${props.variant ?? "field"} ${props.class ?? ""}`} aria-hidden="true" />;
+  return <canvas ref={canvas} class={`shader shader-${props.variant ?? "field"} ${props.class ?? ""}`} data-cell={props.cell ?? 4} aria-hidden="true" />;
 }

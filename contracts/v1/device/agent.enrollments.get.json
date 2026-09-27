@@ -1,0 +1,34 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "enrollment"
+  ],
+  "kind": "http",
+  "operation": "enrollments.get",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Enrollment {enrollment_secret}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "GET",
+    "path": "/api/v1/enrollments/{enrollment_id}"
+  },
+  "response": {
+    "non_null": [
+      "/code_expires_at",
+      "/pairing_code",
+      "/state"
+    ],
+    "required": [
+      "/code_expires_at",
+      "/pairing_code",
+      "/state"
+    ],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; crates/extend-agent/src/service.rs (get_enrollment) with crates/extend-protocol types"
+}

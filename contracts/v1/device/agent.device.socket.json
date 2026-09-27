@@ -1,0 +1,171 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "paired"
+  ],
+  "kind": "device_socket",
+  "operation": "device.socket",
+  "os": "macos",
+  "reads": {
+    "attach": [
+      "device_id",
+      "os",
+      "name"
+    ],
+    "cancel": [
+      "id"
+    ],
+    "command": [
+      "id",
+      "session_id",
+      "command",
+      "timeout_ms",
+      "upload_ids"
+    ],
+    "environment": [],
+    "ping": [
+      "nonce"
+    ],
+    "refresh": [],
+    "session_ended": [
+      "session_id",
+      "reason"
+    ],
+    "session_started": [
+      "session_id",
+      "silicon_id",
+      "since"
+    ],
+    "setup_code": [
+      "device_id",
+      "code"
+    ],
+    "superseded": [],
+    "takeover": [
+      "session_id",
+      "reason",
+      "expires_at"
+    ],
+    "takeover_ended": [
+      "session_id"
+    ],
+    "unpaired": [
+      "reason"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "GET",
+    "path": "/api/v1/device/connect"
+  },
+  "sends": [
+    {
+      "effect": "hello",
+      "frame": {
+        "agent_device_version": "0.13.0",
+        "app_version": "1.0.0",
+        "capabilities": [
+          "screen.read",
+          "screen.capture",
+          "screen.record",
+          "input.pointer",
+          "input.text",
+          "input.keyboard",
+          "apps.launch",
+          "apps.list",
+          "alerts",
+          "clipboard",
+          "logs",
+          "takeover",
+          "terminal"
+        ],
+        "missing": [],
+        "model": "MacBookPro18,3",
+        "os": "macos",
+        "os_version": "15.5",
+        "setup": {
+          "state": "complete",
+          "steps": []
+        },
+        "type": "hello"
+      }
+    },
+    {
+      "effect": "none",
+      "frame": {
+        "nonce": 42,
+        "type": "pong"
+      }
+    },
+    {
+      "effect": "result",
+      "frame": {
+        "error": null,
+        "files": [
+          {
+            "content_type": "image/png",
+            "kind": "screenshot",
+            "name": "screenshot.png",
+            "size_bytes": 28,
+            "upload_id": "{upload_id}"
+          }
+        ],
+        "id": "{command_id}",
+        "ok": true,
+        "output": {
+          "nodes": 12
+        },
+        "text": "12 nodes",
+        "type": "result"
+      }
+    },
+    {
+      "effect": "takeover_done",
+      "frame": {
+        "type": "takeover_done"
+      }
+    },
+    {
+      "effect": "stop",
+      "frame": {
+        "type": "stop"
+      }
+    },
+    {
+      "effect": "attached",
+      "frame": {
+        "capabilities": [
+          "screen.capture",
+          "input.remote",
+          "nav.system",
+          "apps.launch",
+          "apps.list"
+        ],
+        "device_id": "{attached_id}",
+        "missing": [],
+        "model": "AppleTV14,1",
+        "online": true,
+        "os_version": "18.0",
+        "setup": {
+          "state": "complete",
+          "steps": []
+        },
+        "type": "attached"
+      }
+    },
+    {
+      "effect": "stop_target",
+      "frame": {
+        "target": "{attached_id}",
+        "type": "stop"
+      }
+    }
+  ],
+  "source": "docs/device-protocol.md §2; crates/extend-agent/src/agent.rs (hello_from) and hosted.rs (status_from_probe) with crates/extend-protocol/src/frames.rs"
+}

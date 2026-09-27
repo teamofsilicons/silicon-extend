@@ -1,0 +1,25 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "kind": "http",
+  "operation": "device.stop",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}"
+    },
+    "method": "POST",
+    "path": "/api/v1/device/stop"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (stop) and protocol/Frames.kt"
+}

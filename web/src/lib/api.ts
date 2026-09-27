@@ -412,15 +412,40 @@ export class ExtendClient {
 
   // ───────────── Devices ─────────────
 
-  async listDevices(params: { scope: "mine" | "team" | "accessible"; cursor?: string | null; limit?: number }): Promise<Page<Device>> {
+  /**
+   * One page of devices. `include_removed` (Carbons, scope=mine only) also lists the Carbon's removed
+   * devices, marked with `removed_at` and `removed_reason`.
+   */
+  async listDevices(params: {
+    scope: "mine" | "team" | "accessible";
+    cursor?: string | null;
+    limit?: number;
+    include_removed?: boolean;
+  }): Promise<Page<Device>> {
     return (
       await this.request<Page<Device>>({
         method: "GET",
         path: "/api/v1/devices",
-        query: { scope: params.scope, cursor: params.cursor, limit: params.limit },
+        query: { scope: params.scope, cursor: params.cursor, limit: params.limit, include_removed: params.include_removed ? "true" : undefined },
         expect: "devices",
       })
     ).data;
+  }
+
+  /**
+   * The Carbon's removed devices in the selected team, newest removal first. The service pages
+   * paired and removed devices together, so this reads every page (at most `maxPages`).
+   */
+  async listRemovedDevices(maxPages = 20): Promise<Device[]> {
+    const removed: Device[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < maxPages; page++) {
+      const result: Page<Device> = await this.listDevices({ scope: "mine", include_removed: true, limit: 100, cursor });
+      removed.push(...result.items.filter((d) => d.removed_at));
+      cursor = result.next_cursor;
+      if (!cursor) break;
+    }
+    return removed.sort((a, b) => Date.parse(b.removed_at!) - Date.parse(a.removed_at!) || a.name.localeCompare(b.name));
   }
 
   async getDevice(deviceId: string): Promise<{ device: DeviceDetail; etag: string | null }> {

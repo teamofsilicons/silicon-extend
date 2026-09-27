@@ -14,6 +14,10 @@ set -a; . e2e/dev.env; set +a
 cargo run -p extend-service          # http://127.0.0.1:8480, migrations run at start
 ```
 
+`EXTEND_ENVIRONMENT` must be set (`e2e/dev.env` sets `development`): the service refuses to start
+without it rather than guess. CI and production run PostgreSQL 17; the local container above is
+16.9, which the suites also pass on.
+
 `e2e/dev.env` runs with local stand-ins for Silicon IAM, Briefcase and Ting (all refused in
 production):
 
@@ -40,14 +44,16 @@ own `EXTEND_DATA_DIR`, and point the lane at it (`bash e2e/cli-e2e.sh http://127
 
 | Command | What it covers |
 |---|---|
-| `cargo test --workspace` | Unit tests everywhere, plus `crates/extend-service/tests/e2e.rs`: pairing, sessions, relay, files, takeover, revocation, idle and pair expiry, test environments, versioning — real PostgreSQL (`EXTEND_TEST_ADMIN_URL`), real HTTP/WebSocket, a scripted device. `tests/obo_requests.rs` checks Briefcase and Ting requests against mock servers; `tests/real_services.rs` runs only with `EXTEND_REALIAM_STATE` set. `e2e/clean-test-dbs.sh` drops the throwaway `extend_e2e_*` databases |
+| `cargo test --workspace` | Unit tests everywhere, plus the service suites against real PostgreSQL (`EXTEND_TEST_ADMIN_URL`), real HTTP/WebSocket and scripted devices: `e2e.rs` (pairing, sessions, relay, files, takeover, revocation, idle and pair expiry, test environments, versioning), `core_gaps.rs` (the idle hold, sessions ending mid-command, refused logins, Ting registration and retries, self-destruct, downloads, warnings, requests), `devices_gaps.rs` (removed devices, the test device limit under concurrency, hosted devices, paging), `testenv_gaps.rs` (secrets on every route, readiness, disable, the 10-slot limit, the lifecycle rules, the clean fence, webhooks, logout, test-plane login, world-bound codes, the image default) and `contracts.rs` (versioning and the contract replay). `tests/obo_requests.rs` checks Briefcase and Ting requests against mock servers; `tests/real_services.rs` runs only with `EXTEND_REALIAM_STATE` set. The suites leave throwaway databases (`extend_e2e_*`, `extend_core_*`, `extend_gaps_*`, `extend_contracts_*`); `e2e/clean-test-dbs.sh` drops all four |
+| `cargo test -p silicon-extend-client --test contract_fixtures` and `cargo test -p extend-service --test contracts` | Consumer contracts: the client's recorded fixtures still match what it sends, and a real service accepts every fixture in `contracts/` (`contracts/README.md`) |
 | `cargo test -p extend-cli` | Includes `tests/device_args.rs`: the real binary against a fake service, reading the exact arguments a device receives |
 | `bash e2e/cli-e2e.sh` | The `extend` CLI end to end against a running service and `examples/fake_device` |
-| `cd web && pnpm test && pnpm test:e2e` | Website unit tests and Playwright against the mock API; `pnpm test:e2e:real` against the running service |
+| `cd web && pnpm test && pnpm build && pnpm test:e2e` | Website unit tests, the type-checked build, and Playwright against the mock API; `pnpm test:e2e:real` against a running service (`EXTEND_REAL_URL`) |
 | `apps/android` | See its README (unit tests, emulator runs, the notices generator and dependency verification) |
 | `crates/extend-agent`, `apps/desktop/linux-e2e` | Desktop agent tests; Linux run and recording lanes in Docker (`apps/desktop/README.md`) |
-| `node --test apps/desktop/stamp-runtime.test.mjs apps/desktop/runtime-entry.test.mjs` | Packaged runtime stamp and entry |
-| `cd vendor/agent-device && pnpm typecheck && pnpm exec vitest run …` | The agent-device fork; `pnpm test:macos-helper` for the Swift helper |
+| `node --test apps/desktop/*.test.mjs` | Packaged runtime stamp and entry, and the packaging checks (stamp errors, dist freshness) |
+| `cd vendor/agent-device && pnpm typecheck && pnpm exec vitest run --project unit-core <files>` | The agent-device fork: CI runs every test file an Extend change touched (the list is in `.github/workflows/ci.yml`); `pnpm test:macos-helper` for the Swift helper |
+| `cd apps/android && ./gradlew :app:testDebugUnitTest :libadb:testDebugUnitTest` | The Android app's and libadb's JVM tests (with `JAVA_HOME` at a JDK 17) |
 
 ## Conventions
 

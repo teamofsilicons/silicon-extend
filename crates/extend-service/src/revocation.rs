@@ -1,5 +1,8 @@
 //! Ending access when IAM says a member logged out, left a team, or was removed (TECHNICAL.md
-//! section 9). A webhook is only a prompt: every decision here is re-checked with IAM first.
+//! section 9). A webhook is only a prompt: every decision here is re-checked with IAM first, so a
+//! late or repeated event can't end access IAM still grants. Only when IAM can't be asked does a
+//! removal the signed event reports decide (routes/webhook.rs has already dropped events older
+//! than one applied for the same aggregate).
 
 use extend_protocol::model::{EndReason, MemberKind};
 
@@ -43,13 +46,15 @@ async fn recheck(state: &AppState, world: &World, member: &str, event: &IamEvent
                 .await
                 .get(&(world.schema.clone(), sid.clone()))
                 .cloned();
-            let still_ok = if removed(event, member, &team) {
-                false
-            } else {
-                match &stored {
-                    Some((p, sel)) => state.iam.authorize(&p.token, Some(&team), sel.as_ref()).await.is_ok(),
-                    None => still_member(state, world, event, &team, member, None).await,
-                }
+            // IAM's live answer for the login the Silicon is using decides; IAM being unreachable
+            // falls back to the membership check below.
+            let still_ok = match &stored {
+                Some((p, sel)) => match state.iam.authorize(&p.token, Some(&team), sel.as_ref()).await {
+                    Ok(_) => true,
+                    Err(e) if crate::iam::refuses_token(&e) => false,
+                    Err(_) => still_member(state, world, event, &team, member, None).await,
+                },
+                None => still_member(state, world, event, &team, member, None).await,
             };
             if !still_ok {
                 let active = still_member(state, world, event, &team, member, stored.as_ref()).await;
@@ -117,9 +122,10 @@ fn removed(event: &IamEvent, member: &str, team: &str) -> bool {
     event.removed.iter().any(|(m, t)| m == member && t == team)
 }
 
-/// Whether `member` is still an active member of `team`. A removal the signed event reports is
-/// final; otherwise IAM is asked with a login Extend holds for that team (the member's own, or
-/// another member's). When nobody can ask, or IAM cannot answer, access is left as it is.
+/// Whether `member` is still an active member of `team`. IAM is asked first, with a login Extend
+/// holds for that team (the member's own, or another member's). Only when nobody can ask or IAM
+/// can't answer does the signed event decide: a removal it reports ends access, anything else
+/// leaves access as it is.
 async fn still_member(
     state: &AppState,
     world: &World,
@@ -128,9 +134,6 @@ async fn still_member(
     member: &str,
     own: Option<&(Principal, Option<TestingSelection>)>,
 ) -> bool {
-    if removed(event, member, team) {
-        return false;
-    }
     let reader = match own {
         Some(found) => Some(found.clone()),
         None => reader(state, world, team, member).await,
@@ -139,11 +142,14 @@ async fn still_member(
         Some((p, sel)) => (Some(p), sel),
         None => (None, None),
     };
-    state
-        .iam
-        .member_active(team, member, p.as_ref(), sel.as_ref())
-        .await
-        .unwrap_or(true)
+    match state.iam.member_active(team, member, p.as_ref(), sel.as_ref()).await {
+        Ok(active) => active,
+        Err(e) => {
+            let reported = removed(event, member, team);
+            tracing::info!(member, team, error = %e, reported_removed = reported, "IAM couldn't confirm a membership; using the signed event");
+            !reported
+        }
+    }
 }
 
 /// A signed-in member of `team` (other than `member`) whose login can read the team's directory:

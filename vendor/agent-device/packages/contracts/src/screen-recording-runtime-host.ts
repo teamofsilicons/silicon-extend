@@ -21,7 +21,16 @@ export type LinuxScreenRecordingHost = Readonly<{
     Readonly<{ available: true }> | Readonly<{ available: false; hint: string }>
   >;
   start(
-    input: Readonly<{ outputPath: string; fps?: number; appId?: string }>,
+    input: Readonly<{
+      outputPath: string;
+      fps?: number;
+      appId?: string;
+      /**
+       * Silicon Extend fork: the encoder's quality (medium, the default, or high). Linux exports
+       * the recorder's own H.264 encode, so the quality is chosen when it is encoded.
+       */
+      quality?: RecordingExportQuality;
+    }>,
     signal?: AbortSignal,
   ): Promise<ScreenRecordingBackgroundProcess>;
   inspectProcess(marker: ManagedProcessIdentity): Promise<ManagedProcessOwnership>;

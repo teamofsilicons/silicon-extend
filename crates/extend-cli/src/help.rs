@@ -33,8 +33,11 @@ pub const NODES: &[Node] = &[
         usage: "extend login status [--json]",
         who: "anyone",
         purpose: "Show who is signed in, checked live with Silicon IAM.",
-        used_with: "Scripts check `authenticated` in `--json` output before running other commands; exit code 3 means not signed in.",
-        flags: &[("--json", "{authenticated, member, teams, team, ...}")],
+        used_with: "Scripts check `authenticated` in the --json output before running other commands. It exits 0 whether or not you are signed in (the check itself worked); other commands exit 3 when you are not.",
+        flags: &[(
+            "--json",
+            "{\"authenticated\": true, \"member\": {...}, \"teams\": [...], \"team\": ...} or {\"authenticated\": false, \"reason\": \"...\"}",
+        )],
         examples: &["extend login status --json"],
     },
     Node {
@@ -42,7 +45,7 @@ pub const NODES: &[Node] = &[
         usage: "extend logout",
         who: "Carbon or Silicon",
         purpose: "Sign out and delete the saved tokens. A Silicon signing out ends its running sessions.",
-        used_with: "",
+        used_with: "Sign in again later with `extend login <slt>`.",
         flags: &[],
         examples: &[],
     },
@@ -54,7 +57,7 @@ pub const NODES: &[Node] = &[
         used_with: "Use app_id when generating an SLT for Extend with the IAM CLI.",
         flags: &[(
             "--json",
-            "{app_id, iam_base_url, api_base_url, website_url, docs_url, repository_url}",
+            "{\"app_id\": \"extend\", \"iam_base_url\", \"api_base_url\", \"website_url\", \"docs_url\", \"repository_url\", ...}",
         )],
         examples: &["extend iam --json"],
     },
@@ -69,11 +72,16 @@ pub const NODES: &[Node] = &[
     },
     Node {
         path: "config",
-        usage: "extend config ls | get <key> | set <key> <value> | unset <key> | home <dir> | test add|ls|rm",
+        usage: "extend config ls | get <key> | set <key> <value> | unset <key> | home <dir> [--use-existing] | test add|ls|rm",
         who: "anyone",
         purpose: "Read and change CLI settings, where state is kept, and saved test environments.",
-        used_with: "`extend config home <dir>` moves state (default $SILICON_HOME/.extend or ~/.extend). `extend config test add <test_id>` reads a test app secret from stdin so `--test <test_id>` works.",
-        flags: &[],
+        used_with: "Settings (each value is checked): api_url (https, or http for a local address), telemetry on|off, output text|json, team <handle>, screenshot_scale 0.01–1, self_destruct 1m–30d, download_dir <existing directory>, color auto|always|never. \
+`extend config home <dir>` moves the saved login, settings, test environments and sessions to <dir>/.extend (default $SILICON_HOME/.extend or ~/.extend); if <dir> already holds Extend state it refuses, unless --use-existing switches to that state and leaves this one where it is. \
+`extend config test add <test_id>` reads a test app secret from stdin, checks with Extend that it belongs to <test_id>, and saves it so `--test <test_id>` works. Scripts can skip that step: EXTEND_TEST_SECRET=<secret> extend --test <test_id> <command>.",
+        flags: &[(
+            "--use-existing",
+            "config home: switch to the state already in <dir> instead of moving this one there",
+        )],
         examples: &[
             "extend config set telemetry off",
             "extend config home /data/si-chef",
@@ -91,10 +99,10 @@ pub const NODES: &[Node] = &[
     },
     Node {
         path: "device ls",
-        usage: "extend device ls [--online] [--os <os>] [--team-visible] [--json]",
+        usage: "extend device ls [--online] [--os <os>] [--team-visible] [--removed] [--json]",
         who: "Carbon or Silicon",
         purpose: "Silicon: every device you have access to. Carbon: every device you paired; --team-visible lists other Carbons' team-visible devices.",
-        used_with: "Pick a device id from here for `extend device show` or `extend session new`.",
+        used_with: "Pick a device id from here for `extend device show` or `extend session new`. Every page is read, so the list is complete (it says so if it had to stop early).",
         flags: &[
             ("--online", "only online devices"),
             (
@@ -102,6 +110,10 @@ pub const NODES: &[Node] = &[
                 "android, android_tv, macos, windows, linux, ios, ipados, tvos, samsung_tv, lg_tv",
             ),
             ("--team-visible", "Carbons: other Carbons' devices"),
+            (
+                "--removed",
+                "Carbons: also your removed devices, whose activity stays readable",
+            ),
         ],
         examples: &["extend device ls --online"],
     },
@@ -137,7 +149,14 @@ pub const NODES: &[Node] = &[
         who: "Carbon",
         purpose: "Pair an iPhone, iPad, Apple TV or Samsung/LG TV through a paired Mac or computer on the same network.",
         used_with: "Then `extend device setup <device_id> --watch`; an Apple TV also needs `extend device setup-code <device_id> <code>`.",
-        flags: &[],
+        flags: &[
+            ("--os <os>", "ios, ipados, tvos, samsung_tv or lg_tv; required"),
+            ("--name <name>", "1–64 characters, required"),
+            (
+                "--address <ip>",
+                "a TV's address on the network, when it isn't found on its own",
+            ),
+        ],
         examples: &["extend device attach 2e7f00d1 --os ios --name \"Saket's iPhone\""],
     },
     Node {
@@ -145,7 +164,7 @@ pub const NODES: &[Node] = &[
         usage: "extend device setup <device_id> [--watch]",
         who: "Carbon (owner)",
         purpose: "The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete.",
-        used_with: "",
+        used_with: "Run after `extend device pair` or `extend device attach`.",
         flags: &[("--watch", "refresh every 2 s until setup completes")],
         examples: &[],
     },
@@ -154,7 +173,7 @@ pub const NODES: &[Node] = &[
         usage: "extend device setup-code <device_id> <code>",
         who: "Carbon (owner)",
         purpose: "Enter the 4-digit code an Apple TV shows during setup.",
-        used_with: "",
+        used_with: "`extend device setup <device_id>` says when the Apple TV is showing a code.",
         flags: &[],
         examples: &[],
     },
@@ -190,7 +209,7 @@ pub const NODES: &[Node] = &[
         usage: "extend device stop <device_id>",
         who: "Carbon (owner)",
         purpose: "Stop the Silicon using the device right now.",
-        used_with: "",
+        used_with: "See who is using it with `extend device show <device_id>`.",
         flags: &[],
         examples: &[],
     },
@@ -199,7 +218,7 @@ pub const NODES: &[Node] = &[
         usage: "extend device rm <device_id> --yes",
         who: "Carbon (owner)",
         purpose: "Remove the device: ends any session and every Silicon's access, and unpairs it. Devices paired through it go too.",
-        used_with: "Without --yes it only says what would happen.",
+        used_with: "Without --yes it only says what would happen. The activity log stays readable: `extend device ls --removed`, then `extend device activity <device_id>`.",
         flags: &[("--yes", "confirm")],
         examples: &[],
     },
@@ -208,7 +227,7 @@ pub const NODES: &[Node] = &[
         usage: "extend device access ls <device_id> | grant <device_id> <silicon_id>... | revoke <device_id> <silicon_id>...",
         who: "Carbon (owner)",
         purpose: "See, give and take away which Silicons can use a device. Taking access away ends that Silicon's running session at once.",
-        used_with: "",
+        used_with: "`extend team silicons` lists the Silicons you can grant.",
         flags: &[],
         examples: &["extend device access grant 7c1e09ab si:chef"],
     },
@@ -218,7 +237,12 @@ pub const NODES: &[Node] = &[
         who: "Carbon (owner)",
         purpose: "Every action on the device, which Silicon did it, and when. Typed text is redacted.",
         used_with: "",
-        flags: &[("--since/--until", "RFC 3339, or relative like 2h, 3d")],
+        flags: &[
+            ("--silicon <id>", "only this Silicon's actions"),
+            ("--session <id>", "only this session's actions"),
+            ("--since/--until", "RFC 3339, or relative like 30m, 2h, 3d"),
+            ("--limit <n>", "at most n entries, 1–100 (default 50)"),
+        ],
         examples: &["extend device activity 7c1e09ab --since 2h"],
     },
     Node {
@@ -253,7 +277,7 @@ pub const NODES: &[Node] = &[
         usage: "extend session connect <session_id>",
         who: "Silicon",
         purpose: "Make this the session later commands run in, and load its device's commands into --help.",
-        used_with: "",
+        used_with: "The command list is refreshed on every device command and `extend session status`, and forgotten when the session ends.",
         flags: &[],
         examples: &["extend session connect a3f"],
     },
@@ -271,7 +295,7 @@ pub const NODES: &[Node] = &[
         usage: "extend session status [<session_id>]",
         who: "Silicon",
         purpose: "State, device, commands run, and when it ends for inactivity.",
-        used_with: "",
+        used_with: "Also refreshes what `extend --help` lists for the connected device.",
         flags: &[],
         examples: &[],
     },
@@ -281,7 +305,10 @@ pub const NODES: &[Node] = &[
         who: "Carbon or Silicon",
         purpose: "Silicon: your sessions. Carbon: sessions on your devices.",
         used_with: "",
-        flags: &[],
+        flags: &[
+            ("--device <device_id>", "only sessions on this device"),
+            ("--state <state>", "active, paused or ended"),
+        ],
         examples: &[],
     },
     Node {
@@ -308,7 +335,11 @@ pub const NODES: &[Node] = &[
         who: "Silicon",
         purpose: "Ask the Silicon using a device for it. Delivered through Ting with your reason exactly as written (1–300 characters).",
         used_with: "Use after `extend session new` says the device is in use.",
-        flags: &[],
+        flags: &[
+            ("--reason <text>", "send: 1–300 characters, required"),
+            ("--sent / --received", "ls: only requests you sent, or received"),
+            ("--device <id>", "ls: only requests for this device"),
+        ],
         examples: &["extend request send 7c1e09ab --reason \"Need 2 minutes to read an OTP\""],
     },
     Node {
@@ -316,9 +347,20 @@ pub const NODES: &[Node] = &[
         usage: "extend file ls [--session <id>] [--device <id>] [--kind <kind>] | show <file_id> | get <file_id> [--out <path>] | keep <file_id>",
         who: "Carbon or Silicon",
         purpose: "Files made in sessions (screenshots, recordings, logs, scripts), stored in Briefcase. They self-destruct after 1 day unless made with --ttl or kept.",
-        used_with: "Device commands that make files also take --ttl <1m–30d>, --keep and --out <path>.",
-        flags: &[],
-        examples: &["extend file keep 6e1f2a9c-..."],
+        used_with: "Device commands that make files also take --ttl <1m–30d>, --keep and --out <path>. `extend file get` downloads through Extend, which reads Briefcase for you, so it works for the Silicon that made the file and the Carbon whose device made it.",
+        flags: &[
+            ("--session <id>", "ls: only files from this session"),
+            ("--device <id>", "ls: only files from this device"),
+            ("--kind <kind>", "ls: screenshot, recording, log, replay_script or diff"),
+            (
+                "--out <path>",
+                "get: a file or directory to save to (default: download_dir, else here)",
+            ),
+        ],
+        examples: &[
+            "extend file get 6e1f2a9c-... --out ./shot.png",
+            "extend file keep 6e1f2a9c-...",
+        ],
     },
     Node {
         path: "report",
@@ -342,9 +384,12 @@ pub const NODES: &[Node] = &[
         path: "version",
         usage: "extend version [--json]",
         who: "anyone",
-        purpose: "CLI, client crate and negotiated API versions.",
-        used_with: "",
-        flags: &[],
+        purpose: "CLI, client crate and negotiated API versions, and whether this CLI is current, deprecated or sunset.",
+        used_with: "Reads Extend's compatibility matrix (GET /api/v1/contracts). Status is current, deprecated (update before the API is retired), sunset (update now), unsupported (this CLI is outside the versions the API works with) or unknown (Extend couldn't be asked). Update with `honeycomb install 'extend'`.",
+        flags: &[(
+            "--json",
+            "{\"cli\", \"client_crate\", \"api_version\", \"api_url\", \"service_version\", \"status\", \"api_state\", \"cli_range\", \"message\", ...}",
+        )],
         examples: &[],
     },
     Node {
@@ -356,16 +401,25 @@ pub const NODES: &[Node] = &[
         flags: &[],
         examples: &[],
     },
+    Node {
+        path: "help",
+        usage: "extend help [<command>...]",
+        who: "anyone",
+        purpose: "The same as `extend [<command>...] --help`.",
+        used_with: "",
+        flags: &[],
+        examples: &["extend help device ls"],
+    },
 ];
 
 pub const GLOBAL_FLAGS: &[(&str, &str)] = &[
     (
         "--json",
-        "one JSON document on stdout: {\"ok\": true, \"data\": ...} or {\"ok\": false, \"error\": {...}}",
+        "one JSON document: on success the data itself on stdout, on failure {\"error\": {code, message, hint, request_id, docs_url, details, exit_code}} on stderr",
     ),
     (
         "--test <test_id>",
-        "run in a test environment added with `extend config test add` (printed on stderr at the end)",
+        "run in a test environment added with `extend config test add` or given by EXTEND_TEST_SECRET (named on stderr at the end, even on failure)",
     ),
     (
         "--session <session_id>",
@@ -374,12 +428,23 @@ pub const GLOBAL_FLAGS: &[(&str, &str)] = &[
     ("--team <handle>", "use this team for one command"),
     ("--timeout <ms>", "device command deadline, 1000–300000 (default 30000)"),
     ("-h, --help", "help for this part of the tree"),
-    ("-V, --version", "versions"),
-    ("-v, --verbose", "request ids and timings on stderr"),
+    ("-V, --version", "versions, and whether this CLI is current"),
+    (
+        "-v, --verbose",
+        "on stderr: each call to Extend with its time and outcome, and the request id of a failed one",
+    ),
 ];
 
 pub fn find(path: &str) -> Option<&'static Node> {
     NODES.iter().find(|n| n.path == path)
+}
+
+/// The usage line for `extend <path>`, or its parent's.
+pub fn usage_of(path: &str) -> &'static str {
+    find(path)
+        .or_else(|| path.rsplit_once(' ').and_then(|(parent, _)| find(parent)))
+        .or_else(|| find(path.split(' ').next().unwrap_or(path)))
+        .map_or("extend --help", |n| n.usage)
 }
 
 pub fn render_node(n: &Node) -> String {
@@ -413,6 +478,7 @@ pub fn render_node(n: &Node) -> String {
             s.push_str(&format!("  {e}\n"));
         }
     }
+    s.push_str("\nGlobal flags work here too; see `extend --help`.\n");
     s
 }
 
@@ -420,7 +486,65 @@ fn first_sentence(s: &str) -> &str {
     s.split(". ").next().unwrap_or(s).trim_end_matches('.')
 }
 
-pub fn render_device_command(name: &str) -> Option<String> {
+/// The session this CLI is connected to, as last read from Extend.
+pub struct Connected<'a> {
+    pub session_id: &'a str,
+    pub device: &'a str,
+    pub os: &'a str,
+    pub commands: &'a [String],
+    pub missing: &'a [crate::store::MissingNote],
+    /// Unix seconds.
+    pub refreshed_at: i64,
+}
+
+impl Connected<'_> {
+    fn when(&self) -> String {
+        if self.refreshed_at <= 0 {
+            return "when you connected".into();
+        }
+        time::OffsetDateTime::from_unix_timestamp(self.refreshed_at)
+            .ok()
+            .and_then(|t| {
+                t.format(&time::macros::format_description!("[hour]:[minute]:[second]Z"))
+                    .ok()
+            })
+            .map_or_else(|| "when you connected".into(), |t| format!("at {t}"))
+    }
+}
+
+/// Why the connected device can't run `c`, or `None` when it can.
+fn not_available(c: &CommandSpec, on: &Connected) -> Option<String> {
+    if on.commands.iter().any(|x| x == c.name) {
+        return None;
+    }
+    let caps: Vec<&str> = c.any_of.iter().map(|x| x.as_str()).collect();
+    let reasons: Vec<String> = on
+        .missing
+        .iter()
+        .filter(|m| caps.contains(&m.capability.as_str()))
+        .map(|m| format!("{}: {}", m.capability, m.reason))
+        .collect();
+    Some(format!(
+        "Not available on {} ({}) in session {}: it needs {}, which the device {} ({}).{}",
+        on.device,
+        on.os,
+        on.session_id,
+        caps.join(" or "),
+        if on.commands.is_empty() {
+            "didn't report"
+        } else {
+            "doesn't have"
+        },
+        on.when(),
+        if reasons.is_empty() {
+            String::new()
+        } else {
+            format!(" {}.", reasons.join("; ").trim_end_matches('.'))
+        }
+    ))
+}
+
+pub fn render_device_command(name: &str, connected: Option<&Connected>) -> Option<String> {
     let c = COMMANDS.iter().find(|c| c.name == name)?;
     let caps: Vec<&str> = c.any_of.iter().map(|x| x.as_str()).collect();
     let origin = match c.origin {
@@ -440,8 +564,14 @@ pub fn render_device_command(name: &str) -> Option<String> {
         ),
         Origin::Extend => String::new(),
     };
+    let note = connected
+        .and_then(|on| not_available(c, on))
+        .map(|n| {
+            format!("\n{n}\n`extend --help` lists what works there; `extend session status` refreshes that list.\n")
+        })
+        .unwrap_or_default();
     Some(format!(
-        "extend {name}\n\n{}.\n\nUsage:\n  extend {}\n\nThis is {origin}. It needs a session (`extend session new <device_id> --connect`) and a device with: {}.\n\nFlags for any device command:\n  --session <id>          which session (default: the connected one)\n  --timeout <ms>          deadline, 1000–300000 (default 30000)\n  --json                  full structured result\n  --ttl <1m–30d>          self-destruct for files this command makes (default 1d)\n  --keep                  keep files this command makes permanently\n  --out <path>            also save the files locally\n\n{placement}{more}",
+        "extend {name}\n\n{}.\n{note}\nUsage:\n  extend {}\n\nThis is {origin}. It needs a session (`extend session new <device_id> --connect`) and a device with: {}.\n\nFlags for any device command:\n  --session <id>          which session (default: the connected one)\n  --timeout <ms>          deadline, 1000–300000 (default 30000)\n  --json                  full structured result\n  --ttl <1m–30d>          self-destruct for files this command makes (default 1d)\n  --keep                  keep files this command makes permanently\n  --out <path>            also save the files locally (their Briefcase links are printed first)\n\n{placement}{more}",
         c.summary,
         usage(c),
         caps.join(" or "),
@@ -477,7 +607,7 @@ For a larger APK, the error explains how to push it in parts and install it with
 extend adb shell pm install -r /data/local/tmp/<file>.
 ";
 
-/// How `extend adb` reads its arguments (see `VERBATIM_COMMANDS` in main.rs).
+/// How `extend adb` reads its arguments (see `VERBATIM_COMMANDS` in args.rs).
 const ADB_ARGUMENTS: &str = "\
 Everything after the first adb argument goes to the device exactly as typed, including -h, -v,
 --json and --out (only pull's local path is kept here; see below). Put Extend's flags before it:
@@ -498,7 +628,7 @@ larger file, split it into parts of 8 MiB or less (split -b 8m), push each part 
 ";
 
 /// Top-level help. `connected` narrows the device commands to what the session's device can do.
-pub fn render_top(connected: Option<(&str, &str, &str, &[String])>) -> String {
+pub fn render_top(connected: Option<&Connected>) -> String {
     let mut s = String::from(
         "extend — let a Silicon use the devices a Carbon has paired, and let the Carbon manage them.\n\n\
 Getting started\n\
@@ -515,10 +645,21 @@ Commands (extend <command> --help goes deeper)\n",
         s.push_str(&format!("  {:<12} {}\n", n.path, first_sentence(n.purpose)));
     }
     match connected {
-        Some((sid, device, os, cmds)) => {
-            s.push_str(&format!("\nDevice commands — connected to session {sid} on {device} ({os}); only commands that work there are shown\n"));
-            for c in COMMANDS.iter().filter(|c| cmds.iter().any(|x| x == c.name)) {
+        Some(on) => {
+            s.push_str(&format!(
+                "\nDevice commands — connected to session {} on {} ({}); only commands that work there are shown (as the device reported {}; `extend session status` refreshes this)\n",
+                on.session_id,
+                on.device,
+                on.os,
+                on.when()
+            ));
+            let mut any = false;
+            for c in COMMANDS.iter().filter(|c| on.commands.iter().any(|x| x == c.name)) {
+                any = true;
                 s.push_str(&format!("  {:<14} {}\n", c.name, c.summary));
+            }
+            if !any {
+                s.push_str("  (none right now: the device reported nothing it can do, usually because it is offline or still being set up. `extend session status` checks again.)\n");
             }
         }
         None => {
@@ -550,7 +691,7 @@ mod tests {
         )
         .unwrap();
         for name in ["install", "reinstall"] {
-            let help = render_device_command(name).unwrap();
+            let help = render_device_command(name, None).unwrap();
             let usage_line = help.lines().skip_while(|l| *l != "Usage:").nth(1).unwrap();
             assert!(
                 !usage_line.contains("file_id"),
@@ -564,5 +705,59 @@ mod tests {
                 "{help}"
             );
         }
+    }
+
+    /// Every flag an Extend command accepts is documented in its help node.
+    #[test]
+    fn every_accepted_flag_is_in_help() {
+        for spec in crate::args::SPECS {
+            let node = find(spec.path)
+                .or_else(|| spec.path.rsplit_once(' ').and_then(|(p, _)| find(p)))
+                .or_else(|| find(spec.path.split(' ').next().unwrap()))
+                .unwrap_or_else(|| panic!("no help for `extend {}`", spec.path));
+            for (flag, _) in spec.flags {
+                let documented = node.usage.contains(flag) || node.flags.iter().any(|(f, _)| f.contains(flag));
+                assert!(
+                    documented,
+                    "`extend {}` accepts {flag}, but `extend {} --help` doesn't mention it",
+                    spec.path, node.path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn help_marks_commands_the_connected_device_cannot_run() {
+        let commands = vec!["snapshot".to_owned(), "terminal".to_owned()];
+        let missing = vec![crate::store::MissingNote {
+            capability: "input.remote".into(),
+            reason: "Only TVs have a remote.".into(),
+        }];
+        let on = Connected {
+            session_id: "a3f",
+            device: "CLI box",
+            os: "linux",
+            commands: &commands,
+            missing: &missing,
+            refreshed_at: 0,
+        };
+        let tv = render_device_command("tv-remote", Some(&on)).unwrap();
+        assert!(
+            tv.contains(
+                "Not available on CLI box (linux) in session a3f: it needs input.remote, which the device doesn't have (when you connected). input.remote: Only TVs have a remote."
+            ),
+            "{tv}"
+        );
+        let snap = render_device_command("snapshot", Some(&on)).unwrap();
+        assert!(!snap.contains("Not available"), "{snap}");
+        assert!(
+            !render_device_command("tv-remote", None)
+                .unwrap()
+                .contains("Not available")
+        );
+
+        let empty: Vec<String> = vec![];
+        let offline = Connected { commands: &empty, ..on };
+        assert!(render_top(Some(&offline)).contains("(none right now"));
     }
 }

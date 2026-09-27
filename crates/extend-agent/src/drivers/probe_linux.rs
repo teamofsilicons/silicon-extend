@@ -2,7 +2,9 @@
 //! bus, and the helper programs agent-device's Linux support drives (xdotool or ydotool, a
 //! screenshot tool, a clipboard tool, xdg-open).
 //!
-//! A computer without a screen (a server) gets only `terminal`, `apps.launch` and `replay`.
+//! A computer without a screen (a server) gets only `terminal` (`UNDERSTANDING.md`: "a computer
+//! without a screen, like a server, only gets the terminal"); everything else is missing with
+//! [`NO_SCREEN_REASON`].
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -12,6 +14,7 @@ use extend_protocol::model::{MissingCapability, Setup, SetupStep, StepStatus};
 use extend_protocol::{Capability, DeviceOs};
 
 use crate::drivers::agent_device::ProbeInput;
+use crate::drivers::screen_lock::{self, ScreenBlock};
 
 pub const NO_SCREEN_REASON: &str =
     "This computer has no screen (no DISPLAY or WAYLAND_DISPLAY), so a Silicon can only use the terminal here.";
@@ -34,6 +37,8 @@ pub struct LinuxFacts {
     /// screen; the error says what to install otherwise.
     pub recording: Result<(), String>,
     pub xdg_open: bool,
+    /// logind says the session's lock screen is up (`LockedHint`).
+    pub locked: bool,
 }
 
 fn miss(c: Capability, reason: &str, missing: &mut Vec<MissingCapability>) {
@@ -68,16 +73,9 @@ pub fn build_probe(facts: &LinuxFacts, input: &ProbeInput<'_>) -> Probe {
     let mut steps = Vec::new();
 
     let Some(display) = facts.display else {
-        // A server: terminal (added by the local driver), opening apps and replay only.
-        if let Some(problem) = input.problem {
-            for c in [AppsLaunch, Replay] {
-                miss(c, problem, &mut missing);
-            }
-        } else {
-            caps.extend([AppsLaunch, Replay]);
-        }
+        // A server: only the terminal, which the local driver adds.
         for c in DeviceOs::Linux.full_capabilities() {
-            if !matches!(c, Terminal | AppsLaunch | Replay) {
+            if *c != Terminal {
                 miss(*c, NO_SCREEN_REASON, &mut missing);
             }
         }
@@ -213,6 +211,11 @@ pub fn build_probe(facts: &LinuxFacts, input: &ProbeInput<'_>) -> Probe {
             &mut missing,
         ),
     }
+    // Nothing that needs the screen works until it is unlocked. Not a setup step: the terminal
+    // works while it is locked.
+    if facts.locked {
+        screen_lock::withhold(ScreenBlock::Locked, &mut caps, &mut missing);
+    }
     finish(caps, missing, steps)
 }
 
@@ -302,6 +305,7 @@ pub fn gather() -> LinuxFacts {
         clipboard_tool,
         recording,
         xdg_open: have("xdg-open"),
+        locked: display.is_some() && screen_lock::current() == Some(ScreenBlock::Locked),
     }
 }
 
@@ -367,7 +371,7 @@ pub fn ffmpeg_problem(encoders: &str, devices: &str) -> Option<String> {
 }
 
 /// Runs a program and returns its stdout, giving up after `timeout`.
-fn capture(program: &std::path::Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+pub(crate) fn capture(program: &std::path::Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     use std::io::Read as _;
     let mut child = Command::new(program)
         .args(args)
@@ -456,7 +460,61 @@ mod tests {
             clipboard_tool: Some("xclip".into()),
             recording: Ok(()),
             xdg_open: true,
+            locked: false,
         }
+    }
+
+    #[test]
+    fn a_locked_session_says_so_for_everything_that_needs_the_screen() {
+        let commands = vec![
+            "record".to_owned(),
+            "apps".to_owned(),
+            "logs".to_owned(),
+            "clipboard".to_owned(),
+        ];
+        let admitted = ProbeInput {
+            problem: None,
+            commands: Some(&commands),
+        };
+        let unlocked = build_probe(&desktop(), &admitted);
+        assert!(unlocked.capabilities.contains(&Capability::ScreenRead));
+        let locked = LinuxFacts {
+            locked: true,
+            ..desktop()
+        };
+        let p = build_probe(&locked, &admitted);
+        assert_eq!(
+            p.capabilities,
+            vec![Capability::AppsList, Capability::Logs, Capability::Takeover]
+        );
+        let reason = ScreenBlock::Locked.reason();
+        assert!(reason.contains("is locked") && reason.contains("Unlock it"), "{reason}");
+        for c in DeviceOs::Linux.full_capabilities() {
+            if matches!(
+                c,
+                Capability::Terminal | Capability::AppsList | Capability::Logs | Capability::Takeover
+            ) {
+                continue;
+            }
+            let m = p.missing.iter().find(|m| m.capability == *c);
+            assert_eq!(m.map(|m| m.reason.as_str()), Some(reason.as_str()), "{c:?}");
+        }
+        assert!(!p.missing.iter().any(|m| m.capability == Capability::Terminal));
+        assert_eq!(p.setup.state, SetupState::Complete);
+        // Missing for a reason unlocking won't fix: that reason stays.
+        let p = build_probe(
+            &LinuxFacts {
+                input_tool: None,
+                ..locked.clone()
+            },
+            &admitted,
+        );
+        let m = p
+            .missing
+            .iter()
+            .find(|m| m.capability == Capability::InputText)
+            .unwrap();
+        assert!(m.reason.contains("xdotool"), "{}", m.reason);
     }
     fn input() -> ProbeInput<'static> {
         ProbeInput {
@@ -477,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn a_server_gets_terminal_apps_and_replay_only() {
+    fn a_server_gets_only_the_terminal() {
         let facts = LinuxFacts {
             display: None,
             atspi: Err("no screen".into()),
@@ -485,17 +543,44 @@ mod tests {
             screenshot_tool: None,
             clipboard_tool: None,
             recording: Err("no X11 screen".into()),
-            xdg_open: false,
+            xdg_open: true,
+            locked: false,
         };
-        let p = build_probe(&facts, &input());
-        assert_eq!(p.capabilities, vec![Capability::AppsLaunch, Capability::Replay]);
-        assert!(
-            p.missing
-                .iter()
-                .any(|m| m.capability == Capability::ScreenRead && m.reason == NO_SCREEN_REASON)
+        for commands in [
+            None,
+            Some(vec!["open".to_owned(), "replay".to_owned(), "record".to_owned()]),
+        ] {
+            let p = build_probe(
+                &facts,
+                &ProbeInput {
+                    problem: None,
+                    commands: commands.as_deref(),
+                },
+            );
+            // The terminal is added by the local driver; nothing else works without a screen.
+            assert_eq!(p.capabilities, vec![]);
+            let p = crate::drivers::local::with_terminal(p);
+            assert_eq!(p.capabilities, vec![Capability::Terminal]);
+            for c in DeviceOs::Linux.full_capabilities() {
+                if *c == Capability::Terminal {
+                    assert!(!p.missing.iter().any(|m| m.capability == *c));
+                } else {
+                    let m = p.missing.iter().find(|m| m.capability == *c);
+                    assert_eq!(m.map(|m| m.reason.as_str()), Some(NO_SCREEN_REASON), "{c:?}");
+                }
+            }
+            assert_eq!(p.setup.state, SetupState::Complete);
+        }
+        // Without agent-device the reason is still the missing screen: that's what the Carbon can act on.
+        let p = build_probe(
+            &facts,
+            &ProbeInput {
+                problem: Some("agent-device isn't available"),
+                commands: None,
+            },
         );
-        assert!(!p.missing.iter().any(|m| m.capability == Capability::Terminal));
-        assert_eq!(p.setup.state, SetupState::Complete);
+        assert!(p.capabilities.is_empty());
+        assert!(p.missing.iter().all(|m| m.reason == NO_SCREEN_REASON));
     }
 
     #[test]

@@ -1,0 +1,555 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Silicon Extend service (backend.extend.teamofsilicons.com) on ONE ARM64 EC2
+  host with Caddy HTTPS and WebSockets, the service container under systemd (exactly one instance:
+  the device WebSocket hub lives in the process), a private RDS PostgreSQL 17 db.t4g.micro, ECR, one
+  Secrets Manager runtime secret, CloudWatch logs. No load balancer. Administration through SSM only;
+  no SSH. Modeled on silicon-remind/deploy/aws/standalone.yaml (Caddy + ECR containers + RDS),
+  silicon-peek-production (PinnedImageId, AllocateEip, termination protection) and
+  silicon-commit-database (private db.t4g.micro). Deploy in us-east-1:
+  aws --profile silicon-production --region us-east-1 cloudformation deploy
+  --stack-name silicon-extend-production --template-file deploy/aws/standalone.yaml
+  --capabilities CAPABILITY_NAMED_IAM --tags Service=silicon-extend Environment=production. See README.md.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-04b23a487cfe0bd8e
+    Description: silicon-chat-production VPC (10.80.0.0/16), shared by every production sibling
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-07945746462c26b2d
+    Description: silicon-chat-production-public-a (us-east-1a, routes to igw-00f22c5b810fb576b)
+  DatabaseSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-00cb233b2b136e259,subnet-039e3864dbc2f129d
+    Description: silicon-chat-production-private-a and -b (the subnets every sibling RDS uses)
+  DatabaseAvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+    Description: Same AZ as the host, so host<->database traffic is not billed as cross-AZ
+  Ami:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 arm64; used only while PinnedImageId is empty
+  PinnedImageId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(ami-[0-9a-f]{8,17})?$'
+    Description: >-
+      After the first deploy ALWAYS pass PinnedImageId=<ImageId output>. CloudFormation re-resolves
+      the Ami parameter on every update and a newer AMI would replace the instance (new public IP).
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    AllowedValues: [t4g.small, t4g.medium]
+    Description: Device uploads of up to 1 GiB are buffered in memory, hence 4 GiB
+  AllocateEip:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: >-
+      The account's EC2-VPC Elastic IP quota is 10 and 14 addresses are allocated (6 of them
+      ALB-managed), so allocation is expected to fail. 'false' uses the auto-assigned public IPv4,
+      which survives reboot and auto-recovery but changes on stop/start or replacement.
+  HostName:
+    Type: String
+    Default: backend.extend.teamofsilicons.com
+  AcmeEmail:
+    Type: String
+    Default: ops@teamofsilicons.com
+    Description: Let's Encrypt account email (same as silicon-remind-standalone)
+  CaddyImageUri:
+    Type: String
+    Default: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    Description: Multi-arch Caddy index pinned by digest (resolved 2026-09-27)
+  ImageParameterName:
+    Type: String
+    Default: /silicon/extend/production/backend-image
+    Description: >-
+      SSM String parameter holding the live digest-pinned image URI. Created and updated by the
+      release procedure (never by this template), read by extend-release on a rebuilt host.
+  DatabaseEngineVersion:
+    Type: String
+    Default: '17.9'
+    Description: Matches the sibling fleet (IAM, DM, Briefcase, Remind are on 17.9); Extend needs 16+
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small]
+  AllowMasterSecretRead:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: >-
+      'true' only for the one-time extend-db-bootstrap run (lets the host read the RDS-managed
+      master secret); redeploy with 'false' right after.
+
+Conditions:
+  CreateEip: !Equals [!Ref AllocateEip, 'true']
+  UsePinnedImage: !Not [!Equals [!Ref PinnedImageId, '']]
+  ReadMasterSecret: !Equals [!Ref AllowMasterSecretRead, 'true']
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: silicon-extend-production
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: AES256}
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Retain the 20 newest release images",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+  RuntimeSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: silicon-extend/production/runtime
+      Description: >-
+        Silicon Extend runtime secrets as one JSON object of strings (EXTEND_* keys). Rendered to
+        /etc/extend/runtime.env (0600) by /usr/local/sbin/extend-render-env on the host.
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: /silicon-extend/production/service
+      RetentionInDays: 30
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Silicon Extend host - Caddy HTTP (ACME, redirect) and HTTPS/WSS only; admin via SSM
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: ACME HTTP-01 and redirect to HTTPS}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS API and device WebSockets}
+      SecurityGroupEgress:
+        - {IpProtocol: '-1', CidrIp: 0.0.0.0/0, Description: IAM Briefcase Ting Postmark Space Station ECR RDS}
+      Tags:
+        - {Key: Name, Value: silicon-extend-production}
+        - {Key: Service, Value: silicon-extend}
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    Properties:
+      GroupDescription: Silicon Extend private PostgreSQL - 5432 from the Extend host only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref InstanceSecurityGroup, Description: Extend host}
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    DeletionPolicy: Retain
+    Properties:
+      DBSubnetGroupDescription: Silicon Extend private database subnets
+      SubnetIds: !Ref DatabaseSubnetIds
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: silicon-extend-production
+      Engine: postgres
+      EngineVersion: !Ref DatabaseEngineVersion
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: 100
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: extend_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      AvailabilityZone: !Ref DatabaseAvailabilityZone
+      MultiAZ: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      DeletionProtection: true
+      AutoMinorVersionUpgrade: true
+      EnablePerformanceInsights: false
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+        - {Key: Environment, Value: production}
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: silicon-extend-production-host
+      Description: Silicon Extend production host (SSM, ECR pull, runtime secret, image parameter, logs)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
+      Policies:
+        - PolicyName: ExtendRuntime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: ecr:GetAuthorizationToken, Resource: '*'}
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+                Resource: !Ref RuntimeSecret
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ImageParameterName}'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt LogGroup.Arn
+              - !If
+                - ReadMasterSecret
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !GetAtt Database.MasterUserSecret.SecretArn
+                - !Ref AWS::NoValue
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  Instance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: !If [UsePinnedImage, !Ref PinnedImageId, !Ref Ami]
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      DisableApiTermination: true
+      # Refuses stop/start, which would change the auto-assigned public IP (and the DNS target).
+      # It also makes CloudFormation fail instead of stop/starting on a UserData change.
+      DisableApiStop: true
+      EbsOptimized: true
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref PublicSubnetId
+          AssociatePublicIpAddress: true
+          GroupSet: [!Ref InstanceSecurityGroup]
+      # Hop limit 1 keeps containers on the bridge network away from the instance credentials.
+      MetadataOptions: {HttpEndpoint: enabled, HttpTokens: required, HttpPutResponseHopLimit: 1}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 30, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: silicon-extend-production}
+        - {Key: Service, Value: silicon-extend}
+        - {Key: Environment, Value: production}
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            # First boot only. Never change this after the first deploy (see DisableApiStop). Every
+            # release is installed later with /usr/local/sbin/extend-release through SSM.
+            set -Eeuo pipefail
+            exec > >(tee -a /var/log/extend-bootstrap.log | logger -t extend-bootstrap -s 2>/dev/console) 2>&1
+            trap 'echo "bootstrap failed at line $LINENO" >&2' ERR
+
+            dnf install -y docker awscli-2 python3 jq
+            systemctl enable --now docker amazon-ssm-agent
+            if [ ! -f /swapfile ]; then
+              fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+              echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+            fi
+            install -d -m 0700 /etc/extend
+            install -d -m 0755 /opt/extend
+            # The image's user is uid/gid 10001; EXTEND_DATA_DIR must be writable (uploads are
+            # staged there for seconds before they go to Briefcase).
+            install -d -o 10001 -g 10001 -m 0700 /var/lib/extend /var/lib/extend/data
+            curl --fail --silent --show-error --location --retry 3 \
+              https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+              --output /opt/extend/rds-global-bundle.pem
+            test -s /opt/extend/rds-global-bundle.pem
+            chmod 0644 /opt/extend/rds-global-bundle.pem
+
+            cat > /etc/extend/stack.env <<'ENV'
+            REGION=${AWS::Region}
+            ACCOUNT=${AWS::AccountId}
+            RUNTIME_SECRET_ARN=${RuntimeSecret}
+            MASTER_SECRET_ARN=${MasterSecretArn}
+            DB_HOST=${DatabaseHost}
+            IMAGE_PARAMETER=${ImageParameterName}
+            LOG_GROUP=${LogGroup}
+            HOST_NAME=${HostName}
+            ENV
+            chmod 0600 /etc/extend/stack.env
+
+            cat > /etc/extend/Caddyfile <<'CADDY'
+            {
+              email ${AcmeEmail}
+            }
+            ${HostName} {
+              handle /dev/* {
+                respond 404
+              }
+              handle {
+                # WebSocket upgrades pass through; Caddy has no idle timeout on upgraded streams.
+                # stream_close_delay keeps device sockets open across a Caddy config reload.
+                reverse_proxy extend-service:8080 {
+                  stream_close_delay 5m
+                }
+              }
+            }
+            CADDY
+            chmod 0600 /etc/extend/Caddyfile
+
+            cat > /usr/local/sbin/extend-render-env <<'SCRIPT'
+            #!/bin/bash
+            # Renders /etc/extend/runtime.env (0600) from the runtime secret plus fixed settings.
+            set -Eeuo pipefail
+            . /etc/extend/stack.env
+            umask 077
+            aws secretsmanager get-secret-value --region "$REGION" --secret-id "$RUNTIME_SECRET_ARN" \
+              --query SecretString --output text > /etc/extend/runtime.json
+            python3 - <<'PY'
+            import json, os, pathlib
+            stack = dict(l.split('=', 1) for l in pathlib.Path('/etc/extend/stack.env').read_text().splitlines() if '=' in l)
+            source = json.loads(pathlib.Path('/etc/extend/runtime.json').read_text())
+            required = ('EXTEND_DATABASE_URL', 'EXTEND_IAM_APP_ID', 'EXTEND_IAM_APP_SECRET',
+                        'EXTEND_IAM_WEBHOOK_SECRET', 'EXTEND_HONEYCOMB_SERVICE_TOKEN',
+                        'EXTEND_POSTMARK_SERVER_TOKEN', 'EXTEND_REPORT_RECIPIENTS')
+            optional = ('EXTEND_IAM_WEBHOOK_SECRET_VERSION', 'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET',
+                        'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION', 'EXTEND_SPACE_STATION_KEY',
+                        'EXTEND_TEST_TELEMETRY_KEYS', 'EXTEND_IAM_BASE_URL', 'EXTEND_IAM_PUBLIC_URL',
+                        'EXTEND_IAM_LOGIN_URL', 'EXTEND_BRIEFCASE_URL', 'EXTEND_BRIEFCASE_WEB_URL',
+                        'EXTEND_TING_URL', 'EXTEND_WEBSITE_URL', 'EXTEND_DOCS_URL',
+                        'EXTEND_REPOSITORY_URL', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG')
+            def clean(key, value):
+                if not isinstance(value, str) or not value or any(ord(c) in (0, 10, 13) for c in value):
+                    raise SystemExit('runtime secret value missing or malformed: ' + key)
+                return value
+            values = {k: clean(k, source.get(k)) for k in required}
+            values.update({k: clean(k, source[k]) for k in optional if k in source})
+            if 'sslmode=verify-full' not in values['EXTEND_DATABASE_URL']:
+                raise SystemExit('EXTEND_DATABASE_URL must use sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem')
+            defaults = {
+                'EXTEND_IAM_BASE_URL': 'https://backend.iam.teamofsilicons.com',
+                'EXTEND_IAM_LOGIN_URL': 'https://auth.iam.teamofsilicons.com/login',
+                'EXTEND_BRIEFCASE_URL': 'https://backend.briefcase.teamofsilicons.com',
+                'EXTEND_BRIEFCASE_WEB_URL': 'https://briefcase.teamofsilicons.com',
+                'EXTEND_TING_URL': 'https://backend.ting.teamofsilicons.com',
+                'EXTEND_WEBSITE_URL': 'https://extend.teamofsilicons.com',
+                'EXTEND_DOCS_URL': 'https://extend.teamofsilicons.com/docs',
+                'EXTEND_IAM_WEBHOOK_SECRET_VERSION': '1',
+                'EXTEND_LOG': 'info',
+            }
+            for k, v in defaults.items():
+                values.setdefault(k, v)
+            values.update({
+                'EXTEND_ENVIRONMENT': 'production',
+                'EXTEND_BIND': '0.0.0.0:8080',
+                'EXTEND_PUBLIC_URL': 'https://' + stack['HOST_NAME'],
+                'EXTEND_DATA_DIR': '/var/lib/extend/data',
+                'EXTEND_LOG_FORMAT': 'json',
+                # Caddy is the only peer on this network; the service reads X-Forwarded-For from it.
+                'EXTEND_TRUSTED_PROXY_CIDRS': '172.30.87.0/24',
+            })
+            with open('/etc/extend/runtime.env', 'w', opener=lambda p, m: os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)) as out:
+                for key, value in sorted(values.items()):
+                    out.write(key + '=' + value + '\n')
+            os.remove('/etc/extend/runtime.json')
+            PY
+            SCRIPT
+
+            cat > /usr/local/sbin/extend-db-bootstrap <<'SCRIPT'
+            #!/bin/bash
+            # One time (stack deployed with AllowMasterSecretRead=true): role extend_app and database
+            # silicon_extend owned by it. The password is read from EXTEND_DATABASE_URL in the runtime
+            # secret, so it never appears in SSM command history. The service creates its own schemas
+            # (extend_global, extend, extend_test_<id>) at runtime, hence database ownership.
+            set -Eeuo pipefail
+            . /etc/extend/stack.env
+            umask 077
+            master=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$MASTER_SECRET_ARN" --query SecretString --output text)
+            runtime=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$RUNTIME_SECRET_ARN" --query SecretString --output text)
+            PGUSER=$(printf '%s' "$master" | jq -er .username)
+            PGPASSWORD=$(printf '%s' "$master" | jq -er .password)
+            url=$(printf '%s' "$runtime" | jq -er .EXTEND_DATABASE_URL)
+            APP_PASSWORD=$(printf '%s' "$url" | python3 -c 'import sys, urllib.parse; print(urllib.parse.unquote(urllib.parse.urlsplit(sys.stdin.read().strip()).password or ""))')
+            [ -n "$APP_PASSWORD" ] || { echo 'EXTEND_DATABASE_URL carries no password' >&2; exit 2; }
+            export PGUSER PGPASSWORD APP_PASSWORD
+            docker run --rm -i -e PGUSER -e PGPASSWORD -e APP_PASSWORD \
+              -v /opt/extend/rds-global-bundle.pem:/rds.pem:ro postgres:17-bookworm \
+              psql "host=$DB_HOST dbname=postgres sslmode=verify-full sslrootcert=/rds.pem" -v ON_ERROR_STOP=1 <<'SQL'
+            \getenv app_password APP_PASSWORD
+            SELECT NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'extend_app') AS create_role \gset
+            \if :create_role
+            CREATE ROLE extend_app LOGIN;
+            \endif
+            ALTER ROLE extend_app PASSWORD :'app_password';
+            GRANT extend_app TO CURRENT_USER WITH SET TRUE;
+            SELECT NOT EXISTS (SELECT FROM pg_database WHERE datname = 'silicon_extend') AS create_db \gset
+            \if :create_db
+            CREATE DATABASE silicon_extend OWNER extend_app;
+            \endif
+            REVOKE ALL ON DATABASE silicon_extend FROM PUBLIC;
+            SQL
+            echo 'extend_app and silicon_extend are ready'
+            SCRIPT
+
+            cat > /usr/local/sbin/extend-release <<'SCRIPT'
+            #!/bin/bash
+            # In-place release: extend-release [<ecr-uri>@sha256:<digest>]. Without an argument it
+            # installs the image recorded in the SSM parameter (what a rebuilt host comes back on).
+            # One service container at a time: the hub is in-process, so old stops before new starts.
+            set -Eeuo pipefail
+            . /etc/extend/stack.env
+            if [ $# -ge 1 ]; then image=$1; else
+              image=$(aws ssm get-parameter --region "$REGION" --name "$IMAGE_PARAMETER" --query Parameter.Value --output text)
+            fi
+            case "$image" in *@sha256:*) ;; *) echo 'image must be pinned by @sha256 digest' >&2; exit 2;; esac
+            /usr/local/sbin/extend-render-env
+            aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+            docker pull "$image"
+            docker network create --driver bridge --subnet 172.30.87.0/24 extend >/dev/null 2>&1 || true
+            # Migrate in a throwaway container first (advisory-locked; serve would also migrate).
+            docker run --rm --network extend --env-file /etc/extend/runtime.env \
+              -v /opt/extend/rds-global-bundle.pem:/etc/ssl/rds/global-bundle.pem:ro \
+              --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --cap-drop ALL --security-opt no-new-privileges:true \
+              "$image" migrate
+            umask 077
+            printf 'EXTEND_IMAGE=%s\n' "$image" > /etc/extend/image.env.next
+            mv /etc/extend/image.env.next /etc/extend/image.env
+            systemctl daemon-reload
+            systemctl enable extend.service extend-caddy.service
+            systemctl restart extend.service
+            systemctl start extend-caddy.service
+            for attempt in $(seq 1 60); do
+              status=$(docker inspect -f '{{.State.Health.Status}}' extend-service 2>/dev/null || echo starting)
+              if [ "$status" = healthy ]; then echo "extend-service healthy on $image"; exit 0; fi
+              sleep 2
+            done
+            docker logs --tail 50 extend-service >&2 || true
+            echo 'extend-service did not become healthy' >&2
+            exit 1
+            SCRIPT
+            chmod 0750 /usr/local/sbin/extend-render-env /usr/local/sbin/extend-db-bootstrap /usr/local/sbin/extend-release
+
+            cat > /etc/systemd/system/extend.service <<'UNIT'
+            [Unit]
+            Description=Silicon Extend service (exactly one instance; in-process WebSocket hub)
+            Requires=docker.service
+            After=docker.service network-online.target
+            Wants=network-online.target
+            ConditionPathExists=/etc/extend/image.env
+            [Service]
+            EnvironmentFile=/etc/extend/stack.env
+            EnvironmentFile=/etc/extend/image.env
+            ExecStartPre=-/usr/bin/docker rm -f extend-service
+            ExecStartPre=-/usr/bin/docker network create --driver bridge --subnet 172.30.87.0/24 extend
+            # Device artifact uploads (up to 1 GiB) are buffered whole in memory by the service, so
+            # the limit lets the container spill into the 2 GiB swapfile instead of being OOM-killed.
+            ExecStart=/usr/bin/docker run --rm --name extend-service --network extend \
+              --env-file /etc/extend/runtime.env \
+              -v /var/lib/extend/data:/var/lib/extend/data \
+              -v /opt/extend/rds-global-bundle.pem:/etc/ssl/rds/global-bundle.pem:ro \
+              --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --cap-drop ALL --security-opt no-new-privileges:true --memory 1600m --memory-swap 3200m \
+              --log-driver awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=$LOG_GROUP \
+              --log-opt awslogs-stream=extend-service --log-opt mode=non-blocking \
+              $EXTEND_IMAGE serve
+            ExecStop=/usr/bin/docker stop --time 20 extend-service
+            Restart=always
+            RestartSec=3
+            TimeoutStartSec=180
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+
+            cat > /etc/systemd/system/extend-caddy.service <<'UNIT'
+            [Unit]
+            Description=Caddy TLS edge for Silicon Extend
+            Requires=docker.service
+            After=docker.service network-online.target
+            Wants=network-online.target
+            [Service]
+            ExecStartPre=-/usr/bin/docker rm -f extend-caddy
+            ExecStartPre=-/usr/bin/docker network create --driver bridge --subnet 172.30.87.0/24 extend
+            ExecStartPre=-/usr/bin/docker volume create extend-caddy-data
+            ExecStartPre=-/usr/bin/docker volume create extend-caddy-config
+            ExecStart=/usr/bin/docker run --rm --name extend-caddy --network extend -p 80:80 -p 443:443 \
+              -v /etc/extend/Caddyfile:/etc/caddy/Caddyfile:ro \
+              -v extend-caddy-data:/data -v extend-caddy-config:/config \
+              --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges:true \
+              --log-opt max-size=10m --log-opt max-file=3 \
+              ${CaddyImageUri} caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+            ExecStop=/usr/bin/docker stop --time 10 extend-caddy
+            Restart=always
+            RestartSec=3
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+
+            systemctl daemon-reload
+            # A replacement host (database, secret and image parameter already exist) comes straight
+            # back up; on the very first boot this fails harmlessly until the release procedure runs.
+            if ! /usr/local/sbin/extend-release; then
+              echo 'No release installed yet: run extend-db-bootstrap then extend-release through SSM.'
+            fi
+            echo 'Silicon Extend host bootstrap completed.'
+          - MasterSecretArn: !GetAtt Database.MasterUserSecret.SecretArn
+            DatabaseHost: !GetAtt Database.Endpoint.Address
+
+  Address:
+    Type: AWS::EC2::EIP
+    Condition: CreateEip
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags:
+        - {Key: Service, Value: silicon-extend}
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  ImageId:
+    Description: Pass as PinnedImageId on every later stack update
+    Value: !If [UsePinnedImage, !Ref PinnedImageId, !Ref Ami]
+  PublicIp:
+    Description: Namecheap A record backend.extend -> this address (TTL 300)
+    Value: !If [CreateEip, !Ref Address, !GetAtt Instance.PublicIp]
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  RuntimeSecretArn:
+    Value: !Ref RuntimeSecret
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseMasterSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+  LogGroupName:
+    Value: !Ref LogGroup
+  InstanceSecurityGroupId:
+    Value: !Ref InstanceSecurityGroup
+  HealthUrl:
+    Value: !Sub 'https://${HostName}/ready'

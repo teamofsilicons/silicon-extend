@@ -1,5 +1,6 @@
-import { DEVICE_MAC, DEVICE_PIXEL, TEST_ENVIRONMENT_NAME, TEST_SECRET, UNKNOWN_SECRET } from "../mock/fixtures";
+import { DEVICE_IPHONE, DEVICE_MAC, DEVICE_PIXEL, DEVICE_TV, TEST_ENVIRONMENT_NAME, TEST_SECRET, UNKNOWN_SECRET } from "../mock/fixtures";
 import { expect, shoot, signInWithSlt, test } from "./fixtures";
+import { readFileSync } from "node:fs";
 
 test.describe("signing in", () => {
   test("with a short-lived token, then lists devices", async ({ page, mock }) => {
@@ -67,6 +68,45 @@ test.describe("signing in", () => {
     await expect(page.getByTestId("devices-page")).toBeVisible();
     await expect(page).toHaveURL(/\/devices$/);
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
+  });
+
+  test("New to Silicon IAM: sign-up goes to IAM's /signup beside its /login, with the same app_id and callback", async ({ page, mock }) => {
+    void mock;
+    // Extend names IAM's real layout (<auth origin>/login); the sign-up page is /signup beside it.
+    await page.route("**/api/v1/iam", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.data.iam_login_url = "https://auth.iam.example.test/login";
+      await route.fulfill({ response: res, json: body });
+    });
+    let landed: URL | null = null;
+    await page.route("https://auth.iam.example.test/**", async (route) => {
+      landed = new URL(route.request().url());
+      await route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Silicon IAM sign-up</h1>" });
+    });
+    await page.goto("/");
+    await expect(page.getByTestId("signup")).toContainText("New to Silicon IAM?");
+    await expect(page.getByTestId("signup-note")).toContainText("checks your email and phone, creates your Carbon account and signs you in with a code");
+    await page.getByTestId("sign-up-iam").click();
+    await expect(page.getByRole("heading", { name: "Silicon IAM sign-up" })).toBeVisible();
+    const url = landed as unknown as URL;
+    expect(url.pathname).toBe("/signup");
+    expect(url.searchParams.get("app_id")).toBe("extend");
+    expect(url.searchParams.has("org_id")).toBe(false);
+    const callback = new URL(url.searchParams.get("redirect_uri")!);
+    expect(callback.pathname).toBe("/auth/callback");
+    expect(callback.searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  });
+
+  test("New to Silicon IAM, with a login page Extend can't place: it says so and opens IAM's sign-in page", async ({ page, mock }) => {
+    void mock;
+    await page.goto("/");
+    // The mock's consent screen lives at /__mock/iam/login, which is not IAM's layout.
+    await expect(page.getByTestId("signup-note")).toContainText("gives Extend no sign-up page, so this opens its sign-in page");
+    await page.getByTestId("sign-up-iam").click();
+    await expect(page).toHaveURL(/\/__mock\/iam\/login\?app_id=extend&redirect_uri=/);
+    await page.getByRole("button", { name: /Continue as Saket/ }).click();
+    await expect(page.getByTestId("devices-page")).toBeVisible();
   });
 
   test("a forged callback is refused", async ({ page, mock }) => {
@@ -271,6 +311,12 @@ test.describe("a device's page", () => {
     expect(res.status()).toBe(201);
     await expect(page.getByTestId("takeover-reason")).toHaveText("Please approve the Face ID prompt for the payment", { timeout: 12_000 });
     await expect(page.getByTestId("in-use-card")).toContainText("handed the device to you");
+    // The header and the list row say the same as the card, at every width.
+    await expect(page.locator(".device-header").getByTestId("device-status")).toHaveText("Paused for you");
+    await expect(page.locator(`[data-device-id="${DEVICE_PIXEL}"]`).getByTestId("device-status")).toHaveText("Paused for you");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".device-header").getByTestId("device-status")).toHaveText("Paused for you");
+    await page.setViewportSize({ width: 1280, height: 900 });
     await shoot(page, "22-takeover");
     await page.getByTestId("takeover-done").click();
     await expect(page.getByTestId("takeover")).toHaveCount(0);
@@ -327,6 +373,10 @@ test.describe("a device's page", () => {
     await page.getByTestId("remove-device").click();
     const dialog = page.getByTestId("remove-dialog");
     await expect(dialog).toBeVisible();
+    // What removal does to this offline TV with one Silicon, in words that agree with the count.
+    await expect(page.getByTestId("remove-access")).toHaveText("1 Silicon loses access.");
+    await expect(page.getByTestId("remove-unpair")).toHaveText("It's offline, so the Extend app on it unpairs the next time it connects, then shows a new pairing code.");
+    await expect(page.getByTestId("remove-consequences")).toContainText("Its activity log stays readable: find it under Removed in your device list.");
     await expect(page.getByTestId("remove-confirm")).toBeDisabled();
     await page.getByTestId("remove-confirm-input").fill("Living room");
     await expect(page.getByTestId("remove-confirm")).toBeDisabled();
@@ -336,6 +386,64 @@ test.describe("a device's page", () => {
     await expect(page).toHaveURL(/\/devices$/);
     await expect(page.getByTestId("device-row")).toHaveCount(3);
     await expect(page.getByTestId("device-list")).not.toContainText("Living room TV");
+    await expect(page.getByTestId("toast").last()).toContainText("Its activity log is under Removed");
+
+    // Where the dialog said: under Removed, newest first, with the log readable.
+    await page.getByTestId("tab-removed").click();
+    const removed = page.getByTestId("removed-device-list").getByTestId("device-row");
+    await expect(removed).toHaveCount(3);
+    await expect(removed.first()).toContainText("Living room TV");
+    await expect(removed.first()).toContainText("You removed it");
+    await removed.first().click();
+    await expect(page).toHaveURL(new RegExp(`/devices/${DEVICE_TV}$`));
+    await expect(page.getByTestId("removed-card")).toContainText("You removed it.");
+    await expect(page.getByTestId("activity-summary").filter({ hasText: "Removed the device" })).toHaveCount(1);
+    await expect(page.getByTestId("activity-summary").filter({ hasText: "Session ended" })).toHaveCount(0);
+  });
+
+  test("the Removed tab: removed devices and their logs, read-only", async ({ page, mock, request }) => {
+    void mock;
+    await signInWithSlt(page);
+    await page.getByTestId("tab-removed").click();
+    const rows = page.getByTestId("removed-device-list").getByTestId("device-row");
+    await expect(rows).toHaveCount(2);
+    await expect(page.getByTestId("removed-overview")).toContainText("A removed device can't be changed or used");
+    // Newest removal first: the tablet (3 days ago), then the iMac whose pair ran out (9 days ago).
+    await expect(rows.nth(0)).toContainText("Old Galaxy Tab");
+    await expect(rows.nth(1)).toContainText("Office iMac");
+    await expect(rows.nth(1)).toContainText("It went unused for longer than its pairing lasts (7 days)");
+    await shoot(page, "23-removed-list");
+
+    await rows.nth(0).click();
+    await expect(page.getByTestId("device-name")).toHaveText("Old Galaxy Tab");
+    await expect(page.getByTestId("removed-badge")).toBeVisible();
+    await expect(page.getByTestId("removed-why")).toContainText("You removed it.");
+    await expect(page.getByTestId("activity-item")).toHaveCount(6);
+    await expect(page.getByTestId("activity-summary").first()).toHaveText("Removed the device");
+    // Nothing that changes a device is offered on a removed one.
+    for (const id of ["rename", "stop-session", "access-card", "settings-card", "danger-zone", "capabilities"]) await expect(page.getByTestId(id)).toHaveCount(0);
+    await expect(page.getByTestId("pair-again")).toHaveAttribute("href", "/devices/new?kind=android");
+    await shoot(page, "24-removed-device");
+
+    // Extend's own entry (the pair ran out) is not shown as a Carbon's.
+    await page.goto("/devices/f00d5eed");
+    await expect(page.getByTestId("removed-why")).toContainText("It went unused for longer than its pairing lasts (7 days).");
+    await expect(page.getByTestId("actor-extend")).toHaveText("Silicon Extend");
+
+    // The mock refuses changes the way the service does: its Carbon hears when and why.
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
+    const res = await request.patch("/api/v1/devices/e1d0a7c3", {
+      headers: { Authorization: `Bearer ${token}`, "X-Org-ID": "acme", "If-Match": '"4"', "Content-Type": "application/json" },
+      data: { type: "device", data: { name: "Back again" } },
+    });
+    expect(res.status()).toBe(404);
+    const body = await res.json();
+    expect(body.data.code).toBe("device_not_found");
+    expect(body.data.message).toMatch(/^Device e1d0a7c3 \(Old Galaxy Tab\) was removed at .+: its Carbon removed it\. A removed device can't be changed or used\.$/);
+    expect(body.data.details.removed_reason).toBe("device_removed");
+    // Only with scope=mine.
+    const team = await request.get("/api/v1/devices?scope=team&include_removed=true", { headers: { Authorization: `Bearer ${token}`, "X-Org-ID": "acme" } });
+    expect(team.status()).toBe(422);
   });
 
   test("removing a Mac also removes the devices paired through it", async ({ page, mock }) => {
@@ -343,10 +451,29 @@ test.describe("a device's page", () => {
     await signInWithSlt(page);
     await page.goto(`/devices/${DEVICE_MAC}`);
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-dialog")).toContainText("Saket's iPhone");
+    await expect(page.getByTestId("remove-children")).toHaveText("Also removed, because they pair through it: Saket's iPhone.");
+    await expect(page.getByTestId("remove-unpair")).toHaveText("The Extend app on it unpairs now and shows a new pairing code.");
     await page.getByTestId("remove-confirm-input").fill("MacBook Pro");
     await page.getByTestId("remove-confirm").click();
     await expect(page.getByTestId("device-row")).toHaveCount(2);
+    // The iPhone went with its Mac, for the same reason.
+    await page.goto(`/devices/${DEVICE_IPHONE}`);
+    await expect(page.getByTestId("removed-why")).toContainText("You removed it, or the computer it paired through.");
+  });
+
+  test("the Remove dialog for a device paired through a computer, with two Silicons", async ({ page, mock }) => {
+    void mock;
+    await signInWithSlt(page);
+    await page.goto(`/devices/${DEVICE_IPHONE}`);
+    await page.getByTestId("remove-device").click();
+    await expect(page.getByTestId("remove-unpair")).toHaveText("Extend stops reaching it through MacBook Pro.");
+    await expect(page.getByTestId("remove-access")).toHaveCount(0);
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.goto(`/devices/${DEVICE_PIXEL}`);
+    await page.getByTestId("remove-device").click();
+    await expect(page.getByTestId("remove-access")).toHaveText("2 Silicons lose access.");
+    await expect(page.getByTestId("remove-consequences")).toContainText("si:chef is using it now; its session ends immediately.");
+    await shoot(page, "13b-remove-dialog-pixel");
   });
 });
 
@@ -477,10 +604,23 @@ test.describe("settings and docs", () => {
     await expect(page.getByTestId("docs-page")).toContainText("extend login <slt>");
     await expect(page.getByTestId("docs-page")).toContainText("Ask your Silicon to use it");
     await shoot(page, "18-docs");
+    // The reference is generated from cli.yaml, whose fields come as strings, lists or maps: every
+    // command must render, and the page must not throw on any of them.
+    const pageErrors: string[] = [];
+    page.on("pageerror", (e) => pageErrors.push(e.message));
     await page.getByRole("link", { name: "CLI reference" }).first().click();
     await expect(page.getByTestId("cli-command").first()).toBeVisible();
-    expect(await page.getByTestId("cli-command").count()).toBeGreaterThan(70);
+    // Playwright runs from web/, where `pnpm test:e2e` has just regenerated this file.
+    const docs = JSON.parse(readFileSync("src/generated/docs.json", "utf8")) as {
+      cli: { groups: { commands: { usage: string; errors: { codes: string[]; note: string | null } | null }[] }[] };
+    };
+    const generated = docs.cli.groups.flatMap((g) => g.commands);
+    await expect(page.getByTestId("cli-command")).toHaveCount(generated.length);
+    expect(generated.length).toBeGreaterThan(70);
+    for (const c of generated.filter((x) => x.errors?.note).slice(0, 3))
+      await expect(page.getByTestId("cli-command").filter({ hasText: c.usage }).getByTestId("cli-command-errors")).toContainText(c.errors!.note!.split("`")[0]);
     await expect(page.getByTestId("docs-page")).toContainText("test_device_limit");
+    expect(pageErrors).toEqual([]);
     await shoot(page, "19-docs-cli");
     await page.getByRole("link", { name: "How Extend works" }).first().click();
     await expect(page.getByTestId("docs-page")).toContainText("Identifiers and values");

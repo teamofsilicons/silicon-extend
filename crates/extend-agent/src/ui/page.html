@@ -681,6 +681,39 @@
   body.banner-minimized #banner-env { order: 2; }
   body.banner-minimized #banner-stop { order: 3; }
   body.banner-minimized #banner-button { order: 4; padding: 4px 11px; }
+  /* A row for each other session (a device this computer carries), each with its own Stop or
+     Done. The first session keeps the strip above; the window grows by 38px per row. */
+  #banner-more { display: none; }
+  body.banner-multi .bar { height: 52px; }
+  body.banner-multi #banner-more { display: block; }
+  body.banner-minimized #banner-more { display: none; }
+  .more-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 8px 0 46px;
+    border: 1px solid var(--blue);
+    border-top: 0;
+    background: var(--paper) var(--paper-grain);
+  }
+  .more-row .pixel-dot { flex: none; width: 8px; height: 8px; }
+  .more-line { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .more-line .who { font: 500 12.5px var(--mono); }
+  .more-line .dev { font-weight: 500; }
+  /* A takeover's reason is what the Carbon has to do: two lines rather than cut after the name. */
+  .more-row.takeover .more-line {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 11.5px;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .more-row.takeover .more-line .who { font-size: 11.5px; }
+  .more-row .button { flex: none; min-height: 26px; padding: 3px 10px; font-size: 12px; }
+  .more-row .button svg { width: 12px; height: 12px; }
 
   @media (prefers-reduced-motion: reduce) {
     .pixel-dot.in-use .rim { animation: none; }
@@ -811,7 +844,10 @@
     </section>
 
     <section id="upgrade" class="card hidden">
-      <p class="use-line">Extend needs a newer version of this app, so Silicons can't use this <span class="word"></span> until it's updated. Download the latest Silicon Extend from <b class="selectable">extend.teamofsilicons.com</b>.</p>
+      <p class="use-line">Extend needs a newer version of this app, so Silicons can't use this <span class="word"></span> until it's updated. Download the update, install it over this copy and open it again.</p>
+      <p class="fine">From <b class="selectable" id="download-host"></b>. Pairing, access and settings stay as they are.</p>
+      <p class="row-error hidden" id="download-error"></p>
+      <div class="use-actions"><button class="button primary" data-action="open_download"><svg aria-hidden="true"><use href="#i-open"/></svg>Download the update</button></div>
     </section>
 
     <section id="setup" class="card hidden">
@@ -825,8 +861,17 @@
 
     <section id="attached" class="card hidden">
       <h2>Devices this <span class="word"></span> carries.</h2>
-      <p class="fine">They connect to Extend through this <span class="word"></span>, so their Stop is here too.</p>
+      <p class="fine">They connect to Extend through this <span class="word"></span>, so their Stop is here too, and in the menu and the banner. To revoke one's pair, remove it on its page on the Extend website.</p>
       <ol class="rows" id="attached-list"></ol>
+    </section>
+
+    <section id="startup" class="card hidden">
+      <div class="card-head">
+        <h2>Start at login.</h2>
+        <button class="button secondary" id="startup-toggle" data-action="set_autostart" data-on="false">Turn off</button>
+      </div>
+      <p class="fine" id="startup-text"></p>
+      <p class="row-error hidden" id="startup-error"></p>
     </section>
 
     <section id="paired" class="card hidden">
@@ -884,6 +929,7 @@
     <button class="button danger" id="banner-button" data-action="stop">Stop</button>
     <button id="banner-restore" data-action="banner_restore" aria-label="Restore activity banner" title="Restore activity banner"><span class="label" id="banner-restore-label"></span><svg aria-hidden="true"><use href="#i-expand"/></svg></button>
   </div>
+  <div id="banner-more"></div>
 </div>
 
 <script>
@@ -1084,6 +1130,7 @@
     var msg = { action: action };
     if (el.hasAttribute('data-step')) msg.step = el.getAttribute('data-step');
     if (el.hasAttribute('data-target')) msg.target = el.getAttribute('data-target');
+    if (el.hasAttribute('data-on')) msg.on = el.getAttribute('data-on') === 'true';
     send(msg);
   });
 
@@ -1154,6 +1201,36 @@
     upgrade_required: ['attention', 'Update needed']
   };
 
+  // The sessions the banner shows: this computer's own first, then each device it carries (the
+  // same order as the app's banner_sessions, which sizes the window for them).
+  function bannerRows(s) {
+    var rows = [];
+    var row = function (target, name, inUse, takeover) {
+      return { target: target, name: name, inUse: inUse, takeover: takeover, who: inUse ? inUse.silicon_id : 'A Silicon' };
+    };
+    if (s.in_use || s.takeover) rows.push(row(null, null, s.in_use, s.takeover));
+    (s.attached || []).forEach(function (a) {
+      if (a.in_use || a.takeover) rows.push(row(a.device_id, a.name, a.in_use, a.takeover));
+    });
+    return rows;
+  }
+  function targetOf(el, target) {
+    if (target) el.setAttribute('data-target', target); else el.removeAttribute('data-target');
+  }
+  function moreRow(r) {
+    var line, action;
+    if (r.takeover) {
+      line = '<span class="who">' + esc(r.who) + '</span> needs you on <span class="dev">' + esc(r.name) + '</span>: ' + esc(r.takeover.reason);
+      action = '<button class="button primary" data-action="takeover_done" data-target="' + esc(r.target) + '" aria-label="Done on ' + esc(r.name) + '">Done</button>';
+      if (r.inUse) action = '<button class="button danger quiet" data-action="stop" data-target="' + esc(r.target) + '" aria-label="Stop ' + esc(r.who) + ' on ' + esc(r.name) + '"><svg aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>' + action;
+    } else {
+      line = '<span class="who">' + esc(r.who) + '</span> is using <span class="dev">' + esc(r.name) + '</span>';
+      action = '<button class="button danger quiet" data-action="stop" data-target="' + esc(r.target) + '" aria-label="Stop ' + esc(r.who) + ' on ' + esc(r.name) + '"><svg aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>';
+    }
+    var plain = r.takeover ? r.who + ' needs you on ' + r.name + ': ' + r.takeover.reason : r.who + ' is using ' + r.name;
+    return '<div class="more-row' + (r.takeover ? ' takeover' : '') + '" title="' + esc(plain) + '">' + dot('in-use') + '<span class="more-line">' + line + '</span>' + action + '</div>';
+  }
+
   window.__extend = function (s, minimized) {
     state = s;
     var word = s.computer_word || 'computer';
@@ -1163,16 +1240,28 @@
     var who = inUse ? inUse.silicon_id : 'A Silicon';
 
     if (view === 'banner') {
+      var rows = bannerRows(s);
+      var first = rows[0] || { target: null, name: null, inUse: null, takeover: null, who: 'A Silicon' };
+      takeover = first.takeover;
+      inUse = first.inUse;
+      who = first.who;
+      // This computer, or the carried device the first row is about.
+      var place = first.target ? first.name : 'this ' + word;
       document.body.classList.toggle('banner-minimized', !!minimized);
       document.body.classList.toggle('banner-takeover', !!takeover);
+      var more = rows.slice(1, 4);
+      document.body.classList.toggle('banner-multi', more.length > 0);
+      $('banner-more').innerHTML = more.map(moreRow).join('');
       var button = $('banner-button');
+      targetOf(button, first.target);
+      targetOf($('banner-stop'), first.target);
       var plain;
       if (takeover) {
         // A long id keeps "si:" and five more characters in view.
         var keep = Math.min(who.length, 9);
-        $('banner-state').innerHTML = '<span class="who" style="min-width:calc(' + keep + 'ch + ' + (keep * 0.2 + 1).toFixed(1) + 'px)">' + esc(who) + '</span><span class="st">needs you</span>';
+        $('banner-state').innerHTML = '<span class="who" style="min-width:calc(' + keep + 'ch + ' + (keep * 0.2 + 1).toFixed(1) + 'px)">' + esc(who) + '</span><span class="st">' + (first.target ? 'needs you on ' + esc(first.name) : 'needs you') + '</span>';
         $('banner-line').textContent = takeover.reason;
-        plain = who + ' needs you: ' + takeover.reason;
+        plain = who + ' needs you' + (first.target ? ' on ' + first.name : '') + ': ' + takeover.reason;
         $('banner-restore-label').textContent = who;
         button.textContent = 'Done';
         button.setAttribute('data-action', 'takeover_done');
@@ -1181,14 +1270,14 @@
         var at = inUse ? clock(inUse.since) : '';
         // With a test environment its name needs the room, so the time goes.
         $('banner-state').innerHTML = '<span class="st">' + esc(at && !s.environment ? 'In use · since ' + at : 'In use') + '</span>';
-        $('banner-line').innerHTML = '<span class="who">' + esc(who) + '</span> is using this ' + esc(word);
-        plain = who + ' is using this ' + word;
+        $('banner-line').innerHTML = '<span class="who">' + esc(who) + '</span> is using ' + esc(place);
+        plain = who + ' is using ' + place;
         $('banner-restore-label').textContent = who;
         button.innerHTML = '<svg aria-hidden="true"><use href="#i-stop"/></svg>Stop';
         button.setAttribute('data-action', 'stop');
         button.className = 'button danger';
       }
-      button.setAttribute('aria-label', button.textContent + ' ' + who);
+      button.setAttribute('aria-label', button.textContent + ' ' + who + (first.target ? ' on ' + first.name : ''));
       // Collapsed, the Silicon's id keeps at least "si:" and five more characters (padding, gap and
       // the restore icon are the 34px).
       $('banner-restore').style.minWidth = 'calc(' + Math.min(who.length, 9) + 'ch + 34px)';
@@ -1303,6 +1392,21 @@
     if (!d || pairing) openConfirm(false);
     show('superseded', phase === 'superseded');
     show('upgrade', phase === 'upgrade_required');
+    $('download-host').textContent = s.download_host || s.download_url || '';
+    $('download-error').textContent = s.download_error || '';
+    show('download-error', !!s.download_error);
+
+    // Start at login: on after pairing unless the Carbon turns it off here (or in the menu).
+    var auto = s.autostart || { on: false, error: null };
+    show('startup', paired);
+    $('startup-text').textContent = auto.on
+      ? 'Silicon Extend opens by itself when you log in to this ' + word + ', so Silicons you allow can reach it again after a restart.'
+      : 'Silicon Extend doesn\'t open by itself when you log in, so after a restart no Silicon can reach this ' + word + ' until you open it. Turn it on to open it at login.';
+    $('startup-toggle').textContent = auto.on ? 'Turn off' : 'Turn on';
+    $('startup-toggle').setAttribute('data-on', auto.on ? 'false' : 'true');
+    $('startup-toggle').className = auto.on ? 'button secondary' : 'button primary';
+    $('startup-error').textContent = auto.error || '';
+    show('startup-error', !!auto.error);
 
     var steps = (s.setup && s.setup.steps) || [];
     var pending = steps.filter(function (x) { return x.status !== 'done'; });

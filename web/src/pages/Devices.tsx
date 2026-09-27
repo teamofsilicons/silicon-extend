@@ -7,17 +7,26 @@ import { usePoll } from "../lib/poll";
 import { Link } from "../lib/router";
 import { devicesTick } from "../lib/refresh";
 import { OS_LABEL, POLL_MS } from "../config";
-import { duration, plural, relativeTime } from "../lib/format";
+import { duration, plural, relativeTime, removedWhy } from "../lib/format";
 import { Button, DeviceIcon, Empty, ErrorNote, MemberTag, OnlineDot, Spinner } from "../components/ui";
 import Shader from "../components/Shader";
 import DevicePage from "./DevicePage";
 
-type Scope = "mine" | "team" | "accessible";
+/** The list's tabs. "removed" is the Carbon's own devices that were removed (scope=mine&include_removed=true). */
+type Scope = "mine" | "team" | "removed" | "accessible";
 
 const EYEBROW: Record<Scope, string> = {
   mine: "Your paired devices",
   team: "Your team's devices",
+  removed: "Your removed devices",
   accessible: "Devices you can use",
+};
+
+const EMPTY: Record<Scope, string> = {
+  mine: "Nothing paired yet.",
+  team: "No other Carbon in this team has made a device visible.",
+  removed: "Nothing removed in this team.",
+  accessible: "No Carbon has given you a device in this team yet.",
 };
 
 /**
@@ -37,12 +46,18 @@ export default function Devices(props: { selected?: string | null }) {
   const [now, setNow] = createSignal(Date.now());
   const [filter, setFilter] = createSignal("");
 
-  /** Reloads everything shown so far in one request (up to 100), so polling doesn't drop pages. */
+  /**
+   * Reloads everything shown so far in one request (up to 100), so polling doesn't drop pages. Removed
+   * devices come mixed with paired ones, so that tab reads every page and keeps only the removed.
+   */
   async function load(reset = false) {
     const current = scope();
     const shown = reset ? 0 : (items()?.length ?? 0);
     try {
-      const page = await s.client().listDevices({ scope: current, limit: Math.min(100, Math.max(50, shown)) });
+      const page =
+        current === "removed"
+          ? { items: await s.client().listRemovedDevices(), next_cursor: null }
+          : await s.client().listDevices({ scope: current, limit: Math.min(100, Math.max(50, shown)) });
       if (current !== scope()) return;
       setItems(page.items);
       setNext(page.next_cursor);
@@ -56,10 +71,11 @@ export default function Devices(props: { selected?: string | null }) {
 
   async function loadMore() {
     const cursor = next();
-    if (!cursor) return;
+    const current = scope();
+    if (!cursor || current === "removed") return;
     setLoadingMore(true);
     try {
-      const page = await s.client().listDevices({ scope: scope(), cursor });
+      const page = await s.client().listDevices({ scope: current, cursor });
       setItems([...(items() ?? []), ...page.items]);
       setNext(page.next_cursor);
     } catch (e) {
@@ -130,12 +146,22 @@ export default function Devices(props: { selected?: string | null }) {
               <button role="tab" aria-selected={scope() === "team"} class={scope() === "team" ? "selected" : ""} onClick={() => setScope("team")} data-testid="tab-team">
                 Team devices
               </button>
+              <button
+                role="tab"
+                aria-selected={scope() === "removed"}
+                class={scope() === "removed" ? "selected" : ""}
+                onClick={() => setScope("removed")}
+                title="Devices you removed, or whose pair ended. Their activity logs stay readable."
+                data-testid="tab-removed"
+              >
+                Removed
+              </button>
             </div>
           </Show>
 
           <div class="list-label">
             <span>
-              {scope() === "team" ? "Visible in " : "In "}
+              {scope() === "team" ? "Visible in " : scope() === "removed" ? "Removed in " : "In "}
               {s.team()}
               <Show when={items()}> · {items()!.length}</Show>
             </span>
@@ -155,17 +181,42 @@ export default function Devices(props: { selected?: string | null }) {
               {(list) => (
                 <Show
                   when={list().length}
-                  fallback={
-                    <p class="small-empty">
-                      {scope() === "mine"
-                        ? "Nothing paired yet."
-                        : scope() === "team"
-                          ? "No other Carbon in this team has made a device visible."
-                          : "No Carbon has given you a device in this team yet."}
-                    </p>
-                  }
+                  fallback={<p class="small-empty">{EMPTY[scope()]}</p>}
                 >
                   <Show when={shown().length} fallback={<p class="small-empty">No device matches “{filter().trim()}”. Try a name, an id or a Silicon.</p>}>
+                    <Show when={scope() === "removed"}>
+                      <nav class="device-list removed" aria-label="Your removed devices" data-testid="removed-device-list">
+                        <For each={shown()}>
+                          {(d) => (
+                            <Link
+                              href={`/devices/${d.device_id}`}
+                              class={`device-row removed ${props.selected === d.device_id ? "active" : ""}`}
+                              aria-current={props.selected === d.device_id ? "page" : undefined}
+                              data-testid="device-row"
+                              data-device-id={d.device_id}
+                              data-removed="true"
+                            >
+                              <DeviceIcon device={d} />
+                              <span class="device-copy">
+                                <span class="device-top">
+                                  <strong class="device-name">{d.name}</strong>
+                                  <small title={d.removed_at ? new Date(d.removed_at).toLocaleString() : undefined}>removed {relativeTime(d.removed_at, now())}</small>
+                                </span>
+                                <span class="device-sub">
+                                  {OS_LABEL[d.os] ?? d.os}
+                                  {d.os_version ? ` ${d.os_version}` : ""}
+                                  <Show when={d.host_device_id}> · through {hostName(d.host_device_id)}</Show>
+                                </span>
+                                <span class="device-state">
+                                  <span class="badge muted">Removed</span>
+                                  <span class="removed-why">{removedWhy(d)}</span>
+                                </span>
+                              </span>
+                            </Link>
+                          )}
+                        </For>
+                      </nav>
+                    </Show>
                     <Show
                       when={scope() !== "team"}
                       fallback={
@@ -191,6 +242,7 @@ export default function Devices(props: { selected?: string | null }) {
                         </ul>
                       }
                     >
+                      <Show when={scope() !== "removed"}>
                       <nav class="device-list" aria-label="Your devices" data-testid="device-list">
                         <For each={shown()}>
                           {(d) => (
@@ -214,7 +266,7 @@ export default function Devices(props: { selected?: string | null }) {
                                   <Show when={d.visibility === "personal"}> · personal</Show>
                                 </span>
                                 <span class="device-state">
-                                  <OnlineDot online={d.online} inUse={!!d.in_use} />
+                                  <OnlineDot online={d.online} inUse={!!d.in_use} paused={!!d.in_use?.paused} />
                                   <Show when={d.state === "setup"}>
                                     <span class="badge warn">Setup unfinished</span>
                                   </Show>
@@ -232,11 +284,7 @@ export default function Devices(props: { selected?: string | null }) {
                                     <span class="in-use" data-testid="in-use">
                                       <MemberTag type="silicon" />
                                       <strong>{u().silicon_id}</strong>
-                                      <span>
-                                        {" "}
-                                        · {duration(u().since, now())}
-                                        {u().paused ? " · paused for you" : ""}
-                                      </span>
+                                      <span> · {duration(u().since, now())}</span>
                                     </span>
                                   )}
                                 </Show>
@@ -245,6 +293,7 @@ export default function Devices(props: { selected?: string | null }) {
                           )}
                         </For>
                       </nav>
+                      </Show>
                     </Show>
                   </Show>
                   <Show when={next()}>
@@ -278,6 +327,7 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
   const count = (f: (d: Device) => boolean) => (props.items ?? []).filter(f).length;
   const two = (n: number) => String(n).padStart(2, "0");
   return (
+    <Show when={props.scope !== "removed"} fallback={<RemovedOverview items={props.items} />}>
     <Show when={props.items}>
       {(list) => (
         <Show
@@ -348,6 +398,39 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
                 </Link>
               </div>
             </Show>
+          </section>
+        </Show>
+      )}
+    </Show>
+    </Show>
+  );
+}
+
+/** The right pane on the Removed tab: what a removed device still offers (its log), and what it doesn't. */
+function RemovedOverview(props: { items: Device[] | null }) {
+  const s = session();
+  return (
+    <Show when={props.items}>
+      {(list) => (
+        <Show
+          when={list().length}
+          fallback={
+            <Empty eyebrow={`Extend · ${s.team() ?? ""}`} title="Nothing removed yet." testid="removed-empty">
+              <p>When you remove a device, or its pair ends, it moves here. You can still read its activity log.</p>
+            </Empty>
+          }
+        >
+          <section class="overview" aria-label="Removed devices" data-testid="removed-overview">
+            <p class="eyebrow">Extend · {s.team()}</p>
+            <h2 class="overview-title">Removed devices.</h2>
+            <p class="overview-lead">
+              Choose one on the left to read its activity log. A removed device can't be changed or used, and no Silicon can reach it. To use one again, pair it again.
+            </p>
+            <div class="overview-actions">
+              <Link href="/devices/new" class="button primary">
+                <Plus size={16} aria-hidden="true" /> Add a device
+              </Link>
+            </div>
           </section>
         </Show>
       )}

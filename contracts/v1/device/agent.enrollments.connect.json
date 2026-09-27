@@ -1,0 +1,33 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "enrollment"
+  ],
+  "kind": "enrollment_socket",
+  "operation": "enrollments.connect",
+  "reads": {
+    "code": [
+      "pairing_code",
+      "code_expires_at"
+    ],
+    "paired": [
+      "device_id",
+      "device_credential"
+    ],
+    "ping": [
+      "nonce"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Enrollment {enrollment_secret}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "GET",
+    "path": "/api/v1/enrollments/{enrollment_id}/connect"
+  },
+  "source": "docs/device-protocol.md; crates/extend-agent/src/service.rs (enrollment socket) with crates/extend-protocol types (EnrollmentFrame)"
+}

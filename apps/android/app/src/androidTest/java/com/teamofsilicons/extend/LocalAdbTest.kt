@@ -74,6 +74,54 @@ class LocalAdbTest {
         finally { if (args.getString("keep_connected") != "true") adb.disconnect() }
     }
 
+    /**
+     * `-e adb_tls true`: a decoy advertising this device's Wireless debugging name on a port that
+     * isn't Android's (plain text) is one more candidate, and connecting still reaches the real one.
+     * Discovery used to take whichever advertisement resolved first.
+     */
+    @Test fun discoveryTriesEveryCandidate(): Unit = runBlocking {
+        assumeTrue(args.getString("adb_tls") == "true")
+        emulatorOnly()
+        val guid = context.getSharedPreferences("extend_adb", 0).getString("guid", null)
+        assumeTrue("Pair Android debugging with a code first (tools/wireless-debugging-lane.py)", guid != null)
+        val decoy = ServerSocket(0, 50)
+        val knocks = java.util.concurrent.atomic.AtomicInteger()
+        thread(isDaemon = true) {
+            while (!decoy.isClosed) {
+                runCatching { decoy.accept().use { knocks.incrementAndGet(); it.getOutputStream().write("not adbd\n".toByteArray()) } }
+            }
+        }
+        val nsd = context.getSystemService(android.net.nsd.NsdManager::class.java)
+        val registered = kotlinx.coroutines.CompletableDeferred<String>()
+        val listener = object : android.net.nsd.NsdManager.RegistrationListener {
+            override fun onServiceRegistered(info: android.net.nsd.NsdServiceInfo) { registered.complete(info.serviceName) }
+            override fun onRegistrationFailed(info: android.net.nsd.NsdServiceInfo, code: Int) { registered.completeExceptionally(AssertionError("NSD registration failed: $code")) }
+            override fun onServiceUnregistered(info: android.net.nsd.NsdServiceInfo) = Unit
+            override fun onUnregistrationFailed(info: android.net.nsd.NsdServiceInfo, code: Int) = Unit
+        }
+        val info = android.net.nsd.NsdServiceInfo().apply {
+            serviceName = if (guid!!.startsWith("adb-")) guid else "adb-$guid"
+            serviceType = "_adb-tls-connect._tcp"
+            port = decoy.localPort
+        }
+        nsd.registerService(info, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, listener)
+        try {
+            val name = withTimeout(10_000) { registered.await() }
+            assertTrue("the decoy carries the paired device's name: $name", com.teamofsilicons.extend.adb.AdbDiscovery.matches(name, guid))
+            val ports = com.teamofsilicons.extend.adb.AdbDiscovery.ports(context, guid)
+            assertTrue("the decoy is a candidate: $ports", decoy.localPort in ports)
+            assertTrue("and so is Android's own service: $ports", ports.size >= 2)
+            // A separate instance, so the running app's connection is left alone.
+            val adb = LocalAdb(context)
+            assertTrue(adb.lastError, adb.connect())
+            assertEquals("2000", adb.shell("id -u").text.trim())
+            android.util.Log.i("SiliconExtend", "discoveryTriesEveryCandidate: candidates $ports, decoy knocked ${knocks.get()} time(s)")
+        } finally {
+            runCatching { nsd.unregisterService(listener) }
+            decoy.close()
+        }
+    }
+
     /** A local app posing as adbd (plain text, answers every command) must not be trusted. */
     @Test fun anImpostorDaemonIsRefused(): Unit = runBlocking {
         emulatorOnly()

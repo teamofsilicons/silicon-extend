@@ -1,0 +1,61 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "takeover"
+  ],
+  "kind": "http",
+  "operation": "device.self",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}"
+    },
+    "method": "GET",
+    "path": "/api/v1/device"
+  },
+  "response": {
+    "non_null": [
+      "/device_id",
+      "/environment/environment_id",
+      "/environment/name",
+      "/in_use/session_id",
+      "/in_use/silicon_id",
+      "/in_use/since",
+      "/name",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/setup/state",
+      "/setup/steps",
+      "/setup/steps/*/key",
+      "/setup/steps/*/status",
+      "/setup/steps/*/title",
+      "/takeover/reason",
+      "/takeover/session_id"
+    ],
+    "required": [
+      "/device_id",
+      "/environment/environment_id",
+      "/environment/name",
+      "/in_use/session_id",
+      "/in_use/silicon_id",
+      "/in_use/since",
+      "/name",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/setup/state",
+      "/setup/steps",
+      "/setup/steps/*/key",
+      "/setup/steps/*/status",
+      "/setup/steps/*/title",
+      "/takeover/reason",
+      "/takeover/session_id"
+    ],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (device) and protocol/Frames.kt"
+}

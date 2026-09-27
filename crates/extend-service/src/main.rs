@@ -21,6 +21,7 @@ async fn main() -> anyhow::Result<()> {
         Some("migrate") => {
             let pool = extend_service::db::connect(&cfg.database_url).await?;
             extend_service::db::migrate_global(&pool).await?;
+            extend_service::versions::migrate(&pool).await?;
             println!("migrations applied");
             Ok(())
         }

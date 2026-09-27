@@ -18,6 +18,7 @@
 
 use std::time::Duration;
 
+pub mod attachments;
 pub use extend_protocol as protocol;
 use extend_protocol::envelope::Page;
 use extend_protocol::model::*;
@@ -345,6 +346,16 @@ impl Client {
         expect_empty(self.send(r).await?).await
     }
 
+    /// The Carbon tapped Stop on the device (`POST /api/v1/device/stop`): ends the session running
+    /// on it, and on a host, on every device it carries. The fallback when the socket's `stop`
+    /// frame can't be sent.
+    pub async fn device_stop(&self, credential: &str) -> Result<()> {
+        let r = self
+            .req(Method::POST, "/api/v1/device/stop")
+            .header("authorization", format!("Extend-Device {credential}"));
+        expect_empty(self.send(r).await?).await
+    }
+
     pub async fn upload_artifact(
         &self,
         credential: &str,
@@ -485,6 +496,25 @@ impl Authed<'_> {
                 ("os", q.os),
                 ("limit", q.limit.map(|l| l.to_string())),
                 ("cursor", q.cursor)
+            ])
+        ))
+        .await
+    }
+
+    /// Like [`Authed::devices`], but also lists the Carbon's removed devices, each with
+    /// `removed_at` and `removed_reason` set (`include_removed=true`; `scope=mine` only). A removed
+    /// device's record and activity log stay readable with [`Authed::device`] and
+    /// [`Authed::activity`].
+    pub async fn devices_including_removed(&self, q: DeviceQuery) -> Result<Page<Device>> {
+        self.get(&format!(
+            "/api/v1/devices{}",
+            qs(&[
+                ("scope", q.scope),
+                ("online", q.online.map(|b| b.to_string())),
+                ("os", q.os),
+                ("limit", q.limit.map(|l| l.to_string())),
+                ("cursor", q.cursor),
+                ("include_removed", Some("true".to_owned()))
             ])
         ))
         .await
@@ -736,6 +766,51 @@ impl Authed<'_> {
         .await
     }
 
+    /// A file's bytes, read through Extend (`GET /api/v1/files/{file_id}/content`). Works for
+    /// files stored in Briefcase, which Extend reads on the caller's behalf; for the Silicon that
+    /// made the file and the Carbon who owns its device.
+    pub async fn file_content(&self, id: &str) -> Result<FileContent> {
+        self.file_download(id, None).await?.content().await
+    }
+
+    /// Starts reading a file's bytes, optionally one range (`first` byte, and `last` inclusive or
+    /// to the end), to take in chunks with [`FileDownload::chunk`] (large recordings) or at once
+    /// with [`FileDownload::content`].
+    pub async fn file_download(&self, id: &str, range: Option<(u64, Option<u64>)>) -> Result<FileDownload> {
+        let path = format!("/api/v1/files/{id}/content");
+        let mut r = self.req(Method::GET, &path);
+        if let Some((first, last)) = range {
+            let value = match last {
+                Some(last) => format!("bytes={first}-{last}"),
+                None => format!("bytes={first}-"),
+            };
+            r = r.header("range", value);
+        }
+        let resp = self.c.send(r).await?;
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            decode::<serde_json::Value>(resp).await?;
+            return Err(Error::Decode {
+                status,
+                detail: format!("reading file {id} failed"),
+            });
+        }
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        Ok(FileDownload {
+            content_type: header("content-type").unwrap_or_else(|| "application/octet-stream".into()),
+            name: header("content-disposition").as_deref().and_then(disposition_name),
+            length: header("content-length").and_then(|v| v.parse().ok()),
+            range: header("content-range").as_deref().and_then(content_range),
+            url: format!("{}{path}", self.c.base),
+            resp,
+        })
+    }
+
     pub async fn report(&self, input: &ReportInput) -> Result<ReportReceipt> {
         self.post("/api/v1/reports", "report", input, true).await
     }
@@ -747,6 +822,97 @@ impl Authed<'_> {
             .json(&env("telemetry", event));
         expect_empty(self.c.send(r).await?).await
     }
+}
+
+/// A file's bytes, read through Extend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileContent {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+    /// The file's name, from `Content-Disposition`.
+    pub name: Option<String>,
+    /// For a partial answer: (first byte, last byte, total size).
+    pub range: Option<(u64, u64, u64)>,
+}
+
+/// A file being read through Extend, taken in chunks or all at once.
+#[derive(Debug)]
+pub struct FileDownload {
+    resp: reqwest::Response,
+    url: String,
+    pub content_type: String,
+    /// The file's name, from `Content-Disposition`.
+    pub name: Option<String>,
+    /// Bytes in this answer (the whole file, or the range asked for).
+    pub length: Option<u64>,
+    /// For a partial answer: (first byte, last byte, total size).
+    pub range: Option<(u64, u64, u64)>,
+}
+
+impl FileDownload {
+    /// The next chunk, or `None` at the end.
+    pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>> {
+        self.resp
+            .chunk()
+            .await
+            .map(|c| c.map(|b| b.to_vec()))
+            .map_err(|e| Error::Transport {
+                url: self.url.clone(),
+                source: e,
+            })
+    }
+
+    /// Everything that is left.
+    pub async fn content(self) -> Result<FileContent> {
+        let bytes = self.resp.bytes().await.map_err(|e| Error::Transport {
+            url: self.url.clone(),
+            source: e,
+        })?;
+        Ok(FileContent {
+            bytes: bytes.to_vec(),
+            content_type: self.content_type,
+            name: self.name,
+            range: self.range,
+        })
+    }
+}
+
+/// The file name in a `Content-Disposition` header: the RFC 8187 `filename*` when present,
+/// else `filename`.
+fn disposition_name(value: &str) -> Option<String> {
+    let mut plain = None;
+    for part in value.split(';').map(str::trim) {
+        if let Some(v) = part.strip_prefix("filename*=") {
+            let encoded = v.split_once("''").map_or(v, |(_, e)| e);
+            let mut out = Vec::new();
+            let bytes = encoded.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%'
+                    && let Some(b) = encoded.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
+                    out.push(b);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            if let Ok(s) = String::from_utf8(out) {
+                return Some(s);
+            }
+        } else if let Some(v) = part.strip_prefix("filename=") {
+            plain = Some(v.trim_matches('"').to_owned());
+        }
+    }
+    plain
+}
+
+/// `bytes first-last/total` → (first, last, total).
+fn content_range(value: &str) -> Option<(u64, u64, u64)> {
+    let (span, total) = value.trim().strip_prefix("bytes ")?.split_once('/')?;
+    let (first, last) = span.split_once('-')?;
+    Some((first.parse().ok()?, last.parse().ok()?, total.parse().ok()?))
 }
 
 /// True when an error means the access token needs refreshing.

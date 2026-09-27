@@ -1,8 +1,9 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, onMount, Show } from "solid-js";
 import { ArrowRight, FlaskConical, KeyRound } from "lucide-solid";
 import { session } from "../lib/session";
 import { ApiError, toApiError } from "../lib/api";
-import { beginIamLogin } from "../lib/auth";
+import { beginIamLogin, beginIamSignup, iamSignupUrl } from "../lib/auth";
+import type { IamInfo } from "../lib/types";
 import { Button, ErrorNote } from "../components/ui";
 import { ExtendMark } from "../components/ExtendMark";
 import Shader from "../components/Shader";
@@ -13,7 +14,7 @@ import { write } from "../lib/storage";
 export default function SignIn(props: { reason?: ApiError | null; next?: string; onSignedIn?: () => void }) {
   const s = session();
   const [slt, setSlt] = createSignal("");
-  const [busy, setBusy] = createSignal<"iam" | "slt" | null>(null);
+  const [busy, setBusy] = createSignal<"iam" | "signup" | "slt" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [showTesting, setShowTesting] = createSignal(false);
   const testing = () => s.world().kind === "testing";
@@ -21,14 +22,29 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
     const w = s.world();
     return w.kind === "production" ? "production" : w.environment.environment_id;
   };
+  // Read early only to say where "Create an account" leads; each click reads it again.
+  const [iamInfo, setIamInfo] = createSignal<IamInfo | null>(null);
+  onMount(async () => {
+    try {
+      setIamInfo(await s.client().iam());
+    } catch {
+      /* the error shows if the Carbon chooses to continue */
+    }
+  });
+  const signupPageKnown = () => {
+    const info = iamInfo();
+    return !info || iamSignupUrl(info) !== null;
+  };
 
-  async function withIam() {
-    setBusy("iam");
+  /** Sign in, or (for a Carbon new to Silicon IAM) sign up first: both go through IAM and come back here. */
+  async function withIam(signup = false) {
+    setBusy(signup ? "signup" : "iam");
     setError(null);
     try {
       const info = await s.client().iam();
+      setIamInfo(info);
       write("session", "extend.next", props.next ?? "/devices");
-      const url = beginIamLogin(info, location.origin, worldKey());
+      const url = (signup ? beginIamSignup(info, location.origin, worldKey()) : null) ?? beginIamLogin(info, location.origin, worldKey());
       location.assign(url);
     } catch (e) {
       setError(toApiError(e));
@@ -93,10 +109,27 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
           </p>
         </Show>
 
-        <Button variant="primary" class="wide" onClick={withIam} busy={busy() === "iam"} data-testid="sign-in-iam">
+        <Button variant="primary" class="wide" onClick={() => withIam()} busy={busy() === "iam"} data-testid="sign-in-iam">
           Continue with Silicon IAM <ArrowRight size={16} aria-hidden="true" />
         </Button>
         <p class="fine">IAM asks you to approve Extend and pick your teams, then sends you back here. Extend never sees your password.</p>
+
+        {/* Signing up is IAM's too. Test identities come from the test environment, not from sign-up. */}
+        <Show when={!testing()}>
+          <div class="signup" data-testid="signup">
+            <p class="signup-line">
+              New to Silicon IAM?{" "}
+              <button class="link-button" onClick={() => withIam(true)} disabled={busy() === "signup"} data-testid="sign-up-iam">
+                Create an account
+              </button>
+            </p>
+            <p class="fine" data-testid="signup-note">
+              {signupPageKnown()
+                ? "Silicon IAM checks your email and phone, creates your Carbon account and signs you in with a code, then asks you to approve Extend and sends you back here."
+                : "This Silicon IAM gives Extend no sign-up page, so this opens its sign-in page. Create your account there if it offers to; if it doesn't, ask someone in your Team to invite you."}
+            </p>
+          </div>
+        </Show>
 
         <div class="divider">
           <span>or</span>

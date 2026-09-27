@@ -264,13 +264,37 @@ struct FakeComputer {
     /// An ended session still holds the screen (a failed release): only the terminal works.
     /// Session setup releases it; session cleanup leaves it held again.
     held: std::sync::atomic::AtomicBool,
+    /// The screen is locked: only the terminal works, and the screen watch says so.
+    locked: std::sync::atomic::AtomicBool,
+}
+
+const LOCKED_REASON: &str = "This computer is locked. Unlock it to let a Silicon use it.";
+
+/// The agent's screen watch, reading the fake computer's lock.
+fn screen_watch(computer: &Arc<FakeComputer>) -> Option<extend_agent::agent::ScreenWatch> {
+    let computer = computer.clone();
+    Some(Arc::new(move || {
+        computer
+            .locked
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .then_some(extend_agent::drivers::screen_lock::ScreenBlock::Locked)
+    }))
 }
 
 #[async_trait]
 impl Driver for FakeComputer {
     async fn probe(&self) -> Probe {
         let held = self.held.load(std::sync::atomic::Ordering::SeqCst);
-        let (capabilities, missing) = if held {
+        let locked = self.locked.load(std::sync::atomic::Ordering::SeqCst);
+        let (capabilities, missing) = if locked {
+            (
+                vec![Capability::Terminal],
+                vec![MissingCapability {
+                    capability: Capability::ScreenRead,
+                    reason: LOCKED_REASON.into(),
+                }],
+            )
+        } else if held {
             let reason = "Session 0ld ended, but agent-device couldn't release this computer".to_owned();
             (
                 vec![Capability::Terminal],
@@ -399,6 +423,7 @@ async fn start_inner(paired: bool, closes: &[u16], held: bool) -> Harness {
         hosted_factory: factory,
         credentials: store,
         probe_interval: Duration::from_secs(3600),
+        screen_watch: screen_watch(&computer),
     });
     let task = tokio::spawn(agent.run());
     Harness {
@@ -911,6 +936,7 @@ async fn a_refused_credential_on_connect_means_unpaired() {
         hosted_factory: Arc::new(|_d| Err("none".into())),
         credentials: store,
         probe_interval: Duration::from_secs(3600),
+        screen_watch: None,
     });
     let task = tokio::spawn(agent.run());
     eventually("enrollment after 401", || {
@@ -923,4 +949,39 @@ async fn a_refused_credential_on_connect_means_unpaired() {
         .await
         .unwrap()
         .unwrap();
+}
+
+/// Locking or unlocking the screen reaches Extend within seconds, not at the next periodic check
+/// (an hour here).
+#[tokio::test]
+async fn locking_and_unlocking_the_screen_is_reported_at_once() {
+    let h = start(true).await;
+    let fake = h.fake.clone();
+    let hello = eventually("hello", || frame_of(&fake, "hello", 0)).await;
+    assert_eq!(
+        hello["capabilities"],
+        json!(["screen.read", "screen.capture", "terminal"])
+    );
+    h.computer.locked.store(true, std::sync::atomic::Ordering::SeqCst);
+    let locked = eventually("hello after locking", || frame_of(&fake, "hello", 1)).await;
+    assert_eq!(locked["capabilities"], json!(["terminal"]));
+    assert_eq!(locked["missing"][0]["reason"], LOCKED_REASON);
+    eventually("status shows the lock", || {
+        h.handle
+            .status
+            .get()
+            .missing
+            .iter()
+            .any(|m| m.reason == LOCKED_REASON)
+            .then_some(())
+    })
+    .await;
+    h.computer.locked.store(false, std::sync::atomic::Ordering::SeqCst);
+    let unlocked = eventually("hello after unlocking", || frame_of(&fake, "hello", 2)).await;
+    assert_eq!(
+        unlocked["capabilities"],
+        json!(["screen.read", "screen.capture", "terminal"])
+    );
+    h.handle.shutdown.cancel();
+    let _ = h.task.await;
 }

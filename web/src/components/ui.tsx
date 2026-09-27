@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show, splitProps, type JSX 
 import { Check, CircleAlert, Laptop, LoaderCircle, Monitor, Smartphone, Tablet, Tv, X } from "lucide-solid";
 import type { ApiError } from "../lib/api";
 import type { Device } from "../lib/types";
+import { statusLabel } from "../lib/format";
 import Shader from "./Shader";
 
 /** Shows exactly what Extend said: the message, the hint, and the ids to report it with. */
@@ -133,18 +134,19 @@ export function deviceStatus(device: { online: boolean; in_use?: unknown }): Dev
   return device.in_use ? "in-use" : device.online ? "online" : "offline";
 }
 
-/** "Online", "In use" or "Offline" with its pixel dot: the words always say what the colour says. */
-export function OnlineDot(props: { online: boolean; inUse?: boolean; label?: boolean }) {
+/**
+ * "Online", "In use", "Paused for you" or "Offline" with its pixel dot: the words always say what the
+ * colour says. A paused session is still a Silicon's session (cobalt), waiting for the Carbon.
+ */
+export function OnlineDot(props: { online: boolean; inUse?: boolean; paused?: boolean; label?: boolean }) {
   const status = (): DeviceStatus => (props.inUse ? "in-use" : props.online ? "online" : "offline");
   return (
-    <span class={`online ${props.online ? "is-online" : "is-offline"} ${props.inUse ? "is-in-use" : ""}`}>
+    <span class={`online ${props.online ? "is-online" : "is-offline"} ${props.inUse ? "is-in-use" : ""}`} data-testid="device-status">
       <StatusDot status={status()} />
-      <Show when={props.label !== false}>{STATUS_LABEL[status()]}</Show>
+      <Show when={props.label !== false}>{statusLabel({ online: props.online, inUse: props.inUse, paused: props.paused })}</Show>
     </span>
   );
 }
-
-const STATUS_LABEL: Record<DeviceStatus, string> = { online: "Online", "in-use": "In use", offline: "Offline" };
 
 /** The SILICON / CARBON tag Interface puts beside a member's name. */
 export function MemberTag(props: { type: "carbon" | "silicon" | string | undefined }) {
@@ -186,7 +188,8 @@ export function DeviceIcon(props: { device: Pick<Device, "kind" | "os">; size?: 
 export function Empty(props: { title: string; eyebrow?: string; children?: JSX.Element; testid?: string }) {
   return (
     <div class="empty" data-testid={props.testid}>
-      <Shader variant="orb" class="empty-orb" />
+      {/* The same 3 px cell as the sign-in print, so the two read as one press run. */}
+      <Shader variant="orb" class="empty-orb" cell={3} />
       <Show when={props.eyebrow}>
         <p class="eyebrow">{props.eyebrow}</p>
       </Show>

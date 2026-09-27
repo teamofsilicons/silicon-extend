@@ -137,19 +137,31 @@ fun Pill(
 @Composable
 fun SiliconBadge() = Pill("Silicon", Tokens.TagInk, Tokens.CobaltPale, border = Tokens.CobaltEdge)
 
-/** A 2 dp ring drawn just outside the element when it has focus, so a TV remote always shows where it is. */
-fun Modifier.focusRing(focused: Boolean, radius: Dp = 6.dp, color: Color = Tokens.Ink): Modifier = drawWithContent {
+/**
+ * Interface's `:focus-visible` outline (`2px solid var(--blue)`, `outline-offset: 4px`): a 2 dp
+ * cobalt ring 4 dp outside the element while it has focus, so a TV remote always shows where it is.
+ */
+fun Modifier.focusRing(focused: Boolean, radius: Dp = 6.dp, color: Color = FocusRing.color): Modifier = drawWithContent {
     drawContent()
     if (focused) {
-        val o = 4.dp.toPx()
+        val stroke = FocusRing.width.toPx()
+        // The stroke is centred on its path: put the path half a stroke beyond the offset.
+        val o = FocusRing.offset.toPx() + stroke / 2
         drawRoundRect(
             color = color,
             topLeft = Offset(-o, -o),
             size = Size(size.width + 2 * o, size.height + 2 * o),
             cornerRadius = CornerRadius(radius.toPx() + o),
-            style = Stroke(width = 2.dp.toPx()),
+            style = Stroke(width = stroke),
         )
     }
+}
+
+/** Interface's focus-visible outline, as the app draws it ([focusRing]). */
+object FocusRing {
+    val color = Tokens.Cobalt
+    val width = 2.dp
+    val offset = 4.dp
 }
 
 enum class Tone { Primary, Secondary, Stop, Danger, Quiet }
@@ -213,13 +225,15 @@ fun ExtendButton(
             .then(if (flushEnd && !s.tv) Modifier.offset(x = hPad) else Modifier)
             .heightIn(min = if (s.tv) 56.dp else 48.dp)
             .widthIn(min = 48.dp)
-            .focusRing(focused, color = if (tone == Tone.Stop || tone == Tone.Danger) Tokens.StopDeep else Tokens.Ink),
+            .focusRing(focused),
     ) {
         if (leading != null) {
             leading()
             Spacer(Modifier.width(10.dp))
         }
-        Text(text, style = Type.label(s), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // A long label on a narrow screen with large text wraps to a second line rather than
+        // losing its end ("Disconnect Android debu…").
+        Text(text, style = Type.label(s), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 
@@ -313,6 +327,8 @@ fun ExtendTextField(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     keyboardType: KeyboardType = KeyboardType.Text,
+    /** Set in IBM Plex Mono, like Interface's URLs, codes and ids. */
+    mono: Boolean = false,
 ) {
     val s = LocalScale.current
     val interaction = remember { MutableInteractionSource() }
@@ -322,7 +338,7 @@ fun ExtendTextField(
         onValueChange = onValueChange,
         enabled = enabled,
         singleLine = true,
-        textStyle = Type.body(s).copy(color = if (enabled) Tokens.Ink else Tokens.Muted),
+        textStyle = (if (mono) Type.monoField(s) else Type.body(s)).copy(color = if (enabled) Tokens.Ink else Tokens.Muted),
         cursorBrush = SolidColor(Tokens.Cobalt),
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         interactionSource = interaction,

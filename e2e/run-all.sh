@@ -52,5 +52,11 @@ if command -v npx >/dev/null; then
   run contract-lint npx -y @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash
 fi
 
+if command -v honeycomb >/dev/null; then
+  run cli-release-archive python3 -m unittest discover -s scripts -p 'test_*.py'
+else
+  skip cli-release-archive "honeycomb not installed"
+fi
+
 echo; echo "Summary:"; printf '  %s\n' "${SUMMARY[@]}"
 printf '%s\n' "${SUMMARY[@]}" | grep -q '^✗' && exit 1 || exit 0

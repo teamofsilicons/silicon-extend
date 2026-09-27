@@ -31,6 +31,10 @@ struct Cli {
     /// Base directory; state lives in <home>/.extend-agent (env SILICON_HOME, default ~).
     #[arg(long, global = true)]
     home: Option<PathBuf>,
+    /// Where "Download the update" goes when Extend needs a newer app (env EXTEND_DOWNLOAD_URL,
+    /// default the website's download page for this OS).
+    #[arg(long, global = true)]
+    download_url: Option<String>,
     /// More detail in the log.
     #[arg(long, short, global = true)]
     verbose: bool,
@@ -40,11 +44,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the app (the default): pair, stay connected, carry out commands.
+    /// Run the app (the default): pair, stay connected, carry out commands. Once this computer is
+    /// paired, the app with a window starts at login from then on, unless you turn that off.
     Run {
-        /// No tray icon or windows; status goes to stdout. For servers and CI.
+        /// No tray icon or windows; status goes to stdout. For servers and CI. Doesn't turn on
+        /// start at login unless --autostart is given.
         #[arg(long)]
         headless: bool,
+        /// Start at login from now on (also for --headless; on Linux --headless uses a systemd
+        /// user unit). Remembered.
+        #[arg(long, conflicts_with = "no_autostart")]
+        autostart: bool,
+        /// Don't start at login: removes the entry if there is one, and the app won't turn it on
+        /// again after pairing. Remembered; undo with --autostart or install-autostart.
+        #[arg(long)]
+        no_autostart: bool,
     },
     /// Show what the running app is doing.
     Status {
@@ -113,10 +127,27 @@ fn real_main(cli: Cli) -> Result<i32> {
         service_url: cli.service_url.clone(),
         credential_store: cli.credential_store,
         home: cli.home.clone(),
+        download_url: cli.download_url.clone(),
     };
     let config = Config::load(&overrides)?;
-    match cli.command.unwrap_or(Command::Run { headless: false }) {
-        Command::Run { headless } => run(config, headless, cli.verbose),
+    let default_run = Command::Run {
+        headless: false,
+        autostart: false,
+        no_autostart: false,
+    };
+    match cli.command.unwrap_or(default_run) {
+        Command::Run {
+            headless,
+            autostart,
+            no_autostart,
+        } => {
+            let flag = match (autostart, no_autostart) {
+                (true, _) => extend_agent::autostart::RunFlag::On,
+                (_, true) => extend_agent::autostart::RunFlag::Off,
+                _ => extend_agent::autostart::RunFlag::Unset,
+            };
+            run(config, headless, flag, cli.verbose)
+        }
         Command::Status { json } => {
             let s = status::read_status_file(&config.status_path());
             if json {
@@ -195,18 +226,16 @@ fn real_main(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         Command::InstallAutostart { headless, systemd } => {
-            let at =
-                extend_agent::autostart::install(&extend_agent::autostart::AutostartOptions { headless, systemd })?;
+            let opts = extend_agent::autostart::AutostartOptions { headless, systemd };
+            let at = extend_agent::autostart::set_by_carbon(&config.state_dir, true, &opts)?;
             println!("Silicon Extend will start at login ({at}).");
             Ok(0)
         }
         Command::UninstallAutostart => {
-            let removed = extend_agent::autostart::uninstall()?;
-            if removed.is_empty() {
-                println!("Silicon Extend wasn't set to start at login.");
-            } else {
-                println!("Removed {}.", removed.join(", "));
-            }
+            let removed = extend_agent::autostart::set_by_carbon(&config.state_dir, false, &Default::default())?;
+            println!(
+                "Silicon Extend won't start at login ({removed}), and won't turn it on again by itself. Turn it back on with `extend-agent install-autostart`."
+            );
             Ok(0)
         }
         Command::Exec {
@@ -285,13 +314,43 @@ fn single_instance(config: &Config) -> Result<Option<std::fs::File>> {
     }
 }
 
-fn run(config: Config, headless: bool, verbose: bool) -> Result<i32> {
+/// `run --autostart` / `--no-autostart`: carried out, and remembered, before anything else.
+fn apply_autostart_flag(config: &Config, flag: extend_agent::autostart::RunFlag, headless: bool) {
+    use extend_agent::autostart::{self, AutostartOptions, Decision};
+    let on = match autostart::at_start(flag, autostart::is_installed()) {
+        Decision::Install => true,
+        Decision::Remove => false,
+        Decision::Leave(_) if flag == autostart::RunFlag::Off => false,
+        Decision::Leave(_) => return,
+    };
+    let opts = AutostartOptions {
+        headless,
+        systemd: headless && cfg!(target_os = "linux"),
+    };
+    match autostart::set_by_carbon(&config.state_dir, on, &opts) {
+        Ok(done) if on => {
+            eprintln!("Silicon Extend will start at login ({done}).");
+            if opts.systemd {
+                eprintln!(
+                    "It starts when you log in. To start it when the computer starts, before anyone logs in, run `loginctl enable-linger` once."
+                );
+            }
+        }
+        Ok(_) => eprintln!("Silicon Extend won't start at login, and won't turn it on again by itself."),
+        Err(e) => eprintln!(
+            "Couldn't change start at login: {e:#}. Silicon Extend runs anyway; try again with `extend-agent install-autostart` or `uninstall-autostart`."
+        ),
+    }
+}
+
+fn run(config: Config, headless: bool, autostart: extend_agent::autostart::RunFlag, verbose: bool) -> Result<i32> {
     init_logging(&config, verbose, true);
     let Some(_lock) = single_instance(&config)? else {
         let s = status::read_status_file(&config.status_path());
         eprintln!("Silicon Extend is already running (pid {}): {}", s.pid, s.headline());
         return Ok(0);
     };
+    apply_autostart_flag(&config, autostart, headless);
     let local: Arc<dyn Driver> = Arc::new(LocalDriver::for_the_agent(&config));
     let deps = AgentDeps {
         config: config.clone(),
@@ -299,6 +358,7 @@ fn run(config: Config, headless: bool, verbose: bool) -> Result<i32> {
         hosted_factory: hosted_factory(),
         credentials: credential::store_for(&config),
         probe_interval: Duration::from_secs(30),
+        screen_watch: Some(Arc::new(extend_agent::drivers::screen_lock::current)),
     };
     let (agent, handle) = Agent::new(deps);
     tracing::info!(
@@ -333,11 +393,11 @@ fn run(config: Config, headless: bool, verbose: bool) -> Result<i32> {
         });
         return Ok(0);
     }
-    run_with_ui(agent, handle)
+    run_with_ui(agent, handle, &config)
 }
 
 #[cfg(feature = "tray")]
-fn run_with_ui(agent: Agent, handle: AgentHandle) -> Result<i32> {
+fn run_with_ui(agent: Agent, handle: AgentHandle, config: &Config) -> Result<i32> {
     let rt = runtime()?;
     let rt_handle = rt.handle().clone();
     {
@@ -364,11 +424,15 @@ fn run_with_ui(agent: Agent, handle: AgentHandle) -> Result<i32> {
             rt.shutdown_timeout(Duration::from_secs(2));
         })
         .context("couldn't start the agent thread")?;
-    extend_agent::ui::run(handle, rt_handle, agent_thread)
+    let context = extend_agent::ui::Context {
+        state_dir: config.state_dir.clone(),
+        download_url: config.download_url.to_string(),
+    };
+    extend_agent::ui::run(handle, rt_handle, agent_thread, context)
 }
 
 #[cfg(not(feature = "tray"))]
-fn run_with_ui(_agent: Agent, _handle: AgentHandle) -> Result<i32> {
+fn run_with_ui(_agent: Agent, _handle: AgentHandle, _config: &Config) -> Result<i32> {
     anyhow::bail!("this build has no tray icon; run with --headless")
 }
 

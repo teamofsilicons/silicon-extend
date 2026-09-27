@@ -26,17 +26,19 @@ shows which Silicon is using the computer, with a **Stop** button. The wire cont
 ```
 extend-agent                      # = run: tray icon + window (Mac, Windows, Linux with a screen)
 extend-agent run --headless       # servers and CI: no UI, status lines on stdout
+extend-agent run [--autostart | --no-autostart]   # also turn start at login on or off, for good
 extend-agent status [--json]      # what the running app is doing (reads {state}/status.json)
 extend-agent probe [--json]       # what this computer can do right now (the `hello` it would send)
 extend-agent stop                 # Stop the Silicon using this computer (POST /api/v1/device/stop)
 extend-agent revoke [--yes]       # Revoke pair, after a typed confirmation (DELETE /api/v1/device)
-extend-agent install-autostart [--headless] [--systemd]   # start at login
-extend-agent uninstall-autostart
+extend-agent install-autostart [--headless] [--systemd]   # start at login (remembered)
+extend-agent uninstall-autostart                          # stop starting at login (remembered)
 extend-agent exec [--session a3f] [--timeout-ms N] [--out DIR] [--end-session] <command> [args…]
                                   # run one command through the local driver, without Extend
 ```
 
-Global flags are `--service-url`, `--credential-store auto|keyring|file`, `--home` and `-v`.
+Global flags are `--service-url`, `--credential-store auto|keyring|file`, `--home`,
+`--download-url` and `-v`.
 
 | Setting | Where | Default |
 |---|---|---|
@@ -46,6 +48,7 @@ Global flags are `--service-url`, `--credential-store auto|keyring|file`, `--hom
 | agent-device | `EXTEND_AGENT_DEVICE` (path to `bin/agent-device.mjs` or an executable), `config.json` `agent_device` (argv), the copy bundled with the app, then `vendor/agent-device` in a source checkout | — |
 | Node | `EXTEND_NODE`, the bundled copy, `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` | — |
 | Terminal shell | `EXTEND_TERMINAL_SHELL` (argv before the command) | `$SHELL -l -c` (bash, zsh, fish, ksh), else `/bin/sh -c`; `cmd.exe /D /S /C` on Windows |
+| Update download page | `--download-url`, `EXTEND_DOWNLOAD_URL`, `config.json` `download_url` (http or https) | `https://extend.teamofsilicons.com/download/mac`, `/windows` or `/linux` |
 
 The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file in it is 0600:
 
@@ -57,6 +60,7 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
 - `status.json`: the live status, read by `extend-agent status`.
 - `agent.lock`: the single-instance lock, so two copies never fight over one credential.
 - `attached.json`, `hosted/<device_id>/`: devices this computer carries.
+- `start-at-login.json`: the start-at-login choice (`{"start_at_login": bool, "by": "default"|"carbon"}`).
 - `agent-device/`: agent-device's own daemon state (`AGENT_DEVICE_STATE_DIR`).
 - `sessions/<session_id>/`: recordings and armed replay scripts that outlive a single command;
   `live-session` while the running app has that session in use, and `cleanup-pending.json` while a
@@ -188,9 +192,13 @@ both the JSON and the text the CLI would print.
   planned, so `--save-script` in any position keeps the app. Bundle ids, `settings`, links and
   paths are passed unchanged. Limit: an app whose display name differs from its file name
   (`OBS Studio`, `Code`, `iTerm2`) relies on agent-device's own display-name match.
-- **Known gap:** `record start --quality normal` fails with `invalid_args` on Mac and Linux, because
-  `normal` is passed on unchanged and agent-device accepts `medium|high` (Mac) or no quality (Linux).
-  See TECHNICAL.md open question 15.
+- **Recording quality.** `record start --quality normal|high` (`cli.yaml`) is passed as agent-device's
+  `medium|high` (`medium` is accepted too; anything else is `invalid_args` naming both values). On
+  a Mac it picks the export quality; on Linux the fork encodes at 8 Mbit/s (medium) or 20 Mbit/s
+  (high), as Android's screenrecord does. The same mapping applies to iPhones and iPads a Mac
+  carries (`extend-hosted`).
+- **`--`.** Flags the agent adds (`--platform`, `--session`, `--json`) go before a `--` in the
+  Silicon's arguments, since agent-device reads every token after it as text (`type -- --json`).
 
 **macOS probe.**
 - It checks Accessibility (`AXIsProcessTrusted`) and Screen Recording
@@ -209,9 +217,18 @@ both the JSON and the text the CLI would print.
   their results any more.)
 - Permissions belong to the app that launched the agent: Silicon Extend.app when installed, or the
   terminal during development.
+- A locked Mac (`CGSSessionScreenIsLocked` in `CGSessionCopyCurrentDictionary`), one showing the
+  login window or another account (`kCGSSessionOnConsoleKey` false), or one whose attached main
+  display is asleep, reports everything that needs the screen as missing with "This Mac is
+  locked…" (or "…showing the login window or another account…", "…asleep…"); the terminal,
+  `apps.list`, `logs` and `takeover` stay. It isn't a setup step, so sessions still start.
 
 **Linux probe.**
-- It reports only `terminal`, `apps.launch` and `replay` without `DISPLAY`/`WAYLAND_DISPLAY`.
+- Without `DISPLAY`/`WAYLAND_DISPLAY` it reports only `terminal` (`UNDERSTANDING.md`: a computer
+  without a screen only gets the terminal); everything else is missing with that reason.
+- A session whose lock screen is up (logind's `LockedHint`, from `loginctl show-session` for
+  `XDG_SESSION_ID` or the user's display session) reports everything that needs the screen as
+  missing with "This computer is locked…", as on a Mac.
 - With a screen, it checks:
   - the AT-SPI bus (the same Python/GI calls agent-device's dumper makes), for `screen.read`
   - xdotool (X11) or ydotool (Wayland), for input
@@ -232,6 +249,9 @@ both the JSON and the text the CLI would print.
 - `open`, `close` and `apps` use the Start menu (`Get-StartApps`) and the shell.
 - `record`, `logs`, `alert` and `replay`/`test`/`batch` are reported as `missing`.
 - A locked computer reports input and screen capabilities as `missing` ("This computer is locked…").
+- **Lock changes.** The agent asks `drivers::screen_lock::current()` every 3 s (Mac, Linux, Windows)
+  and checks the computer again as soon as the answer changes, so a lock or unlock reaches Extend
+  in seconds rather than at the next 30-second check.
 - **It is compile-checked (`cargo check`/`clippy --target x86_64-pc-windows-msvc`) and its pure
   logic is unit-tested on macOS/Linux. It has never run on Windows.**
 
@@ -247,7 +267,8 @@ both the JSON and the text the CLI would print.
   - The menu shows the headline ("Pairing code: 4F9C2A", "Paired to c:alice", "si:chef is using
     this Mac") and the device name.
   - It also shows the test environment, **Stop si:chef**, **Done** during a takeover, and the
-    devices this computer carries.
+    devices this computer carries, each in use with its own **Stop si:x on <name>** (and **Done on
+    <name>** during a takeover): one click, `stop` with its `target`.
   - The rest of the menu: Show Silicon Extend…, Start at login, Revoke pair…, Quit.
 - **Window** (a wry webview):
   - the big pairing code with a countdown and where to enter it
@@ -255,12 +276,18 @@ both the JSON and the text the CLI would print.
   - "Not available yet": each missing capability with its reason (while a computer is held, the
     same reason appears once per withheld capability)
   - the device name, the Carbon it's paired to and the team
-  - the test-environment banner and devices carried
-  - **Revoke pair…** with an in-window confirmation
+  - the test-environment banner and devices carried (each in use with **Stop**)
+  - **Start at login** with a switch (Turn off / Turn on)
+  - while Extend needs a newer app: **Download the update**, which opens the configured download
+    page (`download_url`) in the default browser
+  - **Revoke pair…** with an in-window confirmation. A carried device's pair can't be revoked from
+    here yet (the device API has no route for it); the window says to remove it on the website.
 - It opens by itself when enrollment starts, including when a connection error prevents a pairing code.
 - **Banner.** A small always-on-top strip at the bottom centre of the screen reads "si:chef is using
   this Mac" with **Stop**, or "si:chef needs you: <reason>" with **Done**.
-  - It is shown for as long as a session lasts.
+  - It is shown for as long as a session lasts, on this computer or on a device it carries. Each
+    carried device in use adds a row ("si:x is using <name>" with its own **Stop**, or **Done**),
+    up to four rows; the window grows by 38 px per row.
   - Drag its grip (the dots) to move it. **−** collapses it to a small pill that keeps **Stop** (or **Done**
     during a takeover) and the test-environment tag, so stopping stays one tap; click the pill to
     restore it. Sizes: 420x52 expanded, 250x44 collapsed (360x44 with an environment). The
@@ -272,6 +299,15 @@ both the JSON and the text the CLI would print.
 
 ## Start at login
 
+`UNDERSTANDING.md`: the app starts on its own when the device starts. Once the computer is paired,
+the app with a window turns start at login on (`autostart::after_pairing`), pointing the entry at
+this copy (again, if the app was moved), unless the Carbon turned it off: the window's switch, the
+menu's **Start at login**, `run --no-autostart` or `uninstall-autostart`. That choice is kept in
+`start-at-login.json` and never overridden. A copy running from App Translocation or a disk image
+is never registered (the window says to move the app to Applications), and neither, by itself, is
+a development build in a Cargo `target/` directory. `run --headless` leaves it
+alone unless given `--autostart` (a systemd user unit on Linux).
+
 `install-autostart` writes one of:
 - macOS: `~/Library/LaunchAgents/com.teamofsilicons.extend-agent.plist` (RunAtLoad, restart on a
   crash, Aqua sessions only)
@@ -282,7 +318,7 @@ both the JSON and the text the CLI would print.
 ## Tests
 
 ```
-cargo test -p extend-agent            # 142 unit + 9 integration (2026-09-27, macOS)
+cargo test -p extend-agent            # 164 unit + 10 integration (2026-09-27, macOS)
 cargo clippy -p extend-agent --all-targets -- -D warnings
 cargo check --target x86_64-pc-windows-msvc -p extend-agent
 ```
@@ -296,6 +332,7 @@ cargo check --target x86_64-pc-windows-msvc -p extend-agent
   - Revoke pair, 4401, 4409 (no reconnect until asked), 4426, reconnect after a drop, and a
     refused credential
   - capabilities re-checked right after a session's setup and cleanup
+  - a lock and an unlock reported within seconds through the screen watch
 - The unit tests cover, among others: interrupting a running command at session end, idle worker
   restart, a hung cleanup cut off, late commands for an ended session, `SESSION_NOT_FOUND` on close,
   held-computer reporting, forced and non-forced background retries, restart mid-session, a session

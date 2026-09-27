@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.teamofsilicons.extend.BuildConfig
 import com.teamofsilicons.extend.Extend
+import com.teamofsilicons.extend.config.DeviceInfo
 import com.teamofsilicons.extend.core.Link
 import com.teamofsilicons.extend.core.Phase
 import com.teamofsilicons.extend.core.SetupItem
@@ -194,7 +195,10 @@ private fun Footer(state: UiState, onOpenDeveloperSettings: () -> Unit, onOpenLi
     var taps by remember { mutableIntStateOf(0) }
     val versionFocus = remember { MutableInteractionSource() }
     val versionFocused by versionFocus.collectIsFocusedAsState()
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    val s = LocalScale.current
+    // On a narrow screen with large text the licences link goes under the version instead of
+    // being cut short; its text then lines up with the column's start edge.
+    FooterRow(nudge = if (s.tv) 0.dp else 18.dp) {
         Box(
             Modifier
                 .heightIn(min = 48.dp)
@@ -209,14 +213,41 @@ private fun Footer(state: UiState, onOpenDeveloperSettings: () -> Unit, onOpenLi
                 .padding(vertical = 12.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            Mono("Silicon Extend ${BuildConfig.VERSION_NAME}${if (state.isTv) " · TV" else ""}")
+            Mono("${DeviceInfo.appName(state.isTv)} ${BuildConfig.VERSION_NAME}")
         }
-        Spacer(Modifier.weight(1f))
         // On the TV pairing screen (nothing else to press) the remote starts on the licences link,
         // not on the hidden developer-settings trigger. Paired screens keep focus at the top.
         val licences = remember { FocusRequester() }
         if (state.isTv && state.phase == Phase.UNPAIRED) LaunchedEffect(Unit) { runCatching { licences.requestFocus() } }
-        ExtendButton("Open-source licences", onOpenLicences, tone = Tone.Quiet, flushEnd = true, modifier = Modifier.focusRequester(licences))
+        ExtendButton("Open-source licences", onOpenLicences, tone = Tone.Quiet, modifier = Modifier.focusRequester(licences))
+    }
+}
+
+/**
+ * The footer's two parts: side by side when they fit, the second under the first when not.
+ * [nudge] moves a quiet button by its own padding so its text meets the column edge: out to the
+ * end beside the version, or out to the start below it.
+ */
+@Composable
+private fun FooterRow(nudge: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+    androidx.compose.ui.layout.Layout(content, Modifier.fillMaxWidth()) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val first = measurables[0].measure(loose)
+        val second = measurables[1].measure(loose)
+        val width = constraints.maxWidth
+        val n = nudge.roundToPx()
+        if (first.width + second.width - n <= width) {
+            val height = maxOf(first.height, second.height)
+            layout(width, height) {
+                first.placeRelative(0, (height - first.height) / 2)
+                second.placeRelative(width - second.width + n, (height - second.height) / 2)
+            }
+        } else {
+            layout(width, first.height + second.height) {
+                first.placeRelative(0, 0)
+                second.placeRelative(-n, first.height)
+            }
+        }
     }
 }
 
@@ -234,7 +265,7 @@ private fun Starting() {
 @Composable
 private fun PairingScreen(state: UiState) {
     val noun = if (state.isTv) "TV" else "device"
-    Eyebrow("Silicon Extend · Pairing")
+    Eyebrow("${DeviceInfo.appName(state.isTv)} · Pairing")
     Gap(8.dp)
     Title("Pair this $noun")
     Gap(8.dp)
@@ -363,6 +394,7 @@ private fun TvPairingScreen(state: UiState, footer: @Composable () -> Unit) {
                 Spacer(Modifier.weight(1f))
                 Eyebrow("Silicon", color = Color.White)
                 Eyebrow("Extend", color = Color.White)
+                Eyebrow("TV", color = Color.White)
             }
         }
         Column(
@@ -374,7 +406,7 @@ private fun TvPairingScreen(state: UiState, footer: @Composable () -> Unit) {
                 .padding(start = 32.dp, end = 56.dp, top = 36.dp, bottom = 27.dp),
         ) {
             state.environment?.let { EnvironmentBanner(it.name) }
-            Eyebrow("Silicon Extend · Pairing")
+            Eyebrow("${DeviceInfo.TV_APP_NAME} · Pairing")
             Gap(8.dp)
             Title("Pair this TV")
             Gap(8.dp)
@@ -441,8 +473,12 @@ private fun PairedScreen(extend: Extend, state: UiState, onRequestNotifications:
         CardTitle(if (setup.state == "complete") "Setup is done" else "Finish setting up")
         Gap(4.dp)
         Muted(
-            if (setup.state == "complete") "Core device control is ready. Android debugging below adds app installation, logs and recording."
-            else "Do these on this $noun, one at a time.",
+            when {
+                setup.state != "complete" -> "Do these on this $noun, one at a time."
+                report.optionalNeedsCarbon ->
+                    "Core device control is ready. Android debugging needs you again: see the step below."
+                else -> "Core device control is ready. Android debugging below adds app installation, logs and recording."
+            },
         )
         Gap(14.dp)
         StepList(required, 1, tv, onRequestNotifications, onOpen)
@@ -638,7 +674,9 @@ private fun StepRow(index: Int, item: SetupItem, onRequestNotifications: () -> U
                     ExtendButton(label ?: "Allow notifications", onRequestNotifications, tone = if (item.required) Tone.Primary else Tone.Secondary)
                 } else if (item.open != null) {
                     Gap(12.dp)
-                    ExtendButton(label ?: "Open settings", { onOpen(item.open.invoke()) }, tone = if (item.required) Tone.Primary else Tone.Secondary)
+                    // An optional step that needs the Carbon (Wireless debugging after a restart) gets the primary button too.
+                    val primary = item.required || step.status == "needs_carbon"
+                    ExtendButton(label ?: "Open settings", { onOpen(item.open.invoke()) }, tone = if (primary) Tone.Primary else Tone.Secondary)
                 }
             }
         }
@@ -668,19 +706,21 @@ private fun Capabilities(capabilities: List<String>) {
 
 // ───────────── Developer settings ─────────────
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit) {
     var url by remember { mutableStateOf(extend.config.serviceUrl) }
     var forceTv by remember { mutableStateOf(extend.config.forceTv) }
     var message by remember { mutableStateOf<String?>(null) }
     val paired = state.phase == Phase.PAIRED
-    ScrollingPage(topBar = { TopBar("Settings") }) {
+    // Close sits in the top bar, as on the licences screen, so the form's buttons fit a narrow screen.
+    ScrollingPage(topBar = { TopBar("Settings", trailing = { ExtendButton("Close", onClose, tone = Tone.Quiet, flushEnd = true) }) }) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Eyebrow("For testing")
             Title("Developer settings")
-            Muted("For testing Silicon Extend. Changing the service moves this device to another Extend.")
+            Muted("For testing ${DeviceInfo.appName(state.isTv)}. Changing the service moves this device to another Extend.")
             Gap(4.dp)
-            ExtendTextField(url, { url = it }, "Extend service URL", keyboardType = KeyboardType.Uri)
+            ExtendTextField(url, { url = it }, "Extend service URL", keyboardType = KeyboardType.Uri, mono = true)
             Column {
                 Mono("Production")
                 Mono("https://backend.extend.teamofsilicons.com", color = Tokens.Ink)
@@ -690,7 +730,7 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
             }
             if (paired) Muted("Saving a different URL forgets this device's pair here (it isn't revoked on the old service).", color = Tokens.StopDeep)
             ExtendSwitch("Behave as a TV (android_tv, corner badge, remote)", forceTv, { forceTv = it })
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 ExtendButton("Save", {
                     val clean = url.trim().trimEnd('/')
                     if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
@@ -719,13 +759,34 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
                     url = BuildConfig.DEFAULT_SERVICE_URL
                     message = "Press Save to switch to ${BuildConfig.DEFAULT_SERVICE_URL}."
                 }, tone = Tone.Secondary)
-                Spacer(Modifier.weight(1f))
-                ExtendButton("Close", onClose, tone = Tone.Quiet, flushEnd = true)
             }
             message?.let { Muted(it) }
             Mono("Device id: ${state.deviceId ?: "—"} · os: ${extend.os} · build ${BuildConfig.BUILD_TYPE}")
         }
     }
+}
+
+/**
+ * The Android debugging card's words. Once the Carbon connected debugging, it stays theirs to
+ * disconnect even while it isn't connected (after a restart turned Wireless debugging off, the
+ * after-restart step tells them they can), so Disconnect is offered then too.
+ */
+internal object DebuggingCardCopy {
+    const val DISCONNECT = "Disconnect Android debugging"
+
+    fun text(connected: Boolean, enabled: Boolean, wirelessDebuggingOff: Boolean): String = when {
+        connected -> "Connected · app installation, device logs and recording are available."
+        enabled && wirelessDebuggingOff ->
+            "Paired, but not connected: Wireless debugging is off (Android turns it off when this device restarts). " +
+                "Turn it back on in Developer options and Extend reconnects by itself. To stop using Android debugging, tap $DISCONNECT below."
+        enabled ->
+            "Paired, but not connected right now; Extend keeps reconnecting. If it doesn't connect within a minute, " +
+                "connect or pair again below, or tap $DISCONNECT to stop using it."
+        else -> "Enable Wireless debugging in Developer options. Open ‘Pair device with pairing code’ in split screen beside Extend, " +
+            "then enter its port and code here. These are Android's values, separate from your Extend pairing code."
+    }
+
+    fun offersDisconnect(connected: Boolean, enabled: Boolean) = connected || enabled
 }
 
 @Composable
@@ -737,15 +798,22 @@ private fun AndroidDebuggingCard(extend: Extend) {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var connected by remember { mutableStateOf(extend.adb.connected) }
+    var enabled by remember { mutableStateOf(extend.adb.enabled) }
+    var wirelessOff by remember { mutableStateOf(extend.adb.wirelessDebuggingOff) }
     LaunchedEffect(Unit) {
-        while (true) { connected = extend.adb.connected; delay(1000) }
+        while (true) {
+            connected = extend.adb.connected
+            enabled = extend.adb.enabled
+            wirelessOff = extend.adb.wirelessDebuggingOff
+            delay(1000)
+        }
     }
     fun act(action: suspend () -> String) {
         busy = true
         scope.launch {
             try { message = action() }
             catch (e: Exception) { message = e.message ?: "Android debugging failed with no reason given. Check Wireless debugging is on, then try again." }
-            finally { busy = false; connected = extend.adb.connected; extend.onCapabilitiesMayHaveChanged() }
+            finally { busy = false; connected = extend.adb.connected; enabled = extend.adb.enabled; extend.onCapabilitiesMayHaveChanged() }
         }
     }
     Gap(22.dp)
@@ -758,10 +826,7 @@ private fun AndroidDebuggingCard(extend: Extend) {
         Gap(6.dp)
         CardTitle("Android debugging")
         Gap(4.dp)
-        Muted(
-            if (connected) "Connected · app installation, device logs and recording are available."
-            else "Enable Wireless debugging in Developer options. Open ‘Pair device with pairing code’ in split screen beside Extend, then enter its port and code here. These are Android's values, separate from your Extend pairing code.",
-        )
+        Muted(DebuggingCardCopy.text(connected, enabled, wirelessOff))
         if (!connected) {
             Gap(12.dp)
             ExtendTextField(pairingPort, { pairingPort = it }, "Android pairing port", enabled = !busy, keyboardType = KeyboardType.Number)
@@ -788,9 +853,14 @@ private fun AndroidDebuggingCard(extend: Extend) {
                     if (extend.adb.connect(port)) "Connected." else extend.adb.lastError ?: "Could not connect."
                 }
             }, enabled = !busy, tone = Tone.Secondary)
-        } else {
+        }
+        if (DebuggingCardCopy.offersDisconnect(connected, enabled)) {
+            if (!connected) {
+                Gap(18.dp)
+                Hairline()
+            }
             Gap(12.dp)
-            ExtendButton("Disconnect Android debugging", {
+            ExtendButton(DebuggingCardCopy.DISCONNECT, {
                 act {
                     extend.executor.cancelAdbCommands()
                     extend.adbExecutor.endAll()

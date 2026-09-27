@@ -35,11 +35,12 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   grep -E "^test result" /tmp/cargo-test.log
 fi
 
-log "Headless probe (no DISPLAY): a server gets terminal, apps.launch and replay"
+log "Headless probe (no DISPLAY): a server gets only the terminal"
 # Its own home: agent-device's daemon keeps the environment of the run that started it, so the
 # desktop runs below must not share a daemon started without a display.
-env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -c '{capabilities, setup: .setup.state}'
-[[ "$(env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -c .capabilities)" == '["apps.launch","replay","terminal"]' ]] || fail "headless capabilities"
+env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -c '{capabilities, setup: .setup.state, missing: [.missing[] | select(.capability == "apps.launch")]}'
+[[ "$(env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -c .capabilities)" == '["terminal"]' ]] || fail "headless capabilities"
+env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -e '[.missing[] | select(.capability == "replay" and (.reason | test("only use the terminal")))] | length == 1' >/dev/null || fail "headless: replay's reason"
 
 log "Start the desktop: Xvfb, D-Bus, AT-SPI, openbox, GNOME Calculator"
 Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &

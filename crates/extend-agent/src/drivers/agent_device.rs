@@ -274,6 +274,38 @@ fn take_save_script(argv: &mut Vec<String>) -> Option<Option<String>> {
     None
 }
 
+/// agent-device's name for a recording quality Extend's CLI offers (`cli.yaml`: `normal` or
+/// `high`). agent-device calls the default `medium`, and takes that spelling too.
+#[allow(clippy::result_large_err)] // The error is the command's answer, returned as-is.
+pub fn recording_quality(requested: &str) -> Result<&'static str, Output> {
+    match requested.trim().to_ascii_lowercase().as_str() {
+        "normal" | "medium" => Ok("medium"),
+        "high" => Ok("high"),
+        _ => Err(invalid(format!(
+            "--quality {requested:?} isn't a recording quality. Use --quality normal (the default) or --quality high, or leave it out."
+        ))),
+    }
+}
+
+/// Puts the platform, session and `--json` flags the agent adds in front of a `--`, if the
+/// command has one: after it agent-device reads every token as text (`type -- --json`), so flags
+/// appended there would be typed instead of obeyed.
+pub fn with_agent_flags(argv: &[String], flags: &[String]) -> Vec<String> {
+    let mut full = Vec::with_capacity(argv.len() + flags.len());
+    match argv.iter().position(|a| a == "--") {
+        Some(at) => {
+            full.extend_from_slice(&argv[..at]);
+            full.extend_from_slice(flags);
+            full.extend_from_slice(&argv[at..]);
+        }
+        None => {
+            full.extend_from_slice(argv);
+            full.extend_from_slice(flags);
+        }
+    }
+    full
+}
+
 /// Builds the run for one command. Pure: no processes, no file system.
 #[allow(clippy::result_large_err)] // The error is the command's answer, returned as-is.
 pub fn plan(command: &str, args: &[String], ctx: &PlanContext<'_>) -> Result<Plan, Output> {
@@ -341,6 +373,9 @@ pub fn plan(command: &str, args: &[String], ctx: &PlanContext<'_>) -> Result<Pla
                     .positional(1)
                     .map(|n| with_extension(&safe_file_name(n, "recording.mp4"), &[".mp4", ".mov", ".webm"]))
                     .unwrap_or_else(|| "recording.mp4".into());
+                if let Some(quality) = parsed.value("--quality") {
+                    set_flag(&mut rest, "--quality", recording_quality(quality)?);
+                }
                 let path = ctx.session_dir.join("recordings").join(&name);
                 match pos.get(1) {
                     Some(&i) => rest[i] = path.display().to_string(),
@@ -939,14 +974,16 @@ impl AgentDevice {
         let Some(cmd) = &self.command else {
             return self.unavailable();
         };
-        let mut full = argv.to_vec();
-        full.extend([
-            "--platform".into(),
-            self.platform.into(),
-            "--session".into(),
-            Self::agent_session(session_id),
-            "--json".into(),
-        ]);
+        let full = with_agent_flags(
+            argv,
+            &[
+                "--platform".into(),
+                self.platform.into(),
+                "--session".into(),
+                Self::agent_session(session_id),
+                "--json".into(),
+            ],
+        );
         let result = run_process(cmd, &full, &self.state_dir, Some(cwd), timeout, cancel).await;
         process_output(result, cmd, timeout)
     }
@@ -2028,6 +2065,52 @@ mod tests {
     }
 
     #[test]
+    fn agent_flags_go_before_a_separator() {
+        let flags = s(&["--platform", "linux", "--session", "extend-a3f", "--json"]);
+        // After `--` agent-device types every token, so its flags must come first.
+        assert_eq!(
+            with_agent_flags(&s(&["type", "--", "--state-dir=~/notes"]), &flags),
+            s(&[
+                "type",
+                "--platform",
+                "linux",
+                "--session",
+                "extend-a3f",
+                "--json",
+                "--",
+                "--state-dir=~/notes"
+            ])
+        );
+        assert_eq!(
+            with_agent_flags(&s(&["fill", "@e3", "--", "-x", "--"]), &flags),
+            s(&[
+                "fill",
+                "@e3",
+                "--platform",
+                "linux",
+                "--session",
+                "extend-a3f",
+                "--json",
+                "--",
+                "-x",
+                "--"
+            ])
+        );
+        assert_eq!(
+            with_agent_flags(&s(&["snapshot", "-i"]), &flags),
+            s(&[
+                "snapshot",
+                "-i",
+                "--platform",
+                "linux",
+                "--session",
+                "extend-a3f",
+                "--json"
+            ])
+        );
+    }
+
+    #[test]
     fn plain_commands_pass_through() {
         let e = Env::new();
         let p = e.plan("click", &["@e2", "--button", "secondary"]).unwrap();
@@ -2096,6 +2179,45 @@ mod tests {
         );
         let p = e.plan("record", &["stop"]).unwrap();
         assert_eq!(p.after, After::RecordingStopped);
+        // `cli.yaml` offers normal and high; agent-device calls normal "medium".
+        for (given, sent) in [
+            (&["start", "--quality", "normal"][..], &["--quality", "medium"][..]),
+            (&["start", "--quality=normal"][..], &["--quality=medium"][..]),
+            (&["start", "--quality", "high"][..], &["--quality", "high"][..]),
+            (&["start", "--quality", "HIGH"][..], &["--quality", "high"][..]),
+            (&["start", "--quality", "medium"][..], &["--quality", "medium"][..]),
+        ] {
+            let p = e.plan("record", given).unwrap();
+            assert!(
+                p.argv.windows(sent.len()).any(|w| w == sent),
+                "{given:?} became {:?}",
+                p.argv
+            );
+            assert!(p.argv.contains(&"/w/sessions/a3f/recordings/recording.mp4".to_owned()));
+        }
+        let p = e
+            .plan("record", &["start", "clip", "--quality", "normal", "--scope", "device"])
+            .unwrap();
+        assert_eq!(
+            p.argv,
+            s(&[
+                "record",
+                "start",
+                "/w/sessions/a3f/recordings/clip.mp4",
+                "--quality",
+                "medium",
+                "--scope",
+                "device"
+            ])
+        );
+        let err = e.plan("record", &["start", "--quality", "ultra"]).unwrap_err();
+        let err = err.error.unwrap();
+        assert_eq!(err.code, "invalid_args");
+        assert!(
+            err.message.contains("--quality normal") && err.message.contains("high"),
+            "{}",
+            err.message
+        );
         let mut busy = Env::new();
         busy.facts.recording = Some(PathBuf::from("/x.mp4"));
         assert_eq!(

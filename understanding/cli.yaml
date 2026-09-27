@@ -33,32 +33,42 @@ grammar:
     before that argument (`extend --json adb shell df -h`, `extend adb --timeout 60000 shell sleep 40`); a `--` directly
     after `adb` ends them and is not sent. The one exception is where `adb pull` saves on this computer (see `adb` below).'
   - Global flags work on every command.
+  - Each Extend command takes only the flags listed for it (plus the global flags). An unknown flag, a value given to a
+    flag that takes none, a missing value, or an extra argument is refused with exit 2, naming the command's valid flags
+    (and the closest one, for a typo). A token starting with `-` where a value goes is read as a flag; put such a value
+    after `--`. Device commands pass their arguments to the device (agent-device's parser decides), apart from Extend's
+    own --ttl, --keep and --out.
+  - The value of an Extend command's flag is taken as written, even when it looks like a global flag
+    (`extend request send 7c1e09ab --reason -h` sends the reason "-h").
   - Destructive commands need `--yes`. Without it they print what would happen and exit 2.
-  - Errors say exactly what failed, why, and the command to run next. Never "something went wrong".
+  - Errors say exactly what failed, why, and the command to run next. Never "something went wrong". Every usage error
+    (exit 2) has a hint.
 
 global_flags:
-  - {flag: '--json', gives: 'One JSON document on stdout: {"ok": true, "data": ...} or {"ok": false, "error": {code, message, hint, docs_url, request_id, details}}'}
-  - {flag: '--test <test_id>', takes: 'Honeycomb environment_id (UUID) previously added with `extend config test add`', gives: 'Runs the command in that test environment. The environment is printed on stderr at the end, including on failure.'}
+  - {flag: '--json', gives: 'One JSON document, the convention every Team CLI follows. On success: the data itself on stdout, with no wrapper (`extend iam --json` prints {"app_id": "extend", ...}). On failure: {"error": {code, message, hint, request_id, docs_url, details, exit_code}} on stderr, and nothing on stdout. The `output = json` setting makes it the default.'}
+  - {flag: '--test <test_id>', takes: 'Honeycomb environment_id (UUID), added with `extend config test add`, or with its app secret in EXTEND_TEST_SECRET', gives: 'Runs the command in that test environment. The last line on stderr is always `[test environment: <name> (<test_id>) as <member or "not signed in">]`, including when the command fails; when it failed before anything ran (an unknown id, a bad secret, a refused command line) the line ends "; nothing ran" and the name is "unknown" if this CLI has never seen the environment.'}
   - {flag: '--session <session_id>', takes: '^[0-9a-f]{3,}$', gives: 'Uses this session instead of the connected one. Precedence: --session, then EXTEND_SESSION, then the connected session.'}
   - {flag: '--team <handle>', takes: IAM team handle, gives: 'Overrides the default team for this command (sent as X-Org-ID).'}
-  - {flag: '--timeout <ms>', takes: '1000–300000, default 30000', gives: 'Command deadline for session commands.'}
-  - {flag: '-h, --help', gives: 'Help for this node of the tree. While a session is connected, lists only the commands that work on its device.'}
-  - {flag: '-V, --version', gives: 'CLI version, client crate version, negotiated API version.'}
-  - {flag: '-v, --verbose', gives: 'Request ids, timings and HTTP status on stderr.'}
+  - {flag: '--timeout <ms>', takes: '1000–300000, default 30000; anything else is refused before sending (exit 2)', gives: 'Command deadline for session commands.'}
+  - {flag: '-h, --help', gives: 'Help for this node of the tree. While a session is connected, lists only the commands that work on its device, and a device command''s own help says "Not available on <device> (<os>) in session <id>: it needs <capability>, which the device doesn''t have (<when>). <capability>: <reason>" when it can''t run there. The list comes from the session as Extend last described it: read at `session connect`, and refreshed by `extend session status` and by every device command (read alongside the command, so it costs no time). It is forgotten when a result or `session status` says the session ended.'}
+  - {flag: '-V, --version', gives: 'The same as `extend version`.'}
+  - {flag: '-v, --verbose', gives: 'On stderr, one line per call to Extend: `[extend] <METHOD> <path>: ok in <ms> ms`, or for a failed call `[extend] <METHOD> <path>: <HTTP status> <code> in <ms> ms, request <request_id>`; then `[extend] finished in <ms> ms with exit code <n>`. Request ids are known only for failed calls (the client crate does not expose the x-request-id of a successful answer).'}
 
 environment:
   SILICON_HOME: 'Base directory. State lives in $SILICON_HOME/.extend/. Default ~.'
   EXTEND_SESSION: 'Session id to use when --session is not given.'
   EXTEND_API_URL: 'Override the service URL (development only).'
   EXTEND_TELEMETRY: 'on|off. Overrides the config value for this process.'
-  NO_COLOR: 'Disables colour in text output.'
+  EXTEND_TEST_SECRET: 'A test environment''s app secret (ask_…), used by `--test <test_id>` instead of the one `extend config test add` saved. The first time, Extend is asked which environment it belongs to, and a secret of another environment is refused (exit 11, nothing runs). It is never written to disk; only its digest is kept, so the check is not repeated, along with that environment''s login. Set without --test, any command that would call Extend is refused (exit 2) and nothing is sent, so a script meant for a test environment never reaches production.'
+  NO_COLOR: 'Set to anything but empty: no colour, when the color setting is auto (the default). color = always or never overrides it (no-color.org). Colour is used only on a terminal, and never with --json.'
 
 state_files:
   - '{home}/.extend/auth.json        tokens, member, default team (0600)'
   - '{home}/.extend/config.toml      settings from `extend config`'
   - '{home}/.extend/sessions/current the connected session id'
-  - '{home}/.extend/sessions/<id>.json  device and capabilities cached at connect'
-  - '{home}/.extend/test/<test_id>.json test app secret and that environment''s tokens'
+  - '{home}/.extend/sessions/<id>.json  the session''s device, capabilities, commands and missing capabilities, as last read'
+  - '{home}/.extend/test/<test_id>.json test app secret (absent when it comes from EXTEND_TEST_SECRET), environment name and that environment''s tokens'
+  - '{default home}/.extend/home     written by `extend config home <dir>`: the directory whose .extend/ holds the state'
 
 exit_codes:
   0: success
@@ -134,8 +144,9 @@ commands:
     who: both
     summary: Check who is signed in, verified live with IAM.
     gives:
-      text: 'Authenticated as si:chef (Silicon) in team acme.'
-      json: '{authenticated: true, member: {type: "silicon", id: "si:chef"}, teams: ["acme"], team: "acme", team_role: null}. When not signed in: {authenticated: false, reason: "..."} and exit 3.'
+      text: 'Authenticated as si:chef (Silicon) in team acme. Or: Not signed in: <reason> Run `extend login <slt>`.'
+      json: '{authenticated: true, member: {type: "silicon", id: "si:chef"}, teams: ["acme"], team: "acme", team_role: null, testing_environment}. When not signed in: {authenticated: false, reason: "..."}; when a saved login no longer works (expired and not refreshable, refused): {authenticated: false, reason, code}.'
+      exit: '0 whether or not a login works: the check itself succeeded (as `dm login status` does). A failure to check (Extend unreachable: 14) is an error. Every other command exits 3 when not signed in.'
     api: GET /api/v1/auth/me
 
   - usage: extend logout
@@ -149,7 +160,7 @@ commands:
     summary: Show Extend's public IAM application details.
     gives:
       text: 'app_id: extend, IAM: https://backend.iam.teamofsilicons.com, API: https://backend.extend.teamofsilicons.com'
-      json: '{app_id: "extend", iam_base_url, api_base_url, website_url, docs_url, repository_url, testing_environment}'
+      json: '{app_id: "extend", iam_base_url, iam_login_url, api_base_url, website_url, docs_url, repository_url, testing_environment}, app_id at the top level'
     api: GET /api/v1/iam
 
   - usage: extend team ls | extend team use <handle>
@@ -164,49 +175,59 @@ commands:
     gives: {text: 'si:chef  Chef', json: '{items: [{id, display_name}]}'}
     api: GET /api/v1/team/silicons
 
-  - usage: extend config home <dir>
+  - usage: extend config home <dir> [--use-existing]
     who: both
-    summary: Move where Extend keeps its state. Default {SILICON_HOME or ~}/.extend.
-    takes: {dir: 'An existing directory. Anything else fails with "not a directory: <dir>" (exit 2).'}
-    gives: {text: 'Extend state now lives in /data/si-chef/.extend'}
+    summary: Move where Extend keeps its state to <dir>/.extend. Default {SILICON_HOME or ~}/.extend.
+    takes:
+      dir: 'An existing directory. Anything else fails with "not a directory: <dir>" and a hint (exit 2).'
+      --use-existing: 'Switch to the state already in <dir>/.extend (or start empty there) and leave the current state where it is.'
+    behaviour: 'Without --use-existing the state moves: the login, settings, test environments and sessions are copied to <dir>/.extend (files 0600, directories 0700), later runs are pointed there, and the old copies are deleted (a copy that can''t be deleted is reported). If <dir>/.extend already holds Extend state it is refused (exit 2) and nothing changes; the hint names --use-existing, or removing that directory. Pointing back at the default home removes the pointer file.'
+    gives:
+      text: 'Moved the login for si:chef, 2 setting(s) from /home/si/.extend to /data/si-chef/.extend. Extend state now lives there.'
+      json: '{state_dir, moved_from, moved: ["auth.json", "config.toml", ...], login}; with --use-existing {state_dir, moved: [], left_in, left}'
 
   - usage: extend config ls | get <key> | set <key> <value> | unset <key>
     who: both
     summary: Read and change settings.
     takes:
       keys:
+        api_url: 'https://…, or http:// only for 127.0.0.1, localhost, [::1] or 10.0.2.2 (default https://backend.extend.teamofsilicons.com); a trailing / is dropped. EXTEND_API_URL overrides it.'
         telemetry: 'on|off (default on)'
         output: 'text|json (default text); json makes --json the default'
-        team: default team handle
-        screenshot_scale: '0.01–1, default 1; applied to screenshot when --scale is not given'
+        team: 'default team handle: 1–64 letters, digits, "-", "_", "." or ":"'
+        screenshot_scale: 'a number from 0.01 to 1, default 1; applied to screenshot when --scale is not given'
         self_destruct: 'default file self-destruct, e.g. 1d, 90m, 30d (1m–30d, default 1d)'
-        download_dir: 'where `--out` and `extend file get` save by default (default current directory)'
-        color: 'auto|always|never'
+        download_dir: 'an existing directory, saved as an absolute path: where `extend file get` saves without --out (default the current directory)'
+        color: 'auto|always|never (default auto: colour on a terminal unless NO_COLOR is set)'
+    behaviour: 'Every value is checked when set; an out-of-range value, or an unknown key in get, set or unset, is refused with exit 2 and a hint listing what is accepted.'
+    gives: {text: '`config get <key>` prints the value, or "<default> (default)"', json: 'get: {key, value, default, effective}; ls: {settings, state_dir, keys: [{key, about, default, value}]}'}
 
   - usage: extend config test add <test_id> | ls | rm <test_id>
     who: both
     summary: Save a test environment's app_secret so `--test <test_id>` can use it.
     takes:
       test_id: Honeycomb environment_id (UUID)
-      secret: 'Read from stdin (never an argument, so it stays out of shell history). Must match ^ask_[A-Za-z0-9_-]{43}$. Validated with Extend before saving.'
+      secret: 'Read from stdin (never an argument, so it stays out of shell history). Must match ^ask_[A-Za-z0-9_-]{43}$. Validated with Extend before saving, and it must belong to <test_id>: a secret of another environment is refused (testing_secret_invalid, exit 11) and nothing is saved.'
     gives: {text: 'Added test environment "checkout-e2e" (9b3e…). Use: extend --test 9b3e… <command>'}
     api: GET /api/v1/testing-environment
 
   # ───────────────────────────── Devices (Carbon manages, Silicon lists) ─────────────────────────────
-  - usage: extend device ls [--online] [--os <os>] [--team-visible] [--json]
+  - usage: extend device ls [--online] [--os <os>] [--team-visible] [--removed] [--json]
     who: both
-    summary: 'Silicon: every device you have access to. Carbon: every device you paired (--team-visible: other Carbons'' team-visible devices).'
+    summary: 'Silicon: every device you have access to. Carbon: every device you paired (--team-visible: other Carbons'' team-visible devices; --removed: also your removed devices, whose activity stays readable).'
+    behaviour: 'Reads every page (100 devices each, following next_cursor) so the list is complete; --online is sent to Extend, which filters before paging. After 100 pages, or if Extend returns a cursor it already returned, it stops and says the list is incomplete (json: next_cursor is where it stopped; null when complete). --removed with --team-visible is refused.'
     gives:
       text: |
         ID        NAME             OS          ONLINE  IN USE BY          DAYS LEFT
         7c1e09ab  Saket's Pixel    android     yes     si:chef (a3f, 4m)  14
         0d44e1f2  Living room TV   android_tv  no      —                  9
-      json: '{items: [Device], next_cursor}'
-    api: GET /api/v1/devices
+        (with --removed, ONLINE says "removed" for a removed device and a REMOVED column gives when and why)
+      json: '{items: [Device], next_cursor: null | "<cursor where it stopped>"}'
+    api: GET /api/v1/devices (include_removed=true with --removed)
 
   - usage: extend device show <device_id> [--json]
     who: both
-    summary: One device, and what a Silicon can do on it given its OS and the permissions it has.
+    summary: One device, and what a Silicon can do on it given its OS and the permissions it has. For a removed device (its Carbon only), when and why it was removed.
     gives:
       text: 'Name, OS, owner, online, who is using it, days left, then "You can:" with each capability and its commands, then "Missing:" with each unavailable capability and why.'
       json: '{...Device, capabilities: [..], missing: [{capability, reason}], commands: [..]}'
@@ -346,7 +367,7 @@ commands:
   - usage: extend request send <device_id> --reason "<text>"
     who: silicon
     summary: Ask the Silicon using a device for it. Delivered through Ting with the reason exactly as written.
-    takes: {--reason: '1–300 characters, required'}
+    takes: {--reason: '1–300 characters not counting the spaces and line breaks around it (at most 1,000 with them), sent exactly as written; required'}
     gives: {text: 'Sent to si:chef (using Saket''s Pixel since 09:58).', json: '{Request}'}
     errors: [device_not_in_use, no_access]
     api: POST /api/v1/devices/{device_id}/requests
@@ -366,8 +387,12 @@ commands:
     api: GET /api/v1/files/{file_id}
 
   - usage: extend file get <file_id> [--out <path>]
-    who: both
-    summary: Download a file from Briefcase to a local path.
+    who: 'the Silicon that made the file, and the Carbon whose device made it'
+    summary: 'Download a file through Extend, which reads it from Briefcase as the caller, so it works for Briefcase files. Prints the file''s line and Briefcase link first, then streams the bytes to disk (a partial download is never left behind).'
+    takes: {--out: 'A file path, or a directory (existing, or ending in /) to save under the file''s own name. Default: download_dir, else the current directory. The file''s name is reduced to its last path component.'}
+    gives: {text: '<file line with link>, then "Saved to <path> (<size>)"', json: '{file: File, saved_to, bytes}'}
+    errors: 'A refused download says which file failed and why, and the hint gives its Briefcase link.'
+    api: GET /api/v1/files/{file_id}, GET /api/v1/files/{file_id}/content
 
   - usage: extend file keep <file_id>
     who: silicon (that made it)
@@ -379,7 +404,11 @@ commands:
     summary: The documentation tree. Top level shows getting started, every branch with a one-line purpose, and links. While connected to a session, the device commands shown are only those that work on that device.
 
   - usage: extend version [--json]
-    summary: CLI version, client crate version, API version negotiated, and whether this CLI is deprecated (from the compatibility matrix).
+    summary: CLI version, client crate version, API version negotiated, and whether this CLI is current, deprecated or sunset (from the compatibility matrix).
+    behaviour: 'Status is current (the API major is current and its cli range includes this CLI), deprecated (update before it is retired; says since when, the sunset rule and sunset_earliest_at), sunset (Extend answered api_version_sunset, or the matrix says so), unsupported (this CLI is outside the major''s cli range, or no API version in common), or unknown (Extend could not be asked, or the matrix does not list the major). Exits 0 in every case.'
+    gives:
+      text: "extend 1.0.0 (silicon-extend-client 1.0.0), API v1 at https://backend.extend.teamofsilicons.com (service 1.0.0)\nStatus: current. API v1 is current, and it works with CLI >=1.0.0, <2.0.0, which includes 1.0.0."
+      json: '{cli, client_crate, api_version, api_url, service_version, status, api_state, cli_range, deprecated_at, sunset_at, sunset_earliest_at, sunset_rule, message}'
     api: GET /api/version, GET /api/v1/contracts
 
   - usage: extend docs
@@ -403,6 +432,13 @@ commands:
 # (TECHNICAL.md §5). Flags every one of them accepts: --session, --timeout, --json.
 # Commands that make files also accept --ttl <1m–30d> (default 1d), --keep (permanent), and --out <path> (also save locally).
 # Files are returned with their Briefcase link. For `adb`, all of these go before its first argument (see grammar).
+# Text output: the device's text, then one line per file with its Briefcase link, then one `warning: …` line on stderr per
+# entry in the result's warnings (a file Briefcase refused to store or share, and why; the exit code is unchanged), then,
+# with --out, each file is downloaded through GET /api/v1/files/{file_id}/content and "Saved <name> to <path>" is printed.
+# The links come first so they are there even if a download fails. --out is a file path or a directory (existing, or
+# ending in /); when a command makes several files and --out is a file path, the second is saved as <stem>-2.<ext>, etc.
+# --json: the CommandResult itself (with `warnings`), plus `saved_to: [paths]` when --out was given; if a download fails,
+# the error's details carry {result, saved_to, file}. A result or error saying session_ended disconnects the session.
 # Local files a command names (scripts, media, APKs, adb push sources) are read on the caller's machine and sent inside
 # the request: at most 8 files and 8 MiB in total, checked before any file is read. install, reinstall, adb push and
 # adb install take a local file only; a Briefcase link or file id is not accepted in its place yet. The CLI refuses a
@@ -562,7 +598,9 @@ examples:
     extend device pair 4f9c2a --name "Saket's Pixel" --access si:chef
     extend device setup 7c1e09ab --watch
   testing: |
+    # either save the secret once…
     printf %s "$TEST_APP_SECRET" | extend config test add 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c
+    # …or give it per command: EXTEND_TEST_SECRET="$TEST_APP_SECRET" extend --test 9b3e0c1a-… <command>
     extend --test 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c login si:chef
     extend --test 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c device ls
     # stderr, always last: [test environment: checkout-e2e (9b3e0c1a…) as si:chef]

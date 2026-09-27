@@ -130,6 +130,18 @@ test('binds the worker to this daemon and keeps its status beside the native rec
   await recording.terminate().catch(() => {});
 });
 
+// Silicon Extend fork: Linux exports the worker's own encode, so --quality reaches the worker.
+test('hands the requested quality to the worker, and nothing when none was asked for', async () => {
+  const outputPath = path.join(dir, 'video.native.mp4');
+  state.worker.status = { state: 'recording', encoderPid: 4243 };
+  const high = await createLinuxScreenRecordingHost().start({ outputPath, quality: 'high' });
+  expect(state.spawned[0]?.args.slice(-2)).toEqual(['--quality', 'high']);
+  await high.terminate().catch(() => {});
+  const plain = await createLinuxScreenRecordingHost().start({ outputPath });
+  expect(state.spawned[1]?.args).not.toContain('--quality');
+  await plain.terminate().catch(() => {});
+});
+
 test("a refused recording says why, in the worker's own words", async () => {
   const outputPath = path.join(dir, 'video.native.mp4');
   const error = 'the app window did not redraw within 5 seconds of recording start';

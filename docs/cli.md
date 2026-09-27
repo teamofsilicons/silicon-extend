@@ -12,11 +12,13 @@ is under it.
 honeycomb install 'extend'
 extend iam --json            # app_id "extend" — generate a short-lived token for it with Silicon IAM
 extend login <slt>           # never a password; the SLT comes from the IAM CLI or consent screen
-extend login status --json   # {"authenticated": true, "member": {...}, ...}; exit 3 when not signed in
+extend login status --json   # {"authenticated": true, "member": {...}, ...}; not signed in: {"authenticated": false, "reason": ...}, still exit 0
 ```
 
-State lives in `$SILICON_HOME/.extend` (or `~/.extend`); move it with `extend config home <dir>`.
-Files are private to the user (0600).
+State lives in `$SILICON_HOME/.extend` (or `~/.extend`); `extend config home <dir>` moves it,
+login included, to `<dir>/.extend` (or, with `--use-existing`, switches to state already there).
+Files are private to the user (0600). `extend version` says whether this CLI is current, deprecated
+or sunset, from Extend's compatibility matrix.
 
 ## For a Silicon
 
@@ -28,7 +30,7 @@ extend --help                             # now lists only commands that work on
 extend snapshot -i                        # @refs for the interactive elements
 extend click @e2                          # act; refs stay valid until the next snapshot
 extend fill @e3 "hello"                   # typed text is redacted in the activity log
-extend screenshot --ttl 7d --out shot.png # stored in Briefcase; self-destructs in 7 days; also saved locally
+extend screenshot --ttl 7d --out shot.png # stored in Briefcase; self-destructs in 7 days; also downloaded here
 extend terminal run "ls ~/Downloads"      # computers only
 extend tv-remote press select             # TVs only
 extend takeover --reason "Approve Face ID" # hand the device to its Carbon; commands wait until Done
@@ -37,7 +39,16 @@ extend session end                        # free the device (it also ends after 
 
 When another Silicon is using the device, `extend session new` exits 6 and tells you who and since
 when. Ask for it with `extend request send <device_id> --reason "..."` (1–300 characters, delivered
-through Ting exactly as written).
+through Ting exactly as written). Every new reason is sent; the same reason again within 60 s is
+treated as a repeat. If Ting can't take it yet, `extend request ls` shows it pending with the reason
+why, and it fails with a reason after 6 attempts.
+
+Files a command makes are printed with their Briefcase links. `--out` (and `extend file get
+<file_id>`) downloads them through Extend, which reads them from Briefcase as you, after printing the
+links. A file Extend couldn't store or share is a `warning: …` line on stderr saying why and what to
+do; the command's exit code doesn't change. If the session ends while a command runs (the Carbon
+pressed Stop, access was removed, the device was removed), the command answers at once with exit 6,
+says the command may have run, and the CLI disconnects the session.
 
 ## Arguments, `--` and local files
 
@@ -71,6 +82,7 @@ extend device ttl 7c1e09ab 30                                       # stays pair
 extend device activity 7c1e09ab --since 2h                          # every action, who, when
 extend device stop 7c1e09ab                                         # stop the Silicon using it now
 extend device rm 7c1e09ab --yes
+extend device ls --removed                                          # also removed devices; their activity stays readable
 ```
 
 ## Test environments
@@ -80,20 +92,28 @@ printf %s "$TEST_APP_SECRET" | extend config test add <test_id>   # the secret n
 extend --test <test_id> login si:chef                             # a test member id works as the login
 extend --test <test_id> device ls
 extend --test <test_id> env show                                  # test-only; without --test it exits 11
+EXTEND_TEST_SECRET="$TEST_APP_SECRET" extend --test <test_id> device ls   # for scripts: no config test add
 ```
 
-The environment is printed on stderr after every `--test` command, so scripts reading stdout (JSON,
-screenshots) are unaffected. Production and test logins are stored separately.
+The environment is printed on stderr as the last line of every `--test` command, also when it fails
+before anything ran, so scripts reading stdout (JSON, screenshots) are unaffected. The secret must
+belong to `<test_id>`. With `EXTEND_TEST_SECRET` set but no `--test`, nothing is sent, so a test
+script never reaches production. Production and test logins are stored separately.
 
 ## Scripts and agents
 
-- `--json` prints exactly one document: `{"ok": true, "data": ...}` or
-  `{"ok": false, "error": {"code", "message", "hint", "request_id", "exit_code"}}`.
+- `--json` prints exactly one document, the convention every Team CLI follows. On success, the data
+  itself on stdout with no wrapper (`extend iam --json` prints `{"app_id": "extend", ...}`; a device
+  command prints its command result). On failure, `{"error": {"code", "message", "hint",
+  "request_id", "docs_url", "details", "exit_code"}}` on stderr and nothing on stdout.
 - Exit codes are stable (0 ok, 1 failed on the device, 2 usage, 3 not signed in, 4 forbidden,
   5 not found, 6 conflict, 7 offline, 8 paused, 9 timeout, 10 unsupported, 11 test environment,
   12 rate limited, 13 versions, 14 service unavailable).
 - `--session <id>` or `EXTEND_SESSION` picks a session without connecting, so several processes can
   share one home.
+- `-v` prints one line per call to Extend on stderr (method, path, result, time; the request id of a
+  failed call). `NO_COLOR` turns colour off unless the `color` setting says otherwise.
+- Unknown flags, settings and values are refused with exit 2, naming what is accepted.
 
 ## Settings
 

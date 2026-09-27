@@ -10,11 +10,18 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameS
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The packaged agent-device can't start without these: the CLI wrapper, its entry and the daemon.
+// The packaged agent-device can't start without these: the CLI wrapper, its entry and the daemon,
+// and the entries it loads by a computed path, which the import check below can't follow (every
+// `internal/*` entry in vendor/agent-device/tsdown.config.ts): the PNG worker thread (screenshots),
+// the Metro companion tunnel, the Maestro runScript HTTP child and the update check.
 export const REQUIRED_ENTRIES = Object.freeze([
   'bin/agent-device.mjs',
   'dist/src/internal/bin.js',
   'dist/src/internal/daemon.js',
+  'dist/src/internal/png-worker.js',
+  'dist/src/internal/companion-tunnel.js',
+  'dist/src/internal/run-script-http-child.js',
+  'dist/src/internal/update-check-entry.js',
 ]);
 
 // What a stamped version looks like: `0.21.15+extend.<sha256>` or `1.0.0+build.2.extend.<sha256>`.

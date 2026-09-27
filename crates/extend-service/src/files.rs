@@ -33,6 +33,9 @@ pub struct Stored {
     pub file_id: Uuid,
     pub url: String,
     pub shared_with: Option<String>,
+    /// Why the file could not be shared with the device's Carbon (it is stored either way), said
+    /// so the Silicon can be told: what happened, why, and what to do.
+    pub share_error: Option<String>,
 }
 
 pub struct NewFile<'a> {
@@ -307,18 +310,23 @@ impl FileStore for BriefcaseFiles {
             content_type: "application/json",
             doing: format!("share {name} with {}", file.owner_carbon),
         };
-        let shared_with = match self.delegated(silicon, call, sel).await {
-            Ok(_) => Some(file.owner_carbon.to_owned()),
+        let (shared_with, share_error) = match self.delegated(silicon, call, sel).await {
+            Ok(_) => (Some(file.owner_carbon.to_owned()), None),
             Err(e) => {
                 // The file is stored either way; the owner just can't open it in Briefcase yet.
                 tracing::warn!(file_id = %file_id, error = %e.0.message, hint = ?e.0.hint, "sharing an Extend file with the device owner failed");
-                None
+                let why = match &e.0.hint {
+                    Some(h) => format!("{} {h}", e.0.message),
+                    None => e.0.message.clone(),
+                };
+                (None, Some(why))
             }
         };
         Ok(Stored {
             file_id,
             url,
             shared_with,
+            share_error,
         })
     }
 
@@ -408,6 +416,7 @@ impl FileStore for LocalFiles {
             file_id,
             url: format!("{}/dev/files/{file_id}", self.public_url),
             shared_with: Some(file.owner_carbon.to_owned()),
+            share_error: None,
         })
     }
 

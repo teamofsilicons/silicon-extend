@@ -25,8 +25,10 @@ import { fileURLToPath } from 'node:url';
 const root = realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const args = process.argv.slice(2);
-const at = args.indexOf('--state-dir');
-const given = at === -1 ? process.env.AGENT_DEVICE_STATE_DIR : args[at + 1];
+// Like agent-device, flags end at '--'; what follows is text.
+const flags = args.includes('--') ? args.slice(0, args.indexOf('--')) : args;
+const at = flags.indexOf('--state-dir');
+const given = at === -1 ? process.env.AGENT_DEVICE_STATE_DIR : flags[at + 1];
 // Like agent-device, ~ is the home directory (else "~/x" would be created under the working directory).
 const dir = given.startsWith('~/') ? path.join(os.homedir(), given.slice(2)) : given;
 mkdirSync(dir, { recursive: true });
@@ -48,6 +50,8 @@ if (args[0] === 'daemon') {
   if (!info || (info.version !== version && !newer(info.version, version))) {
     info = { pid: 4242, token: 't', version, startedFrom: root };
     writeFileSync(infoPath, JSON.stringify(info));
+    // A command killed (a timeout, SIGKILL) once its daemon is up, before it could exit.
+    if (existsSync(path.join(dir, 'die-after-start'))) process.kill(process.pid, 'SIGKILL');
   }
   console.log(JSON.stringify({ success: true, data: { daemonFrom: info.startedFrom, daemonVersion: info.version } }));
 }
@@ -89,9 +93,11 @@ function stops(state) {
   return calls(state).filter((call) => call.args[0] === 'daemon');
 }
 
-function recorded(state) {
+// The location the record says a daemon of `version` here was started from.
+function recorded(state, version = VERSION) {
   try {
-    return JSON.parse(readFileSync(path.join(state, RECORD), 'utf8')).root;
+    const saved = JSON.parse(readFileSync(path.join(state, RECORD), 'utf8'));
+    return saved.roots ? saved.roots[version] : saved.root;
   } catch {
     return undefined;
   }
@@ -201,7 +207,33 @@ test('a newer daemon is left to agent-device, and its record is kept', (t) => {
   writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/newer' }));
   assert.equal(ok(run(root, ['session', 'list', '--json'], { state })).daemonVersion, '0.22.0+extend.2222');
   assert.deepEqual(stops(state), []);
-  assert.equal(recorded(state), '/Applications/newer');
+  assert.equal(recorded(state, '0.22.0+extend.2222'), '/Applications/newer');
+});
+
+test("an older copy's claim never makes the newer location stop its own daemon", (t) => {
+  const { scratch, root, state } = install(t);
+  const newer = path.join(scratch, 'Newer');
+  cpSync(root, newer, { recursive: true });
+  writeFileSync(path.join(newer, 'package.json'), JSON.stringify({ name: 'agent-device', version: '0.22.0+extend.2222' }));
+  assert.equal(ok(run(newer, ['session', 'list', '--json'], { state })).daemonFrom, realpathSync(newer));
+  // The older copy runs once (agent-device keeps the newer daemon), then the newer one again.
+  assert.equal(ok(run(root, ['session', 'list', '--json'], { state })).daemonVersion, '0.22.0+extend.2222');
+  assert.equal(ok(run(newer, ['session', 'list', '--json'], { state })).daemonFrom, realpathSync(newer));
+  assert.deepEqual(stops(state), [], 'nobody stopped the newer daemon');
+  assert.equal(recorded(state, '0.22.0+extend.2222'), realpathSync(newer));
+});
+
+test('a first command after an update that is killed still leaves the record', (t) => {
+  const { root, state } = install(t);
+  writeDaemon(state, { version: '0.20.0', startedFrom: '/Applications/older' });
+  writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/older' }));
+  writeFileSync(path.join(state, 'die-after-start'), '');
+  const killed = run(root, ['session', 'list', '--json'], { state });
+  assert.equal(killed.signal, 'SIGKILL', 'the command was killed after agent-device replaced the daemon');
+  assert.equal(recorded(state), realpathSync(root));
+  rmSync(path.join(state, 'die-after-start'));
+  assert.equal(ok(run(root, ['snapshot', '--json'], { state })).daemonFrom, realpathSync(root));
+  assert.deepEqual(stops(state), [], 'the next command keeps the daemon this location started');
 });
 
 test('an older release is replaced by agent-device and recorded once it is', (t) => {
@@ -272,6 +304,37 @@ for (const spelling of ['separate', 'joined']) {
     assert.deepEqual(stops(flagged).map((call) => call.args), [['daemon', 'stop', '--state-dir', flagged, '--json']]);
     assert.equal(recorded(flagged), realpathSync(root));
     assert.equal(existsSync(path.join(state, RECORD)), false, 'the environment directory is not the one in use');
+  });
+}
+
+for (const [label, args] of [
+  ['joined', ['type', '--', '--state-dir=~/notes']],
+  ['separate', ['type', '--', '--state-dir', '~/notes']],
+]) {
+  test(`text after -- is never read as --state-dir (${label})`, (t) => {
+    const { scratch, root, state } = install(t);
+    const home = path.join(scratch, 'home');
+    mkdirSync(home);
+    const result = run(root, args, { state, env: { HOME: home } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(path.join(home, 'notes')), false, 'the typed text created a directory');
+    assert.equal(recorded(state), realpathSync(root), 'the record went to the state directory in use');
+    assert.deepEqual(calls(state).map((call) => call.args), [args]);
+  });
+}
+
+for (const [label, args] of [
+  ['--help', ['fill', '@e1', '--', '--help']],
+  ['-h', ['type', '--', '-h']],
+  ['--daemon-base-url', ['type', '--', '--daemon-base-url=https://daemon.example']],
+]) {
+  test(`${label} typed after -- still gets the daemon checked`, (t) => {
+    const { root, state } = install(t);
+    writeDaemon(state, { version: VERSION, startedFrom: '/Applications/other' });
+    writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/other' }));
+    assert.equal(ok(run(root, args, { state })).daemonFrom, realpathSync(root));
+    assert.equal(stops(state).length, 1, "the other location's daemon was replaced");
+    assert.equal(recorded(state), realpathSync(root));
   });
 }
 

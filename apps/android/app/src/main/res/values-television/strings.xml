@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- On a television (UI mode "television": Android TV, Google TV, Fire TV) the app is
+     "Silicon Extend TV" in the launcher, Settings and accessibility settings. -->
+<resources>
+    <string name="app_name">Silicon Extend TV</string>
+    <string name="accessibility_label">Silicon Extend TV</string>
+    <string name="accessibility_summary">Lets the Silicons you allow on extend.teamofsilicons.com see this screen and press the remote\'s buttons. A badge in the corner always shows when a Silicon is using this TV; stop it from the Silicon Extend TV app or the website.</string>
+    <string name="accessibility_description">Silicon Extend TV reads what is on the screen and presses remote buttons and types for a Silicon you gave access to this TV. Nothing happens unless a Silicon with access starts a session, and you can stop it at any moment from the Silicon Extend TV app or the website. Turn this off to stop Silicons from using this TV.</string>
+    <string name="notification_listener_label">Silicon Extend TV</string>
+</resources>

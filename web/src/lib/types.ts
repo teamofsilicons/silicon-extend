@@ -71,6 +71,11 @@ export interface IamInfo {
   repository_url?: string;
   /** IAM's consent screen, e.g. https://auth.iam.teamofsilicons.com/login. */
   iam_login_url?: string | null;
+  /**
+   * IAM's sign-up page, if Extend names one. api.yaml doesn't define it yet; the website uses it when
+   * present and otherwise derives the page from `iam_login_url` (see `iamSignupUrl` in lib/auth.ts).
+   */
+  iam_signup_url?: string | null;
   testing_environment?: TestingEnvironment | null;
 }
 
@@ -106,6 +111,13 @@ export interface Device {
   access_count?: number;
   app_version?: string | null;
   version?: number;
+  /**
+   * Set only on a removed device, which only the Carbon who paired it can still read (with
+   * `include_removed=true`, or by id). It reads as offline, with no in_use, pair_expires_at or days_left.
+   */
+  removed_at?: string | null;
+  /** Why it was removed: an EndReason such as device_removed, pair_revoked, pair_expired, left_team. */
+  removed_reason?: string | null;
 }
 
 export interface DeviceDetail extends Device {

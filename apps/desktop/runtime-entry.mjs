@@ -15,6 +15,15 @@
 //
 // A daemon of another version is left to agent-device, which replaces an older one and leaves a
 // newer one running. Help, --version, `daemon …` and runs against a remote daemon aren't checked.
+//
+// The record names, for each version, the location its daemon was started from
+// ({"root": <latest>, "roots": {"<version>": <location>}}), and it is written before agent-device
+// runs: a command killed before it exits (a timeout, SIGKILL) must still leave it, or the next
+// command would stop the daemon this location has just started. Keyed by version, a location's
+// claim never covers a daemon of another version that agent-device keeps (a newer one).
+//
+// Flags are read the way agent-device's parser reads them (src/cli/parser/args.ts): only before a
+// `--`, after which every token is text (`type -- --state-dir=~/notes` types those words).
 import { spawnSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import os from 'node:os';
@@ -41,12 +50,21 @@ function describe(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// The tokens agent-device reads as flags: those before the first `--` (its parser, args.ts:64).
+function flagTokens(args) {
+  const end = args.indexOf('--');
+  return end === -1 ? args : args.slice(0, end);
+}
+
 // The last `--name value` or `--name=value`, as agent-device's parser reads it.
 function flag(args, name) {
+  const tokens = flagTokens(args);
   let value;
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === name) value = args[i + 1];
-    else if (args[i].startsWith(`${name}=`)) value = args[i].slice(name.length + 1);
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i] === name) {
+      value = tokens[i + 1];
+      i += 1; // the value is never a flag of its own
+    } else if (tokens[i].startsWith(`${name}=`)) value = tokens[i].slice(name.length + 1);
   }
   return value;
 }
@@ -65,21 +83,32 @@ function stateDir(args, env) {
 function usesLocalDaemon(args, env) {
   if (args.length === 0 || args[0] === 'help' || args[0] === 'daemon') return false;
   if (args.length === 1 && (args[0] === '--version' || args[0] === '-V')) return false;
-  if (args.some((arg) => arg === '--help' || arg === '-h')) return false;
+  if (flagTokens(args).some((arg) => arg === '--help' || arg === '-h')) return false;
   return !env.AGENT_DEVICE_DAEMON_BASE_URL?.trim() && flag(args, '--daemon-base-url') === undefined;
 }
 
-// `0.21.15+extend.<digest>` → `0.21.15`: agent-device ignores build metadata when it decides
-// which of two versions is newer.
-function release(version) {
-  return version.split('+')[0];
+// The location the record says a daemon of `version` was started from. A record from before
+// versions were recorded ({"root"}) speaks for whatever daemon runs there.
+function ownerOf(saved, version) {
+  if (!saved || version === undefined) return undefined;
+  if (saved.roots && typeof saved.roots === 'object') {
+    const owner = saved.roots[version];
+    return typeof owner === 'string' ? owner : undefined;
+  }
+  return typeof saved.root === 'string' ? saved.root : undefined;
 }
 
-function record(dir, root) {
+// Records that a daemon of `version` here is started from `root`, keeping what the record says
+// about the daemon running now (`running`), when that is another version.
+function record(dir, root, version, saved, running) {
+  const roots = {};
+  const other = running !== undefined && running !== version ? ownerOf(saved, running) : undefined;
+  if (other !== undefined) roots[running] = other;
+  roots[version] = root;
   try {
     mkdirSync(dir, { recursive: true });
     const temporary = path.join(dir, `${RECORD}.${process.pid}.tmp`);
-    writeFileSync(temporary, `${JSON.stringify({ root })}\n`, { mode: 0o600 });
+    writeFileSync(temporary, `${JSON.stringify({ root, roots })}\n`, { mode: 0o600 });
     renameSync(temporary, path.join(dir, RECORD));
   } catch (error) {
     process.stderr.write(`Silicon Extend couldn't record in ${dir} that agent-device's daemon runs from ${root} (${describe(error)}), so the next command may restart the daemon and end its sessions. Make sure ${dir} is writable.\n`);
@@ -162,25 +191,25 @@ function prepare(args, env) {
   const info = readJson(infoPath);
   if (typeof info?.baseUrl === 'string' && info.baseUrl) return;
   const running = typeof info?.version === 'string' ? info.version : undefined;
-  if (readJson(recordPath)?.root === root) return; // the daemon here, if any, is this location's
+  const saved = readJson(recordPath);
   if (running === version) {
+    if (ownerOf(saved, version) === root) return; // the daemon here is this location's
     withLock(dir, () => {
       // Another command from here may have replaced the daemon while this one waited.
-      const recorded = readJson(recordPath)?.root;
+      const latest = readJson(recordPath);
+      const recorded = ownerOf(latest, version);
       if (recorded === root) return;
       const current = readJson(infoPath);
       // A failed stop leaves the record alone, so the next command tries again.
       if (current?.version === version && !stopDaemon(dir, current, recorded, root)) return;
-      record(dir, root);
+      record(dir, root, version, latest, current?.version);
     });
-  } else if (running === undefined || release(running) === release(version)) {
-    // No daemon, or one agent-device replaces for certain: the daemon after this run is ours.
-    record(dir, root);
-  } else {
-    // Another release: agent-device replaces it if it is older and keeps it if it is newer.
-    process.once('exit', () => {
-      if (readJson(infoPath)?.version === version) record(dir, root);
-    });
+  } else if (ownerOf(saved, version) !== root) {
+    // No daemon, another build of this release, or another release: agent-device starts one from
+    // here or replaces the one running, unless that is a newer release it can reach, which it
+    // keeps (and whose entry the record keeps). Either way the next daemon of this version here
+    // is this location's, so that is recorded now, before agent-device runs.
+    record(dir, root, version, saved, running);
   }
 }
 

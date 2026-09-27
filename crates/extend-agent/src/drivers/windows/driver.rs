@@ -40,7 +40,7 @@ impl WindowsDriver {
 }
 
 /// True when the input desktop isn't the user's (locked, or the secure desktop of an admin prompt).
-fn locked() -> bool {
+pub(crate) fn locked() -> bool {
     unsafe {
         match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_SWITCHDESKTOP) {
             Ok(desk) => {

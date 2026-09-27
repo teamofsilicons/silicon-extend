@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { beginIamLogin, finishIamLogin, iamLoginUrl } from "../../src/lib/auth";
+import { beginIamLogin, beginIamSignup, finishIamLogin, iamLoginUrl, iamSignupUrl } from "../../src/lib/auth";
 
 const info = { app_id: "extend", iam_base_url: "https://backend.iam.teamofsilicons.com", api_base_url: "", website_url: "", docs_url: "" };
 
@@ -61,5 +61,44 @@ describe("callback", () => {
   it("reports IAM's own error", () => {
     start();
     expect(() => finishIamLogin(new URLSearchParams({ error: "access_denied" }), "production")).toThrow(/did not sign you in: access_denied/);
+  });
+});
+
+describe("IAM sign-up", () => {
+  it("uses iam_signup_url when Extend names one", () => {
+    expect(iamSignupUrl({ ...info, iam_login_url: "https://auth.iam.teamofsilicons.com/login", iam_signup_url: "https://join.example/start" }, "")).toBe("https://join.example/start");
+  });
+
+  it("derives IAM's /signup beside its /login, keeping the login URL's query", () => {
+    expect(iamSignupUrl({ ...info, iam_login_url: "https://auth.iam.teamofsilicons.com/login" }, "")).toBe("https://auth.iam.teamofsilicons.com/signup");
+    expect(iamSignupUrl({ ...info, iam_login_url: "https://auth.iam.teamofsilicons.com/login/?theme=extend" }, "")).toBe("https://auth.iam.teamofsilicons.com/signup?theme=extend");
+    // Without iam_login_url: the derived sign-in origin (`backend.` host → `auth.` host).
+    expect(iamSignupUrl(info, "")).toBe("https://auth.iam.teamofsilicons.com/signup");
+  });
+
+  it("doesn't guess for a login page laid out another way (the local stand-in, the mock)", () => {
+    expect(iamSignupUrl({ ...info, iam_login_url: "http://127.0.0.1:8480/dev/iam/login" }, "")).toBeNull();
+    expect(iamSignupUrl({ ...info, iam_login_url: "http://localhost:5190/__mock/iam/login" }, "")).toBeNull();
+    expect(beginIamSignup({ ...info, iam_login_url: "http://127.0.0.1:8480/dev/iam/login" }, "https://b.test", "production")).toBeNull();
+  });
+
+  it("sends app_id and the same state-bound callback as sign-in, so IAM brings the new Carbon back signed in", () => {
+    const url = new URL(beginIamSignup(info, "https://extend.teamofsilicons.com", "production")!);
+    expect(url.origin + url.pathname).toBe("https://auth.iam.teamofsilicons.com/signup");
+    expect(url.searchParams.get("app_id")).toBe("extend");
+    expect(url.searchParams.has("org_id")).toBe(false);
+    const callback = new URL(url.searchParams.get("redirect_uri")!);
+    expect(callback.origin + callback.pathname).toBe("https://extend.teamofsilicons.com/auth/callback");
+    const state = callback.searchParams.get("state")!;
+    expect(finishIamLogin(new URLSearchParams({ state, slt: "oac_new" }), "production")).toBe("oac_new");
+  });
+
+  it("gives a sign-up 30 minutes (email and phone checks come first), and a sign-in still 10", () => {
+    const signup = new URL(new URL(beginIamSignup(info, "https://b.test", "production", 0)!).searchParams.get("redirect_uri")!).searchParams.get("state")!;
+    expect(finishIamLogin(new URLSearchParams({ state: signup, slt: "oac_new" }), "production", 25 * 60_000)).toBe("oac_new");
+    const late = new URL(new URL(beginIamSignup(info, "https://b.test", "production", 0)!).searchParams.get("redirect_uri")!).searchParams.get("state")!;
+    expect(() => finishIamLogin(new URLSearchParams({ state: late, slt: "oac_new" }), "production", 31 * 60_000)).toThrow(/older than 30 minutes/);
+    const login = new URL(new URL(beginIamLogin(info, "https://b.test", "production", 0)).searchParams.get("redirect_uri")!).searchParams.get("state")!;
+    expect(() => finishIamLogin(new URLSearchParams({ state: login, slt: "oac_abc" }), "production", 25 * 60_000)).toThrow(/older than 10 minutes/);
   });
 });

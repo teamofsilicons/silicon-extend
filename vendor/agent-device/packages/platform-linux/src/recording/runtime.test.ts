@@ -209,16 +209,25 @@ test('app scope forwards the bound identity and keeps it across durable recovery
   });
 });
 
-test('refuses --quality, which Linux cannot honor, before preparing output or spawning a recorder', async () => {
+// Silicon Extend fork: Linux honors --quality by choosing the bit rate of its own encode.
+test('passes --quality to the recorder, which encodes at that quality', async () => {
+  for (const exportQuality of ['medium', 'high'] as const) {
+    const { operations, host } = setup();
+    const start = await operations.screenRecordingStart({ ...input, exportQuality });
+    expect(host.linux.start).toHaveBeenCalledWith(
+      { outputPath: '/session/video.native.mp4', fps: 12, quality: exportQuality },
+      expect.any(AbortSignal),
+    );
+    const recovered = await operations.screenRecordingReattach({ envelope: start.envelope });
+    if (recovered.status !== 'active') throw new Error('expected recovered recording');
+    expect(recovered.handle.inspect()).toMatchObject({ exportQuality });
+  }
   const { operations, host } = setup();
-  await expect(
-    operations.screenRecordingStart({ ...input, exportQuality: 'high' }),
-  ).rejects.toMatchObject({
-    code: 'INVALID_ARGS',
-    message: expect.stringMatching(/do not support --quality: .*Run record start again without it/),
-  });
-  expect(host.outputs.prepare).not.toHaveBeenCalled();
-  expect(host.linux.start).not.toHaveBeenCalled();
+  await operations.screenRecordingStart(input);
+  expect(host.linux.start).toHaveBeenCalledWith(
+    { outputPath: '/session/video.native.mp4', fps: 12 },
+    expect.any(AbortSignal),
+  );
 });
 
 const statusPath = '/session/video.native.mp4.status.json';

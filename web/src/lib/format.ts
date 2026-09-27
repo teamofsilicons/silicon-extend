@@ -60,7 +60,8 @@ const END_REASON: Record<string, string> = {
   pair_revoked: "the pair was revoked",
   pair_expired: "the pair expired",
   silicon_logged_out: "the Silicon signed out",
-  left_team: "the Silicon left the team",
+  // Logged when the Silicon using the device left, and when the device's Carbon left (which removes it).
+  left_team: "the Silicon or the device's Carbon left the team",
   device_offline: "the device went offline",
   environment_disabled: "the test environment was disabled",
   environment_cleaned: "the test environment was cleaned",
@@ -89,6 +90,15 @@ const ACTION: Record<string, string> = {
 export function actionLabel(action: string): string {
   return ACTION[action] ?? action;
 }
+
+/**
+ * Why a "removed" entry was logged, where it reads differently from a session's end. Extend removes a
+ * device for `left_team` only when the Carbon who paired it left the team (revocation.rs), together
+ * with the devices paired through it.
+ */
+const REMOVED_REASON: Record<string, string> = {
+  left_team: "its Carbon left the team",
+};
 
 type Details = Record<string, unknown> | undefined | null;
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -144,12 +154,53 @@ export function activitySummary(action: string, details: Details): string {
       return `Handed the device to you${str(d.reason) ? `: “${d.reason}”` : ""}`;
     case "takeover_released":
       return "Took the device back after the handover";
+    case "removed": {
+      const reason = str(d.reason);
+      if (!reason || reason === "device_removed") return "Removed the device";
+      return `Removed: ${REMOVED_REASON[reason] ?? endReason(reason)}`;
+    }
+    case "pair_revoked":
+      return "Revoked the pair";
+    case "pair_expired":
+      return "The pair ended: unused for longer than its pairing lasts";
     default: {
       const extra = Object.entries(d)
         .filter(([, v]) => v !== null && v !== undefined && typeof v !== "object")
         .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`)
         .join(", ");
       return `${actionLabel(action)}${extra ? ` (${extra})` : ""}`;
+    }
+  }
+}
+
+/** What a device's status label says: the words always match the pixel dot's colour. */
+export function statusLabel(status: { online: boolean; inUse?: boolean; paused?: boolean }): string {
+  if (status.inUse) return status.paused ? "Paused for you" : "In use";
+  return status.online ? "Online" : "Offline";
+}
+
+/**
+ * Why a removed device was removed, told to the Carbon who paired it (the only member who can still
+ * read it). A device paired through a computer ends with that computer, for the same reason.
+ */
+export function removedWhy(device: { removed_reason?: string | null; host_device_id?: string | null; pair_ttl_days?: number | null }): string {
+  const hosted = !!device.host_device_id;
+  switch (device.removed_reason ?? "device_removed") {
+    case "device_removed":
+      return hosted ? "You removed it, or the computer it paired through" : "You removed it";
+    case "pair_revoked":
+      return hosted ? "The computer it paired through had its pair revoked" : "The pair was revoked on the device itself";
+    case "pair_expired": {
+      const days = device.pair_ttl_days ? ` (${plural(device.pair_ttl_days, "day")})` : "";
+      return hosted
+        ? `It, or the computer it paired through, went unused for longer than its pairing lasts${days}`
+        : `It went unused for longer than its pairing lasts${days}`;
+    }
+    case "left_team":
+      return "Its Carbon left the team";
+    default: {
+      const text = endReason(device.removed_reason);
+      return text.charAt(0).toUpperCase() + text.slice(1);
     }
   }
 }

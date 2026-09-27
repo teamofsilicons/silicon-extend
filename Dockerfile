@@ -12,7 +12,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir /var/lib/extend --shell /usr/sbin/nologin extend
 COPY --from=builder /build/target/release/extend-service /usr/local/bin/extend-service
-ENV EXTEND_BIND=0.0.0.0:8080 \
+COPY LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt /usr/share/doc/silicon-extend/
+# Production unless someone explicitly asks otherwise: production refuses the local IAM, Briefcase
+# and Ting stand-ins and member-id logins, and requires the IAM webhook secret.
+ENV EXTEND_ENVIRONMENT=production \
+    EXTEND_BIND=0.0.0.0:8080 \
     EXTEND_DATA_DIR=/var/lib/extend/data \
     EXTEND_LOG_FORMAT=json
 USER extend

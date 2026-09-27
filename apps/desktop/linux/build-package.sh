@@ -8,7 +8,7 @@
 #                                                                  Extend's entry (runtime-entry.mjs)
 #   lib/silicon-extend/node/bin/node                               Node 22 for agent-device
 #   share/applications/silicon-extend.desktop
-#   share/doc/silicon-extend/README
+#   share/doc/silicon-extend/{README,LICENSE,THIRD_PARTY_NOTICES.md,THIRD_PARTY_LICENSES.txt}
 # extend-agent finds agent-device and node through ../lib/silicon-extend next to its own binary.
 #
 #   PROFILE=debug …        use a debug build
@@ -17,7 +17,9 @@
 #
 # With pnpm on PATH it rebuilds the agent-device fork first, like the macOS build. Without pnpm
 # (the linux-e2e container, where build-in-docker.sh has just built it on the host) it packages
-# vendor/agent-device/dist only if nothing the build reads is newer than it.
+# vendor/agent-device/dist only if it was built from the source that is there now: every file
+# the build reads is compared with the record made after the build (apps/desktop/dist-manifest.mjs),
+# so an edited, added or deleted source file each counts.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 PROFILE="${PROFILE:-release}"
@@ -27,27 +29,22 @@ OUT="${OUT:-$TARGET_DIR/desktop/linux}"
 AD="$ROOT/vendor/agent-device"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 die() { printf '%s\n' "$*" >&2; exit 1; }
+# shellcheck source=../packaging.sh
+source "$ROOT/apps/desktop/packaging.sh"
 case "$(uname -m)" in x86_64) ARCH=x64; DEB_ARCH=amd64;; aarch64|arm64) ARCH=arm64; DEB_ARCH=arm64;; *) die "Silicon Extend packages Linux for x86_64 and aarch64 only, and this machine is $(uname -m). Build on one of those.";; esac
 
 # Packaging a stale dist would ship old behaviour under a valid build identity, so the fork is
-# rebuilt here, or its build must be newer than every file the build reads.
+# rebuilt here, or its dist must have been built from exactly the source that is there now.
 BUILT="$AD/dist/src/internal/bin.js"
-REBUILD_HINT="(cd vendor/agent-device && pnpm install --frozen-lockfile && pnpm build)"
-newer_agent_device_source() {
-  local input inputs=()
-  for input in "$AD/src" "$AD/packages" "$AD/package.json" "$AD/pnpm-lock.yaml" "$AD/pnpm-workspace.yaml" "$AD/tsdown.config.ts" "$AD"/tsconfig*.json; do
-    if [[ -e "$input" ]]; then inputs+=("$input"); fi
-  done
-  find "${inputs[@]}" \( -name node_modules -o -name dist -o -name .build \) -prune -o -type f -newer "$BUILT" -print -quit
-}
+REBUILD_HINT="(cd vendor/agent-device && pnpm install --frozen-lockfile && pnpm build) && node apps/desktop/dist-manifest.mjs record vendor/agent-device"
 if command -v pnpm >/dev/null; then
   echo "== agent-device fork (pnpm install && pnpm build)"
   (cd "$AD" && pnpm install --frozen-lockfile && pnpm build)
+  node "$ROOT/apps/desktop/dist-manifest.mjs" record "$AD"
 elif [[ ! -f "$BUILT" ]]; then
   die "vendor/agent-device isn't built and pnpm isn't installed to build it, so there is no agent-device to package. Install pnpm, or build it where pnpm is: $REBUILD_HINT, then package again."
 else
-  STALE="$(newer_agent_device_source)"
-  [[ -z "$STALE" ]] || die "vendor/agent-device/dist is older than ${STALE#"$AD/"}, so it may not contain the current code, and pnpm isn't installed to rebuild it. Rebuild it where pnpm is: $REBUILD_HINT, then package again."
+  require_fresh_dist "$AD"
 fi
 
 if [[ -z "${EXTEND_AGENT_BIN:-}" ]]; then
@@ -101,8 +98,9 @@ RUNTIME="$STAGE/lib/silicon-extend/agent-device"
 mv "$RUNTIME/bin/agent-device.mjs" "$RUNTIME/bin/agent-device-cli.mjs"
 install -m 0755 "$ROOT/apps/desktop/runtime-entry.mjs" "$RUNTIME/bin/agent-device.mjs"
 # The stamp must be printed and in the staged manifest: an unstamped runtime would keep reusing an
-# older daemon of the same upstream version after an update.
-STAMPED="$("$BUNDLED_NODE" "$ROOT/apps/desktop/stamp-runtime.mjs" "$RUNTIME")"
+# older daemon of the same upstream version after an update. stamp_runtime sets STAMPED, or stops
+# the build saying why (even when the stamp is killed by a signal and prints nothing).
+stamp_runtime "$BUNDLED_NODE" "$RUNTIME"
 # Read back independently of the stamp's own code.
 MANIFEST_VERSION="$("$BUNDLED_NODE" -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version' "$RUNTIME/package.json")"
 MANIFEST_DIGEST="$("$BUNDLED_NODE" -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).extendRuntime?.sha256 ?? ""' "$RUNTIME/package.json")"
@@ -120,6 +118,7 @@ Exec=extend-agent run
 Terminal=false
 Categories=Utility;
 EOF
+cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/THIRD_PARTY_LICENSES.txt" "$STAGE/share/doc/silicon-extend/"
 cat > "$STAGE/share/doc/silicon-extend/README" <<EOF
 Silicon Extend $VERSION for Linux
 
@@ -133,9 +132,11 @@ Screen reading needs the AT-SPI bus (at-spi2-core, python3-gi, gir1.2-atspi-2.0)
 typing need xdotool (X11) or ydotool (Wayland); screenshots need gnome-screenshot, scrot or
 ImageMagick (grim on Wayland); the clipboard needs xclip or xsel (wl-clipboard on Wayland).
 Whole-screen X11 recording needs ffmpeg (with ffprobe) and x11-utils (xwininfo). App-only
-recording also needs xdotool and libxcomposite1: the named app must match exactly one mapped
-WM_CLASS. Covered windows are captured; resizing or unmapping ends capture. Wayland
-ScreenCast portal support remains under development.
+recording also needs xdotool, libxcomposite1, libxdamage1 and libxfixes3 (the recorder loads
+them itself): the named app must match exactly one mapped WM_CLASS. Covered windows are
+captured; resizing or unmapping ends capture. An app that doesn't redraw its whole window when
+asked (one that isn't responding) is refused rather than risk recording another window; record
+the whole screen instead. Wayland ScreenCast portal support remains under development.
 EOF
 
 tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
@@ -163,7 +164,7 @@ Maintainer: Team of Silicons <team@teamofsilicons.com>
 Section: utils
 Priority: optional
 Depends: $DEPENDS, python3, python3-gi, gir1.2-atspi-2.0, at-spi2-core
-Recommends: xdotool, xclip, imagemagick, xdg-utils, ffmpeg, x11-utils, libxcomposite1, libayatana-appindicator3-1
+Recommends: xdotool, xclip, imagemagick, xdg-utils, ffmpeg, x11-utils, libxcomposite1, libxdamage1, libxfixes3, libayatana-appindicator3-1
 Description: Silicon Extend for Linux
  Lets the Silicons a Carbon chooses use this computer, with an always-visible
  indicator and a Stop button.

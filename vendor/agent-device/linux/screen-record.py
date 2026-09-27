@@ -27,6 +27,9 @@ from x11_composite import WindowPixels, WindowFeed
 
 MAX_BYTES = 1024 ** 3
 MAX_DURATION_MS = 30 * 60 * 1000
+# Silicon Extend fork: --quality picks the H.264 bit rate, as Android's screenrecord does. The
+# encode is the export on Linux, so this is where quality is decided.
+BIT_RATE = {'medium': '8M', 'high': '20M'}
 
 
 def options():
@@ -40,6 +43,8 @@ def options():
     parser.add_argument('--max-bytes', type=int, default=MAX_BYTES)
     parser.add_argument('--max-duration-ms', type=int, default=MAX_DURATION_MS)
     parser.add_argument('--owner-pid', type=int, help='The process this worker belongs to (default: its parent)')
+    parser.add_argument('--quality', choices=sorted(BIT_RATE), default='medium',
+                        help='Encoding quality: medium (8 Mbit/s, the default) or high (20 Mbit/s)')
     args = parser.parse_args()
     if args.owner_pid is not None and args.owner_pid < 1:
         parser.error('owner-pid must be a process ID')
@@ -156,7 +161,8 @@ def run(args):
     # -r keeps a constant frame rate on wall-clock time, repeating or dropping frames as needed.
     command += ['-an', '-r', str(args.fps), '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
                 '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
-                '-pix_fmt', 'yuv420p', '-b:v', '8M', '-maxrate', '8M', '-bufsize', '8M',
+                '-pix_fmt', 'yuv420p', '-b:v', BIT_RATE[args.quality], '-maxrate', BIT_RATE[args.quality],
+                '-bufsize', BIT_RATE[args.quality],
                 '-t', str(args.max_duration_ms / 1000), '-fs', str(threshold),
                 '-movflags', '+faststart', '-f', 'mp4', str(args.out)]
     reason = None

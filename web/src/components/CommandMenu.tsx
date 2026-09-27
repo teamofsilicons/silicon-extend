@@ -154,7 +154,13 @@ export function CommandMenu() {
           onKeyDown={onKey}
           data-testid="command-input"
         />
-        <kbd>esc</kbd>
+        {/* Esc where there is a keyboard; a Cancel button on touch screens, where there isn't. */}
+        <kbd class="command-esc" data-testid="command-esc">
+          esc
+        </kbd>
+        <button type="button" class="link-button command-cancel" onClick={() => setOpen(false)} data-testid="command-cancel">
+          Cancel
+        </button>
       </div>
       <ErrorNote error={error()} compact />
       <ul class="command-results" id="command-results" role="listbox" aria-label="Results">

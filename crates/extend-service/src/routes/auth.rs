@@ -66,6 +66,10 @@ pub async fn refresh(
     Ok(ok("refresh", session))
 }
 
+/// Signs a login out. A Silicon signing out also ends its running sessions in this world, so
+/// Extend finds out whose login it is before revoking it: from the token being revoked (a
+/// refresh token works on its own, no Authorization header needed), else from the access token in
+/// Authorization. If IAM can't say, nothing is revoked and the error says so.
 pub async fn logout(
     State(state): State<Shared>,
     Sel { world, sel }: Sel,
@@ -73,21 +77,44 @@ pub async fn logout(
     Body(input): Body<LogoutInput>,
 ) -> AppResult<Response> {
     let token = input.token.trim().to_owned();
-    // A Silicon signing out ends its running sessions. Find who it is before the token dies.
-    let who = headers
+    if token.is_empty() {
+        return Err(crate::error::AppError::invalid("token is empty.")
+            .hint("Send the refresh token (or the access token) to sign out, as {\"type\":\"logout\",\"data\":{\"token\":\"...\"}}."));
+    }
+    let bearer = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && *t != token)
         .map(str::to_owned);
-    let mut member = None;
-    for t in [who.as_deref(), Some(token.as_str())].into_iter().flatten() {
-        if let Ok(p) = state.iam.authorize(t, None, sel.as_ref()).await {
-            member = Some(p.member);
-            break;
-        }
+    let unsure = |e: crate::error::AppError| {
+        crate::error::AppError::new(
+            e.code(),
+            format!(
+                "Extend couldn't sign this login out: it couldn't ask Silicon IAM whose login it is ({}), and a Silicon's \
+                 running sessions must end with it. Nothing was revoked.",
+                e.0.message
+            ),
+        )
+        .hint("Retry `extend logout` in a moment; if it keeps failing, report it with `extend report`.")
+    };
+    let mut member = state.iam.identify(&token, sel.as_ref()).await.map_err(unsure)?;
+    if member.is_none()
+        && let Some(b) = &bearer
+    {
+        member = match state.iam.authorize(b, None, sel.as_ref()).await {
+            Ok(p) => Some(p.member),
+            Err(e) if crate::iam::refuses_token(&e) => None,
+            Err(e) => return Err(unsure(e)),
+        };
     }
     state.iam.logout(&token, sel.as_ref()).await?;
     state.auth_cache.forget_token(&token).await;
+    if let Some(b) = &bearer {
+        state.auth_cache.forget_token(b).await;
+    }
+    tracing::info!(member = ?member.as_ref().map(|m| m.id.clone()), world = %world.schema, "logout");
     if let Some(m) = member {
         state.auth_cache.forget(std::slice::from_ref(&m.id)).await;
         if m.kind == extend_protocol::model::MemberKind::Silicon {

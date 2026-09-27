@@ -6,20 +6,28 @@ of substituting desktop pixels. See the Xcomposite(3) and XGetImage(3) contracts
 
 Silicon Extend fork: when a window is first redirected, the X server seeds its new off-screen
 copy from what is on screen at that spot (compNewPixmap copies the parent with IncludeInferiors).
-With no compositor, the parts another window covered, or that lay off screen, start out holding
-someone else's pixels. The server repaints window borders and backgrounds there itself and sends
-Expose events for exactly those parts; everything else in the copy is what the app showed. So
-the recorder grabs the server while it redirects (nothing can move in between), selects Expose on
-the window and on every viewable window inside it (an Expose goes only to the window it names,
-never to its inferiors), and creates its XDamage object before the redirect, so the server's own
-repaint counts. No frame is read until damage covers every exposed part; an app that does not
-redraw them in time, such as one that is not responding, is refused rather than recorded. A
-window that nothing covered starts at once. An app that stopped handling events while covered
-still shows the cover after it leaves, with no Expose left to reveal that, so an app that
-advertises _NET_WM_PING must also answer a ping before the first frame (Xt, Motif and plain Xlib
-apps do not advertise it, but the server paints their window backgrounds on every exposure).
-Pixels outside a shaped window's bounding shape are seeded from the screen too and nobody
-repaints them, so they are recorded black.
+With no compositor, the parts another window covers, or that lie off screen, start out holding
+someone else's pixels. And what is on screen can be someone else's even where nothing covers the
+window now: a window whose background is None (the XCreateWindow default, which GLFW, SDL and
+many toolkits keep) keeps showing a cover that has moved away until its app redraws, and an app
+that stopped handling events never does. X11 can't be asked for a window's background, nor
+whether its app is responding, so the recorder never trusts the seeded copy. It grabs the server
+while it redirects (nothing can move in between), creates its XDamage object before the
+redirect, and then has the whole window drawn again, as if it had just been uncovered: it clears
+the window and every viewable window inside it with exposures (XClearArea), so the server paints
+each one's background, if it has one, and sends its app real Expose events for all of it (an
+Expose goes only to the window it names, never to its inferiors). No frame is read until damage
+covers every pixel of the window, so every pixel the recording shows was drawn after it started,
+by the app or by the server painting the app's own background. Borders are the exception: only
+the server ever paints a window's border (what lies in its bounding shape but outside its clip
+shape: the frame of an inner window, the rounded-off corners of a shaped button), whenever it is
+exposed, a cover moving away included, so a border is never someone else's pixels and needn't be
+drawn again. The clear can show as a brief flicker of the window's background before the app
+redraws. An app that doesn't redraw its whole window within the timeout, such as one that is not
+responding, is refused: isolation can't be guaranteed for it, and the whole screen can be
+recorded instead. An app that advertises _NET_WM_PING must also answer a ping first. Pixels
+outside a shaped window's bounding shape are seeded from the screen too and nobody repaints
+them, so they are recorded black.
 The copy is reseeded whenever the window is unmapped, remapped, resized or reparented, so any
 of those, however brief, ends capture (StructureNotify catches changes between two frames).
 """
@@ -30,14 +38,13 @@ import time
 
 REDRAW_TIMEOUT_S = 5.0
 MAX_WATCHED_WINDOWS = 2048
-EXPOSURE_MASK = 1 << 15
 STRUCTURE_NOTIFY_MASK = 1 << 17
 SUBSTRUCTURE_NOTIFY_MASK = 1 << 19
-EXPOSE, CLIENT_MESSAGE = 12, 33
+CLIENT_MESSAGE = 33
 DESTROY_NOTIFY, UNMAP_NOTIFY, MAP_NOTIFY, REPARENT_NOTIFY, CONFIGURE_NOTIFY = 17, 18, 19, 21, 22
 DAMAGE_REPORT_NON_EMPTY = 3
 INPUT_OUTPUT, IS_VIEWABLE = 1, 2
-WINDOW_REGION_BOUNDING = 0
+WINDOW_REGION_BOUNDING, WINDOW_REGION_CLIP = 0, 1
 
 
 class XImage(C.Structure):
@@ -139,6 +146,8 @@ class WindowPixels:
         self._bind(self.x, 'XGetWMProtocols', C.c_int, [C.c_void_p, C.c_ulong, C.POINTER(C.POINTER(C.c_ulong)),
                    C.POINTER(C.c_int)])
         self._bind(self.x, 'XSendEvent', C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_long, C.POINTER(XEvent)])
+        self._bind(self.x, 'XClearArea', C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_int, C.c_uint, C.c_uint,
+                   C.c_int])
         self._bind(self.x, 'XPending', C.c_int, [C.c_void_p])
         self._bind(self.x, 'XNextEvent', C.c_int, [C.c_void_p, C.POINTER(XEvent)])
         self._bind(self.x, 'XConnectionNumber', C.c_int, [C.c_void_p])
@@ -163,6 +172,7 @@ class WindowPixels:
         self._bind(self.fixes, 'XFixesDestroyRegion', None, [C.c_void_p, C.c_ulong])
         self._bind(self.fixes, 'XFixesUnionRegion', None, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_ulong])
         self._bind(self.fixes, 'XFixesSubtractRegion', None, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_ulong])
+        self._bind(self.fixes, 'XFixesTranslateRegion', None, [C.c_void_p, C.c_ulong, C.c_int, C.c_int])
         self._bind(self.fixes, 'XFixesFetchRegion', C.POINTER(XRectangle), [C.c_void_p, C.c_ulong, C.POINTER(C.c_int)])
         self.handler = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(XError))(self._error)
         self.previous_handler = self.x.XSetErrorHandler(C.cast(self.handler, C.c_void_p))
@@ -296,24 +306,27 @@ class WindowPixels:
             if rectangles:
                 self.x.XFree(rectangles)
 
-    def _exposed(self, watched):
-        """The queued Expose rectangles of the watched windows, clipped to the window's interior."""
-        exposed = []
-        while self.x.XPending(self.display):
-            self.x.XNextEvent(self.display, C.byref(self.event))
-            if self.event.type != EXPOSE:
-                self._check_event(self.event)
-                continue
-            expose = self.event.xexpose
-            if expose.window not in watched:
-                continue
-            origin_x, origin_y = watched[expose.window]
-            left, top = max(0, origin_x + expose.x), max(0, origin_y + expose.y)
-            right = min(self.width, origin_x + expose.x + expose.width)
-            bottom = min(self.height, origin_y + expose.y + expose.height)
-            if right > left and bottom > top:
-                exposed.append(XRectangle(left, top, right - left, bottom - top))
-        return exposed
+    def _borders(self, watched, into, scratch):
+        """Adds to `into` the border of every watched window (its bounding region less its clip
+        region, as the SHAPE extension defines it), in the window's coordinates."""
+        for window, (x, y) in watched.items():
+            bounding = self.fixes.XFixesCreateRegionFromWindow(self.display, window, WINDOW_REGION_BOUNDING)
+            scratch.append(bounding)
+            clip = self.fixes.XFixesCreateRegionFromWindow(self.display, window, WINDOW_REGION_CLIP)
+            scratch.append(clip)
+            self.fixes.XFixesSubtractRegion(self.display, bounding, bounding, clip)
+            self.fixes.XFixesTranslateRegion(self.display, bounding, x, y)
+            self.fixes.XFixesUnionRegion(self.display, into, into, bounding)
+
+    def _ask_to_redraw(self, watched):
+        """Has every watched window drawn again, as if it had just been uncovered: the server paints
+        its background (if it has one) and sends its app Expose events for all of it."""
+        for window in watched:
+            self.x.XClearArea(self.display, window, 0, 0, 0, 0, 1)  # The whole window, with exposures.
+        self.x.XSync(self.display, 0)
+        # An inner window destroyed since the grab can't be cleared; the damage check still needs
+        # every pixel, and the next frame reports the target itself if it is gone.
+        self.error = None
 
     def _mask_spans(self, rectangles):
         """Byte ranges of a packed frame that hold the given rectangles, merged where they touch."""
@@ -347,9 +360,7 @@ class WindowPixels:
                 self.width, self.height, self.border = attributes.width, attributes.height, attributes.border_width
                 self.root = attributes.root
                 watched = self._inner_windows()
-                for window in watched:
-                    self.x.XSelectInput(self.display, window,
-                                        EXPOSURE_MASK | (STRUCTURE_NOTIFY_MASK if window == self.window else 0))
+                self.x.XSelectInput(self.display, self.window, STRUCTURE_NOTIFY_MASK)
                 damage = self.damage.XDamageCreate(self.display, self.window, DAMAGE_REPORT_NON_EMPTY)
                 # A new damage object reports the whole window at once (for compositing managers),
                 # which says nothing about what anyone drew.
@@ -362,13 +373,20 @@ class WindowPixels:
                 self.composite.XCompositeRedirectWindow(self.display, self.window, 0)  # Automatic
                 self._sync()
                 self.redirected = True
-                hidden = region(self._exposed(watched))
+                # Every pixel inside the shape must be drawn again before the first frame, except
+                # borders, which only the server ever paints.
+                hidden = region()
+                self.fixes.XFixesSubtractRegion(self.display, hidden, interior, outside)
+                borders = region()
+                self._borders(watched, borders, regions)
+                self.fixes.XFixesSubtractRegion(self.display, hidden, hidden, borders)
                 self.masked = self._mask_spans(self._rectangles(outside))
                 self.blank = memoryview(bytes(max((length for _, length in self.masked), default=0)))
                 self._sync()
             finally:
                 self.x.XUngrabServer(self.display)
                 self.x.XSync(self.display, 0)
+            self._ask_to_redraw(watched)
             self._send_ping()
             painted, parts, missing = region(), region(), region()
             deadline = time.monotonic() + timeout
@@ -388,21 +406,22 @@ class WindowPixels:
                 elif self.ping is not None and not self.answered:
                     raise RuntimeError(
                         f'the app is not responding: it did not answer an X11 ping within {timeout:g} seconds of '
-                        'recording start, so its window could still show whatever last covered it; wait until the '
-                        'app responds and record again, or record the whole screen with --scope device')
+                        'recording start, so its window could still show whatever last covered it and a recording '
+                        'of just this app could show another window; record the whole screen instead '
+                        '(--scope device), or wait until the app responds and record it again')
                 else:
                     raise RuntimeError(
-                        'part of the app window was hidden when recording started (covered by another window '
-                        f'or off screen) and the app did not redraw it within {timeout:g} seconds, so the '
-                        'recording would show whatever was there instead; make sure the app is responding and '
-                        'record again, or record the whole screen with --scope device')
+                        f'the app did not redraw its whole window within {timeout:g} seconds of recording start (it '
+                        'may not be responding), so its window could still hold pixels another window left there '
+                        'and a recording of just this app could show that window; record the whole screen instead '
+                        '(--scope device), or make sure the app is responding and record it again')
         finally:
             if self.display:
                 if self.ping is not None:
                     self.x.XSelectInput(self.display, self.root, 0)
                     self.ping = None
-                for window in watched:
-                    self.x.XSelectInput(self.display, window, STRUCTURE_NOTIFY_MASK if window == self.window else 0)
+                if watched:
+                    self.x.XSelectInput(self.display, self.window, STRUCTURE_NOTIFY_MASK)
                 if damage is not None:
                     self.damage.XDamageDestroy(self.display, damage)
                 for made in regions:

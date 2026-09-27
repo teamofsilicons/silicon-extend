@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { Marked } from "marked";
+import { errorTable, normalizeCommand } from "./docs-model.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..", "understanding");
@@ -43,21 +44,7 @@ for (const line of lines) {
   if (usage && group) group.usages.push(usage[1].replace(/^'|'$/g, ""));
 }
 
-const normalize = (value) => (typeof value === "string" ? value : value == null ? null : JSON.parse(JSON.stringify(value)));
-const commands = (list, device) =>
-  (list ?? []).map((c) => ({
-    usage: String(c.usage),
-    who: c.who ?? null,
-    needs: c.needs ?? null,
-    capability: c.capability ?? null,
-    summary: c.summary ?? null,
-    takes: normalize(c.takes),
-    gives: normalize(c.gives),
-    errors: c.errors ?? null,
-    api: c.api ?? null,
-    notes: c.notes ?? null,
-    device,
-  }));
+const commands = (list, device) => (list ?? []).map((c) => normalizeCommand(c, device));
 
 const allCommands = [...commands(cli.commands, false), ...commands(cli.device_commands, true)];
 const grouped = groups.map((g) => ({
@@ -109,7 +96,7 @@ writeFileSync(
         environment: cli.environment,
         state_files: cli.state_files,
         exit_codes: cli.exit_codes,
-        errors: Object.entries(cli.errors ?? {}).map(([code, [exit, meaning]]) => ({ code, exit, meaning })),
+        errors: errorTable(cli.errors),
         groups: grouped,
         not_exposed: cli.not_exposed,
         examples: cli.examples,

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Silicon Extend</string>
+    <!-- The TV launcher's name for the app on every TV, whatever UI mode it reports. -->
+    <string name="app_name_tv">Silicon Extend TV</string>
     <string name="accessibility_label">Silicon Extend</string>
     <string name="accessibility_summary">Lets the Silicons you allow on extend.teamofsilicons.com see this screen and act on it. A notification or badge always shows when a Silicon is using this device, with a Stop button.</string>
     <string name="accessibility_description">Silicon Extend reads what is on the screen and taps, types, scrolls and presses buttons for a Silicon you gave access to this device. Nothing happens unless a Silicon with access starts a session, and you can stop it at any moment from the notification, the Silicon Extend app or the website. Turn this off to stop Silicons from using this device.</string>

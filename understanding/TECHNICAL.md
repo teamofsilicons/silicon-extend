@@ -14,6 +14,15 @@ row (§1), file naming and sharing (§6), `cancel` (§7), the per-device table (
 open questions 12–15. Those edits describe what was built; they await a Carbon's review like the
 rest of this file.
 
+Later on 2026-09-27, after the second round of fixes (an audit of the build against
+`UNDERSTANDING.md`, then fixes in the service, CLI, website and apps, each checked by a separate
+verifier), the as-built parts were updated again: request reasons and the idle timer (§1, §5),
+world-bound pairing codes, removed devices and the device limit (§4), sessions ending mid-command
+and on a refused login (§5, §9), file downloads, storage warnings and self-destruct (§6), close
+code 4503 (§7), readiness, the lifecycle rules and the clean fence (§8), webhook ordering (§9),
+versioning as built (§10), section 13, and the open questions. [Open questions](#open-questions)
+now starts with the decisions a Carbon still has to make.
+
 ---
 
 ## 1. Identifiers and values
@@ -25,7 +34,7 @@ means one isolated data plane: production, or one Honeycomb test environment.
 
 | Name | Example | Format | Lifetime and uniqueness |
 |---|---|---|---|
-| `pairing_code` | `4F9C2A` | `^[0-9A-F]{6}$`, 6 hexadecimal characters. Shown uppercase; accepted in any case (`4f9c2a` is the same code). | Valid for 300 s, then rotated. Works once. One live code per enrollment. Unique among live codes across **all** worlds, because the device doesn't know which world it will be paired into until the Carbon claims the code. |
+| `pairing_code` | `4F9C2A` | `^[0-9A-F]{6}$`, 6 hexadecimal characters. Shown uppercase; accepted in any case (`4f9c2a` is the same code). | Valid for 300 s, then rotated. Works once. One live code per enrollment. Unique among live codes across **all** worlds. As built, a code pairs only into the world its enrollment was started in (§4). |
 | `enrollment_id` | `01926f3a-5c1e-7b2d-9a40-3e5f8c7d1b22` | UUIDv7 | One per unpaired app install. Ends when the device pairs or the app discards it. |
 | `enrollment_secret` | `ees_Q2hh…` (47 chars) | `^ees_[A-Za-z0-9_-]{43}$`, 32 random bytes base64url | Held only by the unpaired app. Proves it owns the enrollment. Stored hashed (SHA-256). |
 | `device_id` | `7c1e09ab` | `^[0-9a-f]{8}$`, 8 lowercase hexadecimal characters, random | Unique within its world. Never reused, even after removal. |
@@ -45,8 +54,8 @@ means one isolated data plane: production, or one Honeycomb test environment.
 | Device `name` | 1–64 Unicode scalar values after trimming. No control characters. Not unique. | Set by the Carbon at pairing |
 | Device `visibility` | `team` or `personal` | `team` |
 | `pair_ttl_days` | Integer 1–30. Days without activity before the pair ends on its own. | `14` |
-| Session idle timeout | Fixed 300 s after the last command finished, or after the session started if no command was sent | 300 s |
-| Request `reason` | 1–300 Unicode scalar values after trimming. Delivered exactly as sent. | required |
+| Session idle timeout | Fixed 300 s after the last command finished, or after the session started if no command was sent. A command in flight holds it (until 300 s after its deadline). | 300 s |
+| Request `reason` | 1–300 Unicode scalar values after trimming, and at most 1,000 with the whitespace around it (as built; Open question C3). Stored and delivered exactly as sent, whitespace included. | required |
 | File self-destruct | 1 minute to 30 days (43,200 minutes), in whole minutes | 1 day (1,440 minutes) |
 | `timeout_ms` on a command | Integer 1,000–300,000 | 30,000 |
 | Test environment paired devices | At most 5 per environment | — |
@@ -80,7 +89,8 @@ Extend stores and passes these. It never mints or parses beyond the prefix rules
 
 ### Formats used everywhere
 
-- Timestamps: RFC 3339, UTC, millisecond precision (`2026-09-26T10:04:12.391Z`).
+- Timestamps: RFC 3339, UTC, millisecond precision (`2026-09-26T10:04:12.391Z`). As built, many are
+  sent with microseconds (`2026-09-26T21:25:04.826326Z`); parse any RFC 3339 fraction.
 - Durations on the wire are integers with the unit in the name: `_ms`, `_s`, `_minutes`, `_days`.
 - Every JSON body is an envelope `{"type": "<kind>", "data": {...}}`. Errors are `{"type": "error", "data": {code, message, hint, docs_url, request_id, details}}`.
 - Every response carries `X-Request-ID` (UUIDv7) and `Silicon-Extend-API-Version`.
@@ -136,6 +146,19 @@ The two tables that must span worlds live in `extend_global`:
 - `enrollments` and live `pairing_codes`, because the world is only chosen when the code is claimed.
 - `test_environments`: id, name, state, revision, generation, key version, and the IAM app binding.
 
+As built (2026-09-27), `extend_global` holds:
+
+- `enrollments`, each with its live pairing code and the world it was started in (`world_schema`,
+  `environment_id`; the constraint `enrollments_claimed_in_own_world` backs §4's rule).
+- `test_environments`: the above plus `last_operation_id` (only the latest operation may be retried)
+  and IAM's test webhook key digest (routes signed test deliveries after a restart).
+- `honeycomb_operations`: lifecycle receipts (§8).
+- `test_secret_bindings`: which environment a test secret was confirmed for, by digest, so a
+  refused secret gets a precise answer while its environment is being restored.
+- `api_versions` and `api_version_usage`: each API major's lifecycle and its requests per UTC day
+  (§10).
+- `schema_versions`, and `local_test_apps` for the local IAM stand-in.
+
 Tables per world:
 
 | Table | Holds |
@@ -149,8 +172,13 @@ Tables per world:
 | `activity` | Non-command events on a device |
 | `requests` | `request_id`, device, from Silicon, to Silicon, reason, Ting delivery state |
 | `files` | Briefcase `entry_id`, session, kind, self-destruct time, permanent flag |
-| `iam_events` | IAM webhook event ids, for de-duplication, plus the latest aggregate version applied |
-| `honeycomb_operations` | Lifecycle receipts (§8) |
+| `iam_events` | IAM webhook event ids, for de-duplication |
+| `iam_aggregates` | The latest version applied per IAM aggregate (as built; §9) |
+| `idempotency`, `uploads`, `reports`, `telemetry` | Stored responses per `Idempotency-Key`, upload slots, bug reports, the telemetry outbox |
+
+As built, lifecycle receipts (`honeycomb_operations`) live in `extend_global`, not per world. A
+clean truncates every per-world table except `iam_events` and `iam_aggregates` (Open question C5),
+including `session_ids`, so session ids can repeat across a clean.
 
 ---
 
@@ -185,6 +213,31 @@ Tables per world:
   computer on the website, Extend creates the new device in `setup` with `host_device_id` set, and
   the host's app walks the setup (§7).
 
+As built (2026-09-27):
+
+- **Only the per-Carbon limit exists.** A Carbon gets 5 failed claims per 10 minutes; the per-address
+  limit of 30 per hour above was never built (Open question 8). New enrollments are limited to 60 per
+  hour per client address, read from `X-Forwarded-For` only behind a proxy listed in
+  `EXTEND_TRUSTED_PROXY_CIDRS`.
+- **A code pairs only into its own world.** An enrollment records the world its request selected
+  (an app started with a test environment's app secret, or none for production). A signed-in Carbon
+  of a team who enters a live code from another world gets `404 pairing_code_invalid` naming the
+  direction and what to do, limited to 20 such answers per Carbon per 15 minutes; everyone else gets
+  the answer a code that doesn't exist gets, so the check reveals nothing before sign-in. Reading,
+  discarding or connecting to an enrollment with another world's secret is `401
+  testing_secret_invalid`. A clean or purge deletes the environment's waiting codes.
+- **The test device limit is atomic.** Adds to one test environment (claims and attachments) take
+  turns: in memory within the service process (so waiting holds no database connection), and
+  through a transaction-scoped advisory lock across processes; the count is taken under the turn.
+  Concurrent claims never exceed 5. An add that waits more than 10 s for its turn, or 5 s on the
+  lock, is `429 rate_limited` with a hint to retry. A committed pairing always answers 201.
+- **Removed devices stay readable to their Carbon.** The row, its activity log and requests stay,
+  marked removed. The Carbon who paired it lists it with `GET /api/v1/devices?scope=mine&
+  include_removed=true` (with `removed_at` and `removed_reason`) and reads its detail, activity,
+  requests, access (empty) and setup. Every change to it is `404 device_not_found`, telling that
+  Carbon when and why it was removed and to pair it again; for anyone else it doesn't exist.
+- **Setup codes** go only to an Apple TV paired through a Mac; other devices are refused with why.
+
 ### When a pair ends
 
 | Cause | Trigger |
@@ -199,7 +252,8 @@ that's merely online doesn't count.
 
 When a pair ends, Extend ends any session with the matching reason, removes all access, sends
 `unpaired` down the device's connection, invalidates the credential, and keeps the device row and
-activity log (marked removed) so the log stays readable.
+activity log (marked removed) so the log stays readable (as built, through the read path above). A
+command running when the pair ends answers its caller `409 session_ended` at once (§5).
 
 ---
 
@@ -248,10 +302,27 @@ If the deadline passes, the service answers `504 command_timeout` and tells the 
 If the device drops mid-command, the answer is `503 device_offline`, and the command's outcome is
 logged as unknown, because it may have run.
 
+As built (2026-09-27):
+
+- **A session ending mid-command answers at once.** The service races the device's answer against
+  the session ending (checked in memory every 200 ms, in the database every 2 s). If the session
+  ends first (device removed, pair revoked, access removed, the Carbon's Stop, a logout, leaving the
+  team, the test environment disabled or cleaned), the caller gets `409 session_ended`: "Session
+  <id> ended while `<command>` was running on <device>: <why>. `<command>` may have run.", a hint
+  for that reason, and `details {end_reason, command_id, may_have_run: true}`. The device gets
+  `cancel` if it is still connected, and the activity log records the outcome as unknown. A dropped
+  socket or a passed deadline whose session had ended answers the same way.
+- **A queued command checks again.** A command that waited behind another checks the session again
+  when its turn comes, and is refused (`session_ended` or `session_paused`) instead of relayed.
+- **Storage problems are warnings.** A file the command made that Extend could not store, share
+  or record is reported in the result's `warnings` (what, why, what to do); `ok` is unchanged (§6).
+
 ### Ending on its own
 
 - **Idle:** 300 s after the last command finished (or the start, with no commands). A command in
-  flight holds the timer.
+  flight holds the timer. As built: relaying a command sets `idle_ends_at` to its start +
+  `timeout_ms` + 2 s + 300 s; the answer, a timeout or the device dropping restarts the 300 s from
+  then.
 - **Offline:** if the device stays disconnected for 120 s during a session, the session ends with
   `device_offline`, so a device that loses power doesn't stay locked.
 - **Revocation:** see §9.
@@ -297,13 +368,17 @@ Capabilities:
 | `display` | `display` | — | ✓ | — | — | — | — | ✓ (pictures, videos) | — |
 | `links` | `open <url>` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
 
-A Linux computer without a screen reports only `terminal`, `apps.launch` and `replay`. The final
+A Linux computer without a screen reports only `terminal` (as built since 2026-09-27, following
+`UNDERSTANDING.md`; it used to add `apps.launch` and `replay`). The final
 list is whatever the device's app reports in its `hello` message, intersected with this table, so
 a device missing a permission (say, Screen Recording on a Mac) simply lacks that capability until
 the Carbon grants it. As built, some ✓ above are still reported missing with a reason: on Windows
 `screen.record`, `logs`, `alerts` and `replay`; on Linux `logs`, and `screen.record` on Wayland;
 on Android, `adb`, `apps.install`, `logs` and `screen.record` until Android debugging is connected
-(§7).
+(§7). A locked computer (a Mac also asleep, or showing the login window or another account;
+Windows also behind an admin prompt's secure desktop) reports everything that needs the screen as
+missing with that reason, and reports it again within seconds of a lock or unlock; the terminal
+stays.
 
 ### agent-device commands Extend does not expose
 
@@ -352,6 +427,28 @@ self-destruct time or offer "make permanent".
 
 Sizes: a single file up to 1 GiB. Recordings stop at 1 GiB or 30 minutes, whichever comes first.
 
+As built (2026-09-27):
+
+- **Downloading through Extend** (Open question 13, built). `GET /api/v1/files/{file_id}/content`
+  serves a file's bytes to the Silicon that made it and the Carbon who owns its device, after
+  Extend's own visibility check, reading it from Briefcase as the caller (`briefcase.files.read`
+  over OBO), so Briefcase's sharing applies too. It sends the device's content type, a
+  `Content-Disposition` with the file's name, and honours one byte range. `extend file get` and
+  every `--out` use it, and print the Briefcase link first. The service holds the whole file in
+  memory while it answers. The route was checked against a real Briefcase (the local harness) by
+  calling it directly; the CLI's downloads through it have run only against the local file store.
+- **Nothing is lost quietly.** A file the device listed but never uploaded, one under an upload id
+  not issued for the command, one Briefcase refused to store, one stored but not shared with the
+  device's Carbon, and one stored but not recorded (before, that failed the command with a 500)
+  each become a line in the result's `warnings`.
+- **Self-destruct keeps the record until Briefcase confirms.** When a file is due, Extend acts as the
+  creating Silicon with the latest login it holds for it in that team and world (its authorization
+  cache, else a running session; no session is needed) and deletes Extend's record only once
+  Briefcase answers the trash (a 404 counts as gone). A failure is logged with the file id and
+  retried, backing off from 1 minute to 1 hour; due files are hidden from lists and reads at once.
+  Logins are held in memory, so after a restart, or once the Silicon's token has expired, the
+  deletion waits until the Silicon uses Extend again (Open question C2).
+
 ---
 
 ## 7. The Extend apps
@@ -367,6 +464,10 @@ boot and reconnects on its own.
 - Heartbeat: the service pings every 15 s; the device is **offline** after 45 s without a pong.
 - Reconnect: exponential backoff from 1 s to 60 s with full jitter.
 - One live connection per device. A new connection replaces the old one, which gets `superseded`.
+- Close codes (as built): `4401` unpaired, `4409` superseded, `4426` upgrade required, and `4503`
+  when the device's test environment closes (disabled, or waiting for Honeycomb's readiness): the
+  pair is kept and the app reconnects with backoff. The handshake and the device's HTTP routes
+  answer `503 testing_environment_not_ready` for such an environment.
 
 | Direction | `type` | Meaning |
 |---|---|---|
@@ -392,16 +493,26 @@ that changed; §13 says why):
 | Device | How commands are carried out | Indicator |
 |---|---|---|
 | **Android phone and tablet** | The app's AccessibilityService reads every window as an element tree (same `@eN` refs and snapshot shape as agent-device), taps and gestures with `dispatchGesture`, presses back/home/recents, takes screenshots, and reads notifications through a notification listener. **Android debugging** (the Carbon pairs Wireless debugging from the app once; a TV can use its TCP port) connects the app's own ADB client on the device, which adds `adb`, `install`/`reinstall`, `logs` and `record`. Recording runs supervised `screenrecord` segments of up to 180 s and joins them into one MP4, bounded to 30 minutes or 1 GiB; there is no per-recording consent prompt. Without debugging connected those capabilities are reported missing with "connect Android debugging". | Ongoing notification with Stop |
-| **Android TV, Google TV, Fire OS** | Same, plus the remote's arrows and select through the accessibility D-pad actions (Android 13+). The display screen is an activity inside the app. With Android debugging: `adb`, `install`/`reinstall` and `logs`; no recording on TVs. | Corner badge drawn as an accessibility overlay (no extra permission); Stop in the app |
+| **Android TV, Google TV, Fire OS** | Same, plus the remote's arrows and select through the accessibility D-pad actions (Android 13+). With Android debugging connected, every remote button but Power (Menu too, and older TVs' D-pad) is a real key press through `input keyevent`; Power is always refused. The display screen is an activity inside the app. With Android debugging: `adb`, `install`/`reinstall` and `logs`; no recording on TVs. The app is named **Silicon Extend TV** on a TV. | Corner badge drawn as an accessibility overlay (no extra permission); Stop in the app |
 | **Mac** | agent-device's macOS driver through its signed native helper, with no XCTest runner and no UI Automation setup: Accessibility for the element tree, pointer input and text entry (text passed over stdin, focus checked before each key event), ScreenCaptureKit for screenshots and H.264 recording of one app or the display. The only setup steps are Accessibility and Screen Recording for Silicon Extend. A session starts on the frontmost app; `open <app>` binds the named app; links open with the system and the session follows the frontmost app. Terminal commands run as the logged-in user. | Menu bar icon changes; banner; Stop in the menu |
 | **Windows** (built by Extend) | UI Automation for the element tree, `SendInput` for mouse and keyboard, GDI for screenshots, Win32 for the clipboard, the Start menu and shell for apps, `cmd.exe` for the terminal. Mapped onto the same agent-device command set and snapshot shape. `record`, `logs`, `alert` and `replay`/`test`/`batch` are reported missing. Compile-checked and unit-tested only; it has never run on Windows. | Tray icon changes; banner with Stop |
-| **Linux** | agent-device's Linux driver: AT-SPI2 for the element tree, xdotool (X11) or ydotool (Wayland) for input, a screenshot tool (gnome-screenshot, scrot or ImageMagick; grim on Wayland), xclip/xsel or wl-clipboard. On X11, recording with ffmpeg (libx264 from `x11grab`): the whole screen, or one app's window through XComposite so windows over it are not recorded. Wayland recording (the ScreenCast portal) is not built and is reported missing, as are `logs`. PTY for the terminal. | Banner with Stop |
+| **Linux** | agent-device's Linux driver: AT-SPI2 for the element tree, xdotool (X11) or ydotool (Wayland) for input, a screenshot tool (gnome-screenshot, scrot or ImageMagick; grim on Wayland), xclip/xsel or wl-clipboard. On X11, recording with ffmpeg (libx264 from `x11grab`): the whole screen, or one app's window through XComposite so windows over it are not recorded (an app that can't redraw its whole window within 5 s is refused, with "record the whole screen instead"). `--quality` picks the bit rate: `normal` 8 Mbit/s, `high` 20 Mbit/s. Wayland recording (the ScreenCast portal) is not built and is reported missing, as are `logs`. PTY for the terminal. | Banner with Stop |
 | **iPhone, iPad** (via Mac) | The Mac's app runs agent-device's physical-iOS driver: its XCTest runner is installed on the iPhone once over USB, then reached over Wi-Fi. | On the Mac's app and the website |
 | **Apple TV** (via Mac) | The Companion protocol for apps and remote buttons, and AirPlay for pictures and videos, from the Mac on the same network. The Apple TV shows a code the Carbon enters once. | On the Mac's app and the website |
 | **Samsung TV** (via computer) | Tizen's local remote-control WebSocket (ports 8001/8002). The TV asks the Carbon to allow the connection once and issues a token. | On the host's app and the website |
 | **LG TV** (via computer) | webOS's local SSAP WebSocket (ports 3000/3001). The TV asks the Carbon to accept once and issues a client key. | On the host's app and the website |
 
 A device paired through a host is offline whenever its host is offline or can't reach it.
+
+As built (2026-09-27): the Mac, Windows and Linux app turns start at login on by itself once paired,
+unless the Carbon turned it off (the window's switch, the menu, `run --no-autostart`); a copy run
+from App Translocation or a disk image is never registered, and `--headless` only with
+`--autostart`. On a Mac `record start --quality normal|high` is agent-device's `medium|high` (the
+same for a carried iPhone or iPad). A host shows Stop (and Done) for each device it carries in its
+window, tray menu and banner, but can't revoke a carried device's pair: the device API has no
+route for that yet, so the window sends the Carbon to the website. After a restart turns Wireless
+debugging off, the Android app asks the Carbon to turn it back on (a notification, and the setup
+step becomes `needs_carbon`) while the device stays usable through accessibility.
 
 ---
 
@@ -426,13 +537,16 @@ A device paired through a host is offline whenever its host is offline or can't 
 
 `PUT /internal/honeycomb/organizations/{org_id}/testing-environments/{environment_id}/operations/{operation_id}`,
 authenticated with Honeycomb's service credential, with the same body and receipt shape the other
-services use. Actions: `prepare`, `rotate-key`, `clean`, `disable`, `restore`, `purge`.
+services use. Actions: `prepare`, `rotate-key`, `clean`, `disable`, `restore`, `purge`. As built,
+Extend also accepts `activate` (below), and acknowledges `import`, `refresh-import` and
+`retire-applications` (which, when it names Extend, clears Extend's data and disables the
+environment).
 
 | Action | Extend does |
 |---|---|
 | `prepare` | Creates the schema, records the environment as `preparing`. Test access opens only after Honeycomb confirms every service is ready and IAM reports the environment ready. |
 | `rotate-key` | Records the new `key_version`. |
-| `clean` | Blocks access, ends sessions, sends `unpaired` to every device in the world, truncates the schema, bumps `generation`. Completes only when all of that is done. Requests, jobs and webhooks carrying an older revision or generation are dropped. |
+| `clean` | Blocks access, ends sessions, sends `unpaired` to every device in the world, truncates the schema, bumps `generation`. Completes only when all of that is done. Requests, jobs and webhooks carrying an older revision or generation are dropped. As built, this is the clean fence below: requests and scheduler passes admitted before the clean finish first, nothing new gets in until it completes, and webhooks for an environment that isn't open are dropped. |
 | `disable` | Blocks access immediately and ends every running session. Data is kept. |
 | `restore` | Makes retained data available again; needs a free slot of the 10. Can't undo a clean. |
 | `purge` | Drops the schema and forgets the environment. |
@@ -441,6 +555,40 @@ Each receipt is `pending`, `completed` or `failed`, repeating the identical inst
 stored receipt, and a changed instruction under the same `operation_id` is `409`. These work even
 while the environment is disabled. Extend reports the environment's last activity to Honeycomb;
 Honeycomb, not Extend, decides when it expires.
+
+As built (2026-09-27):
+
+- **Selecting a world, on every route.** Every `/api/v{n}/` route checks the secret whenever the
+  header is present, the routes that sign nobody in included (enrollments, `/api/v1/iam`, reports,
+  telemetry, the device routes). An empty, repeated, unprintable, unknown or revoked secret, or one
+  of a disabled or removed environment, is `401 testing_secret_invalid`; an environment being
+  prepared or cleaned, or one IAM knows but Extend was never prepared for, is
+  `503 testing_environment_not_ready`; each says "Nothing ran in production". `GET /api/version`,
+  `/live`, `/ready`, `/webhook/` and `/internal/…` take no secret (the version handshake is the same
+  in every world and carries no data). IAM's answer for an open environment is reused for at most
+  10 s and never across a lifecycle change; any other state is asked live.
+- **Readiness.** `prepare`, `restore` and an `import` that arrives first leave the environment
+  `preparing`. It opens when IAM accepts its app secret (Honeycomb confirms readiness to IAM in its
+  activate phase, and IAM refuses the secret until then) or when Honeycomb sends the participant
+  action `activate`. Honeycomb doesn't send `activate` to participants today (Open question C4).
+- **Order and retries.** Operations on one environment run one at a time (an advisory lock). A
+  pending receipt is stored, with the new revision, before any effect. `environment_revision` must
+  be newer than or equal to the stored one (only an older one is stale). Only the latest operation
+  can be retried; a superseded one is refused. Only `clean` advances `generation` (a new clean must)
+  and only `rotate-key` advances `key_version` (a new rotate-key must).
+- **States.** A disabled environment stays disabled through `clean` and `rotate-key`, and `prepare`
+  or `activate` of it is refused (send `restore`). A removed environment accepts only `purge`, not
+  even the retry of an operation accepted before the purge, so nothing brings it back. Every move
+  into an active state (`preparing`, `ready`, `cleaning`) takes one of the 10 slots under a global
+  lock; with none free, `409 test_environment_limit` leaves a `failed` receipt, and retrying the
+  identical instruction later succeeds.
+- **Disable** ends every running session (`environment_disabled`) and closes every device socket
+  with `4503`; no pair ends, and `restore` brings the same credentials back.
+- **The clean fence.** Every request in a test world holds a read guard on that world's fence while
+  it runs; `clean`, `disable` and `purge` take the write guard before they wipe or close the world,
+  so work admitted before them can't write after them. The scheduler holds the same guard per world
+  and skips worlds that aren't open. A clean also deletes the environment's waiting pairing codes;
+  webhooks for an environment that isn't open are dropped (§9).
 
 ---
 
@@ -462,6 +610,31 @@ and applied only if their aggregate version is newer than the last one applied. 
 prompt, not a decision: Extend confirms with IAM introspection before acting, and re-checks on
 every command, so a lost webhook delays nothing.
 
+As built (2026-09-27):
+
+- **Webhooks.** Production refuses to start without `EXTEND_IAM_WEBHOOK_SECRET`. An event is
+  recorded as applied only after its effects succeed, in the same transaction; a failure answers
+  5xx and IAM's retry applies it again. Events about one aggregate apply in version order; an older
+  or equal one is acknowledged and dropped. Extend asks IAM first (the Silicon's live
+  authorization, then membership); a removal the event reports is used only when IAM can't answer.
+  Test deliveries go to their environment only while it is ready or being prepared.
+- **IAM sends applications no logout or session-revocation events** (seen against real IAM), so
+  the two rows above marked "IAM webhook" for logging out don't arrive by webhook. Instead:
+  - `POST /api/v1/auth/logout` identifies the member from the token being revoked (a refresh token
+    works alone) and ends a Silicon's running sessions; if IAM can't say whose login it is,
+    nothing is revoked and the error says so.
+  - **A refused login ends access on the session routes.** When a Silicon's call to a session route
+    is refused and Extend can tell which Silicon the token belonged to (a login it saw that Silicon
+    use in this world since it started): `not_a_team_member` for a team where it has running
+    sessions ends them at once as `left_team`, unless IAM confirms it is still an active member
+    there; `token_expired` ends all its running sessions as `silicon_logged_out` 15 s later, unless
+    IAM accepts another login of that Silicon that Extend has seen (the CLI refreshes an expired
+    token at once, so ordinary expiry never ends a session). If IAM can't answer, nothing ends.
+    A logout made elsewhere is therefore noticed only at the Silicon's next session call, and
+    only by an instance that saw its login (Open question C1).
+- **Starting a session registers the Silicon as a Ting recipient** (in the background), so requests
+  reach it; a real Ting refuses requests to unregistered recipients.
+
 ---
 
 ## 10. Versioning
@@ -482,13 +655,47 @@ every command, so a lost webhook delays nothing.
 - **Consumer-driven contract tests:** the client crate, CLI and each app publish the requests they
   make as contract fixtures; the service's CI replays every fixture of every supported version.
 
+As built (2026-09-27, `crates/extend-service/src/versions.rs`):
+
+- **Several majors side by side.** Each major is mounted under its own `/api/v{n}/` prefix, and one
+  version layer in front of every route reads the major from the path: a major the build doesn't
+  serve is `400 api_version_unsupported`, a pin naming another major is `400 api_version_mismatch`,
+  a sunset major is `410 api_version_sunset`. Only v1 exists; the module docs say how a v2 route
+  table joins it (reuse v1 handlers where the shape holds, add 2 to `SERVED`, record
+  `contracts/v2/client`, then deprecate 1).
+- **Lifecycle state** is kept in `extend_global.api_versions`, shared by every instance. Configuration
+  deprecates a major (`EXTEND_DEPRECATED_API_VERSIONS=1`, applied when an instance starts; the newest
+  served major can't be deprecated, and removing a major from the list makes it current again unless
+  it was sunset). Requests are counted per major and UTC day in `extend_global.api_version_usage`.
+  Every 5 minutes each instance sunsets a deprecated major that has gone 7 consecutive days without a
+  request, counted from the later of its deprecation and the end of its last day with a request, so
+  a deprecated major always gets a full week. Sunset is final.
+- **Headers.** Every response on a deprecated major carries `Deprecation: @<unix seconds>`
+  (RFC 9745) and `Sunset: <HTTP-date>` (RFC 8594, the soonest it can be sunset). Negotiation offers
+  only majors that aren't sunset; a client that speaks only retired majors gets `410`.
+- **The matrix** (`GET /api/v1/contracts`) is built from that state: `current`, `supported`,
+  `deprecated`, the rule, and per major its state, `deprecated_at`, `sunset_at`,
+  `sunset_earliest_at`, `last_request_on` and the compatible client crate and CLI ranges
+  (`EXTEND_API_V{n}_CLIENT_CRATE`, `EXTEND_API_V{n}_CLI`, default `>=n.0.0, <n+1.0.0`) and
+  `device_app_min` (`EXTEND_DEVICE_APP_MIN_VERSION`). `extend version` reads it and says whether the
+  CLI is current, deprecated, sunset or unsupported.
+- **Contract fixtures** live in `contracts/` (`contracts/README.md`): `v1/client` is recorded by the
+  client crate's own test (`contract_fixtures`, which fails when the files no longer match what the
+  crate sends), `v1/device` is derived by hand from this protocol and the apps' code until the
+  apps dump their own frames, and `internal/honeycomb` from Honeycomb's participant client. The
+  service test `contracts` replays every fixture of every major still served against a real
+  service and PostgreSQL, and fails if a consumer's request is no longer accepted or an answer lost
+  a field that consumer reads. CI runs both.
+
 ---
 
 ## 11. CLI and client internals
 
 - **Home:** `$SILICON_HOME` if set, else `~`. State lives in `{home}/.extend/`. `extend config home <dir>`
   moves it; it refuses a path that isn't an existing directory (`not a directory: <path>`). The
-  chosen location is recorded in `{default home}/.extend/home` so later runs find it.
+  chosen location is recorded in `{default home}/.extend/home` so later runs find it. As built, the
+  login, settings, test environments and sessions move with it, and a directory that already holds
+  Extend state is refused unless `--use-existing` switches to it.
 - **Files** (all `0600`, directory `0700`):
   `auth.json` (tokens, team), `config.toml`, `sessions/current`, `sessions/{session_id}.json`
   (device, capabilities), `test/{environment_id}.json` (test app secret and that world's tokens).
@@ -499,7 +706,17 @@ every command, so a lost webhook delays nothing.
   connected session.
 - **Output:** text by default; `--json` gives exactly one JSON document on stdout. Progress,
   warnings and the test-environment line go to stderr so stdout stays safe for scripts and binary
-  output.
+  output. As built (2026-09-27), following the house convention of the sibling CLIs: on success the
+  data itself, with no wrapper (`extend iam --json` has `app_id` at the top, `extend login status
+  --json` has `authenticated`); on failure `{"error": {code, message, hint, request_id, docs_url,
+  details, exit_code}}` on stderr and nothing on stdout. `login status` exits 0 whether or not a
+  login works, as `dm login status` does (Open question C7).
+- **Test secrets for scripts:** `EXTEND_TEST_SECRET` may stand in for `extend config test add`; it is
+  checked to belong to `--test`'s environment and never written to disk, and without `--test` any
+  command that would call Extend is refused, so a test script never reaches production.
+- **The package has what the CLI has:** attachment building and the 8 MiB limits live in the client
+  crate (`silicon_extend_client::attachments`), and file downloads use the client's
+  `file_content`/`file_download`.
 - **Exit codes:** listed in `cli.yaml`. The same code always means the same kind of failure.
 
 ---
@@ -512,7 +729,9 @@ every command, so a lost webhook delays nothing.
   duration, command name, device OS, and the session and command ids. Never typed text, clipboard
   contents, screen contents, tokens, codes or secrets.
 - `extend report "<message>" [--pr <url>]` stores the report and emails it through Postmark to the
-  three addresses in `UNDERSTANDING.md`. In a test environment the email is simulated.
+  three addresses in `UNDERSTANDING.md`. In a test environment the email is simulated. As built
+  (2026-09-27) the default list (`EXTEND_REPORT_RECIPIENTS`) sends to `shubhastro2@gmail.com`, where
+  `UNDERSTANDING.md` writes `shubhastro2@gmails.com` (Open question C6).
 - **Redaction in the activity log:** text typed with `fill` and `type`, and text written with
   `clipboard write`, is replaced with `[redacted N chars]`. Everything else is logged as sent.
 - Secrets never appear in URLs, logs, audit rows, telemetry or stored webhook bodies. Credentials and
@@ -522,7 +741,7 @@ every command, so a lost webhook delays nothing.
 
 ---
 
-## 13. As built (2026-09-26, updated 2026-09-27)
+## 13. As built (2026-09-26, updated twice on 2026-09-27)
 
 Differences from the first draft, each deliberate:
 
@@ -573,10 +792,67 @@ Differences from the first draft, each deliberate:
 - **Telemetry** goes to each world's outbox table and is exported to Space Station when
   `EXTEND_SPACE_STATION_KEY` (and, per test environment, `EXTEND_TEST_TELEMETRY_KEYS`) is set.
 
+Added by the second round (2026-09-27), each described in its section above:
+
+- **Production is never a default.** `EXTEND_ENVIRONMENT` is required (the Docker image sets
+  `production`); an unset value refuses to start and says which to choose. Production refuses the
+  local stand-ins and member-id logins, and requires the IAM webhook secret.
+- **Session routes act on refused logins** (§9), and a session ending mid-command answers at once
+  (§5); the idle timer holds while a command runs (§5).
+- **Requests:** every new reason is delivered, raw; only a byte-identical repeat within 60 s is
+  folded; a raw reason is capped at 1,000 characters; pending requests are retried with the sender's
+  latest login and fail with a reason after 6 attempts (`last_error`, `request_failed` in the log).
+- **Files:** a download route, `warnings` on command results, and self-destruct that keeps the
+  record until Briefcase confirms (§6).
+- **Devices:** codes bound to their world, an atomic test device limit, removed devices readable to
+  their Carbon, the online filter applied before paging (§4, `api.yaml`).
+- **Test environments:** readiness, the lifecycle rules, the clean fence, disable without unpairing
+  and close code `4503` (§7, §8).
+- **Versioning:** the lifecycle, headers, matrix and contract fixtures (§10).
+
 ## Open questions
 
 Proposals in this file that `UNDERSTANDING.md` doesn't settle, or where it conflicts with another
 service. Each needs a Carbon's decision.
+
+### Carbon decisions after round 2 (2026-09-27)
+
+What the build now does and needs a yes or a change; the numbered questions below still stand
+unless marked settled. Naming, signing and publishing decisions are in `docs/completion-work.md`.
+
+- **C1. Logging out elsewhere ends access by a heuristic.** IAM sends applications no logout or
+  revocation events, so Extend ends a Silicon's sessions 15 s after IAM first refuses its login on a
+  session route, and only notices at that call (§9). Accept 15 s and "at the next session call", or
+  ask IAM for logout and revocation webhooks for the `extend` app.
+- **C2. Self-destruct depends on logins Extend saw.** After a service restart, or once the
+  Silicon's token has expired, a due file waits (hidden) until the Silicon uses Extend again (§6).
+  A durable fix needs one of: Extend's own Briefcase credential, a durable OBO delegation, or
+  Briefcase taking the self-destruct time itself through OBO (questions 1–2). Pending Ting requests
+  have the same limit, but fail instead of waiting: with no login held, each 30-second retry still
+  counts, so the request is marked failed after about 2.5 minutes, saying why.
+- **C3. A raw request reason is capped at 1,000 characters**, whitespace included (the reason
+  itself is 1–300 without it). Confirm the cap or change it.
+- **C4. The `activate` participant action.** Extend opens a test environment when IAM accepts its
+  secret, or on a participant `activate`, which Honeycomb doesn't send today. Keep it as an Extend
+  extension, ask Honeycomb to send it, or drop it and rely on IAM alone.
+- **C5. IAM event ids and aggregate versions survive a clean.** They hold no test data, and keeping
+  them stops a replayed event from applying twice. Confirm.
+- **C6. The bug-report address.** `UNDERSTANDING.md` lists `shubhastro2@gmails.com`; the build sends
+  to `shubhastro2@gmail.com`. Confirm the address and correct `UNDERSTANDING.md` (Carbon-only).
+- **C7. The CLI's JSON and `login status`.** `--json` now prints the data itself (errors as
+  `{"error": …}` on stderr), and `login status` exits 0 when not signed in, following `dm`. This
+  changed `cli.yaml` (it said `{ok, data}` and exit 3). Confirm.
+- **C8. Sign-up.** The website's "Create an account" goes to IAM's `/signup` beside its `/login`
+  (or `iam_signup_url` if `GET /api/v1/iam` ever returns one). Confirm IAM's sign-up address, or
+  have Extend return it.
+- **C9. Carbon logout (question 4)** is still open: a Carbon signing out of the website ends
+  nothing.
+
+Settled by round 2: question 13 (downloads go through Extend), question 15 (what `--quality`
+means on computers), the audit's "bind or document" for pairing codes across worlds (bound, as
+`UNDERSTANDING.md` says), and the removed-device promise (a read path, not a copy change).
+
+### Numbered questions
 
 1. **Briefcase self-destruct through OBO.** Briefcase's OBO upload (`/obo/files`) takes only `path`,
    `name` and `content_type`. Self-destruct (`self_destruct_minutes`) exists only on its direct
@@ -589,7 +865,7 @@ service. Each needs a Carbon's decision.
    Is that acceptable?
 4. **"Logging out … ends it immediately."** Read here as the *Silicon* logging out. Ending every
    Silicon's access when the owning *Carbon* logs out of the website would break sessions each
-   time a browser signs out. Confirm.
+   time a browser signs out. Confirm. (How a Silicon's logout elsewhere is noticed: C1.)
 5. **Team-visible devices.** Proposed: other Carbons in the team see the device's name, OS, owner
    and whether it is online, read-only. They can't grant access or see the activity log.
 6. **Can Carbons start sessions?** Proposed: no; sessions are for Silicons, as `UNDERSTANDING.md`
@@ -599,7 +875,11 @@ service. Each needs a Carbon's decision.
 8. **Values not in `UNDERSTANDING.md`:** `device_id` as 8 hexadecimal characters; pairing-code rate
    limits (5 per Carbon per 10 min, 30 per IP per hour); offline session end after 120 s; takeover
    pause up to 30 min; command timeout 30 s by default and 300 s at most; 1 GiB file and
-   30-minute recording caps; activity-log redaction of typed text.
+   30-minute recording caps; activity-log redaction of typed text. As built, the per-IP claim limit
+   does not exist; added since: 60 enrollments per hour per address, 20 cross-world code answers per
+   Carbon per 15 min, the 15 s logout grace (C1), the 1,000-character raw reason (C3), 6 Ting
+   attempts 30 s apart, self-destruct retries backing off from 1 minute to 1 hour, and a 10 s / 5 s
+   wait for a test environment's device-add turn.
 9. **Activity-log retention.** Not stated. Proposed: keep for the life of the device plus 90 days
    after it is removed.
 10. **Physical Fire TV.** `UNDERSTANDING.md` says Extend adds it. agent-device's Fire TV support is
@@ -611,17 +891,18 @@ service. Each needs a Carbon's decision.
 12. **What the owner Carbon may do with a Silicon's file.** §6 first said create, read and update.
     Briefcase refuses `write` on a file and grants create only on folders, so the build shares read
     and update. Confirm read and update, or ask Briefcase for another grant.
-13. **Downloading files through Extend.** `extend file get` and `screenshot --out` fetch the
-    Briefcase permanent URL with the Silicon's Extend token, which Briefcase refuses. Proposed: a
-    service route (for example `GET /api/v1/files/{file_id}/content`) that reads the file from
-    Briefcase on the member's behalf after Extend's own visibility check. This adds to `api.yaml`.
+13. **Downloading files through Extend.** *Settled as built on 2026-09-27:*
+    `GET /api/v1/files/{file_id}/content` reads the file from Briefcase on the member's behalf after
+    Extend's own visibility check (§6, `api.yaml`); `extend file get` and every `--out` use it. It
+    was the proposal here because the CLI's use of the Briefcase URL with an Extend token was
+    refused by Briefcase.
 14. **Briefcase file ids as inputs.** `cli.yaml` offered a Briefcase file id for `install`, and
     still does for `replay`, `display` and `diff screenshot --baseline`; nothing in the CLI, the
     service or the devices resolves one. The CLI now refuses ids for `install` and asks for a local
     file. Decide whether the service (or the device) should fetch Briefcase inputs, which would also
     lift the 8 MiB attachment limit for APKs, or whether `cli.yaml` drops `file_id` there.
-15. **`record start --quality` on computers.** `cli.yaml` offers `normal` (default) and `high` on
-    every platform. agent-device on a Mac accepts `medium` or `high`, and Linux records at one
-    quality and refuses the option. Proposed: the Mac maps `normal` to `medium`; Linux accepts
-    `normal` as "no option" and refuses `high` as unsupported. Not built yet: today
-    `--quality normal` fails on Mac and Linux.
+15. **`record start --quality` on computers.** *Settled as built on 2026-09-27:* `normal` and
+    `high` work everywhere `cli.yaml` offers them. The agent passes them to agent-device as
+    `medium` and `high`; on a Mac (and a carried iPhone or iPad) that is the export quality, and the
+    fork's Linux recorder now encodes at 8 Mbit/s (`medium`) or 20 Mbit/s (`high`), as Android's
+    screenrecord does, instead of refusing the option.

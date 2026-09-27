@@ -61,6 +61,9 @@ interface DeviceRec {
   app_version: string | null;
   version: number;
   removed: boolean;
+  /** Set with `removed`: when and why (an EndReason), as the service keeps them. */
+  removed_at: string | null;
+  removed_reason: string | null;
   setup: { steps: StepDef[]; started: number; codeEnteredAt: number | null } | null;
 }
 
@@ -324,6 +327,8 @@ function seed() {
       app_version: "1.0.0",
       version: 1,
       removed: false,
+      removed_at: null,
+      removed_reason: null,
       setup: null,
       ...d,
     };
@@ -422,6 +427,28 @@ function seed() {
   pixelLog.push(entry(t - 3 * MIN, "si:scout", "request_sent", { details: { to: "si:chef", reason: "I need to check the order confirmation in the Swiggy app, 2 minutes" } }));
   prod.activity.set("7c1e09ab", pixelLog.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)));
   prod.activity.set("2e7f00d1", [entry(t - 30 * DAY, "c:saket", "paired"), entry(t - 3 * DAY, "c:saket", "access_granted", { details: { silicon_id: "si:atlas" } })].reverse());
+
+  // Two of Saket's devices were removed: their logs stay readable to him (include_removed=true).
+  put(prod, device({ device_id: "e1d0a7c3", name: "Old Galaxy Tab", os: "android", os_version: "13", model: "Galaxy Tab S7", owner: "c:saket", team: TEAM, online: false, last_seen_at: iso(t - 3 * DAY), last_used_at: iso(t - 6 * DAY), last_activity_at: t - 3 * DAY, paired_at: iso(t - 40 * DAY), version: 4, removed: true, removed_at: iso(t - 3 * DAY), removed_reason: "device_removed" }));
+  prod.activity.set(
+    "e1d0a7c3",
+    [
+      entry(t - 40 * DAY, "c:saket", "paired", { details: { name: "Old Galaxy Tab", access: [] } }),
+      entry(t - 39 * DAY, "c:saket", "access_granted", { details: { silicon_id: "si:scout" } }),
+      entry(t - 6 * DAY - 30 * MIN, "si:scout", "session_started", { session_id: "b41" }),
+      entry(t - 6 * DAY - 28 * MIN, "si:scout", "command", { session_id: "b41", command: "open", args: ["com.android.chrome"], outcome: "ok" }),
+      entry(t - 6 * DAY - 20 * MIN, "si:scout", "session_ended", { session_id: "b41", details: { reason: "ended_by_silicon" } }),
+      entry(t - 3 * DAY, "c:saket", "removed", { details: { reason: "device_removed" } }),
+    ].reverse(),
+  );
+  put(prod, device({ device_id: "f00d5eed", name: "Office iMac", os: "macos", os_version: "14.6", model: "iMac21,1", owner: "c:saket", team: TEAM, online: false, last_seen_at: iso(t - 16 * DAY), last_activity_at: t - 16 * DAY, paired_at: iso(t - 30 * DAY), pair_ttl_days: 7, version: 2, removed: true, removed_at: iso(t - 9 * DAY), removed_reason: "pair_expired" }));
+  prod.activity.set(
+    "f00d5eed",
+    [
+      entry(t - 30 * DAY, "c:saket", "paired", { details: { name: "Office iMac", access: [] } }),
+      entry(t - 9 * DAY, "extend", "pair_expired", { actor: { type: "carbon", id: "extend" }, details: { reason: "pair_expired" } }),
+    ].reverse(),
+  );
 
   prod.requests.set("7c1e09ab", [
     { request_id: randomUUID(), device_id: "7c1e09ab", from: "si:scout", to: "si:chef", session_id: "a3f", reason: "I need to check the order confirmation in the Swiggy app, 2 minutes", created_at: iso(t - 3 * MIN), delivery: "delivered" },
@@ -647,9 +674,29 @@ function deviceView(world: World, d: DeviceRec, limited = false) {
     kind: d.kind,
     owner: { type: "carbon", id: d.owner, display_name: owner?.display_name ?? null },
     visibility: d.visibility,
-    online: d.online,
+    online: d.removed ? false : d.online,
   };
   if (limited) return base;
+  if (d.removed) {
+    // Like the service: a removed device reads offline, with no in_use, pair_expires_at or days_left.
+    return {
+      ...base,
+      os_version: d.os_version,
+      model: d.model,
+      team: d.team,
+      host_device_id: d.host_device_id,
+      state: "ready",
+      last_seen_at: d.last_seen_at,
+      last_used_at: d.last_used_at,
+      paired_at: d.paired_at,
+      pair_ttl_days: d.pair_ttl_days,
+      access_count: 0,
+      app_version: d.app_version,
+      version: d.version,
+      removed_at: d.removed_at,
+      removed_reason: d.removed_reason,
+    };
+  }
   const expires = d.last_activity_at + d.pair_ttl_days * DAY;
   return {
     ...base,
@@ -676,15 +723,47 @@ function limitedView(world: World, d: DeviceRec) {
   return { ...v, state: d.setup ? "setup" : "ready" };
 }
 
+const REMOVED_WHY: Record<string, string> = {
+  device_removed: "its Carbon removed it",
+  pair_revoked: "the pair was revoked on the device",
+  pair_expired: "it went unused for longer than its pairing lasts",
+  left_team: "its Carbon left the team",
+};
+
+function notFound(ctx: Ctx, team: string): never {
+  return fail(404, "device_not_found", `No device ${ctx.params.device_id} is visible to you in team ${team} and ${ctx.world.environment ? `test environment ${ctx.world.environment.name}` : "production"}.`, "List your devices with `extend device ls`.");
+}
+
+/**
+ * A device the caller owns, for changing it. A removed one is refused like the service refuses it:
+ * its Carbon hears when and why it was removed; anyone else gets the plain device_not_found.
+ */
 function ownedDevice(ctx: Ctx, member: Member, team: string): DeviceRec {
   const d = ctx.world.devices.get(ctx.params.device_id);
   if (!/^[0-9a-f]{8}$/.test(ctx.params.device_id))
     fail(400, "invalid_input", `${ctx.params.device_id} is not a device id (8 lowercase hexadecimal characters).`);
-  if (!d || d.removed || d.team !== team || (d.owner !== member.id && d.visibility === "personal"))
-    fail(404, "device_not_found", `No device ${ctx.params.device_id} is visible to you in team ${team} and ${ctx.world.environment ? `test environment ${ctx.world.environment.name}` : "production"}.`, "List your devices with `extend device ls`.");
+  if (d && d.removed && d.team === team && d.owner === member.id)
+    fail(
+      404,
+      "device_not_found",
+      `Device ${d.device_id} (${d.name}) was removed at ${d.removed_at}: ${REMOVED_WHY[d.removed_reason ?? "device_removed"] ?? d.removed_reason}. A removed device can't be changed or used.`,
+      `Its activity log stays readable: \`extend device activity ${d.device_id}\`, or the device's page on the website. To use the device again, pair it again.`,
+      { removed_at: d.removed_at, removed_reason: d.removed_reason },
+    );
+  if (!d || d.removed || d.team !== team || (d.owner !== member.id && d.visibility === "personal")) notFound(ctx, team);
   if (d!.owner !== member.id)
     fail(403, "not_owner", `Only ${d!.owner}, who paired ${d!.device_id} (${d!.name}), can do this.`, "Ask them to change it.");
   return d!;
+}
+
+/** A device the caller owns, paired or removed, for reading it and its logs. */
+function readableDevice(ctx: Ctx, member: Member, team: string): DeviceRec {
+  const d = ctx.world.devices.get(ctx.params.device_id);
+  if (d && d.removed) {
+    if (d.team === team && d.owner === member.id && member.type === "carbon") return d;
+    notFound(ctx, team);
+  }
+  return ownedDevice(ctx, member, team);
 }
 
 function logActivity(world: World, deviceId: string, a: Omit<Activity, "id" | "at" | "files" | "args" | "command" | "outcome" | "session_id" | "details"> & Partial<Activity>) {
@@ -940,6 +1019,8 @@ route("POST", "/api/v1/pairings", (ctx) => {
     app_version: enrollment!.app_version,
     version: 1,
     removed: false,
+    removed_at: null,
+    removed_reason: null,
     setup: { steps: SETUP_STEPS[enrollment!.os], started: now(), codeEnteredAt: null },
   };
   w.devices.set(device_id, d);
@@ -1007,6 +1088,8 @@ route("POST", "/api/v1/devices/:device_id/attachments", (ctx) => {
     app_version: null,
     version: 1,
     removed: false,
+    removed_at: null,
+    removed_reason: null,
     setup: { steps: SETUP_STEPS[os], started: now(), codeEnteredAt: null },
   };
   w.devices.set(device_id, d);
@@ -1017,7 +1100,7 @@ route("POST", "/api/v1/devices/:device_id/attachments", (ctx) => {
 route("GET", "/api/v1/devices/:device_id/setup", (ctx) => {
   const member = caller(ctx);
   const team = teamOf(ctx, member)!;
-  const d = ownedDevice(ctx, member, team);
+  const d = readableDevice(ctx, member, team);
   const view = setupView(d);
   settle(ctx.world, d);
   return ok(200, "setup", view);
@@ -1045,13 +1128,25 @@ route("GET", "/api/v1/devices", (ctx) => {
   if (!["mine", "accessible", "team"].includes(scope)) fail(400, "invalid_input", `scope must be mine, accessible or team; got ${scope}.`);
   const online = ctx.url.searchParams.get("online");
   const os = ctx.url.searchParams.get("os");
-  let list = [...ctx.world.devices.values()].filter((d) => !d.removed && d.team === team);
+  const includeRaw = ctx.url.searchParams.get("include_removed");
+  if (includeRaw !== null && includeRaw !== "true" && includeRaw !== "false")
+    fail(422, "invalid_input", `include_removed must be true or false; got ${JSON.stringify(includeRaw)}.`, "Send include_removed=true with scope=mine to list your removed devices too.");
+  const includeRemoved = includeRaw === "true";
+  if (includeRemoved && (scope !== "mine" || member.type !== "carbon"))
+    fail(
+      422,
+      "invalid_input",
+      `include_removed=true works only with scope=mine: a Carbon can list the devices they paired after they're removed, to read their activity log. This request lists scope=${scope}, which shows paired devices only.`,
+      "Drop include_removed, or, as the Carbon who paired the devices, send scope=mine&include_removed=true.",
+    );
+  let list = [...ctx.world.devices.values()].filter((d) => (includeRemoved || !d.removed) && d.team === team);
   if (scope === "mine") list = list.filter((d) => d.owner === member.id);
   else if (scope === "team") list = list.filter((d) => d.owner !== member.id && d.visibility === "team");
   else list = list.filter((d) => ctx.world.access.get(d.device_id)?.has(member.id));
-  if (online !== null) list = list.filter((d) => String(d.online) === online);
+  if (online !== null) list = list.filter((d) => String(d.online && !d.removed) === online);
   if (os) list = list.filter((d) => d.os === os);
-  list.sort((a, b) => a.name.localeCompare(b.name));
+  // The service's order: online first, then paired before removed, then name.
+  list.sort((a, b) => Number(b.online && !b.removed) - Number(a.online && !a.removed) || Number(a.removed) - Number(b.removed) || a.name.localeCompare(b.name));
   const page = paginate(list, ctx.url);
   return ok(200, "devices", { items: page.items.map((d) => (scope === "team" ? limitedView(ctx.world, d) : deviceView(ctx.world, d))), next_cursor: page.next_cursor });
 });
@@ -1059,8 +1154,15 @@ route("GET", "/api/v1/devices", (ctx) => {
 route("GET", "/api/v1/devices/:device_id", (ctx) => {
   const member = caller(ctx);
   const team = teamOf(ctx, member)!;
-  const d = ownedDevice(ctx, member, team);
+  const d = readableDevice(ctx, member, team);
   const view = deviceView(ctx.world, d);
+  if (d.removed)
+    return ok(
+      200,
+      "device",
+      { ...view, capabilities: [], missing: [{ capability: "screen.read", reason: "The device was removed, so nothing works on it any more. Pair it again to use it." }], commands: [] },
+      { ETag: `"${d.version}"` },
+    );
   let caps = CAPABILITIES[d.os];
   const missing: { capability: string; reason: string }[] = [];
   if (d.setup) {
@@ -1106,13 +1208,15 @@ route("PATCH", "/api/v1/devices/:device_id", (ctx) => {
   return ok(200, "device", deviceView(ctx.world, d), { ETag: `"${d.version}"` });
 });
 
-function removeDevice(w: World, d: DeviceRec, by: string) {
-  for (const s of w.sessions.values()) if (s.device_id === d.device_id && s.state !== "ended") endSession(w, s, "device_removed");
+function removeDevice(w: World, d: DeviceRec, by: string, reason = "device_removed") {
+  for (const s of w.sessions.values()) if (s.device_id === d.device_id && s.state !== "ended") endSession(w, s, reason);
+  for (const child of w.devices.values()) if (child.host_device_id === d.device_id && !child.removed) removeDevice(w, child, by, reason);
   w.access.delete(d.device_id);
   d.removed = true;
+  d.removed_at = iso(now());
+  d.removed_reason = reason;
   d.online = false;
-  logActivity(w, d.device_id, { actor: { type: "carbon", id: by }, action: "removed" });
-  for (const child of w.devices.values()) if (child.host_device_id === d.device_id && !child.removed) removeDevice(w, child, by);
+  logActivity(w, d.device_id, { actor: { type: "carbon", id: by }, action: "removed", details: { reason } });
 }
 
 route("DELETE", "/api/v1/devices/:device_id", (ctx) => {
@@ -1138,7 +1242,7 @@ route("POST", "/api/v1/devices/:device_id/stop", (ctx) => {
 route("GET", "/api/v1/devices/:device_id/access", (ctx) => {
   const member = caller(ctx);
   const team = teamOf(ctx, member)!;
-  const d = ownedDevice(ctx, member, team);
+  const d = readableDevice(ctx, member, team);
   const items = [...(ctx.world.access.get(d.device_id)?.values() ?? [])].sort((a, b) => a.silicon_id.localeCompare(b.silicon_id));
   return ok(200, "access", { items });
 });
@@ -1266,14 +1370,14 @@ route("GET", "/api/v1/team/silicons", (ctx) => {
 route("GET", "/api/v1/devices/:device_id/requests", (ctx) => {
   const member = caller(ctx);
   const team = teamOf(ctx, member)!;
-  const d = ownedDevice(ctx, member, team);
+  const d = readableDevice(ctx, member, team);
   return ok(200, "requests", paginate(ctx.world.requests.get(d.device_id) ?? [], ctx.url));
 });
 
 route("GET", "/api/v1/devices/:device_id/activity", (ctx) => {
   const member = caller(ctx);
   const team = teamOf(ctx, member)!;
-  const d = ownedDevice(ctx, member, team);
+  const d = readableDevice(ctx, member, team);
   const q = ctx.url.searchParams;
   let list = ctx.world.activity.get(d.device_id) ?? [];
   const silicon = q.get("silicon_id");

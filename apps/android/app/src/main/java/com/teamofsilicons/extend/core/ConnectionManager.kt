@@ -6,12 +6,12 @@ import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.config.DeviceInfo
 import com.teamofsilicons.extend.net.ApiException
 import com.teamofsilicons.extend.net.Backoff
+import com.teamofsilicons.extend.net.Connection
 import com.teamofsilicons.extend.net.Socket
 import com.teamofsilicons.extend.net.SocketEvent
 import com.teamofsilicons.extend.protocol.DeviceFrame
 import com.teamofsilicons.extend.protocol.EnrollmentCreate
 import com.teamofsilicons.extend.protocol.EnrollmentCreated
-import com.teamofsilicons.extend.protocol.EnrollmentFrame
 import com.teamofsilicons.extend.protocol.EnrollmentState
 import com.teamofsilicons.extend.protocol.Frames
 import com.teamofsilicons.extend.protocol.MissingCapability
@@ -26,7 +26,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import java.time.Instant
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -106,7 +105,7 @@ class ConnectionManager(private val extend: Extend) {
                     manualWake.receive()
                 }
                 Exit.UPGRADE_REQUIRED -> {
-                    extend.update { it.copy(link = Link.UPGRADE_REQUIRED, linkDetail = "This version of Silicon Extend is too old. Install the latest from extend.teamofsilicons.com.") }
+                    extend.update { it.copy(link = Link.UPGRADE_REQUIRED, linkDetail = "This version of ${DeviceInfo.appName(extend.isTv)} is too old. Install the latest from extend.teamofsilicons.com.") }
                     manualWake.receive()
                 }
                 Exit.RESTART -> {}
@@ -116,137 +115,45 @@ class ConnectionManager(private val extend: Extend) {
 
     // ───────────── Enrollment ─────────────
 
+    private val enrollmentPort = object : EnrollmentPort {
+        override suspend fun create(): EnrollmentCreated = extend.api.createEnrollment(
+            EnrollmentCreate(
+                os = extend.os,
+                osVersion = DeviceInfo.osVersion,
+                model = DeviceInfo.model,
+                appVersion = DeviceInfo.APP_VERSION,
+            ),
+        )
+
+        override suspend fun poll(e: EnrollmentCreated): EnrollmentState? = extend.api.getEnrollment(e.enrollmentId, e.enrollmentSecret)
+
+        override fun connect(e: EnrollmentCreated): Connection = Socket.open(
+            extend.api.client,
+            config.webSocketUrl("/api/v1/enrollments/${e.enrollmentId}/connect"),
+            "Extend-Enrollment ${e.enrollmentSecret}",
+        )
+
+        override fun discard(e: EnrollmentCreated) {
+            extend.scope.launch { runCatching { extend.api.discardEnrollment(e.enrollmentId, e.enrollmentSecret) } }
+        }
+    }
+
     private suspend fun enroll() {
-        val backoff = Backoff()
-        while (coroutineContext.isActive) {
-            val created = try {
-                extend.api.createEnrollment(
-                    EnrollmentCreate(
-                        os = extend.os,
-                        osVersion = DeviceInfo.osVersion,
-                        model = DeviceInfo.model,
-                        appVersion = DeviceInfo.APP_VERSION,
-                    ),
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                val wait = backoff.next()
-                extend.update {
-                    it.copy(pairing = it.pairing.copy(live = false, error = "Can't reach Extend (${describe(e)}). Retrying in ${wait / 1000} s."))
-                }
-                Extend.log("enrollment create failed", e)
-                withTimeoutOrNull(wait) { netWake.receive() }
-                continue
-            }
-            backoff.reset()
-            extend.update { it.copy(pairing = PairingUi(created.pairingCode.uppercase(), created.codeExpiresAt, live = false, error = null)) }
-            val paired = try {
-                followEnrollment(created)
-            } catch (e: CancellationException) {
-                // Abandoned (restart, new service URL): tell the service so its code stops working.
-                extend.scope.launch { runCatching { extend.api.discardEnrollment(created.enrollmentId, created.enrollmentSecret) } }
-                throw e
-            } ?: continue
-            extend.secrets.writeCredential(paired.deviceCredential)
-            config.deviceId = paired.deviceId
-            config.environment = paired.environment
-            sentCaps = null
-            sentSetup = null
-            extend.update {
-                it.copy(phase = Phase.PAIRED, deviceId = paired.deviceId, environment = paired.environment, pairing = PairingUi())
-            }
-            Extend.log("paired as ${paired.deviceId}")
-            return
+        val paired = EnrollmentLoop(
+            port = enrollmentPort,
+            netWake = netWake,
+            ui = { f -> extend.update { it.copy(pairing = f(it.pairing)) } },
+            serviceUrl = { config.serviceUrl },
+        ).run()
+        extend.secrets.writeCredential(paired.deviceCredential)
+        config.deviceId = paired.deviceId
+        config.environment = paired.environment
+        sentCaps = null
+        sentSetup = null
+        extend.update {
+            it.copy(phase = Phase.PAIRED, deviceId = paired.deviceId, environment = paired.environment, pairing = PairingUi())
         }
-    }
-
-    /** Follows one enrollment until it pairs (the result) or is gone (null). */
-    private suspend fun followEnrollment(e: EnrollmentCreated): EnrollmentFrame.Paired? {
-        val backoff = Backoff()
-        var expiresAt = e.codeExpiresAt
-        while (coroutineContext.isActive) {
-            val sock = Socket.open(
-                extend.api.client,
-                config.webSocketUrl("/api/v1/enrollments/${e.enrollmentId}/connect"),
-                "Extend-Enrollment ${e.enrollmentSecret}",
-            )
-            var gone = false
-            try {
-                loop@ while (true) {
-                    val untilExpiry = millisUntil(expiresAt)?.plus(5_000)?.coerceAtLeast(5_000) ?: 60_000
-                    val ev = withTimeoutOrNull(untilExpiry) { sock.events.receive() }
-                    if (ev == null) {
-                        // The code expired without a rotation frame: ask for the current one.
-                        when (val st = pollEnrollment(e)) {
-                            is PollResult.Paired -> return st.paired
-                            PollResult.Gone -> { gone = true; break@loop }
-                            is PollResult.Waiting -> expiresAt = st.expiresAt
-                            PollResult.Unknown -> break@loop
-                        }
-                        continue
-                    }
-                    when (ev) {
-                        SocketEvent.Open -> {
-                            backoff.reset()
-                            extend.update { it.copy(pairing = it.pairing.copy(live = true, error = null)) }
-                        }
-                        is SocketEvent.Text -> when (val f = Frames.decodeEnrollment(ev.text)) {
-                            is EnrollmentFrame.Code -> {
-                                expiresAt = f.codeExpiresAt
-                                extend.update { it.copy(pairing = it.pairing.copy(code = f.pairingCode.uppercase(), expiresAt = f.codeExpiresAt, live = true)) }
-                            }
-                            is EnrollmentFrame.Paired -> return f
-                            is EnrollmentFrame.Ping -> sock.send(Frames.encode(DeviceFrame.Pong(f.nonce)))
-                            is EnrollmentFrame.Unknown -> Extend.log("enrollment socket: ignored frame ${f.type}: ${f.problem ?: ""}")
-                        }
-                        is SocketEvent.Closed -> break@loop
-                        is SocketEvent.Failed -> {
-                            if (ev.httpStatus == 401 || ev.httpStatus == 404) gone = true
-                            Extend.log("enrollment socket failed (${ev.httpStatus})", ev.error)
-                            break@loop
-                        }
-                    }
-                }
-            } finally {
-                sock.close()
-            }
-            extend.update { it.copy(pairing = it.pairing.copy(live = false)) }
-            if (gone) return null
-            // The socket dropped: maybe we paired meanwhile, maybe the enrollment is gone.
-            when (val st = pollEnrollment(e)) {
-                is PollResult.Paired -> return st.paired
-                PollResult.Gone -> return null
-                is PollResult.Waiting -> {
-                    expiresAt = st.expiresAt
-                    extend.update { it.copy(pairing = it.pairing.copy(code = st.code, expiresAt = st.expiresAt)) }
-                }
-                PollResult.Unknown -> {}
-            }
-            withTimeoutOrNull(backoff.next()) { netWake.receive() }
-        }
-        return null
-    }
-
-    private sealed interface PollResult {
-        data class Paired(val paired: EnrollmentFrame.Paired) : PollResult
-        data class Waiting(val code: String, val expiresAt: String) : PollResult
-        data object Gone : PollResult
-        data object Unknown : PollResult
-    }
-
-    private suspend fun pollEnrollment(e: EnrollmentCreated): PollResult = try {
-        when (val st = extend.api.getEnrollment(e.enrollmentId, e.enrollmentSecret)) {
-            is EnrollmentState.Paired -> PollResult.Paired(EnrollmentFrame.Paired(st.deviceId, st.deviceCredential, st.environment))
-            is EnrollmentState.Waiting -> PollResult.Waiting(st.pairingCode.uppercase(), st.codeExpiresAt)
-            null -> PollResult.Unknown
-        }
-    } catch (ex: ApiException) {
-        if (ex.status == 401 || ex.status == 404) PollResult.Gone else PollResult.Unknown
-    } catch (ex: CancellationException) {
-        throw ex
-    } catch (_: Exception) {
-        PollResult.Unknown
+        Extend.log("paired as ${paired.deviceId}")
     }
 
     // ───────────── The device socket ─────────────
@@ -260,6 +167,7 @@ class ConnectionManager(private val extend: Extend) {
             val sock = Socket.open(extend.api.client, config.webSocketUrl("/api/v1/device/connect"), "Extend-Device $credential")
             socket = sock
             var exit: Exit? = null
+            var limited: ApiException? = null
             try {
                 loop@ for (ev in sock.events) {
                     when (ev) {
@@ -291,6 +199,7 @@ class ConnectionManager(private val extend: Extend) {
                                 426 -> Exit.UPGRADE_REQUIRED
                                 else -> null
                             }
+                            if (ev.httpStatus == 429 || ev.refusal?.rateLimited == true) limited = ev.refusal ?: ApiException(429, "rate_limited", "HTTP 429")
                             Extend.log("device socket failed (${ev.httpStatus})", ev.error)
                             break@loop
                         }
@@ -305,6 +214,16 @@ class ConnectionManager(private val extend: Extend) {
             }
             if (pendingUnpair) return Exit.UNPAIRED
             if (exit != null) return exit
+            if (limited != null) {
+                // Extend answered: it is limiting connections, so the network coming back can't help.
+                val wait = limited.retryAfterS?.let { (it * 1000).coerceIn(1_000, EnrollmentLoop.MAX_RETRY_AFTER_MS) }
+                    ?: maxOf(backoff.next(), EnrollmentLoop.RATE_LIMIT_FALLBACK_MS)
+                extend.update {
+                    it.copy(link = Link.OFFLINE, linkDetail = "Extend is limiting connections from this network; reconnecting ${PairingMessages.whenNext(wait, System.currentTimeMillis(), java.time.ZoneId.systemDefault())}")
+                }
+                delay(wait)
+                continue
+            }
             val wait = backoff.next()
             extend.update { it.copy(link = Link.OFFLINE, linkDetail = "Reconnecting in ${(wait + 999) / 1000} s") }
             withTimeoutOrNull(wait) { netWake.receive() }
@@ -475,11 +394,4 @@ class ConnectionManager(private val extend: Extend) {
         }
     }
 
-    private fun millisUntil(timestamp: String): Long? =
-        runCatching { Instant.parse(timestamp).toEpochMilli() - System.currentTimeMillis() }.getOrNull()
-
-    private fun describe(e: Exception): String = when (e) {
-        is ApiException -> "HTTP ${e.status}${e.code?.let { " $it" } ?: ""}: ${e.message}"
-        else -> e.message ?: e.javaClass.simpleName
-    }
 }

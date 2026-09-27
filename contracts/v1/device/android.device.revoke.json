@@ -1,0 +1,25 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "kind": "http",
+  "operation": "device.revoke",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}"
+    },
+    "method": "DELETE",
+    "path": "/api/v1/device"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; apps/android/app/src/main/java/com/teamofsilicons/extend/net/ExtendApi.kt (revoke) and protocol/Frames.kt"
+}

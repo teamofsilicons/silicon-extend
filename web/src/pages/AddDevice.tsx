@@ -168,7 +168,8 @@ export default function AddDevice() {
                         <p class="download-app">{DOWNLOADS[platform()].app}</p>
                         <p class="fine">{DOWNLOADS[platform()].note}</p>
                       </div>
-                      <a class="button primary" href={DOWNLOADS[platform()].href} target="_blank" rel="noopener" data-testid="download-link">
+                      {/* Secondary: the step's one primary action is going on to the code. */}
+                      <a class="button secondary" href={DOWNLOADS[platform()].href} target="_blank" rel="noopener" data-testid="download-link">
                         <Download size={16} aria-hidden="true" /> Download
                       </a>
                     </div>

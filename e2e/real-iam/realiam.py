@@ -813,7 +813,7 @@ class Checks:
         """`extend --json screenshot` in the Silicon's current session; the one file it made."""
         since = len(self.extend_log())
         _, out, _ = self.extend(who, "--json", "screenshot")
-        files = json.loads(out)["data"]["result"]["files"]
+        files = json.loads(out)["files"]
         if len(files) != 1:
             errors = [l for l in self.extend_log()[since:].splitlines() if "storing a command file failed" in l or "Briefcase" in l]
             raise RuntimeError(f"expected one stored file, got {len(files)}; Extend log: {errors[-3:]}")
@@ -941,7 +941,7 @@ def briefcase_member_owner(c, state, ctx):
             break
         time.sleep(0.2)
     _, out, _ = c.extend("bob", "device", "pair", code, "--name", "Bob box", "--access", "si:chef", "--json")
-    dev = json.loads(out)["data"]["device_id"]
+    dev = json.loads(out)["device_id"]
     time.sleep(1)
     _, sid, _ = c.extend("chef", "session", "new", dev, "--connect")
     try:
@@ -968,7 +968,7 @@ def briefcase_member_owner(c, state, ctx):
 def briefcase_keep(c, state, ctx):
     f = ctx["bc_file"]
     _, out, _ = c.extend("chef", "--json", "file", "keep", f["file_id"])
-    kept = json.loads(out)["data"]
+    kept = json.loads(out)
     if not kept.get("permanent") or kept.get("self_destruct_at"):
         raise RuntimeError(f"extend file keep -> {kept}")
     status, e = bc_get(c, state, "chef", f"/api/v1/entries/{f['file_id']}")
@@ -1035,7 +1035,7 @@ def briefcase_download(c, state, ctx):
 def ting_request(c, state, ctx, reason):
     since = len(c.extend_log())
     _, out, _ = c.extend("sous", "--json", "request", "send", ctx["device"], "--reason", reason)
-    r = json.loads(out)["data"]
+    r = json.loads(out)
     err = c.extend_db(f"SELECT coalesce(last_error, '') FROM extend.requests WHERE request_id = '{r['request_id']}'")
     return r, err, c.extend_log()[since:]
 
@@ -1112,7 +1112,7 @@ def check(args):
         c.ok("Extend started in EXTEND_IAM_MODE=sdk; IAM API-version negotiation succeeded at startup",
              "SdkIam::connect → system().negotiate() returned before listen")
         code, out, _ = c.extend("nobody", "iam", "--json")
-        c.ok("extend iam --json", json.loads(out)["data"].get("app_id", "?"))
+        c.ok("extend iam --json", json.loads(out).get("app_id", "?"))
     c.step("startup", negotiation)
 
     def logins():
@@ -1120,7 +1120,7 @@ def check(args):
             slt = c.slt(who)
             c.extend(who, "login", slt)
             code, out, _ = c.extend(who, "login", "status", "--json")
-            d = json.loads(out)["data"]
+            d = json.loads(out)
             want = ACTORS[who][0]
             if not d.get("authenticated") or d["member"]["id"] != want:
                 raise RuntimeError(f"login status for {who}: {d}")
@@ -1154,7 +1154,7 @@ def check(args):
         if not code:
             raise RuntimeError("fake device never showed a pairing code: " + log.read_text()[-500:])
         _, out, _ = c.extend("alice", "device", "pair", code, "--name", "Real IAM box", "--json")
-        dev = json.loads(out)["data"]["device_id"]
+        dev = json.loads(out)["device_id"]
         ctx["device"] = dev
         for _ in range(50):
             if "PAIRED" in log.read_text(errors="replace"):
@@ -1428,7 +1428,7 @@ def check(args):
         c.ok("the production application secret does not select a test environment", f"HTTP {status} {err_code(v)}")
         c.extend("talice", "login", "c:alice", test=env)
         _, out, _ = c.extend("talice", "login", "status", "--json", test=env)
-        d = json.loads(out)["data"]
+        d = json.loads(out)
         if not d["authenticated"] or d["member"]["id"] != "c:alice" or d["team"] != "kitchen":
             raise RuntimeError(d)
         c.ok("member-id login in the test plane (extend --test … login c:alice)", f"team={d['team']} role={d['team_role']}")
@@ -1460,7 +1460,7 @@ def check(args):
                 break
             time.sleep(0.2)
         _, out, _ = c.extend("talice", "device", "pair", code, "--name", "Test box", "--access", "si:chef", "--access", "si:sous", "--json", test=env)
-        tctx["device"] = json.loads(out)["data"]["device_id"]
+        tctx["device"] = json.loads(out)["device_id"]
         time.sleep(1)
         c.ok("device paired into the test environment with access for test si:chef and si:sous", tctx["device"])
         _, out, _ = c.extend("alice", "device", "ls")

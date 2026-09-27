@@ -23,6 +23,7 @@ pub mod scheduler;
 pub mod state;
 pub mod telemetry;
 pub mod ting;
+pub mod versions;
 
 use std::sync::Arc;
 
@@ -88,6 +89,8 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
         http: reqwest::Client::new(),
         ready_worlds: Default::default(),
         selections: Default::default(),
+        selection_revisions: Default::default(),
+        fences: Default::default(),
         session_principals: Default::default(),
         limits: Default::default(),
     }))
@@ -101,9 +104,21 @@ pub async fn serve(state: Shared) -> anyhow::Result<()> {
 
 /// Serves on an already-bound listener (tests bind port 0).
 pub async fn serve_on(listener: tokio::net::TcpListener, state: Shared) -> anyhow::Result<()> {
+    let versions = versions::Registry::start(state.pool.clone(), versions::Policy::from_env()?).await?;
+    serve_versioned(listener, state, versions).await
+}
+
+/// [`serve_on`] with an API version registry the caller started (tests inject a deprecation
+/// policy, extra majors and a clock).
+pub async fn serve_versioned(
+    listener: tokio::net::TcpListener,
+    state: Shared,
+    versions: Arc<versions::Registry>,
+) -> anyhow::Result<()> {
     scheduler::spawn(state.clone());
+    versions.spawn_upkeep();
     tracing::info!(addr = %state.cfg.bind, environment = ?state.cfg.environment, "Silicon Extend service listening");
-    let app = routes::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let app = routes::router(state, versions).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

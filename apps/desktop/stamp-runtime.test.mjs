@@ -19,6 +19,10 @@ function fixture(t) {
   writeFileSync(path.join(staged, 'bin/agent-device.mjs'), "await import('../dist/src/internal/bin.js');");
   writeFileSync(path.join(staged, 'dist/src/internal/bin.js'), 'const help = () => import(`../help.js`); export { help };');
   writeFileSync(path.join(staged, 'dist/src/internal/daemon.js'), 'import{run}from"../main.js";import"../side.js";run();');
+  // Loaded by computed paths (new Worker(path), spawn(node, [path])), so only REQUIRED_ENTRIES covers them.
+  for (const entry of ['png-worker', 'companion-tunnel', 'run-script-http-child', 'update-check-entry']) {
+    writeFileSync(path.join(staged, `dist/src/internal/${entry}.js`), `export const entry = '${entry}';`);
+  }
   writeFileSync(path.join(staged, 'dist/src/main.js'), "export const run = () => 'old';");
   writeFileSync(path.join(staged, 'dist/src/help.js'), "export const text = 'help';");
   writeFileSync(path.join(staged, 'dist/src/side.js'), '');
@@ -67,7 +71,7 @@ test('native helper changes also invalidate the build identity', (t) => {
 test('a missing dist directory is rejected without stamping the manifest', (t) => {
   const { staged } = fixture(t);
   rmSync(path.join(staged, 'dist'), { recursive: true });
-  assert.throws(() => stampRuntime(staged), /dist\/src\/internal\/bin\.js, dist\/src\/internal\/daemon\.js are missing or empty.*pnpm build/);
+  assert.throws(() => stampRuntime(staged), /dist\/src\/internal\/bin\.js, dist\/src\/internal\/daemon\.js, .* are missing or empty.*pnpm build/);
   assert.deepEqual(manifest(staged), { name: 'agent-device', version: '0.21.15' });
 });
 
@@ -146,6 +150,13 @@ test('the CLI without arguments prints usage and fails', () => {
   const result = runCli(path.join(here, 'stamp-runtime.mjs'), []);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /Usage: stamp-runtime\.mjs/);
+});
+
+test('every internal entry the fork builds is required, since each is loaded by a computed path', () => {
+  const config = readFileSync(path.join(vendored, 'tsdown.config.ts'), 'utf8');
+  const entries = [...config.matchAll(/'internal\/([\w-]+)'\s*:/g)].map((m) => `dist/src/internal/${m[1]}.js`);
+  assert.ok(entries.length >= 6, `found only ${entries.length} internal entries in tsdown.config.ts`);
+  assert.deepEqual(entries.filter((entry) => !REQUIRED_ENTRIES.includes(entry)), []);
 });
 
 test('the built fork passes the completeness check', { skip: !existsSync(path.join(vendored, 'dist/src/internal/daemon.js')) && 'vendor/agent-device is not built' }, (t) => {

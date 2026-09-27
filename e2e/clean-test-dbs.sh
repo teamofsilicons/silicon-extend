@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Drops the throwaway databases `cargo test -p extend-service` creates (extend_e2e_*).
+# Drops the throwaway databases the service suites create: `extend_e2e_*` (e2e.rs, testenv_gaps.rs),
+# `extend_core_*` (core_gaps.rs), `extend_gaps_*` (devices_gaps.rs) and `extend_contracts_*`
+# (contracts.rs). The development database `extend` and anything else are left alone.
 set -euo pipefail
-docker exec silicon-extend-postgres psql -U extend -d postgres -tAc "SELECT datname FROM pg_database WHERE datname LIKE 'extend_e2e_%'" |
-  while read -r db; do [ -n "$db" ] && docker exec silicon-extend-postgres psql -U extend -d postgres -qc "DROP DATABASE IF EXISTS $db WITH (FORCE)"; done
+docker exec silicon-extend-postgres psql -U extend -d postgres -tAc \
+  "SELECT datname FROM pg_database WHERE datname ~ '^extend_(e2e|core|gaps|contracts)_[0-9a-f]{32}\$'" |
+  while read -r db; do [ -n "$db" ] && docker exec silicon-extend-postgres psql -U extend -d postgres -qc "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)"; done
 echo "dropped test databases"

@@ -12,13 +12,15 @@ mod system;
 mod testing;
 mod webhook;
 
-use axum::extract::{FromRequest, Request, State};
+use std::sync::Arc;
+
+use axum::extract::{FromRequest, Request};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
-use extend_protocol::{API_VERSION, API_VERSION_HEADER, ErrorCode};
+use extend_protocol::ErrorCode;
 use serde::de::DeserializeOwned;
 use sha2::{Digest as _, Sha256};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
@@ -27,8 +29,11 @@ use uuid::Uuid;
 use crate::db::World;
 use crate::error::{AppError, AppResult, REQUEST_ID};
 use crate::state::Shared;
+use crate::versions::Registry;
 
-pub fn router(state: Shared) -> Router {
+/// Every route, behind the version layer. Each API major is mounted under its own `/api/v{n}`
+/// prefix; `crate::versions` explains how a v2 route table joins v1 here.
+pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
     let api = Router::new()
         .route("/api/v1/contracts", get(system::contracts))
         .route("/api/v1/iam", get(system::iam))
@@ -60,6 +65,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/v1/files", get(files::list))
         .route("/api/v1/files/{file_id}", get(files::get))
         .route("/api/v1/files/{file_id}/keep", post(files::keep))
+        .route("/api/v1/files/{file_id}/content", get(files::content))
         .route("/api/v1/device", get(device_app::me).delete(device_app::revoke))
         .route("/api/v1/device/stop", post(device_app::stop))
         .route("/api/v1/device/connect", get(device_app::socket))
@@ -80,7 +86,9 @@ pub fn router(state: Shared) -> Router {
         .route("/dev/iam/login", get(dev::authorize_page).post(dev::authorize_submit))
         .route("/dev/ting", get(dev::tings))
         .fallback(any(fallback))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), version_layer))
+        // Test-environment selection for every /api/v{n}/ route (see crate::state).
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::state::selection_layer))
+        .layer(axum::middleware::from_fn_with_state(versions.clone(), crate::versions::layer))
         .layer(axum::extract::DefaultBodyLimit::max(extend_protocol::MAX_ARTIFACT_BYTES as usize + 1024));
 
     let mut app = Router::new()
@@ -94,7 +102,8 @@ pub fn router(state: Shared) -> Router {
             tower_http::services::ServeDir::new(dir).fallback(tower_http::services::ServeFile::new(index)),
         );
     }
-    app.layer(axum::middleware::from_fn(request_id_layer))
+    app.layer(axum::Extension(versions))
+        .layer(axum::middleware::from_fn(request_id_layer))
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::mirror_request())
@@ -102,8 +111,12 @@ pub fn router(state: Shared) -> Router {
                 .allow_headers(AllowHeaders::mirror_request())
                 .expose_headers([
                     http::header::ETAG,
+                    http::header::CONTENT_DISPOSITION,
+                    http::header::CONTENT_RANGE,
                     http::HeaderName::from_static("x-request-id"),
                     http::HeaderName::from_static("silicon-extend-api-version"),
+                    http::HeaderName::from_static(crate::versions::DEPRECATION_HEADER),
+                    http::HeaderName::from_static(crate::versions::SUNSET_HEADER),
                 ])
                 .max_age(std::time::Duration::from_secs(600)),
         )
@@ -128,36 +141,6 @@ async fn request_id_layer(req: Request, next: Next) -> Response {
     if let Ok(v) = HeaderValue::from_str(&id) {
         resp.headers_mut().insert("x-request-id", v);
     }
-    resp
-}
-
-/// Checks a client's version pin, advertises the version, and counts usage for sunset decisions.
-async fn version_layer(State(state): State<Shared>, req: Request, next: Next) -> Response {
-    if let Some(pin) = req.headers().get(API_VERSION_HEADER).and_then(|v| v.to_str().ok())
-        && pin.trim() != API_VERSION.to_string()
-        && req.uri().path().starts_with("/api/v1/")
-    {
-        return AppError::new(
-            ErrorCode::ApiVersionMismatch,
-            format!("The client pinned API version {pin}, but this path is version {API_VERSION}."),
-        )
-        .hint("Negotiate with GET /api/version and use the matching path.")
-        .into_response();
-    }
-    if req.uri().path().starts_with("/api/v1/") {
-        let pool = state.pool.clone();
-        tokio::spawn(async move {
-            let _ = sqlx::query(
-                "INSERT INTO extend_global.api_version_usage (api_version, day, requests) VALUES (1, current_date, 1)
-                 ON CONFLICT (api_version, day) DO UPDATE SET requests = extend_global.api_version_usage.requests + 1",
-            )
-            .execute(&pool)
-            .await;
-        });
-    }
-    let mut resp = next.run(req).await;
-    resp.headers_mut()
-        .insert(API_VERSION_HEADER, HeaderValue::from(API_VERSION));
     resp
 }
 

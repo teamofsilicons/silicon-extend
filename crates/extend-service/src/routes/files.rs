@@ -1,7 +1,7 @@
 //! Files made in sessions: listing, Briefcase links, and keeping a file before it self-destructs.
 
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use extend_protocol::ErrorCode;
 use extend_protocol::model::{FileInfo, FileKind};
@@ -154,6 +154,159 @@ pub async fn keep(State(state): State<Shared>, auth: Auth, Path(file_id): Path<U
     Ok(ok("file", visible(&state, &auth, file_id).await?.view()))
 }
 
+/// Which bytes of a file a `Range` header asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByteRange {
+    /// No usable range (none, several, or malformed): the whole file.
+    Full,
+    /// First and last byte, inclusive.
+    Part(u64, u64),
+    /// A range that starts past the end of the file.
+    Unsatisfiable,
+}
+
+/// Reads a single `bytes=` range (RFC 9110 section 14.2). Several ranges, other units and malformed
+/// ranges are ignored (the whole file is served), which the RFC allows.
+pub fn byte_range(value: &str, total: u64) -> ByteRange {
+    let Some(spec) = value.trim().strip_prefix("bytes=") else {
+        return ByteRange::Full;
+    };
+    if spec.contains(',') {
+        return ByteRange::Full;
+    }
+    let Some((first, last)) = spec.trim().split_once('-') else {
+        return ByteRange::Full;
+    };
+    let (first, last) = (first.trim(), last.trim());
+    if first.is_empty() {
+        // The last N bytes.
+        return match last.parse::<u64>() {
+            Ok(0) => ByteRange::Unsatisfiable,
+            Ok(_) if total == 0 => ByteRange::Unsatisfiable,
+            Ok(n) => ByteRange::Part(total - n.min(total), total - 1),
+            Err(_) => ByteRange::Full,
+        };
+    }
+    let Ok(start) = first.parse::<u64>() else {
+        return ByteRange::Full;
+    };
+    let end = if last.is_empty() {
+        None
+    } else {
+        match last.parse::<u64>() {
+            Ok(e) if e >= start => Some(e),
+            _ => return ByteRange::Full,
+        }
+    };
+    if start >= total {
+        return ByteRange::Unsatisfiable;
+    }
+    ByteRange::Part(start, end.unwrap_or(u64::MAX).min(total - 1))
+}
+
+/// `attachment` with the file's name, as plain ASCII and as RFC 8187 UTF-8.
+pub fn content_disposition(name: &str) -> String {
+    let ascii: String = name
+        .chars()
+        .map(|c| {
+            if (c.is_ascii_graphic() && c != '"' && c != '\\') || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::new();
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
+}
+
+/// A file's bytes (`GET /api/v1/files/{file_id}/content`), for the Silicon that made it and the
+/// Carbon who owns its device. They are read from Briefcase as the caller, so Briefcase's own
+/// sharing applies too. One `Range: bytes=` range is honoured (206, or 416 past the end).
+pub async fn content(
+    State(state): State<Shared>,
+    auth: Auth,
+    Path(file_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let f = visible(&state, &auth, file_id).await?;
+    let (bytes, stored_type) = match state.files.read(&auth.p, file_id, auth.sel.as_ref()).await {
+        Ok(found) => found,
+        Err(e)
+            if auth.p.is_carbon()
+                && f.shared_with.is_none()
+                && matches!(e.code(), ErrorCode::NoAccess | ErrorCode::FileNotFound) =>
+        {
+            return Err(e.hint(format!(
+                "Sharing {} with you failed when it was made, so Briefcase won't let you read it. Ask {} to share it with you in Briefcase.",
+                f.name, f.created_by
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    let content_type = if f.content_type.trim().is_empty() {
+        stored_type
+    } else {
+        f.content_type.clone()
+    };
+    let total = bytes.len() as u64;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map_or(ByteRange::Full, |v| byte_range(v, total));
+    let (status, body, content_range) = match range {
+        ByteRange::Full => (StatusCode::OK, bytes, None),
+        ByteRange::Part(first, last) => (
+            StatusCode::PARTIAL_CONTENT,
+            bytes[first as usize..=last as usize].to_vec(),
+            Some(format!("bytes {first}-{last}/{total}")),
+        ),
+        ByteRange::Unsatisfiable => {
+            let mut resp = AppError::invalid(format!(
+                "The requested range starts past the end of {}, which is {total} bytes.",
+                f.name
+            ))
+            .hint("Ask for a range inside the file, or leave out the Range header to get all of it.")
+            .into_response();
+            *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+            if let Ok(v) = HeaderValue::from_str(&format!("bytes */{total}")) {
+                resp.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            return Ok(resp);
+        }
+    };
+    let length = body.len();
+    let mut resp = (status, body).into_response();
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+    );
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    if let Ok(v) = HeaderValue::from_str(&content_disposition(&f.name)) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    if let Some(r) = content_range.and_then(|r| HeaderValue::from_str(&r).ok()) {
+        h.insert(header::CONTENT_RANGE, r);
+    }
+    h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    // Files are whatever a device made: never let a browser run one in Extend's origin.
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox; default-src 'none'"),
+    );
+    Ok(resp)
+}
+
 /// Serves a file kept on local disk (development and tests only).
 pub async fn local_file(State(state): State<Shared>, Path(file_id): Path<Uuid>) -> Response {
     match state.files.read_local(file_id).await {
@@ -165,5 +318,40 @@ pub async fn local_file(State(state): State<Shared>, Path(file_id): Path<Uuid>) 
             resp
         }
         None => not_found().into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_one_byte_range() {
+        use ByteRange::*;
+        assert_eq!(byte_range("bytes=0-3", 10), Part(0, 3));
+        assert_eq!(byte_range("bytes=4-", 10), Part(4, 9));
+        assert_eq!(byte_range("bytes=-3", 10), Part(7, 9));
+        assert_eq!(byte_range("bytes=-30", 10), Part(0, 9));
+        assert_eq!(byte_range("bytes=2-99", 10), Part(2, 9));
+        assert_eq!(byte_range("bytes=10-", 10), Unsatisfiable);
+        assert_eq!(byte_range("bytes=-0", 10), Unsatisfiable);
+        assert_eq!(byte_range("bytes=0-", 0), Unsatisfiable);
+        // Ignored: several ranges, other units, nonsense, last before first.
+        assert_eq!(byte_range("bytes=0-1,4-5", 10), Full);
+        assert_eq!(byte_range("items=0-1", 10), Full);
+        assert_eq!(byte_range("bytes=x-1", 10), Full);
+        assert_eq!(byte_range("bytes=5-2", 10), Full);
+    }
+
+    #[test]
+    fn names_the_file_for_download() {
+        assert_eq!(
+            content_disposition("shot.png"),
+            "attachment; filename=\"shot.png\"; filename*=UTF-8''shot.png"
+        );
+        assert_eq!(
+            content_disposition("a \"b\" é.txt"),
+            "attachment; filename=\"a _b_ _.txt\"; filename*=UTF-8''a%20%22b%22%20%C3%A9.txt"
+        );
     }
 }

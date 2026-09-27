@@ -1,0 +1,53 @@
+{
+  "api_version": null,
+  "consumer": "silicon-honeycomb",
+  "consumer_version": "0.5.0",
+  "contract": 1,
+  "given": [
+    "honeycomb_environment"
+  ],
+  "kind": "http",
+  "operation": "lifecycle.restore",
+  "request": {
+    "body": {
+      "action": "restore",
+      "app_id": "extend",
+      "environment_id": "{environment_id}",
+      "environment_revision": 7,
+      "generation": 2,
+      "key_version": 2,
+      "operation_id": "{operation_id}",
+      "org_id": "{org_id}",
+      "reason": "requested",
+      "retired_apps": [],
+      "snapshot": {},
+      "testing_key": "{testing_key}"
+    },
+    "headers": {
+      "authorization": "Bearer {honeycomb_token}",
+      "content-type": "application/json"
+    },
+    "method": "PUT",
+    "path": "/internal/honeycomb/organizations/{org_id}/testing-environments/{environment_id}/operations/{operation_id}"
+  },
+  "response": {
+    "equals_request": [
+      "/operation_id",
+      "/environment_id",
+      "/app_id",
+      "/environment_revision",
+      "/generation",
+      "/key_version"
+    ],
+    "one_of": {
+      "/state": [
+        "pending",
+        "completed",
+        "failed"
+      ]
+    },
+    "status": "2xx"
+  },
+  "sequence": 7,
+  "source": "silicon-honeycomb crates/server/src/participant_management.rs (ParticipantClient::apply) and lifecycle.rs"
+}

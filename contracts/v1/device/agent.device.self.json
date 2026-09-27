@@ -1,0 +1,74 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "takeover"
+  ],
+  "kind": "http",
+  "operation": "device.self",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "GET",
+    "path": "/api/v1/device"
+  },
+  "response": {
+    "non_null": [
+      "/device_id",
+      "/environment/environment_id",
+      "/environment/name",
+      "/environment/state",
+      "/in_use/session_id",
+      "/in_use/silicon_id",
+      "/in_use/since",
+      "/name",
+      "/os",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/setup",
+      "/setup/steps",
+      "/setup/steps/*/key",
+      "/setup/steps/*/status",
+      "/setup/steps/*/title",
+      "/takeover/expires_at",
+      "/takeover/reason",
+      "/takeover/session_id",
+      "/takeover/started_at",
+      "/takeover/takeover_id",
+      "/team"
+    ],
+    "required": [
+      "/device_id",
+      "/environment/environment_id",
+      "/environment/name",
+      "/environment/state",
+      "/in_use/session_id",
+      "/in_use/silicon_id",
+      "/in_use/since",
+      "/name",
+      "/os",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/setup",
+      "/setup/steps",
+      "/setup/steps/*/key",
+      "/setup/steps/*/status",
+      "/setup/steps/*/title",
+      "/takeover/expires_at",
+      "/takeover/reason",
+      "/takeover/session_id",
+      "/takeover/started_at",
+      "/takeover/takeover_id",
+      "/team"
+    ],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md; crates/extend-agent/src/service.rs (device_self) with crates/extend-protocol types"
+}

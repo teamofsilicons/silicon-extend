@@ -43,7 +43,15 @@ test.describe("restyle tour", () => {
 
   test("sign-in, devices, wizard, device page, settings, docs, search", async ({ page, mock, request }) => {
     test.setTimeout(180_000);
+    // Production's layout: IAM's consent screen at <auth origin>/login, so sign-up is /signup beside it.
+    await page.route("**/api/v1/iam", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.data.iam_login_url = "https://auth.iam.teamofsilicons.com/login";
+      await route.fulfill({ response: res, json: body });
+    });
     await page.goto("/");
+    await expect(page.getByTestId("signup-note")).toContainText("checks your email and phone");
     await expect(page.getByTestId("sign-in")).toBeVisible();
     await capture(page, "01-sign-in");
     // The print is drawn by WebGL; without it the CSS fallback gradient would show.
@@ -53,11 +61,23 @@ test.describe("restyle tour", () => {
     await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(4);
     await expect(page.locator(`[data-device-id="${DEVICE_PIXEL}"] .pixel-dot.in-use`)).toHaveCount(1);
     await expect(page.locator('[data-device-id="0d44e1f2"] .pixel-dot.offline')).toHaveCount(1);
+    // The tally is a quiet stat, not a second poster beside the pairing code.
+    const tally = await page.locator(".tally-numbers dd").first().evaluate((el) => ({ size: parseFloat(getComputedStyle(el).fontSize), weight: getComputedStyle(el).fontWeight }));
+    expect(tally.size).toBeLessThanOrEqual(38);
+    expect(tally.weight).toBe("400");
     await capture(page, "02-devices");
 
     await page.getByTestId("tab-team").click();
     await expect(page.getByTestId("team-device-list").getByTestId("device-row")).toHaveCount(1);
     await capture(page, "03-team-devices");
+    await page.getByTestId("tab-removed").click();
+    await expect(page.getByTestId("removed-device-list").getByTestId("device-row")).toHaveCount(2);
+    await capture(page, "03b-removed-devices");
+    await page.getByTestId("removed-device-list").getByTestId("device-row").first().click();
+    await expect(page.getByTestId("removed-card")).toBeVisible();
+    await expect(page.getByTestId("activity-item")).toHaveCount(6);
+    await capture(page, "03c-removed-device", { full: true });
+    await page.goto("/devices");
     await page.getByTestId("tab-mine").click();
 
     // ⌘K
@@ -75,6 +95,11 @@ test.describe("restyle tour", () => {
     await page.goto("/devices/new");
     await capture(page, "05-wizard-kind");
     await page.getByTestId("kind-android").click();
+    // "Get the app" has one primary action: going on to the code. Download is secondary.
+    await expect(page.getByTestId("download-link")).toHaveClass(/\bsecondary\b/);
+    await expect(page.getByTestId("guide").locator(".button.primary")).toHaveCount(1);
+    await expect(page.getByTestId("guide").locator(".button.primary")).toContainText("I have the code");
+    await capture(page, "05b-wizard-get-the-app");
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("pairing-code-input").fill(code);
     await expect(page.getByTestId("code-step")).toHaveAttribute("data-valid", "true");
@@ -120,7 +145,30 @@ test.describe("restyle tour", () => {
     expect(res.status()).toBe(201);
     await expect(page.getByTestId("takeover-reason")).toHaveText("Please approve the Face ID prompt for the payment", { timeout: 12_000 });
     await expect(page.getByTestId("activity-item").first()).toBeVisible();
+    await expect(page.locator(".device-header").getByTestId("device-status")).toHaveText("Paused for you");
     await capture(page, "09-device-takeover", { full: true, phoneAlso: '[data-testid="activity"]' });
+    // At phone width "Take away" stays on its grant's first line, at the right, not wrapped and indented.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const grant = page.locator('[data-testid="grant"][data-silicon="si:scout"]');
+    await grant.scrollIntoViewIfNeeded();
+    const place = await grant.evaluate((el) => {
+      const who = el.querySelector(".grant-who")!.getBoundingClientRect();
+      const text = el.querySelector(":scope > div")!.getBoundingClientRect();
+      const button = el.querySelector('[data-testid="revoke"]')!.getBoundingClientRect();
+      const row = el.getBoundingClientRect();
+      return { buttonTop: button.top, whoBottom: who.bottom, buttonLeft: button.left, textRight: text.right, buttonRight: button.right, rowRight: row.right };
+    });
+    expect(place.buttonTop, "Take away sits on the grant's first line").toBeLessThan(place.whoBottom);
+    expect(place.buttonLeft, "Take away is beside the text, not under it").toBeGreaterThanOrEqual(place.textRight);
+    expect(Math.abs(place.buttonRight - place.rowRight), "Take away is flush right").toBeLessThanOrEqual(1);
+    await page.screenshot({ path: `${OUT}/09-device-access-phone.png` });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // The Remove dialog, with its count in agreement.
+    await page.getByTestId("remove-device").click();
+    await expect(page.getByTestId("remove-access")).toHaveText("2 Silicons lose access.");
+    await capture(page, "09b-remove-dialog");
+    await page.keyboard.press("Escape");
 
     await page.goto("/settings");
     await capture(page, "10-settings", { full: true });
@@ -130,6 +178,17 @@ test.describe("restyle tour", () => {
     await page.goto("/docs/cli");
     await expect(page.getByTestId("cli-command").first()).toBeVisible();
     await capture(page, "12-docs-cli");
+    // A command whose errors are a sentence, and whose "who" is long, at phone width.
+    const fileGet = page.getByTestId("cli-command").filter({ has: page.locator("pre.usage", { hasText: /^extend file get / }) });
+    if (await fileGet.count()) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await fileGet.first().scrollIntoViewIfNeeded();
+      await page.evaluate(() => window.scrollBy(0, -70));
+      await settle(page);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `${OUT}/12b-docs-cli-file-get-phone.png` });
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
   });
 
   test("a test environment: banner, empty state", async ({ page, mock }) => {
@@ -143,7 +202,44 @@ test.describe("restyle tour", () => {
     await page.getByTestId("slt-input").fill("c:alice");
     await page.getByTestId("slt-submit").click();
     await expect(page.getByTestId("devices-page")).toContainText("No devices paired yet");
+    // The empty-state orb is printed at the sign-in print's finer 3 px cell.
+    await expect(page.locator(".empty-orb")).toHaveAttribute("data-cell", "3");
     await capture(page, "14-testing-banner-empty");
+  });
+
+  test("wide desktop: the column sits in the middle of its pane", async ({ page, mock }) => {
+    void mock;
+    await signInWithSlt(page);
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    const centred = async (content: string, pane: string) =>
+      page.evaluate(
+        ([c, p]) => {
+          const a = document.querySelector(c)!.getBoundingClientRect();
+          const b = document.querySelector(p)!.getBoundingClientRect();
+          return Math.abs(a.left - b.left - (b.right - a.right));
+        },
+        [content, pane],
+      );
+    await expect(page.locator(".overview")).toBeVisible();
+    await settle(page);
+    // The pane's own padding is symmetric, so equal gaps on both sides mean the column is centred.
+    expect(await centred(".overview", ".main-pane"), "overview centred").toBeLessThanOrEqual(2);
+    await page.screenshot({ path: `${OUT}/18-wide-overview-1920.png` });
+    await page.goto("/devices/new?kind=android");
+    await expect(page.getByTestId("guide")).toBeVisible();
+    await settle(page);
+    expect(await centred(".wizard-body", ".page-main"), "wizard centred").toBeLessThanOrEqual(2);
+    const edges = await page.evaluate(() => [document.querySelector(".wizard .page-heading")!.getBoundingClientRect().left, document.querySelector(".wizard-body")!.getBoundingClientRect().left]);
+    expect(Math.abs(edges[0] - edges[1]), "the heading and the wizard share a left edge").toBeLessThanOrEqual(1);
+    await page.screenshot({ path: `${OUT}/19-wide-wizard-1920.png` });
+    await page.goto("/settings");
+    await expect(page.getByTestId("settings-page")).toBeVisible();
+    await settle(page);
+    expect(await centred(".page-main > .card", ".page-main"), "settings centred").toBeLessThanOrEqual(2);
+    await page.screenshot({ path: `${OUT}/20-wide-settings-1920.png` });
+    // At 1440 the column keeps its place at the left of the pane.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    expect(await centred(".page-main > .card", ".page-main")).toBeGreaterThan(100);
   });
 
   test("dark mode", async ({ page, mock }) => {
@@ -165,7 +261,16 @@ test.describe("restyle tour", () => {
     await page.goto("/devices/new?kind=android");
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("pairing-code-input").fill("4F9C2A");
+    // The print's paper is the card's, so no darker band shows above the tear line.
+    const ticket = await page.evaluate(() => [getComputedStyle(document.querySelector(".ticket-print")!).backgroundColor, getComputedStyle(document.documentElement).getPropertyValue("--card").trim()]);
+    expect(ticket[0]).toBe("rgb(26, 29, 28)");
+    expect(ticket[1]).toBe("#1a1d1c");
     await capture(page, "17-dark-pairing-code");
+    await page.goto("/devices");
+    await expect(page.locator(".tally")).toBeVisible();
+    const tally = await page.evaluate(() => [getComputedStyle(document.querySelector(".tally-print")!).backgroundColor, getComputedStyle(document.querySelector(".tally")!).backgroundColor]);
+    expect(tally[0]).toBe(tally[1]);
+    expect(tally[0]).not.toBe("rgba(0, 0, 0, 0)");
   });
 
   test("reduced motion: no animation runs", async ({ page, mock }) => {
@@ -175,4 +280,32 @@ test.describe("restyle tour", () => {
     const running = await page.evaluate(() => document.getAnimations().filter((a) => a.playState === "running" && (a.effect?.getTiming().duration as number) > 1).length);
     expect(running).toBe(0);
   });
+});
+
+test.describe("touch screens", () => {
+  test.use({ viewport: { width: 1024, height: 768 }, hasTouch: true, isMobile: true });
+
+  test("search shows Cancel instead of keyboard hints", async ({ page, mock }) => {
+    void mock;
+    await signInWithSlt(page);
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), "the context emulates a touch screen").toBe(true);
+    await expect(page.locator(".topbar-command kbd")).toBeHidden();
+    await page.getByTestId("open-search").click();
+    await expect(page.getByTestId("command-menu")).toBeVisible();
+    await expect(page.getByTestId("command-esc")).toBeHidden();
+    await expect(page.locator(".command-hint")).toBeHidden();
+    await expect(page.getByTestId("command-cancel")).toBeVisible();
+    await settle(page);
+    await page.screenshot({ path: `${OUT}/04b-search-touch.png` });
+    await page.getByTestId("command-cancel").click();
+    await expect(page.getByTestId("command-menu")).toBeHidden();
+  });
+});
+
+test("a keyboard keeps its esc hint", async ({ page, mock }) => {
+  void mock;
+  await signInWithSlt(page);
+  await page.getByTestId("open-search").click();
+  await expect(page.getByTestId("command-esc")).toBeVisible();
+  await expect(page.getByTestId("command-cancel")).toBeHidden();
 });

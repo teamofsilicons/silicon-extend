@@ -51,7 +51,11 @@ The e2e suites write full-page screenshots at 1280 px and 390 px to `test-result
 phone width. `e2e/restyle.spec.ts` is a visual tour at 1440×900 and 390×844, light and dark, into
 `test-results/restyle/`; it also checks that the dithered print drew with WebGL and that nothing
 animates under reduced motion, and that the wizard's step strip keeps the current step in view
-(a narrow desktop) or becomes a one-line pixel progress bar (a phone). If another process holds the
+(a narrow desktop) or becomes a one-line pixel progress bar (a phone). It also shoots the Removed tab
+and a removed device, the Remove dialog, the column centred at 1920 px, and ⌘K on a touch screen, and
+checks what those screenshots can't prove on their own (Cancel instead of `esc` on touch, the prints'
+paper matching the card in dark mode, "Take away" on its grant's first line at phone width, the tally
+staying smaller than poster type). If another process holds the
 default ports, move them with
 `E2E_MOCK_PORT` / `E2E_WEB_PORT` (for example `E2E_MOCK_PORT=8496 E2E_WEB_PORT=5196 pnpm test:e2e`).
 
@@ -60,7 +64,10 @@ app over the real device socket (`e2e-real/service.ts`) and creates a test envir
 Honeycomb lifecycle endpoint with the token in `../e2e/dev.env`. The service allows 60 new
 enrollments per hour from one address, counted in memory; if a shared dev service answers
 `rate_limited`, run a second instance with the same `dev.env` on another port and its own database,
-and point `EXTEND_REAL_URL` at it.
+and point `EXTEND_REAL_URL` at it. The removed-device test skips itself, saying why, against a service
+that predates `include_removed` (one that ignores `include_removed=probe` instead of refusing it).
+Fake devices for a test environment enroll with its secret, since the service refuses a claim across
+worlds.
 
 ## Build and deploy
 
@@ -85,7 +92,9 @@ X-Extend-Telemetry, Silicon-Extend-API-Version, Silicon-Extend-Supported-API-Ver
 The docs pages are generated at build time by `scripts/gen-docs.mjs` from `understanding/cli.yaml`
 and `understanding/TECHNICAL.md` into `src/generated/docs.json`. Vercel includes files outside the
 root directory by default; if a build ever lacks `../understanding`, the script keeps the last
-generated file.
+generated file. `scripts/docs-model.mjs` gives every command one shape whatever cli.yaml uses (a
+command's `errors` may be a list of codes or a sentence), and stops the build, naming the command
+and field, on a shape the CLI reference page can't show.
 
 ## Layout
 
@@ -113,6 +122,20 @@ tests/unit/                 vitest
   address bar immediately. `app_id` and `iam_login_url` come from `GET /api/v1/iam`. Only if
   `iam_login_url` is missing does the site fall back to `VITE_IAM_LOGIN_URL`, then to `iam_base_url` with
   `backend.X` → `auth.X` (the Silicon Interface's `auth.iam.teamofsilicons.com`), plus `/login`.
+- **Sign-up** goes through IAM too: "Create an account" sends a new Carbon to IAM's sign-up page with
+  the same `app_id` and state-bound callback, so after creating the account IAM shows the consent
+  screen and returns here signed in (the attempt is honoured for 30 minutes instead of 10, since IAM
+  checks an email and a phone first). The page is `iam_signup_url` if `GET /api/v1/iam` ever names
+  one, else `/signup` beside IAM's `<auth origin>/login`. For a login page laid out any other way (the
+  local stand-in, the mock) the website doesn't guess: it opens the sign-in page and says so. Test
+  environments don't offer sign-up; their identities come from the test environment.
+- **Removed devices:** the Removed tab lists the Carbon's removed devices
+  (`GET /api/v1/devices?scope=mine&include_removed=true`, every page, newest removal first). A removed
+  device's page is read-only: when and why it was removed, its activity log and its requests; nothing
+  that changes a device is offered, and it stops polling. The Remove dialog says exactly what
+  `DELETE /devices/{id}` does: the session ends, each Silicon loses access (counted), the Extend app
+  unpairs now or when it next connects (or, for a device paired through a computer, Extend stops
+  reaching it through that computer), devices paired through it go too, and the log stays readable.
 - **Tokens:** production's pair is kept in memory and localStorage so tabs share one login; a test
   environment's secret and pair live in sessionStorage, so a test world never leaks into production
   tabs. Refresh is serialised per tab (one shared promise) and across tabs (Web Locks), and a waiting
@@ -141,6 +164,9 @@ tests/unit/                 vitest
   details still show.
 - **Stop** is one tap (as UNDERSTANDING.md says). Taking access from the Silicon using the device asks
   first, since it ends that session. Removing a device requires typing its name.
+- **Wide screens:** above 1600 px the page column (880 px, or 720 px for settings and the wizard) and
+  the device pane's content sit in the middle of their pane, as Interface centres its reading column.
+- **Touch screens** get a Cancel button in ⌘K search instead of keyboard hints (`esc`, `⌘ K`, arrows).
 - **Telemetry** is on by default; off is remembered in localStorage, sends no events and adds
   `X-Extend-Telemetry: off` to every request. Events carry step, outcome, duration and error code only.
 - **Errors** always show the service's `message` and `hint`, the `code`, the request id and the docs

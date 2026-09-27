@@ -1,0 +1,164 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "paired"
+  ],
+  "kind": "device_socket",
+  "operation": "device.socket",
+  "os": "android",
+  "reads": {
+    "cancel": [
+      "id"
+    ],
+    "command": [
+      "id",
+      "session_id",
+      "command"
+    ],
+    "environment": [],
+    "ping": [
+      "nonce"
+    ],
+    "refresh": [],
+    "session_ended": [
+      "session_id",
+      "reason"
+    ],
+    "session_started": [
+      "session_id",
+      "silicon_id",
+      "since"
+    ],
+    "superseded": [],
+    "takeover": [
+      "session_id",
+      "reason",
+      "expires_at"
+    ],
+    "takeover_ended": [
+      "session_id"
+    ],
+    "unpaired": [
+      "reason"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Device {device_credential}"
+    },
+    "method": "GET",
+    "path": "/api/v1/device/connect"
+  },
+  "sends": [
+    {
+      "effect": "hello",
+      "frame": {
+        "app_version": "1.0.0",
+        "capabilities": [
+          "screen.read",
+          "screen.capture",
+          "input.touch",
+          "input.text",
+          "nav.system",
+          "apps.launch",
+          "apps.list",
+          "takeover",
+          "notifications",
+          "links"
+        ],
+        "missing": [
+          {
+            "capability": "adb",
+            "reason": "Wireless debugging is off. Turn it on in Developer options."
+          }
+        ],
+        "model": "Pixel 9",
+        "os": "android",
+        "os_version": "15",
+        "setup": {
+          "state": "needs_carbon",
+          "steps": [
+            {
+              "key": "accessibility",
+              "status": "done",
+              "title": "Allow Silicon Extend to control the screen"
+            },
+            {
+              "help": "Settings › System › Developer options › Wireless debugging",
+              "key": "wireless_debugging",
+              "status": "needs_carbon",
+              "title": "Turn on wireless debugging"
+            }
+          ]
+        },
+        "type": "hello"
+      }
+    },
+    {
+      "effect": "setup_progress",
+      "frame": {
+        "setup": {
+          "state": "complete",
+          "steps": [
+            {
+              "key": "accessibility",
+              "status": "done",
+              "title": "Allow Silicon Extend to control the screen"
+            },
+            {
+              "key": "wireless_debugging",
+              "status": "done",
+              "title": "Turn on wireless debugging"
+            }
+          ]
+        },
+        "type": "setup_progress"
+      }
+    },
+    {
+      "effect": "none",
+      "frame": {
+        "nonce": 17,
+        "type": "pong"
+      }
+    },
+    {
+      "effect": "result",
+      "frame": {
+        "error": null,
+        "files": [
+          {
+            "content_type": "image/png",
+            "kind": "screenshot",
+            "name": "screenshot.png",
+            "size_bytes": 28,
+            "upload_id": "{upload_id}"
+          }
+        ],
+        "id": "{command_id}",
+        "ok": true,
+        "output": {
+          "ref": "@e2"
+        },
+        "text": "Tapped @e2 \"Continue\"",
+        "type": "result"
+      }
+    },
+    {
+      "effect": "takeover_done",
+      "frame": {
+        "type": "takeover_done"
+      }
+    },
+    {
+      "effect": "stop",
+      "frame": {
+        "type": "stop"
+      }
+    }
+  ],
+  "source": "docs/device-protocol.md §2; apps/android/app/src/main/java/com/teamofsilicons/extend/protocol/Frames.kt (encode, decodeService)"
+}

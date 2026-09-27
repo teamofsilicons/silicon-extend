@@ -308,3 +308,29 @@ describe("team Silicons and takeovers", () => {
     ]);
   });
 });
+
+describe("removed devices", () => {
+  const device = (id: string, removed_at?: string) => ({ device_id: id, name: `Device ${id}`, os: "android", online: false, ...(removed_at ? { removed_at, removed_reason: "device_removed" } : {}) });
+
+  it("sends include_removed=true only when asked", async () => {
+    const { client: c, calls } = client(() => json(200, DEVICES));
+    await c.listDevices({ scope: "mine" });
+    await c.listDevices({ scope: "mine", include_removed: true });
+    expect(new URL(calls[0].url).searchParams.has("include_removed")).toBe(false);
+    expect(new URL(calls[1].url).searchParams.get("include_removed")).toBe("true");
+    expect(new URL(calls[1].url).searchParams.get("scope")).toBe("mine");
+  });
+
+  it("reads every page and keeps only the removed ones, newest removal first", async () => {
+    const pages = [
+      { items: [device("00000001"), device("00000002", "2026-09-20T10:00:00Z")], next_cursor: "00000002" },
+      { items: [device("00000003", "2026-09-25T10:00:00Z"), device("00000004")], next_cursor: null },
+    ];
+    const { client: c, calls } = client((_call, i) => json(200, { type: "devices", data: pages[i] }));
+    const removed = await c.listRemovedDevices();
+    expect(removed.map((d) => d.device_id)).toEqual(["00000003", "00000002"]);
+    expect(calls).toHaveLength(2);
+    expect(new URL(calls[1].url).searchParams.get("cursor")).toBe("00000002");
+    expect(calls.every((call) => new URL(call.url).searchParams.get("include_removed") === "true")).toBe(true);
+  });
+});

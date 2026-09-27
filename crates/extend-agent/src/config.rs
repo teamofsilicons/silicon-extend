@@ -11,7 +11,9 @@
 //! Environment variables win over the file, and command-line flags win over both:
 //! `EXTEND_API_URL`, `EXTEND_AGENT_CREDENTIAL_STORE` (`auto`, `keyring`, `file`),
 //! `EXTEND_AGENT_DEVICE` (path to agent-device's `bin/agent-device.mjs` or an executable),
-//! `EXTEND_NODE` (the node binary).
+//! `EXTEND_NODE` (the node binary), `EXTEND_DOWNLOAD_URL` (`download_url` in the file: where
+//! "Download the update" goes when Extend needs a newer app; by default the website's download
+//! page for this OS, [`default_download_url`]).
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +25,20 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_SERVICE_URL: &str = "https://backend.extend.teamofsilicons.com";
 /// Directory name under home.
 pub const STATE_DIR_NAME: &str = ".extend-agent";
+/// The Extend website, whose `/download/<platform>` pages have the apps (`web/src/config.ts`).
+pub const DEFAULT_WEBSITE_URL: &str = "https://extend.teamofsilicons.com";
+
+/// The website's download page for this OS: `{website}/download/mac|windows|linux`.
+pub fn default_download_url() -> String {
+    let platform = if cfg!(target_os = "macos") {
+        "mac"
+    } else if cfg!(windows) {
+        "windows"
+    } else {
+        "linux"
+    };
+    format!("{DEFAULT_WEBSITE_URL}/download/{platform}")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +72,9 @@ pub struct FileConfig {
     /// Full command that runs agent-device, e.g. `["node", "/path/bin/agent-device.mjs"]`.
     #[serde(default)]
     pub agent_device: Option<Vec<String>>,
+    /// Where "Download the update" goes (http or https).
+    #[serde(default)]
+    pub download_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +87,8 @@ pub struct Config {
     pub agent_device: Option<Vec<String>>,
     /// Why agent-device wasn't found, for the probe.
     pub agent_device_problem: Option<String>,
+    /// Where "Download the update" goes when Extend needs a newer app.
+    pub download_url: Url,
 }
 
 /// Values given on the command line.
@@ -76,6 +97,7 @@ pub struct Overrides {
     pub service_url: Option<String>,
     pub credential_store: Option<CredentialStoreKind>,
     pub home: Option<PathBuf>,
+    pub download_url: Option<String>,
 }
 
 pub fn home_dir() -> Option<PathBuf> {
@@ -117,6 +139,18 @@ impl Config {
             Err(why) => (None, Some(why)),
         };
 
+        let download_raw = overrides
+            .download_url
+            .clone()
+            .or_else(|| {
+                std::env::var("EXTEND_DOWNLOAD_URL")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+            })
+            .or(file.download_url.clone())
+            .unwrap_or_else(default_download_url);
+        let download_url = parse_download_url(&download_raw)?;
+
         Ok(Self {
             home,
             state_dir,
@@ -124,6 +158,7 @@ impl Config {
             credential_store,
             agent_device,
             agent_device_problem,
+            download_url,
         })
     }
 
@@ -138,6 +173,7 @@ impl Config {
             credential_store: CredentialStoreKind::File,
             agent_device: None,
             agent_device_problem: Some("not used in tests".into()),
+            download_url: parse_download_url(&default_download_url()).expect("download url"),
         }
     }
 
@@ -173,6 +209,18 @@ pub fn parse_service_url(raw: &str) -> Result<Url> {
         let p = format!("{}/", url.path());
         url.set_path(&p);
     }
+    Ok(url)
+}
+
+/// The download page, which is opened in the Carbon's browser: only http and https.
+pub fn parse_download_url(raw: &str) -> Result<Url> {
+    let url = Url::parse(raw.trim()).with_context(|| {
+        format!("the download URL {raw:?} isn't a URL; set download_url (or EXTEND_DOWNLOAD_URL) to the page with the Silicon Extend apps")
+    })?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https") && url.host().is_some(),
+        "the download URL must start with http:// or https:// and name a host, got {raw:?}; set download_url (or EXTEND_DOWNLOAD_URL) to the page with the Silicon Extend apps"
+    );
     Ok(url)
 }
 
@@ -352,6 +400,49 @@ mod tests {
         );
         assert!(parse_service_url("ftp://x").is_err());
         assert!(parse_service_url("nope").is_err());
+    }
+
+    #[test]
+    fn download_urls_come_from_configuration() {
+        let d = default_download_url();
+        assert!(d.starts_with("https://extend.teamofsilicons.com/download/"), "{d}");
+        assert!(["mac", "windows", "linux"].iter().any(|p| d.ends_with(p)), "{d}");
+        assert_eq!(
+            parse_download_url("https://downloads.example.com/extend/mac?channel=beta")
+                .unwrap()
+                .as_str(),
+            "https://downloads.example.com/extend/mac?channel=beta"
+        );
+        // Opened in the browser, so nothing that could run something else.
+        for bad in ["file:///Applications", "javascript:alert(1)", "nope", "https://"] {
+            let e = parse_download_url(bad).unwrap_err().to_string();
+            assert!(e.contains("download_url"), "{bad}: {e}");
+        }
+        // config.json's download_url is read, and a broken one refuses to start with why.
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join(STATE_DIR_NAME);
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("config.json"),
+            r#"{"download_url":"https://mirror.example.org/silicon-extend"}"#,
+        )
+        .unwrap();
+        let c = Config::load(&Overrides {
+            home: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        // EXTEND_DOWNLOAD_URL, when set in the environment running the tests, wins over the file.
+        if std::env::var_os("EXTEND_DOWNLOAD_URL").is_none() {
+            assert_eq!(c.download_url.as_str(), "https://mirror.example.org/silicon-extend");
+        }
+        let c = Config::load(&Overrides {
+            home: Some(dir.path().to_path_buf()),
+            download_url: Some("https://flag.example.org/get".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(c.download_url.as_str(), "https://flag.example.org/get");
     }
 
     #[test]

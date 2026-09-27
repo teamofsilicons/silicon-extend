@@ -1,9 +1,9 @@
 # Verification record
 
 What was run to check that Silicon Extend works as `understanding/UNDERSTANDING.md` intends, on what,
-and what has **not** been verified. Newest first: the 2026-09-27 section, then the 2026-09-26
-record, corrected in place where later work showed it wrong (marked *Corrected 2026-09-27*).
-Rerun the automated part with `e2e/run-all.sh`.
+and what has **not** been verified. Newest first: the 2026-09-27 round-2 section, the earlier
+2026-09-27 section, then the 2026-09-26 record, corrected in place where later work showed it wrong
+(marked *Corrected 2026-09-27*). Rerun the automated part with `e2e/run-all.sh`.
 
 ## Where the evidence is
 
@@ -29,6 +29,240 @@ Rerun the automated part with `e2e/run-all.sh`.
 - Lanes that now write their evidence under `target/`: `apps/desktop/linux-e2e/record-service-e2e.py`
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
+
+## 2026-09-27, round 2 — audit fixes
+
+After the first round was committed (`5b3c578`), an audit checked the build against every
+requirement in `UNDERSTANDING.md` and listed what was unmet. A second round fixed those items in
+eight groups (service core, service devices, service test environments, versioning, CLI, website,
+Android, desktop and fork), between about 02:30 and 04:55. Each group's work was checked by a
+separate verifier agent that re-ran its tests, read the code, and tried to break it (often by
+reverting a fix in a scratch copy and checking that a test failed). Same Mac (macOS 27, arm64),
+the headless emulator `Medium_Phone_API_36.0` (emulator-5554), Docker, and the local IAM, Briefcase
+and Ting stand-ins. **Nothing of round 2 is committed:** it is the working tree on top of
+`5b3c578`. Nobody drove the Carbon's desktop.
+
+The development service on `:8480` was restarted once, at 04:07:51, with a round-2 build; no file
+under `crates/extend-service/src` or `crates/extend-protocol/src` changed after 04:04, so it serves
+the round-2 service. Most service verifiers ran their own instances on other ports with their own
+databases.
+
+One incident: between about 02:56 and 03:00 a service-core agent built mutated scratch copies into
+the shared `target/` directory, and cargo reused those artifacts for the real tree. An
+`extend-service` test run by anyone in that window may have seen false results. The agent forced a
+rebuild at about 03:00; every run cited below is later.
+
+### Run by the documentation pass (05:00–05:15)
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | **exit 1**: 32 hunks in 9 files, all in `crates/extend-agent` (`autostart.rs`, `config.rs`, `drivers/agent_device.rs`, `drivers/probe_linux.rs`, `drivers/probe_macos.rs`, `drivers/screen_lock.rs`, `main.rs`, `ui/mod.rs`, `tests/fake_service.rs`). CI's first check fails until they are formatted. |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 (macOS host) |
+| `EXTEND_TEST_ADMIN_URL=postgres://extend:extend@127.0.0.1:5440/postgres cargo test --workspace --locked` | exit 0. extend-agent 164 unit + 10 `fake_service`; extend-cli 28 unit + 16 `cli_behaviour` + 8 `device_args` + 2 `json_consumers`; extend-hosted 63 (2 ignored); extend-protocol 9; extend-service 34 unit + 8 `contracts` + 16 `core_gaps` + 7 `devices_gaps` + 4 `e2e` + 6 `obo_requests` + 17 `testenv_gaps` + 1 `real_services` (its body runs only with `EXTEND_REALIAM_STATE` set, so here it returned at once); silicon-extend-client 6 unit + 3 `contract_fixtures` + 2 doc tests; silicon-iam-client 47 + 22 + 2 + 3 doc tests. |
+| `npx -y @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash` | valid, 0 errors, 12 warnings (missing 4xx/2xx responses on `/live`, `/ready`, the WebSocket routes and some list routes, and no `license` in `info`) |
+| `pnpm exec vitest run --project unit-core <the 23 fork test files Extend touched>` in `vendor/agent-device` (the list is in `ci.yml`) | 23 files, 278 tests passed (macOS host) |
+| `node --test apps/desktop/*.test.mjs` | 60/60 (the fork's `dist` was present, so the real-dist completeness case ran) |
+| `JAVA_HOME=… ./gradlew :app:testDebugUnitTest --rerun :libadb:testDebugUnitTest --rerun` in `apps/android` | 138 app + 10 libadb JVM tests, 0 failures |
+| `pnpm install --frozen-lockfile --lockfile-only` on a copy of the fork's manifests | the lockfile matches (checks the `fork` CI job's install) |
+| Black-box calls to `:8480` | `GET /api/version` with no header → 200, version 1; `/api/v2/devices` → 400 `api_version_unsupported`; a pin of 2 on a v1 path → 400 `api_version_mismatch`; a blank or unknown test secret on `/api/v1/iam`, `/api/v1/contracts` and `POST /api/v1/enrollments` → 401 `testing_secret_invalid`; `/files/{id}/content` without a token → 401; as c:alice, `include_removed=maybe` and `scope=team&include_removed=true` → 422 with hints, `scope=mine&include_removed=true` listed 32 removed devices with `removed_at`/`removed_reason`; a removed device's detail (empty capabilities, the `missing[0]` reason) and activity → 200; `PATCH` on it → 404 with when, why, the hint and `details`; `os=beos` → 422; `POST /auth/logout` with a blank token → 422; `GET /api/v1/testing-environment` without a secret → 400 `test_only`; an unknown lifecycle receipt → 404 `request_not_found`; the contracts matrix has every field `api.yaml` now lists. |
+| `adb shell pm list packages` on emulator-5554 | only `com.teamofsilicons.extend` and its test package; the old `com.teamofsilicons.bridge` is gone |
+
+Not run by this pass: `e2e/cli-e2e.sh`, the website suites, the real-IAM harness, the Linux
+container lanes, the Swift helper tests and anything on the emulator. Those results below are the
+groups' and verifiers'. This pass also found that `.github/workflows/release.yml` now builds
+`-p silicon-extend-cli`, a package that doesn't exist (the CLI package is `extend-cli`), so a tagged
+release would fail; that file belongs to another group and was not changed here.
+
+### Integration pass (05:20–06:00)
+
+Every suite run again on the whole round-2 tree, after these fixes:
+
+- `cargo fmt --all` formatted the 9 `crates/extend-agent` files (the vendored
+  `silicon-iam-client` came out byte-identical: its own `rustfmt.toml` applies).
+- The local IAM stand-in's logout revoked the Carbon's logins in **every** world, so leaving a test
+  environment on the website signed the Carbon out of production too (the real-service lane's
+  "exit back to production" failure). It now revokes only the logins of the world signed out of;
+  regression test `iam::tests::local_logout_in_a_test_environment_leaves_the_production_login_alone`.
+- `release.yml` builds `-p extend-cli` again; `crates/extend-cli/tests/build_scripts.rs` checks that
+  every `cargo … -p` in the workflows, the Dockerfile and the desktop build scripts names a
+  workspace package.
+- `scripts/package-cli.py` staged `licences/` beside `targets/`, which `honeycomb pack` drops
+  silently, so every release failed the script's own archive check. The licences now go in each
+  target's root; `scripts/test_package_cli.py` packs stand-in executables with the real
+  `honeycomb` 0.5.0 and failed before the change.
+- `e2e/clean-test-dbs.sh` drops all four prefixes the suites create (it had dropped 1,307 left
+  over).
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace --no-fail-fast` | 480 passed, 0 failed, 2 ignored (the 478 above plus the two new tests) |
+| `cargo check -p extend-agent -p extend-hosted --target x86_64-pc-windows-msvc` | exit 0 |
+| `pnpm build`, `pnpm typecheck` and the 23 CI vitest files in `vendor/agent-device` | built; 23 files, 278 tests passed |
+| `node --test apps/desktop/*.test.mjs` | 60/60 against the rebuilt dist |
+| `bash e2e/cli-e2e.sh` against `:8480` (restarted at 05:35 and 05:38 with this build) | 75/75 |
+| `web`: `pnpm test`, `pnpm build`, `pnpm test:e2e`, `pnpm test:e2e:real` | 112/112; built; 34/34; 5/5 (1 of 5 before the logout fix) |
+| `./gradlew :app:testDebugUnitTest --rerun :app:assembleDebug`, `:libadb:testDebugUnitTest --rerun :app:assembleDebugAndroidTest` | 138 + 10 passed; APK and test APK built |
+| `bash e2e/android-adb.sh 1cdee418` (emulator-5554, the installed 03:40 build) | 6/6 PASS |
+| `python3 e2e/real-iam/realiam.py all --briefcase --ting` | 67 passed, 0 failed, 1 known Briefcase gap |
+| `realiam.py up --briefcase --ting` + `EXTEND_REALIAM_STATE=… cargo test -p extend-service --test real_services` | 1/1 |
+| `bash e2e/run-all.sh` | 9/9 lanes (Redocly: valid, 12 warnings) |
+
+Not run: the emulator instrumentation tests (`connectedDebugAndroidTest` uninstalls the paired app
+afterwards), the Linux container lanes, the Swift helper tests.
+
+### Service: sessions, files, requests, Ting (service core)
+
+Verified (verifier's own runs; `core_gaps` 16/16 in three runs of about 19 s):
+
+- **Idle timer:** with the idle window cut to 1 s, a 6 s command keeps the session active, and
+  `idle_ends_at` is more than 300 s out during it and 290–300 s after it. A command queued behind
+  one whose session ended is refused, not relayed (one `command` frame reaches the device).
+- **Ending mid-command:** device removed, pair revoked on the device, and access removed while a
+  command runs each answer `session_ended` within seconds (not at the 120 s deadline), with
+  `end_reason`, `command_id`, `may_have_run: true` and a hint; the device gets `session_ended`
+  before `unpaired`, or `cancel` without `unpaired` when only access was removed. The `stop` frame
+  and `POST /api/v1/device/stop` (in flight, idle no-op, 401 for an unpaired credential).
+- **Refused logins:** against **real IAM** (the `e2e/real-iam` harness), after revoking si:chef's
+  refresh family directly at IAM (no webhook), a session call got `token_expired` 31 s later and
+  15.2 s after that the session was `ended|silicon_logged_out`, and the device received
+  `session_ended`. A refreshed token keeps the session (test).
+- **Ting:** `realiam.py up --briefcase --ting` then `check`: check #1, "Extend registered si:chef as
+  a Ting recipient before delivering — first request delivered", passes against real Ting 0.1.9, and
+  `real_services.rs` passes. A test-world session registered with Ting's test plane, which refused it
+  (503 "Import this testing environment through Honeycomb"); Extend logged that and went on.
+  Pending requests are retried with no session anywhere and fail with a reason after 6 attempts
+  (test driving scheduler passes directly). The reason with quotes, ünïcode and `<tags>` arrived
+  through real Ting exactly as sent.
+- **Self-destruct against real Briefcase:** with si:chef logged out and a backdated file, the pass
+  logged "could not delete the file yet; its record stays … tries=1 retry_in_s=60" and kept the row;
+  after si:chef signed in again (no session), the next pass 60 s later deleted it and Briefcase
+  answered 404 for c:alice with the entry in si:chef's bin.
+- **Download route against real Briefcase** (called directly): c:alice got 200 `image/png`, 67
+  bytes whose SHA-256 matches Briefcase's copy; `Range: bytes=0-7` gave 206 with
+  `content-range: bytes 0-7/67`; c:bob read the file of his own device; c:alice got 404 for bob's.
+- **Warnings:** a double file store produced four of the five cases; "stored but not recorded" is
+  covered only by reading the code.
+
+Not verified: the CLI's downloads through the new route against real Briefcase (the harness's own
+"briefcase: download" check was still failing when it ran, because `extend file get` still used
+the Briefcase URL; the CLI switched afterwards and the harness was not run again); anything after a
+service restart (logins are held in memory).
+
+### Service: devices (service devices)
+
+Verified: the full `extend-service` suite, clippy and rustfmt clean at the time; `devices_gaps`
+passed 3 more times (54 claims in 0.58–0.60 s, slowest production read 63–76 ms). Mutations in a
+scratch copy with its own target directory: the round-1 design (no in-memory turn) made the burst
+test fail with a 500 after 30.8 s; removing only the turn made the connection test fail (32
+advisory waiters instead of 1); removing the lock let 8 of 8 claims succeed in 2 of 3 runs. Two
+service processes on one database with 20–24 concurrent claims, some with an outside connection
+holding the lock: every run ended with exactly 5 devices, the rest `409 test_device_limit`, and
+production reads answered in ≤78 ms. With the lock held for 20 s, claims answered `429 rate_limited`
+at 5.06 s and 10.06 s. The removed-device reads, the hosted-device path end to end (attach, the
+`attach` frame, the setup code, `attached`, commands with `target`, a targeted Stop, removal) and
+full pages with the online filter (also a scratch test with 460 offline devices spanning several
+batches) were checked.
+
+Found and still open: retrying the pairing that filled a test environment, with the same
+`Idempotency-Key` and body, answers `409 test_device_limit` instead of replaying its 201, because
+the early limit check runs before the idempotency lookup (also true before round 2).
+
+### Service: test environments (service test environments)
+
+Verified by the verifier on a private instance (`:8591`): with a live code from the other world and
+with an unknown code, every caller that isn't a signed-in Carbon with a team (not signed in, a bad
+token, a Silicon, a Carbon naming another team, no `X-Org-ID`) got the same status and code for
+both; only a signed-in Carbon heard the precise `404 pairing_code_invalid`, in both directions.
+Reverting the per-member limit, or moving the check before sign-in, made `testenv_gaps` fail at the
+expected lines. A restore of a purged environment, and the retry of a restore accepted before the
+purge, both got 409; restoring the old retry exemption made
+`removed_and_superseded_operations_never_run_again` fail. `POST /api/v1/pairings` with an unknown,
+blank or disabled environment's secret got 401 before any sign-in check. Readiness: `activate` at the
+same revision opens a `preparing` environment, an older one is 409, and IAM accepting the secret
+opens it. `e2e/cli-e2e.sh` (the pre-round-2 CLI, 48 checks) passed against that instance and its
+cleanup purge left the environment `removed`. The verifier's notes on the other test-environment
+items (receipts, the clean fence, webhooks, logout, the production default, test-plane login) did
+not reach this record; `testenv_gaps` (17 tests) covers them and passes in this pass's run.
+
+Not verified: a real IAM or Honeycomb run of the lifecycle (including IAM introspection of refresh
+tokens on logout), a Docker image build, and how the Android app behaves on close code 4503 (its
+code treats unknown close codes as temporary and reconnects).
+
+### Versioning
+
+The verifier's `cargo test -p extend-service` (03:10) passed, `contracts` 8/8, and clippy was clean;
+this pass's run agrees. The lifecycle (deprecation headers, sunset after 7 quiet days with an
+injected clock and usage rows, `410` afterwards, negotiation steering around a sunset major, two
+majors side by side each checking its own pin), the matrix, and the replay of every fixture in
+`contracts/` against a real service are what `contracts.rs` tests. The device fixtures are derived
+by hand from `docs/device-protocol.md` and the apps' code; the apps don't dump their own frames yet.
+
+### CLI
+
+The verifier (04:43–04:51): `cargo test -p extend-cli` 28 unit + 16 `cli_behaviour` + 8
+`device_args` + 2 `json_consumers`, the client crate's tests, clippy clean, and `bash
+e2e/cli-e2e.sh` against `:8480`, 75/75 twice. The checks include `--json` printing the data itself
+and `{"error": …}` on stderr, `login status` at exit 0 with `authenticated: false`, the test line on
+stderr after early failures, `EXTEND_TEST_SECRET`, paging in `device ls`, `config home` moving the
+login, and downloads through the new route (local file store). Not verified: downloads against real
+Briefcase, and `extend version` against a deprecated or sunset major on a live service (unit and
+fake-service tests only).
+
+### Website
+
+The group's and the verifier's runs: `pnpm test` 112/112 (7 files), `pnpm build`, and `pnpm
+test:e2e` against the mock 34/34 (04:42 and 04:50). `pnpm test:e2e:real`: 5/5 against the web
+agent's own service on `:8487` (04:39); against `:8480`, 4 of 5 in three runs (04:20, 04:37, 04:51).
+The failing test is "test environment: banner, test member login, device limit, exit back to
+production": after leaving the test environment, the signed-in member id is not shown within 10 s.
+Its cause was not found. The removed-device test ("the Remove dialog says what happens, then its log
+stays readable under Removed") passed against `:8480`. Screenshots are in
+`web/test-results/restyle/`. Not verified: sign-up through a real IAM (the "Create an account" link
+guesses IAM's `/signup` address), and the deployed website.
+
+### Android
+
+The group and the verifier: `:app:testDebugUnitTest` 138 tests (21 classes; this pass reran them
+with libadb's 10); with each fix reverted in a scratch copy, `DebuggingAfterRestartTest` (3),
+`EnrollmentLoopTest` and `TvRemoteKeysTest` fail. On emulator-5554 against `:8480`: after `adb
+reboot` the device came back `ready` with setup `complete` and the Wireless-debugging step
+`needs_carbon`; a session and `snapshot -i` worked; `extend adb shell` was refused
+(`unsupported_on_device`) with the after-restart reason; the notification was shown, and the
+verifier's screenshots show the system Wireless debugging page open after the notification; turning
+Wireless debugging on reconnected within 3 s and the step returned to `done` (as the group reports).
+The TV emulator, against a stand-in answering 429, showed "Silicon Extend TV" and "Extend is limiting
+new pairing codes from this network … asks again by itself in 12 min 34 s (at 03:40)" (seen in the
+verifier's screenshot). The group reports that at 360 dp and 1.3× font scale the labels wrap
+instead of being cut (screenshots under `apps/android/build-screens/`, not committed).
+Not verified: physical phones and TVs, `input keyevent` remote buttons on a TV (unit tests only),
+TalkBack, the TV D-pad on the licences screen.
+
+### Desktop agent and fork
+
+The verifier (03:41–03:55): `cargo test -p extend-agent` 164 unit + 10 integration on macOS and
+again inside the Linux container (with the Linux e2e passing); `record-hung-e2e.py` passed every
+case with no window manager and with openbox; the verifier's own probe refused all four
+background-`None` cases, the two-recorder one included, with no frame written (before round 2 two
+of them leaked the cover); `record-e2e.py` three times, the isolation, app and runtime lanes, and
+the runtime driver lane including "`--quality high` records on Linux, encoded at 20 Mbit/s";
+`runtime-update-e2e.mjs` 5 PASS and 2 REPRODUCED lines, as before. This pass: the 23 fork vitest
+files and `node --test apps/desktop/*.test.mjs` 60/60. Not verified: anything on a real desktop
+(start at login after a real login, a real lock screen, the Stop rows for carried devices in a
+real tray and banner, "Download the update" opening a browser), macOS recording quality in a real
+recording, and Windows at all.
+
+### Not verified after round 2
+
+- A production deployment, the deployed website, and a production IAM, Briefcase, Ting or
+  Honeycomb (the real-service harness runs them locally).
+- IAM logout or revocation webhooks: IAM sends none to applications, so logout elsewhere is ended by
+  the 15 s check (`TECHNICAL.md` open question C1).
+- Everything after a service restart that depends on logins held in memory (self-destruct, Ting
+  retries, identifying a refused Silicon).
+- Physical devices of every kind; a real Mac, Linux or Windows desktop.
+- The new CI jobs (`fork`, `android`, the named contract step) have not run on GitHub.
 
 ## 2026-09-27 — rename, review fixes, restyle, Briefcase and Ting
 

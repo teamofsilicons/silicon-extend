@@ -7,14 +7,70 @@ read the screen and act on it. Every change made for Extend is listed below, new
 be offered upstream or carried across an upstream sync. Each entry names its files. Entries marked
 *uncommitted* were in the working tree on 2026-09-27 and not yet in a commit.
 
+Every vitest file an Extend change touched is run by Silicon Extend's CI (`.github/workflows/ci.yml`,
+job `fork`); when an entry adds or changes a test file, add it to that list too.
+
 Outside this tree: Extend's packaging installs its own entry, `apps/desktop/runtime-entry.mjs`, as
 the packaged runtime's `bin/agent-device.mjs` and ships this fork's entry beside it as
 `bin/agent-device-cli.mjs`; it also appends `+extend.<sha256>` to the packaged `package.json`
 version. Neither changes the fork's source; see `apps/desktop/README.md`.
 
-## 2026-09-26 — Linux X11 app recording: redraw proof, owner binding, timing (*uncommitted*)
+## 2026-09-27 — Linux: the whole app window is drawn again at record start; `--quality` picks the bit rate (*uncommitted*)
 
-Review fixes to the X11 recorder added in the entries below.
+Round-2 fixes. They supersede two points of the next entry: the recorder now does call
+`XClearArea`, and Linux no longer refuses `--quality`.
+
+- **Every pixel is drawn again before the first frame.** An audit's probes found two leaks left by
+  the Expose-based redraw proof below: a plain Xlib window whose background is `None` (the
+  `XCreateWindow` default, which GLFW, SDL and many toolkits keep) and that doesn't advertise
+  `_NET_WM_PING` could be recorded showing a window that had covered it, if its app stopped
+  handling events while covered and the cover then moved away; and a second recorder started on a
+  window another recorder had already redirected saw no Expose and could record the cover. The
+  seeded off-screen copy is now never trusted. After the grabbed redirect, the recorder clears the
+  window and every viewable window inside it with exposures (`XClearArea(…, 0, 0, 0, 0, True)`), so
+  the X server paints each background there is and the app gets real Expose events for all of it,
+  and it reads no frame until damage covers every pixel inside the window's shape. Borders (a
+  window's bounding region less its clip region) are only ever painted by the server, so they are
+  exempt (`XFixesCreateRegionFromWindow` for both, `XFixesTranslateRegion`). The clear can show as
+  one flicker of the window's background at record start. Exposure selection on inner windows is
+  gone; only `StructureNotify` on the target stays.
+- **Refusals** now name the way out: "the app did not redraw its whole window within 5 seconds of
+  recording start (it may not be responding), so its window could still hold pixels another window
+  left there and a recording of just this app could show that window; record the whole screen
+  instead (--scope device), or make sure the app is responding and record it again", and the same
+  "record the whole screen instead (--scope device)" for an app that doesn't answer its ping. A
+  stopped app whose windows all have a background (xmessage, xev, plain Xlib with a background
+  pixel) is still recorded, since the server painted every pixel.
+- **`--quality` on Linux.** Linux exports the recorder's own H.264 encode unchanged, so `--quality`
+  now picks that encode's bit rate instead of being refused: `medium` (the default) 8 Mbit/s,
+  `high` 20 Mbit/s, as Android's screenrecord. `LinuxScreenRecordingHost.start` takes `quality`,
+  the Linux recording runtime passes `exportQuality` through (and keeps it across a durable
+  reattach), the host adds `--quality <q>` to the worker only when one was asked for, and
+  `screen-record.py --quality medium|high` sets `-b:v`, `-maxrate` and `-bufsize`. The refusal
+  message for options Linux still can't honour no longer mentions quality. The `record` command's
+  help text says so.
+- **Build record.** `.gitignore` ignores `/.extend-build-manifest.json`, which Extend's packaging
+  (`apps/desktop/dist-manifest.mjs`) writes to record which sources `dist/` was built from.
+- Files: `linux/x11_composite.py`, `linux/screen-record.py`,
+  `packages/contracts/src/screen-recording-runtime-host.ts`,
+  `packages/platform-linux/src/recording/runtime.ts` (+ test: `--quality` is passed through and kept
+  across reattach, replacing the old refusal test),
+  `src/platform-runtime-screen-recording-linux-host.ts` (+ test: the worker gets `--quality` only
+  when asked), `src/commands/recording/index.ts` (help text), `.gitignore`.
+- Verified in Xvfb containers only, by a separate verifier: Extend's `record-hung-e2e.py` passed
+  every case with no window manager and with openbox (the `plain …` cases: covered, left by its
+  cover, stopped while covered or uncovered, with and without a background, and a shaped GTK window
+  above the cover); the verifier's own probe refused all four background-`None` cases, the
+  two-recorder one included, with no frame written; `record-e2e.py`, the isolation lane,
+  `record-app-e2e.py` and `record-runtime-e2e.py` passed, the last including "`--quality high`
+  records on Linux, encoded at 20 Mbit/s". The 23 fork vitest files Extend has touched pass
+  (278 tests, macOS host). Not checked: a compositing desktop (GNOME, KDE, picom), Tk or Java apps
+  on a real display, and how visible the one-time flicker is to a Carbon watching the app.
+
+## 2026-09-26 — Linux X11 app recording: redraw proof, owner binding, timing (`911b3c7`)
+
+Review fixes to the X11 recorder added in the entries below. Superseded in part by the 2026-09-27
+entry above (the redraw proof and `--quality`).
 
 - **Covered windows.** At `record start --scope app` the worker holds the X server
   (`XGrabServer`) while it redirects the window, and selects Expose on the window and every
@@ -59,7 +115,7 @@ Review fixes to the X11 recorder added in the entries below.
   cover. Not checked on a compositing desktop (GNOME, KDE, picom), or with Tk or Java apps on a
   real display.
 
-## 2026-09-26 — macOS: text entry, recording start/stop and app screenshots (*uncommitted*)
+## 2026-09-26 — macOS: text entry, recording start/stop and app screenshots (`911b3c7`)
 
 - **Text entry follows the session surface.** On a `frontmost-app` session, `fill`, `type`,
   `focus`, `find … type` and `find … focus` act on the app that is frontmost when the command runs

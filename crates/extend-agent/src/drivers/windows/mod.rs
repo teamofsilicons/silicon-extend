@@ -31,3 +31,5 @@ mod worker;
 
 #[cfg(windows)]
 pub use driver::WindowsDriver;
+#[cfg(windows)]
+pub(crate) use driver::locked as input_desktop_locked;

@@ -115,12 +115,17 @@ data class Scale(
 val LocalScale = staticCompositionLocalOf { Scale.Phone }
 
 object Type {
-    fun title(s: Scale) = TextStyle(fontFamily = SourceSerif, fontSize = s.title, lineHeight = s.title * 1.15, letterSpacing = (-0.01).em, color = Tokens.Ink)
-    fun cardTitle(s: Scale) = TextStyle(fontFamily = SourceSerif, fontSize = s.cardTitle, lineHeight = s.cardTitle * 1.3, color = Tokens.Ink)
+    /** Interface sets its serif titles tight (`.page-heading h1` -1.8px at 43px, `.sidebar-title h1` -0.8px at 23px). */
+    const val TITLE_TRACKING_EM = -0.03f
+    const val CARD_TITLE_TRACKING_EM = -0.025f
+    fun title(s: Scale) = TextStyle(fontFamily = SourceSerif, fontSize = s.title, lineHeight = s.title * 1.15, letterSpacing = TITLE_TRACKING_EM.em, color = Tokens.Ink)
+    fun cardTitle(s: Scale) = TextStyle(fontFamily = SourceSerif, fontSize = s.cardTitle, lineHeight = s.cardTitle * 1.3, letterSpacing = CARD_TITLE_TRACKING_EM.em, color = Tokens.Ink)
     fun body(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.body, lineHeight = s.body * 1.6, color = Tokens.Ink)
     fun muted(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.small, lineHeight = s.small * 1.7, color = Tokens.Muted)
     fun eyebrow(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.eyebrow, lineHeight = s.eyebrow * 1.5, letterSpacing = 0.12.em, color = Tokens.Muted)
     fun mono(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.small, lineHeight = s.small * 1.6, color = Tokens.Muted)
+    /** A form field holding a URL or an id: body size, IBM Plex Mono. */
+    fun monoField(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.body * 0.94f, lineHeight = s.body * 1.6, color = Tokens.Ink)
     fun label(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.button, fontWeight = FontWeight.Medium, lineHeight = s.button * 1.4)
 }
 

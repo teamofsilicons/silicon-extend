@@ -98,6 +98,7 @@ export function createLinuxRecordingOperations(params: {
           outputPath: nativePath,
           fps: input.fps,
           ...(input.scope === 'app' ? { appId: input.activeSessionApp!.bundleId } : {}),
+          ...(input.exportQuality === undefined ? {} : { quality: input.exportQuality }),
         },
         signal,
       );
@@ -191,13 +192,13 @@ export function createLinuxRecordingOperations(params: {
 }
 
 function validate(input: ScreenRecordingStartInput): void {
-  // Linux exports the recorder's own H.264 encode unchanged; --quality only picks the re-encode
-  // quality of the macOS touch overlay, so on Linux it would silently do nothing.
+  // Silicon Extend fork: Linux exports the recorder's own H.264 encode unchanged, so --quality
+  // picks that encode's bit rate (medium 8 Mbit/s, high 20 Mbit/s, as Android's screenrecord).
   assertScreenRecordingOptionsSupported(
     input,
-    { scopes: ['app', 'device', 'system'], fps: true, exportQuality: false, hideTouches: true },
+    { scopes: ['app', 'device', 'system'], fps: true, exportQuality: true, hideTouches: true },
     (unsupported) =>
-      `Linux recordings do not support ${unsupported.join(', ')}: Linux exports the recorder's own H.264 video unchanged. Run record start again without it.`,
+      `Linux recordings do not support ${unsupported.join(', ')}. Run record start again without it.`,
   );
   if (input.scope === 'app' && !input.activeSessionApp?.bundleId) {
     throw new AppError(

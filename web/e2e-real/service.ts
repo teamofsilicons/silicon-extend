@@ -34,6 +34,15 @@ export async function takeover(siliconToken: string, sessionId: string, reason: 
   return (await call("POST", `/api/v1/sessions/${sessionId}/takeover`, { body: { type: "takeover", data: { reason } }, headers: headers(siliconToken) })).data;
 }
 
+/**
+ * Whether this service lets a Carbon read removed devices (GET /devices?include_removed=…). A service
+ * that knows the parameter refuses a value that isn't true or false; an older one ignores it.
+ */
+export async function supportsRemovedDevices(token: string): Promise<boolean> {
+  const res = await fetch(`${REAL}/api/v1/devices?scope=mine&include_removed=probe`, { headers: headers(token) });
+  return res.status === 422;
+}
+
 export async function pairViaApi(token: string, code: string, name: string, secret?: string) {
   return (await call("POST", "/api/v1/pairings", { body: { type: "pairing", data: { pairing_code: code, name } }, headers: headers(token, secret) })).data;
 }
@@ -46,10 +55,16 @@ export class FakeDevice {
   deviceId = "";
   credential = "";
   socket: WebSocket | null = null;
+  /** Every frame the service sent, oldest first. */
+  frames: { type: string; [key: string]: unknown }[] = [];
 
-  static async enroll(os = "android") {
+  /** Starts pairing like an Extend app. With `secret`, the app pairs into that test environment (the service refuses cross-world claims). */
+  static async enroll(os = "android", secret?: string) {
     const d = new FakeDevice();
-    const r = await call("POST", "/api/v1/enrollments", { body: { type: "enrollment", data: { os, os_version: "15", model: "Pixel 9", app_version: "1.0.0" } } });
+    const r = await call("POST", "/api/v1/enrollments", {
+      body: { type: "enrollment", data: { os, os_version: "15", model: "Pixel 9", app_version: "1.0.0" } },
+      headers: secret ? { "X-Testing-Application-Secret": secret } : {},
+    });
     d.enrollmentId = r.data.enrollment_id;
     d.secret = r.data.enrollment_secret;
     d.code = r.data.pairing_code;
@@ -76,6 +91,7 @@ export class FakeDevice {
     this.socket = ws;
     ws.on("message", (raw) => {
       const frame = JSON.parse(String(raw));
+      this.frames.push(frame);
       if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong", nonce: frame.nonce }));
     });
     await new Promise<void>((resolve, reject) => {

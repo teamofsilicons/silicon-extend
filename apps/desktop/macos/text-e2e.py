@@ -73,7 +73,8 @@ with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as
         return result.stdout
 
     def remote(*command):
-        response = json.loads(remote_cli("--timeout", "90000", *command, "--json"))["data"]["result"]
+        # `extend --json <device command>` prints the CommandResult itself.
+        response = json.loads(remote_cli("--timeout", "90000", *command, "--json"))
         assert response["ok"], response
         return response
 
