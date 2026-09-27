@@ -32,6 +32,16 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — deployment runtime controls
+
+The final audit found all five documented 1.1 tuning variables missing from the AWS environment
+renderer allowlist. They would have been silently ignored despite being present in the runtime
+secret, including the owner-at-use emergency switch. The allowlist now includes them. Three tests
+execute the actual embedded renderer and verify values including `false`/`0`, omitted defaults,
+0600 output, temporary-secret cleanup and newline injection rejection. CI runs those tests.
+Existing production helpers still need the documented refresh during release; no production
+helper, secret or running container was changed by this fix.
+
 ## 2026-09-28 — copied production schema rollback rehearsal
 
 After AWS SSO renewal, a read-only export captured the live schema plus only its migration-version

@@ -26,6 +26,8 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL && df -h /
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev
       - run: cargo fmt --all --check
+      - name: Deployment environment renderer
+        run: python3 deploy/aws/test_render_env.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Consumer-driven contracts (TECHNICAL.md section 10, contracts/README.md): the client crate's
       # recorded fixtures must match what it sends, and a real service must still accept every

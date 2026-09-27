@@ -42,6 +42,14 @@ On the host:
 
 For 1.1.0, follow the order and the two release gates in [Releasing 1.1.0](../../docs/deployment.md#releasing-110): the service goes out first.
 
+The template's host helpers are installed at instance bootstrap. An image-only release does not
+refresh `/usr/local/sbin/extend-render-env`. Before applying 1.1 tuning overrides to an existing
+host, back up that helper and replace it with the corresponding script from the release's
+`standalone.yaml` (retain root ownership and mode 0750). The 1.1 allowlist includes all five
+documented tuning variables, including `EXTEND_OWNER_CHECK_AT_USE=false`. Run
+`python3 deploy/aws/test_render_env.py` before deployment; verify the selected non-secret settings
+in the rendered environment afterward. Absent overrides continue using service defaults.
+
 The outage lasts a few seconds, and devices reconnect by themselves. Pass `PinnedImageId`, `InstanceType` and `--tags Service=silicon-extend Environment=production` on every stack update (leaving the tags out strips them from every resource), and read the change set first: `Instance` must never show a replacement.
 
 ## Rollback
