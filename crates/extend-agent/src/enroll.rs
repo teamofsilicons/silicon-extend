@@ -1,5 +1,7 @@
-//! Before pairing: get a pairing code, show it, follow its rotations, and wait for a Carbon to
-//! claim it (`docs/device-protocol.md` section 1).
+//! Pairing codes: get one, show it, follow its rotations, and wait for a Carbon to claim it
+//! (`docs/device-protocol.md` section 1). The same flow pairs the computer the first time and, with
+//! "Pair with another Carbon", adds a pair for another Carbon: that code is started with the
+//! credential of a live pair (`POST /api/v1/device/enrollments`), so its pair joins this device.
 
 use std::time::Duration;
 
@@ -27,8 +29,42 @@ pub struct Paired {
 pub enum EnrollOutcome {
     Paired(Paired),
     UpgradeRequired,
+    /// Extend won't give this device another code; the message says why (a 1.0 service, the
+    /// most pairs a device may have).
+    Refused(String),
     Shutdown,
 }
+
+/// What a code is for, and where it is shown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Purpose {
+    /// The computer isn't paired: the code fills the window and the menu.
+    First,
+    /// "Pair with another Carbon": the computer stays paired and the code shows in its own card.
+    AnotherCarbon,
+}
+
+/// How to get a code.
+pub enum Start<'a> {
+    First(&'a EnrollmentCreate),
+    /// With the credential of any live pair of this computer.
+    AnotherCarbon {
+        credential: &'a str,
+    },
+}
+
+impl Start<'_> {
+    fn purpose(&self) -> Purpose {
+        match self {
+            Start::First(_) => Purpose::First,
+            Start::AnotherCarbon { .. } => Purpose::AnotherCarbon,
+        }
+    }
+}
+
+/// Shown when the service has no "Pair with another Carbon" (a 1.0 service answers 404).
+pub const ANOTHER_CARBON_UNSUPPORTED: &str =
+    "Extend on the service is too old for this. Pairing with another Carbon needs Extend 1.1.";
 
 enum SocketEnd {
     Paired(Paired),
@@ -39,31 +75,44 @@ enum SocketEnd {
     Shutdown,
 }
 
-/// Runs until paired, the service asks for a newer app, or shutdown.
+/// Runs until paired, the service asks for a newer app or refuses, or `shutdown`.
 pub async fn enroll(
     service: &ServiceClient,
     status: &StatusHandle,
-    info: &EnrollmentCreate,
+    start: Start<'_>,
     shutdown: &CancellationToken,
 ) -> EnrollOutcome {
+    let purpose = start.purpose();
     let mut backoff = Backoff::default();
-    status.update(|s| {
-        s.phase = Phase::Enrolling;
-        s.device = None;
-        s.in_use = None;
-        s.takeover = None;
-        s.attached.clear();
-    });
+    if purpose == Purpose::First {
+        status.update(|s| {
+            s.phase = Phase::Enrolling;
+            s.pairs.clear();
+            s.in_use = None;
+            s.takeover = None;
+            s.attached.clear();
+        });
+    }
+    let status = &Codes { status, purpose };
     'enrollment: loop {
-        let created = match service.create_enrollment(info).await {
+        let created = match &start {
+            Start::First(info) => service.create_enrollment(info).await,
+            Start::AnotherCarbon { credential } => service.pair_enrollment(credential).await,
+        };
+        let created = match created {
             Ok(c) => c,
             Err(e) if e.is_upgrade_required() => return EnrollOutcome::UpgradeRequired,
+            Err(e) if purpose == Purpose::AnotherCarbon && e.status == Some(404) => {
+                return EnrollOutcome::Refused(ANOTHER_CARBON_UNSUPPORTED.into());
+            }
+            // The most pairs a device may have, too many codes waiting, or this pair was just
+            // revoked: the service's own words say which.
+            Err(e) if purpose == Purpose::AnotherCarbon && matches!(e.status, Some(401 | 403 | 409 | 429)) => {
+                return EnrollOutcome::Refused(e.message);
+            }
             Err(e) => {
                 tracing::warn!("couldn't get a pairing code: {e}");
-                status.update(|s| {
-                    s.pairing = None;
-                    s.last_error = Some(e.message.clone());
-                });
+                status.failed(&e.message);
                 if sleep_or_shutdown(backoff.next_delay(), shutdown).await {
                     return EnrollOutcome::Shutdown;
                 }
@@ -71,7 +120,7 @@ pub async fn enroll(
             }
         };
         backoff.reset();
-        show_code(status, &created.pairing_code, created.code_expires_at);
+        status.show(&created.pairing_code, created.code_expires_at);
         tracing::info!(
             "pairing code {} (enrollment {})",
             created.pairing_code,
@@ -124,20 +173,14 @@ enum Poll {
     Failed,
 }
 
-async fn poll(
-    service: &ServiceClient,
-    status: &StatusHandle,
-    id: Uuid,
-    secret: &str,
-    expires_at: &mut Timestamp,
-) -> Poll {
+async fn poll(service: &ServiceClient, status: &Codes<'_>, id: Uuid, secret: &str, expires_at: &mut Timestamp) -> Poll {
     match service.get_enrollment(id, secret).await {
         Ok(EnrollmentState::Waiting {
             pairing_code,
             code_expires_at,
         }) => {
             *expires_at = code_expires_at;
-            show_code(status, &pairing_code, code_expires_at);
+            status.show(&pairing_code, code_expires_at);
             Poll::Waiting
         }
         Ok(EnrollmentState::Paired {
@@ -159,7 +202,7 @@ async fn poll(
 
 async fn enrollment_socket(
     service: &ServiceClient,
-    status: &StatusHandle,
+    status: &Codes<'_>,
     created: &EnrollmentCreated,
     expires_at: &mut Timestamp,
     shutdown: &CancellationToken,
@@ -175,7 +218,7 @@ async fn enrollment_socket(
         Err(ConnectError::Http(401 | 403 | 404 | 410)) => return SocketEnd::Gone,
         Err(e) => return SocketEnd::Dropped(e.to_string()),
     };
-    status.update(|s| s.last_error = None);
+    status.connected();
     let (mut sink, mut stream) = socket.split();
     let idle = Duration::from_secs(extend_protocol::OFFLINE_AFTER_S + 15);
     loop {
@@ -209,10 +252,9 @@ async fn enrollment_socket(
                 }) => {
                     *expires_at = code_expires_at;
                     let changed = status
-                        .get()
-                        .pairing
+                        .shown()
                         .is_none_or(|p| !p.code.eq_ignore_ascii_case(&pairing_code));
-                    show_code(status, &pairing_code, code_expires_at);
+                    status.show(&pairing_code, code_expires_at);
                     if changed {
                         tracing::info!("pairing code rotated to {}", pairing_code.to_ascii_uppercase());
                     }
@@ -248,17 +290,62 @@ async fn enrollment_socket(
     }
 }
 
-fn show_code(status: &StatusHandle, code: &str, expires_at: Timestamp) {
-    let expires = expires_at
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default();
-    status.update(|s| {
-        s.phase = Phase::Enrolling;
-        s.pairing = Some(PairingInfo {
+/// Where a code shows: the pairing screen, or the "Pair with another Carbon" card.
+struct Codes<'a> {
+    status: &'a StatusHandle,
+    purpose: Purpose,
+}
+
+impl Codes<'_> {
+    fn show(&self, code: &str, expires_at: Timestamp) {
+        let info = PairingInfo {
             code: code.to_ascii_uppercase(),
-            expires_at: expires,
-        });
-    });
+            expires_at: expires_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        };
+        match self.purpose {
+            Purpose::First => self.status.update(|s| {
+                s.phase = Phase::Enrolling;
+                s.pairing = Some(info);
+            }),
+            Purpose::AnotherCarbon => self.status.update(|s| {
+                let a = s.adding_pair.get_or_insert_with(Default::default);
+                a.pairing = Some(info);
+                a.error = None;
+            }),
+        }
+    }
+    fn shown(&self) -> Option<PairingInfo> {
+        let s = self.status.get();
+        match self.purpose {
+            Purpose::First => s.pairing,
+            Purpose::AnotherCarbon => s.adding_pair.and_then(|a| a.pairing),
+        }
+    }
+    fn failed(&self, why: &str) {
+        match self.purpose {
+            Purpose::First => self.status.update(|s| {
+                s.pairing = None;
+                s.last_error = Some(why.to_owned());
+            }),
+            Purpose::AnotherCarbon => self.status.update(|s| {
+                let a = s.adding_pair.get_or_insert_with(Default::default);
+                a.pairing = None;
+                a.error = Some(why.to_owned());
+            }),
+        }
+    }
+    fn connected(&self) {
+        match self.purpose {
+            Purpose::First => self.status.update(|s| s.last_error = None),
+            Purpose::AnotherCarbon => self.status.update(|s| {
+                if let Some(a) = s.adding_pair.as_mut() {
+                    a.error = None;
+                }
+            }),
+        }
+    }
 }
 
 /// Sleeps; true when shutdown came first.

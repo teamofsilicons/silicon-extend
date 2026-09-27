@@ -78,7 +78,7 @@ async function startHarmonyRecording(params: {
   );
   signal.throwIfAborted();
   await host.screenRecording.outputs.prepare(input.outputPath);
-  const fileName = `agent-device-recording-${randomUUID()}.mp4`;
+  const fileName = `silicon-extend-recording-${randomUUID()}.mp4`;
   const remotePath = `/data/local/tmp/${fileName}`;
   const descriptor = {
     backend: 'harmony-screen-recorder' as const,

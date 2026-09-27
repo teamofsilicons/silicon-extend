@@ -76,7 +76,7 @@ async function listPhysicalDevicesFromDevicectl(
   let temporaryFile;
   try {
     temporaryFile = await host.files.createTemporaryTextFile({
-      prefix: 'agent-device-devicectl-',
+      prefix: 'extend-engine-devicectl-',
       suffix: '.json',
     });
     const result = await host.appleTools.run(

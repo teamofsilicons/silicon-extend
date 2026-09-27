@@ -39,7 +39,7 @@ extension RunnerTests {
       app.terminate()
     }
     let command = try runnerCommandFixture(
-      #"{"command":"tap","commandId":"selector-tap-fallback","selectorKey":"label","selectorValue":"Agent Device Runner","synthesized":true}"#
+      #"{"command":"tap","commandId":"selector-tap-fallback","selectorKey":"label","selectorValue":"Silicon Extend","synthesized":true}"#
     )
 
     let response = try executeOnMainPrepared(command: command, activeApp: app)
@@ -77,7 +77,7 @@ extension RunnerTests {
 
     let textField = app.textFields["agent-device-hardware-keyboard-input"]
     XCTAssertTrue(textField.waitForExistence(timeout: appExistenceTimeout))
-    let otherElement = app.staticTexts["Agent Device Runner"]
+    let otherElement = app.staticTexts["Silicon Extend"]
     XCTAssertTrue(otherElement.waitForExistence(timeout: appExistenceTimeout))
     XCTAssertFalse(
       keyboardFocusConfirmed(app: app, element: textField),

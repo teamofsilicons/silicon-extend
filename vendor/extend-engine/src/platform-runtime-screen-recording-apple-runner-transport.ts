@@ -60,7 +60,7 @@ async function startLocalAppleRunnerRecording({
 }: AppleRunnerScreenRecordingStartRequest): Promise<AppleRunnerScreenRecordingStartResult> {
   const { readRunnerSessionLiveness, runAppleRunnerCommand } =
     await import('@agent-device/platform-apple/runner/operations');
-  const recordingFileName = `agent-device-recording-${Date.now()}.mp4`;
+  const recordingFileName = `silicon-extend-recording-${Date.now()}.mp4`;
   const remotePath =
     device.appleOs === 'macos' || device.kind !== 'device' ? undefined : `tmp/${recordingFileName}`;
   const result = await runAppleRunnerCommand(

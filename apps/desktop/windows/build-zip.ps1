@@ -8,7 +8,7 @@
 #   Silicon Extend\LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt
 #
 # Windows uses Extend's own driver (UI Automation, SendInput, GDI capture), so no Node or
-# agent-device ships with it. The window uses WebView2, which Windows 10 and 11 already have.
+# device engine ships with it. The window uses WebView2, which Windows 10 and 11 already have.
 # Not signed, not published.
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")

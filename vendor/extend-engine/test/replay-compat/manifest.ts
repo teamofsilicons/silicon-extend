@@ -411,7 +411,7 @@ export const REPLAY_COMPAT_CORPUS: ReplayCompatEntry[] = [
     verdict: {
       kind: 'fails',
       code: 'INVALID_ARGS',
-      hint: 'screenshot --max-size was removed; use --scale <0.01-1> (or AGENT_DEVICE_SCREENSHOT_SCALE) to downscale proportionally',
+      hint: 'screenshot --max-size was removed; use --scale <0.01-1> (or EXTEND_ENGINE_SCREENSHOT_SCALE) to downscale proportionally',
     },
     note: 'Pre-removal screenshot `--max-size` flag as the v0.20.5 recorder wrote it. Sole witness of the screenshot sizing migration refusal; without it a parser change could silently demote the flag to ignored positionals and capture at native size.',
   },

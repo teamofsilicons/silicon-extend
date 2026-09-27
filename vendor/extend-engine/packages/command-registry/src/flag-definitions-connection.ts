@@ -27,7 +27,7 @@ export const CONNECTION_FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     type: 'string',
     usageLabel: '--state-dir <path>',
     usageDescription:
-      'Daemon state directory (defaults to ~/.agent-device for packages, or a worktree-scoped dev dir from source)',
+      'Daemon state directory (defaults to ~/.silicon-extend/engine for packages, or a worktree-scoped dev dir from source)',
     projectConfig: false,
     recorded: false,
   },

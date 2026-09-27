@@ -11,9 +11,9 @@ const ALIASES: Record<string, { type: 'intent' | 'package'; value: string }> = {
   settings: { type: 'intent', value: 'android.settings.SETTINGS' },
 };
 export const androidAppsDiscoveryHint =
-  'Run agent-device apps --platform android to discover the installed package name, then retry open with that exact package.';
+  'Run extend apps --platform android to discover the installed package name, then retry open with that exact package.';
 const ANDROID_AMBIGUOUS_APP_HINT =
-  'Run agent-device apps --platform android to see the exact installed package names before retrying open.';
+  'Run extend apps --platform android to see the exact installed package names before retrying open.';
 
 export type AndroidAppResolution = { type: 'intent' | 'package'; value: string };
 

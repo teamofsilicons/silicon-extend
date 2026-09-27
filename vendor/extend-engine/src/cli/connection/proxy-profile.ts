@@ -17,7 +17,7 @@ export function resolveProxyConnectProfile(options: {
   if (!daemonBaseUrl) {
     throw new AppError(
       'INVALID_ARGS',
-      'connect proxy requires --daemon-base-url <url> or AGENT_DEVICE_DAEMON_BASE_URL.',
+      'connect proxy requires --daemon-base-url <url> or EXTEND_ENGINE_DAEMON_BASE_URL.',
     );
   }
   const clientId = buildConnectClientId(options.stateDir, daemonBaseUrl, options.flags.session);

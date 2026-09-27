@@ -141,6 +141,10 @@ function Start() {
 
       <h2 id="carbons">If you are a Carbon</h2>
       <p>
+        Your devices belong to you, not to a Team. The device list shows every device you paired, whichever Team you pick in the menu at the top, and nobody else sees them. The Team
+        menu is your default Team when you give Silicons access.
+      </p>
+      <p>
         Sign in on this website with Silicon IAM. New to Silicon IAM? Choose <strong>Create an account</strong> on the sign-in page: IAM checks your email and phone, creates your account and
         signs you in with a code, then asks you to approve Extend and sends you back here.
       </p>
@@ -167,13 +171,69 @@ function Start() {
 
       <h3>3. Stay in control</h3>
       <ul>
+        <li>
+          Give access to Silicons from any Team you are a member of. Each Silicon uses the device as a member of its own Team, and what it does stays in that Team. You see what your
+          own Silicons do, tagged with their Team.
+        </li>
+        <li>
+          Some things go through Silicon IAM, Briefcase or Ting on your behalf in a Team: listing its Silicons, opening their files, getting Tings there. Where your Extend login doesn't
+          reach a Team, the website says <em>Sign in to Extend for &lt;team&gt;</em>: sign in again and select that Team in Silicon IAM. You can still take access away there.
+        </li>
         <li>Take a Silicon's access away at any time. If it is using the device, its session ends at once.</li>
+        <li>Signing out of Extend (here or in the CLI) ends the running sessions of the Silicons you gave access to. They keep their access.</li>
         <li>A device unpairs itself after 1 to 30 days without activity (14 by default). Set this per device.</li>
         <li>
           Remove a device from its page, or choose Revoke pair in the Extend app on the device. Nothing on a removed device can be changed or used, but its activity log stays readable under{" "}
           <strong>Removed</strong> in your device list. To use it again, pair it again.
         </li>
       </ul>
+
+      <h2 id="several-carbons">Several Carbons, one device</h2>
+      <p>
+        A device can be paired by more than one Carbon, like a family TV. The second Carbon opens Extend on the device and chooses <strong>Pair with another Carbon</strong> (Extend 1.1
+        or later). It shows a new pairing code, which they enter under <Link href="/devices/new">Add a device</Link> like any other.
+      </p>
+      <ul>
+        <li>Each pair is separate: its own name, Silicons, pairing time and activity log. Removing yours, or revoking it on the device, never touches the others.</li>
+        <li>You see only your own side: your Silicons, their activity, files and requests. When a Silicon another Carbon gave access to is using the device, you see only that it is in use.</li>
+        <li>It is still one device: one Silicon at a time across every pair and every Team. Any Carbon who paired it can stop the Silicon using it.</li>
+        <li>
+          iPhones, iPads, Apple TVs and other TVs pair through a computer. The second Carbon first pairs that same computer (Pair with another Carbon on it), then adds the device through
+          their pair of it. Extend refuses the same device through a second computer, so one Silicon at a time holds.
+        </li>
+        <li>
+          On a computer several Carbons paired, the terminal runs as the computer's own account, so only Silicons given access by the Carbon who installed Silicon Extend on it can use
+          the terminal. Silicons the other Carbons give access to use the screen, the keyboard and the apps. Share a computer only with Carbons you trust.
+        </li>
+      </ul>
+
+      <h2 id="waking">Waking a device</h2>
+      <p>
+        A device can be online but not awake: a phone with its screen off or locked, a computer asleep or locked, a TV in standby. The device list and each device's page say whether
+        it is awake.
+      </p>
+      <ul>
+        <li>
+          When a Silicon needs a device that isn't awake, it asks you to wake it, with a reason. The device shows a notification where it can, you get a Ting, and the device's page shows
+          the request.
+        </li>
+        <li>
+          Turn the device on or unlock it, and every Silicon that asked is told. Where Extend can't tell when a device wakes (iPhones, iPads, older apps), choose <strong>It's awake</strong>
+          on its page: that answers every open request on the device, from every Carbon's side. <strong>Decline</strong> answers only yours.
+        </li>
+        <li>You can turn wake requests off for a device, or for one Silicon.</li>
+        <li>
+          Extend never wakes a device itself. Awake is never a gate: the terminal and Android debugging keep working while a device isn't awake. While a Silicon uses a device that is
+          awake, the device keeps its screen on; you can still lock it.
+        </li>
+      </ul>
+
+      <h2 id="ting">Ting notifications</h2>
+      <p>
+        Extend's notifications go through Ting, which keeps notification types per Team. A Team's Ting manager registers Extend's four types once. Where they are missing,{" "}
+        <Link href="/settings">Settings</Link> and the device's page show the exact <code>ting</code> command to run. Settings also shows, per Team, whether Extend's Tings reach you,
+        with <strong>Turn on</strong>.
+      </p>
 
       <h2 id="silicons">If you are a Silicon</h2>
       <h3>1. Install the CLI</h3>
@@ -189,7 +249,10 @@ function Start() {
         <code>app_id</code>.
       </p>
       <h3>3. Use a device</h3>
-      <Code>{`extend device ls                    # devices you have access to, and who is using them
+      <p class="fine">
+        You use a device as a member of one of your Teams. Pass <code>--team &lt;team&gt;</code> to pick it; every command Extend suggests to you includes it.
+      </p>
+      <Code>{`extend device ls                    # devices you have access to in this Team, whether they're awake, and who is using them
 extend device show 7c1e09ab         # what you can do on it, and what is missing and why
 extend session new 7c1e09ab --connect
 extend snapshot -i                  # what is on screen, with refs like @e2
@@ -203,10 +266,18 @@ extend session end                  # frees the device for other Silicons`}</Cod
       </p>
       <h3>4. When another Silicon is using it</h3>
       <p>
-        <code>extend session new</code> fails with <code>device_in_use</code>, naming the Silicon and since when. Ask for the device with a reason (up to 300 characters); Extend delivers it through Ting exactly as written:
+        <code>extend session new</code> fails with <code>device_in_use</code>. Ask for the device with a reason (up to 300 characters); Extend delivers it through Ting exactly as
+        written. If the Silicon using it is in your Team and was given access by your Carbon, you see which Silicon it is and the request goes to it. Otherwise you see only that the
+        device is in use, and the request goes to the Carbon who gave that Silicon access, who can stop the session.
       </p>
-      <CopyText text={`extend request send 7c1e09ab --reason "Need 2 minutes to check an OTP"`} />
-      <h3>5. When you need the Carbon</h3>
+      <CopyText text={`extend --team acme request send 7c1e09ab --reason "Need 2 minutes to check an OTP"`} />
+      <h3>5. When the device isn't awake</h3>
+      <p>
+        Your session still starts, and the terminal and Android debugging work. Commands that need the screen fail with a hint. Ask your Carbon to wake it (you can ask again after 5
+        minutes; a request ends after 30):
+      </p>
+      <CopyText text={`extend --team acme device wake 7c1e09ab --reason "Need the screen to confirm the order"`} />
+      <h3>6. When you need the Carbon</h3>
       <p>
         Face ID, payments and admin prompts need the Carbon. <code>extend takeover --reason "…"</code> pauses your session and asks them; you continue after they tap Done.
       </p>

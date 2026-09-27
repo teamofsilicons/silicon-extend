@@ -1,0 +1,152 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "paired"
+  ],
+  "kind": "device_socket",
+  "operation": "device.socket.setup_retry",
+  "os": "android",
+  "reads": {
+    "cancel": [
+      "id"
+    ],
+    "command": [
+      "id",
+      "session_id",
+      "command"
+    ],
+    "environment": [],
+    "ping": [
+      "nonce"
+    ],
+    "refresh": [],
+    "session_ended": [
+      "session_id",
+      "reason"
+    ],
+    "session_started": [
+      "session_id",
+      "silicon_id",
+      "since"
+    ],
+    "setup_retry": [
+      "step"
+    ],
+    "superseded": [],
+    "takeover": [
+      "session_id",
+      "reason",
+      "expires_at"
+    ],
+    "takeover_ended": [
+      "session_id"
+    ],
+    "unpaired": [
+      "reason"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Device {device_credential}"
+    },
+    "method": "GET",
+    "path": "/api/v1/device/connect"
+  },
+  "sends": [
+    {
+      "effect": "hello",
+      "frame": {
+        "app_version": "1.1.0",
+        "capabilities": [
+          "screen.read",
+          "screen.capture",
+          "input.touch",
+          "input.text",
+          "nav.system",
+          "apps.launch",
+          "apps.list",
+          "takeover",
+          "notifications",
+          "links"
+        ],
+        "features": [
+          "setup_retry"
+        ],
+        "missing": [
+          {
+            "capability": "adb",
+            "reason": "Android debugging isn't connected yet. On the phone, turn on Wireless debugging, then tap Retry in Silicon Extend."
+          }
+        ],
+        "model": "Pixel 9",
+        "os": "android",
+        "os_version": "15",
+        "setup": {
+          "state": "needs_carbon",
+          "steps": [
+            {
+              "key": "accessibility",
+              "status": "done",
+              "title": "Allow Silicon Extend to control the screen"
+            },
+            {
+              "error": "The phone turned down the pairing. On the phone, open Wireless debugging, choose Pair device with pairing code, then tap Retry.",
+              "help": "Settings › System › Developer options › Wireless debugging",
+              "key": "wireless_debugging",
+              "status": "failed",
+              "title": "Turn on wireless debugging"
+            }
+          ]
+        },
+        "type": "hello"
+      }
+    },
+    {
+      "effect": "setup_retry",
+      "frame": {
+        "setup": {
+          "state": "in_progress",
+          "steps": [
+            {
+              "key": "accessibility",
+              "status": "done",
+              "title": "Allow Silicon Extend to control the screen"
+            },
+            {
+              "help": "Settings › System › Developer options › Wireless debugging",
+              "key": "wireless_debugging",
+              "status": "in_progress",
+              "title": "Turn on wireless debugging"
+            }
+          ]
+        },
+        "type": "setup_progress"
+      }
+    },
+    {
+      "effect": "setup_progress",
+      "frame": {
+        "setup": {
+          "state": "complete",
+          "steps": [
+            {
+              "key": "accessibility",
+              "status": "done",
+              "title": "Allow Silicon Extend to control the screen"
+            },
+            {
+              "key": "wireless_debugging",
+              "status": "done",
+              "title": "Turn on wireless debugging"
+            }
+          ]
+        },
+        "type": "setup_progress"
+      }
+    }
+  ],
+  "source": "docs/device-protocol.md (1.1); apps/android/app/src/main/java/com/teamofsilicons/extend/protocol/Frames.kt and core/ConnectionManager.kt (1.1) (SetupRetry → rerun the step; the setup screen's Retry button)"
+}

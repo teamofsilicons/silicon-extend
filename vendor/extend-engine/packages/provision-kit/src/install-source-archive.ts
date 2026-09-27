@@ -91,7 +91,7 @@ async function extractArchive(
 ): Promise<{ outputPath: string; cleanup: () => Promise<void> }> {
   const type = archiveTypeFromPath(archivePath);
   if (!type) throw new AppError('INVALID_ARGS', `Unsupported archive: ${archivePath}`);
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-device-archive-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'extend-engine-archive-'));
   const outputPath = path.join(tempDir, 'extracted');
   try {
     await extractArchiveSafely({ archivePath, outputRoot: outputPath, type, budget, depth });

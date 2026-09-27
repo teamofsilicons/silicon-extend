@@ -104,7 +104,7 @@ test('a foreign live claim refuses the command before it can reach device operat
   expect(error.details?.reason).toBe('DEVICE_CLAIM_LIVE_OWNER');
   expect(error.details?.retriable).toBe(false);
   expect(error.details?.hint).toBe(
-    'Inspect the owner with: agent-device device status --platform android --serial emulator-5554',
+    'Inspect the owner with: extend device status --platform android --serial emulator-5554',
   );
 
   await admission[Symbol.asyncDispose]();

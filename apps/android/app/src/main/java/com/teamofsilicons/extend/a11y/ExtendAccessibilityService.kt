@@ -36,13 +36,25 @@ import kotlin.coroutines.resume
 
 /**
  * How the Extend app sees and acts on the screen. This is the Android app's deliberate
- * replacement for agent-device's ADB-driven Android helpers: an AccessibilityService reads every
- * window's element tree, dispatches touch gestures, presses system buttons and takes screenshots
- * without Android debugging, so it works on any network and survives reboots.
+ * replacement for the device engine's Android debugging helpers: an AccessibilityService reads
+ * every window's element tree, dispatches touch gestures, presses system buttons and takes
+ * screenshots without Android debugging, so it works on any network and survives reboots.
+ *
+ * It also draws what must show over other apps without the "display over other apps" permission:
+ * the TV's in-use badge, and on phones the invisible window that keeps an awake screen on while a
+ * Silicon works ([ScreenKeeper]).
  */
 class ExtendAccessibilityService : AccessibilityService() {
     private var scope: CoroutineScope? = null
     private var badge: TvBadgeOverlay? = null
+    private var keeper: ScreenKeeper? = null
+
+    /** Counts what changes on screen ([CHANGE_EVENTS]), so a click can tell whether it did anything. */
+    private val changeCount = java.util.concurrent.atomic.AtomicLong()
+    val changes: Long get() = changeCount.get()
+
+    /** A list scrolled since the last capture (Android 8.0/8.1 re-read the window roots then). */
+    @Volatile private var scrolled = false
 
     @Volatile var foregroundPackage: String? = null
         private set
@@ -56,9 +68,12 @@ class ExtendAccessibilityService : AccessibilityService() {
         val s = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         scope = s
         badge = TvBadgeOverlay(this)
+        keeper = ScreenKeeper(this)
         s.launch {
             Extend.get(this@ExtendAccessibilityService).state.collect { st ->
                 badge?.render(st)
+                // A TV's badge window keeps its screen on; a phone needs a window of its own.
+                keeper?.render(!st.isTv && KeepScreenOn.wanted(st))
             }
         }
         Extend.get(this).onCapabilitiesMayHaveChanged()
@@ -66,6 +81,12 @@ class ExtendAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        if (event.eventType and CHANGE_EVENTS != 0) changeCount.incrementAndGet()
+        // Android 8.0/8.1 clear a scrolled list's cached nodes only for services that receive
+        // TYPE_VIEW_SCROLLED (Android 9+ always deliver it to the cache), which is why the service
+        // asks for it (accessibility_service_config.xml); without it a snapshot after a scroll
+        // showed the rows from before it.
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) scrolled = true
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: return
             val cls = event.className?.toString()
@@ -102,6 +123,8 @@ class ExtendAccessibilityService : AccessibilityService() {
         _connected.value = false
         badge?.remove()
         badge = null
+        keeper?.render(false)
+        keeper = null
         scope?.cancel()
         scope = null
         runCatching { Extend.get(this).onCapabilitiesMayHaveChanged() }
@@ -126,12 +149,16 @@ class ExtendAccessibilityService : AccessibilityService() {
     fun capture(): Capture {
         // Compose can update bounds without invalidating every cached virtual descendant.
         if (android.os.Build.VERSION.SDK_INT >= 33) clearCache()
+        // Before Android 9, a scroll's cache clearing could miss a window root; read them afresh.
+        val refreshRoots = Build.VERSION.SDK_INT < 28 && scrolled
+        scrolled = false
         val screen = screenBounds()
         val roots = ArrayList<UiNode>()
         val windows = runCatching { windows }.getOrDefault(emptyList())
         for (w in windows.reversed()) {
             if (w.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue
             val root = w.root ?: continue
+            if (refreshRoots) runCatching { root.refresh() }
             roots += convert(root, windowType(w.type), w.title?.toString(), IntArray(1))
         }
         if (roots.isEmpty()) {
@@ -275,6 +302,16 @@ class ExtendAccessibilityService : AccessibilityService() {
     suspend fun tap(x: Float, y: Float, holdMs: Long = 50): Boolean =
         gesture(listOf(Stroke(listOf(x to y), 0, holdMs)))
 
+    /** Waits up to [timeoutMs] for anything on screen to change after [since] ([changes]); whether it did. */
+    suspend fun awaitChange(since: Long, timeoutMs: Long): Boolean {
+        val until = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (changeCount.get() == since) {
+            if (android.os.SystemClock.elapsedRealtime() >= until) return false
+            delay(40)
+        }
+        return true
+    }
+
     fun global(action: Int): Boolean = performGlobalAction(action)
 
     /**
@@ -319,6 +356,11 @@ class ExtendAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val MAX_CAPTURE_NODES = 6000
+
+        /** Events that mean the screen changed: a click was handled, a window or its content changed. */
+        val CHANGE_EVENTS = AccessibilityEvent.TYPE_VIEW_CLICKED or AccessibilityEvent.TYPE_VIEW_SELECTED or
+            AccessibilityEvent.TYPE_VIEW_SCROLLED or AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         @Volatile var instance: ExtendAccessibilityService? = null
             private set
         private val _connected = MutableStateFlow(false)

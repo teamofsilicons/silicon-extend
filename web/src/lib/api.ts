@@ -14,17 +14,23 @@ import type {
   ExtendRequest,
   Device,
   DeviceDetail,
+  DeviceStopped,
   ErrorBody,
   IamInfo,
   Me,
   Member,
   Page,
+  RetryResult,
   Session,
   Setup,
   Takeover,
   TeamSilicon,
+  TeamSilicons,
   TestingEnvironment,
-  Visibility,
+  TingRegistration,
+  WakeAnswered,
+  WakeRequest,
+  WakeSettingsView,
 } from "./types";
 
 export const API_MAJOR = 1;
@@ -86,7 +92,10 @@ export interface ClientContext {
   tokens: TokenStore;
   /** The test application's app_secret, or null for production. */
   testingSecret: () => string | null;
-  /** The team handle sent as X-Org-ID. */
+  /**
+   * The team handle sent as X-Org-ID. Since 1.1 it is the default Team for grants and a Silicon's
+   * Team; it no longer filters a Carbon's devices, grants or history.
+   */
   team: () => string | null;
   telemetryOff: () => boolean;
   /** Names the world for cross-tab refresh locking. */
@@ -109,17 +118,23 @@ interface RequestOptions {
   body?: { type: string; data: unknown };
   /** Send the bearer token (default true). */
   auth?: boolean;
+  /**
+   * X-Org-ID: "required" fails before sending when no Team is selected; "optional" sends it when
+   * one is. Routes of a Carbon's own devices are "optional" since 1.1: devices belong to the Carbon.
+   */
   team?: TeamMode;
   /** Send an Idempotency-Key, reused on the one retry after a network failure. */
   idempotent?: boolean;
   ifMatch?: string;
-  /** Expected envelope `type` of a successful body. */
-  expect?: string;
+  /** Expected envelope `type` of a successful body, or the types a route may answer with. */
+  expect?: string | string[];
   headers?: Record<string, string>;
 }
 
 export interface ApiResponse<T> {
   status: number;
+  /** The envelope's `type`, for routes that answer with more than one ("" for 204). */
+  type: string;
   data: T;
   headers: Headers;
 }
@@ -215,7 +230,7 @@ export class ExtendClient {
     }
   }
 
-  private async parse<T>(response: Response, expect?: string): Promise<T> {
+  private async parse<T>(response: Response, expect?: string | string[]): Promise<{ type: string; data: T }> {
     const text = await response.text();
     let json: unknown = null;
     if (text) {
@@ -241,7 +256,7 @@ export class ExtendClient {
         request_id: requestId ?? undefined,
       });
     }
-    if (response.status === 204) return null as T;
+    if (response.status === 204) return { type: "", data: null as T };
     if (!envelope || typeof envelope.type !== "string" || !("data" in envelope))
       throw new ApiError(response.status, {
         code: "unexpected_response",
@@ -249,14 +264,15 @@ export class ExtendClient {
         hint: "The website and the service disagree on the contract. Report it with the request id.",
         request_id: requestId ?? undefined,
       });
-    if (expect && envelope.type !== expect)
+    const expected = expect === undefined ? [] : Array.isArray(expect) ? expect : [expect];
+    if (expected.length && !expected.includes(envelope.type))
       throw new ApiError(response.status, {
         code: "unexpected_response",
-        message: `Expected a "${expect}" response from Extend, got "${envelope.type}".`,
+        message: `Expected a ${expected.map((t) => `"${t}"`).join(" or ")} response from Extend, got "${envelope.type}".`,
         hint: "The website and the service disagree on the contract. Report it with the request id.",
         request_id: requestId ?? undefined,
       });
-    return envelope.data as T;
+    return { type: envelope.type, data: envelope.data as T };
   }
 
   /** Sends one request, refreshing the access token first if needed and once more after a 401. */
@@ -274,7 +290,7 @@ export class ExtendClient {
 
     if (!auth) {
       const response = await this.send(url, init(), retry);
-      return { status: response.status, headers: response.headers, data: await this.parse<T>(response, options.expect) };
+      return { status: response.status, headers: response.headers, ...(await this.parse<T>(response, options.expect)) };
     }
 
     let pair = this.ctx.tokens.load();
@@ -288,12 +304,15 @@ export class ExtendClient {
 
     let response = await this.send(url, init(pair.access_token), retry);
     if (response.status === 401) {
-      const error = await this.parse<never>(response).catch((e: ApiError) => e);
-      if (error.code === "testing_secret_invalid" || error.code === "testing_environment_not_ready") throw error;
+      const error = await this.parse<never>(response).then(
+        () => null,
+        (e: ApiError) => e,
+      );
+      if (error && (error.code === "testing_secret_invalid" || error.code === "testing_environment_not_ready")) throw error;
       pair = await this.refresh(pair);
       response = await this.send(url, init(pair.access_token), retry);
     }
-    return { status: response.status, headers: response.headers, data: await this.parse<T>(response, options.expect) };
+    return { status: response.status, headers: response.headers, ...(await this.parse<T>(response, options.expect)) };
   }
 
   /**
@@ -413,11 +432,13 @@ export class ExtendClient {
   // ───────────── Devices ─────────────
 
   /**
-   * One page of devices. `include_removed` (Carbons, scope=mine only) also lists the Carbon's removed
-   * devices, marked with `removed_at` and `removed_reason`.
+   * One page of devices. A Carbon's own devices (scope=mine) are every device they paired, whichever
+   * Team is selected, so X-Org-ID is only sent along; a Silicon's (scope=accessible) are the ones it
+   * may use in its selected Team. `include_removed` (Carbons, scope=mine only) also lists the
+   * Carbon's removed devices, marked with `removed_at` and `removed_reason`.
    */
   async listDevices(params: {
-    scope: "mine" | "team" | "accessible";
+    scope: "mine" | "accessible";
     cursor?: string | null;
     limit?: number;
     include_removed?: boolean;
@@ -426,6 +447,7 @@ export class ExtendClient {
       await this.request<Page<Device>>({
         method: "GET",
         path: "/api/v1/devices",
+        team: params.scope === "accessible" ? "required" : "optional",
         query: { scope: params.scope, cursor: params.cursor, limit: params.limit, include_removed: params.include_removed ? "true" : undefined },
         expect: "devices",
       })
@@ -433,8 +455,8 @@ export class ExtendClient {
   }
 
   /**
-   * The Carbon's removed devices in the selected team, newest removal first. The service pages
-   * paired and removed devices together, so this reads every page (at most `maxPages`).
+   * The Carbon's removed devices, newest removal first. The service pages paired and removed devices
+   * together, so this reads every page (at most `maxPages`).
    */
   async listRemovedDevices(maxPages = 20): Promise<Device[]> {
     const removed: Device[] = [];
@@ -452,19 +474,18 @@ export class ExtendClient {
     const res = await this.request<DeviceDetail>({
       method: "GET",
       path: `/api/v1/devices/${encodeURIComponent(deviceId)}`,
+      team: "optional",
       expect: "device",
     });
     return { device: res.data, etag: res.headers.get("ETag") };
   }
 
-  async updateDevice(
-    deviceId: string,
-    patch: { name?: string; visibility?: Visibility; pair_ttl_days?: number },
-    ifMatch: string,
-  ): Promise<{ device: Device; etag: string | null }> {
+  /** Renames the Carbon's pair of a device, or sets how long it stays paired. Visibility is gone in 1.1. */
+  async updateDevice(deviceId: string, patch: { name?: string; pair_ttl_days?: number }, ifMatch: string): Promise<{ device: Device; etag: string | null }> {
     const res = await this.request<Device>({
       method: "PATCH",
       path: `/api/v1/devices/${encodeURIComponent(deviceId)}`,
+      team: "optional",
       ifMatch,
       expect: "device",
       body: { type: "device", data: patch },
@@ -473,31 +494,36 @@ export class ExtendClient {
   }
 
   async removeDevice(deviceId: string, ifMatch: string): Promise<void> {
-    await this.request<null>({ method: "DELETE", path: `/api/v1/devices/${encodeURIComponent(deviceId)}`, ifMatch });
+    await this.request<null>({ method: "DELETE", path: `/api/v1/devices/${encodeURIComponent(deviceId)}`, team: "optional", ifMatch });
   }
 
-  async stopDevice(deviceId: string): Promise<Session> {
-    return (
-      await this.request<Session>({
-        method: "POST",
-        path: `/api/v1/devices/${encodeURIComponent(deviceId)}/stop`,
-        expect: "session",
-      })
-    ).data;
+  /**
+   * Stops the Silicon using the device. When its session ran through the Carbon's own pair the answer
+   * is that session; when it ran through another Carbon's pair of the same device, the Silicon isn't
+   * named (`device_stopped`). A device a computer carries that the Carbon didn't pair answers 409
+   * conflict, saying to stop it at the computer.
+   */
+  async stopDevice(deviceId: string): Promise<{ kind: "session"; session: Session } | { kind: "other"; stopped: DeviceStopped }> {
+    const res = await this.request<Session | DeviceStopped>({
+      method: "POST",
+      path: `/api/v1/devices/${encodeURIComponent(deviceId)}/stop`,
+      team: "optional",
+      expect: ["session", "device_stopped"],
+    });
+    return res.type === "device_stopped" ? { kind: "other", stopped: res.data as DeviceStopped } : { kind: "session", session: res.data as Session };
   }
 
   // ───────────── Pairing ─────────────
 
-  async claimPairing(input: {
-    pairing_code: string;
-    name: string;
-    visibility?: Visibility;
-    pair_ttl_days?: number;
-    silicon_ids?: string[];
-  }): Promise<{ device: Device; etag: string | null }> {
+  /**
+   * Claims a pairing code, the first pair of a device or "Pair with another Carbon". Access is given
+   * afterwards, per Team, so no `silicon_ids` go with it (1.1 refuses them without X-Org-ID).
+   */
+  async claimPairing(input: { pairing_code: string; name: string; pair_ttl_days?: number }): Promise<{ device: Device; etag: string | null }> {
     const res = await this.request<Device>({
       method: "POST",
       path: "/api/v1/pairings",
+      team: "optional",
       idempotent: true,
       expect: "device",
       body: { type: "pairing", data: input },
@@ -505,14 +531,13 @@ export class ExtendClient {
     return { device: res.data, etag: res.headers.get("ETag") };
   }
 
-  async attachDevice(
-    hostId: string,
-    input: { os: AttachOs; name: string; visibility?: Visibility; pair_ttl_days?: number },
-  ): Promise<Device> {
+  /** Adds a device that pairs through one of the Carbon's computers. */
+  async attachDevice(hostId: string, input: { os: AttachOs; name: string; pair_ttl_days?: number }): Promise<Device> {
     return (
       await this.request<Device>({
         method: "POST",
         path: `/api/v1/devices/${encodeURIComponent(hostId)}/attachments`,
+        team: "optional",
         idempotent: true,
         expect: "device",
         body: { type: "attachment", data: input },
@@ -522,7 +547,7 @@ export class ExtendClient {
 
   async getSetup(deviceId: string): Promise<Setup> {
     return (
-      await this.request<Setup>({ method: "GET", path: `/api/v1/devices/${encodeURIComponent(deviceId)}/setup`, expect: "setup" })
+      await this.request<Setup>({ method: "GET", path: `/api/v1/devices/${encodeURIComponent(deviceId)}/setup`, team: "optional", expect: "setup" })
     ).data;
   }
 
@@ -531,44 +556,175 @@ export class ExtendClient {
       await this.request<Setup>({
         method: "POST",
         path: `/api/v1/devices/${encodeURIComponent(deviceId)}/setup/code`,
+        team: "optional",
         expect: "setup",
         body: { type: "setup_code", data: { code } },
       })
     ).data;
   }
 
+  /**
+   * Asks the device to run a failed setup step again now (every failed step without `step`). The
+   * service changes no step itself: the device reports progress as usual, so keep reading getSetup.
+   * Refusals carry the service's own words: 409 when nothing failed or the device is offline, 426
+   * when its app is older than 1.1, 429 at most once every 5 s.
+   */
+  async retrySetup(deviceId: string, step?: string | null): Promise<RetryResult> {
+    const res = await this.request<RetryResult>({
+      method: "POST",
+      path: `/api/v1/devices/${encodeURIComponent(deviceId)}/setup/retry`,
+      team: "optional",
+      expect: "setup_retry",
+      body: { type: "setup_retry", data: step ? { step } : {} },
+    });
+    return { retrying: Array.isArray(res.data?.retrying) ? res.data.retrying : step ? [step] : [] };
+  }
+
   // ───────────── Access ─────────────
 
+  /** Every grant on the Carbon's pair, in every Team, each with its `team`. */
   async listAccess(deviceId: string): Promise<AccessGrant[]> {
     return (
       await this.request<{ items: AccessGrant[] }>({
         method: "GET",
         path: `/api/v1/devices/${encodeURIComponent(deviceId)}/access`,
+        team: "optional",
         expect: "access",
       })
     ).data.items;
   }
 
-  async grantAccess(deviceId: string, siliconId: string): Promise<AccessGrant> {
+  /**
+   * Gives a Silicon access in one of the Carbon's Teams: `team` goes as ?team= (the selected Team,
+   * X-Org-ID, when absent). The Carbon's Extend login must reach that Team.
+   */
+  async grantAccess(deviceId: string, siliconId: string, team?: string | null): Promise<AccessGrant> {
     return (
       await this.request<AccessGrant>({
         method: "PUT",
         path: `/api/v1/devices/${encodeURIComponent(deviceId)}/access/${encodeURIComponent(siliconId)}`,
+        query: { team: team ?? undefined },
+        team: team ? "optional" : "required",
         expect: "access_grant",
       })
     ).data;
   }
 
-  async revokeAccess(deviceId: string, siliconId: string): Promise<void> {
+  /** Takes a Silicon's access away: in one Team with `team`, in every Team without it. Works on ownership alone. */
+  async revokeAccess(deviceId: string, siliconId: string, team?: string | null): Promise<void> {
     await this.request<null>({
       method: "DELETE",
       path: `/api/v1/devices/${encodeURIComponent(deviceId)}/access/${encodeURIComponent(siliconId)}`,
+      query: { team: team ?? undefined },
+      team: "optional",
     });
   }
 
-  /** Silicons in the selected team, for choosing who gets access. */
-  async listTeamSilicons(): Promise<TeamSilicon[]> {
-    return (await this.request<{ items: TeamSilicon[] }>({ method: "GET", path: "/api/v1/team/silicons", expect: "team_silicons" })).data.items;
+  /** Silicons in the selected Team (X-Org-ID, or `team` in its place), for choosing who gets access. */
+  async listTeamSilicons(team?: string | null): Promise<TeamSilicon[]> {
+    return (
+      await this.request<{ items: TeamSilicon[] }>({
+        method: "GET",
+        path: "/api/v1/team/silicons",
+        headers: team ? { "X-Org-ID": team } : undefined,
+        expect: "team_silicons",
+      })
+    ).data.items;
+  }
+
+  /**
+   * The Silicons of every Team the Carbon's login reaches (team=any), each tagged with its Team, and
+   * which Teams couldn't be read and why. A 1.0 service ignores team=any and answers the selected
+   * Team's Silicons without `teams`; `across` is false then.
+   */
+  async listAllTeamSilicons(): Promise<{ items: TeamSilicon[]; teams: NonNullable<TeamSilicons["teams"]>; across: boolean }> {
+    const data = (
+      await this.request<TeamSilicons>({ method: "GET", path: "/api/v1/team/silicons", query: { team: "any" }, team: "optional", expect: "team_silicons" })
+    ).data;
+    return { items: data.items ?? [], teams: data.teams ?? [], across: Array.isArray(data.teams) };
+  }
+
+  // ───────────── Waking ─────────────
+
+  /** Wake requests on the Carbon's pair (every Team's, tagged), or a Silicon's own. */
+  async listWakeRequests(deviceId: string, params: { state?: "open" | "all"; cursor?: string | null; limit?: number } = {}): Promise<Page<WakeRequest>> {
+    return (
+      await this.request<Page<WakeRequest>>({
+        method: "GET",
+        path: `/api/v1/devices/${encodeURIComponent(deviceId)}/wake-requests`,
+        query: params,
+        team: "optional",
+        expect: "wake_requests",
+      })
+    ).data;
+  }
+
+  /**
+   * The Carbon's answer. "woken" ("It's awake") is a fact about the device: it ends every open wake
+   * request on it, through every Carbon's pair and in every Team. "declined" ends only this pair's
+   * requests (or the ones listed).
+   */
+  async answerWake(deviceId: string, answer: "woken" | "declined", wakeIds?: string[]): Promise<WakeAnswered> {
+    return (
+      await this.request<WakeAnswered>({
+        method: "POST",
+        path: `/api/v1/devices/${encodeURIComponent(deviceId)}/wake-requests/answer`,
+        team: "optional",
+        idempotent: true,
+        expect: "wake_answer",
+        body: { type: "wake_answer", data: wakeIds?.length ? { answer, wake_ids: wakeIds } : { answer } },
+      })
+    ).data;
+  }
+
+  /** Turns wake requests off or on for the pair, or for one Silicon (in every Team, or only in `team`). */
+  async setWakeSettings(deviceId: string, settings: { muted: boolean; silicon_id?: string; team?: string }): Promise<WakeSettingsView> {
+    return (
+      await this.request<WakeSettingsView>({
+        method: "PUT",
+        path: `/api/v1/devices/${encodeURIComponent(deviceId)}/wake-settings`,
+        team: "optional",
+        expect: "wake_settings",
+        body: { type: "wake_settings", data: settings },
+      })
+    ).data;
+  }
+
+  // ───────────── Ting ─────────────
+
+  /**
+   * Whether Extend's Tings reach the member in a Team, and which of Extend's Ting types the Team is
+   * missing. "any" (Carbons) lists every Team of the login plus the Teams of the Carbon's grants.
+   */
+  async getTingRegistrations(team: string | "any" = "any"): Promise<TingRegistration[]> {
+    const res = await this.request<TingRegistration | Page<TingRegistration> | TingRegistration[]>({
+      method: "GET",
+      path: "/api/v1/ting-registration",
+      query: { team },
+      team: "optional",
+      expect: ["ting_registration", "ting_registrations"],
+    });
+    const data = res.data;
+    if (Array.isArray(data)) return data;
+    if (data && "items" in data && Array.isArray(data.items)) return data.items;
+    return data ? [data as TingRegistration] : [];
+  }
+
+  /**
+   * "Turn on": registers the member with Ting in that Team now, with their own login, and sends the
+   * Tings waiting for them there. Where they are that Team's Ting manager, Extend also registers its
+   * missing Ting types there (Carbon decision 4).
+   */
+  async turnOnTing(team: string): Promise<TingRegistration> {
+    return (
+      await this.request<TingRegistration>({
+        method: "PUT",
+        path: "/api/v1/ting-registration",
+        query: { team },
+        team: "optional",
+        expect: "ting_registration",
+      })
+    ).data;
   }
 
   // ───────────── Takeovers (the owner Carbon reads and ends them) ─────────────
@@ -578,6 +734,7 @@ export class ExtendClient {
       await this.request<Takeover | null>({
         method: "GET",
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/takeover`,
+        team: "optional",
         expect: "takeover",
       })
     ).data;
@@ -585,7 +742,7 @@ export class ExtendClient {
 
   /** The Carbon is done: the Silicon's session resumes. */
   async releaseTakeover(sessionId: string): Promise<void> {
-    await this.request<null>({ method: "DELETE", path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/takeover` });
+    await this.request<null>({ method: "DELETE", path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/takeover`, team: "optional" });
   }
 
   // ───────────── Activity, requests, sessions ─────────────
@@ -599,17 +756,23 @@ export class ExtendClient {
         method: "GET",
         path: `/api/v1/devices/${encodeURIComponent(deviceId)}/activity`,
         query: filters,
+        team: "optional",
         expect: "activity",
       })
     ).data;
   }
 
+  /**
+   * Requests on the Carbon's pair: the ones its Silicons sent (through this pair), and the ones routed
+   * to the Carbon because a Silicon they gave access to holds the device (`routed_to: "carbon"`).
+   */
   async listDeviceRequests(deviceId: string, cursor?: string | null): Promise<Page<ExtendRequest>> {
     return (
       await this.request<Page<ExtendRequest>>({
         method: "GET",
         path: `/api/v1/devices/${encodeURIComponent(deviceId)}/requests`,
         query: { cursor },
+        team: "optional",
         expect: "requests",
       })
     ).data;
@@ -617,7 +780,7 @@ export class ExtendClient {
 
   async listSessions(params: { device_id?: string; state?: "active" | "paused" | "ended"; cursor?: string | null }): Promise<Page<Session>> {
     return (
-      await this.request<Page<Session>>({ method: "GET", path: "/api/v1/sessions", query: params, expect: "sessions" })
+      await this.request<Page<Session>>({ method: "GET", path: "/api/v1/sessions", query: params, team: "optional", expect: "sessions" })
     ).data;
   }
 

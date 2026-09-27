@@ -18,7 +18,7 @@ test('Provider-backed integration Android record stop finishes an artifact after
     async (tmpDir) => {
       const calls: string[][] = [];
       const outputPath = path.join(tmpDir, 'dead-pid-recovered.mp4');
-      const remotePath = '/sdcard/agent-device-recording-623456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-623456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
         remotePath,

@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'vitest';
 import { parseDeclaredTests, parseDeclaredTestsByPlatform } from '../xctest-declarations.ts';
 
-const TARGET = 'AgentDeviceRunnerUITests';
+const TARGET = 'SiliconExtendHelperUITests';
 
 function source(text: string) {
   return [{ file: 'RunnerTests+Fixture.swift', text }];

@@ -1,6 +1,6 @@
 //
 //  RunnerTests.swift
-//  AgentDeviceRunnerUITests
+//  SiliconExtendHelperUITests
 //
 //  Created by Michał Pierzchała on 30/01/2026.
 //
@@ -17,8 +17,8 @@ typealias RunnerImage = NSImage
 
 final class RunnerTests: XCTestCase {
   enum RunnerErrorDomain {
-    static let general = "AgentDeviceRunner"
-    static let exception = "AgentDeviceRunner.NSException"
+    static let general = "SiliconExtendHelper"
+    static let exception = "SiliconExtendHelper.NSException"
   }
 
   enum RunnerErrorCode {
@@ -50,8 +50,8 @@ final class RunnerTests: XCTestCase {
   static let defaultRecordingFps: Int32 = 15
   var listener: NWListener?
   var doneExpectation: XCTestExpectation?
-  let transportQueue = DispatchQueue(label: "agent-device.runner.transport")
-  let commandExecutionQueue = DispatchQueue(label: "agent-device.runner.commands")
+  let transportQueue = DispatchQueue(label: "silicon-extend.helper.transport")
+  let commandExecutionQueue = DispatchQueue(label: "silicon-extend.helper.commands")
   let app = XCUIApplication()
   lazy var springboard = XCUIApplication(bundleIdentifier: Self.springboardBundleId)
   let mainOwned = RunnerMainOwnedState()
@@ -166,7 +166,7 @@ final class RunnerTests: XCTestCase {
   var textInputProbeIssueForTesting: XCTIssue?
 
   static let injectedTapFailureFlagPathForTesting =
-    "/tmp/agent-device-inject-tap-recorded-failure-for-testing"
+    "/tmp/silicon-extend-inject-tap-recorded-failure-for-testing"
 
   static func shouldInjectTapRecordedFailure(command: CommandType, remaining: Int) -> Bool {
     command == .tap && remaining > 0
@@ -285,7 +285,7 @@ final class RunnerTests: XCTestCase {
 
   @MainActor
   func testCommand() throws {
-    doneExpectation = expectation(description: "agent-device command handled")
+    doneExpectation = expectation(description: "helper command handled")
     NSLog("AGENT_DEVICE_RUNNER_HEADLESS_STARTUP=1")
     let desiredPort = RunnerEnv.resolvePort()
     NSLog("AGENT_DEVICE_RUNNER_DESIRED_PORT=%d", desiredPort)

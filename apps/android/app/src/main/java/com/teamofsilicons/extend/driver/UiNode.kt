@@ -25,7 +25,7 @@ data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int) 
  * the screen (snapshots, selectors, alerts) is plain Kotlin and testable on the JVM. [handle] keeps
  * the live node so actions can reach it.
  *
- * Naming follows agent-device's Android mapping: `label` is the text or else the content
+ * Naming follows the device engine's Android mapping: `label` is the text or else the content
  * description, `value` is the text, `identifier` is the resource id.
  */
 class UiNode(
@@ -69,7 +69,7 @@ class UiNode(
     val value: String? get() = text
     val identifier: String? get() = resourceId
 
-    /** A node a touch or D-pad/keyboard focus can act on (agent-device's `hittable`). */
+    /** A node a touch or D-pad/keyboard focus can act on (the device engine's `hittable`). */
     val hittable: Boolean get() = clickable || focusable || focused
 
     val isEditable: Boolean
@@ -101,7 +101,7 @@ class UiNode(
     override fun toString(): String = "UiNode($role ${label?.let { "\"$it\"" } ?: ""} $bounds)"
 }
 
-/** agent-device's role vocabulary (capture-kit `snapshot-lines.ts`). */
+/** The device engine's role vocabulary (capture-kit `snapshot-lines.ts`). */
 object Roles {
     private val ROLE_LABELS = mapOf(
         "application" to "application",

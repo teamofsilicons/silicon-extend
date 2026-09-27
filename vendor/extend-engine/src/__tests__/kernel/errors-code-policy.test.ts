@@ -161,7 +161,7 @@ test('retriableForErrorCode returns undefined for a daemon/runner-originated cod
 const EXPECTED_HINT_BY_CODE: Record<KnownAppErrorCode, string> = {
   INVALID_ARGS: 'Check command arguments and run --help for usage examples.',
   DEVICE_NOT_FOUND: 'Verify the target device is booted/connected and selectors match.',
-  DEVICE_IN_USE: 'The device is busy with another agent-device request; retry once it frees up.',
+  DEVICE_IN_USE: 'The device is busy with another device engine request; retry once it frees up.',
   TOOL_MISSING: 'Install required platform tooling and ensure it is available in PATH.',
   APP_NOT_INSTALLED:
     'Run apps to discover the exact installed package or bundle id, or install the app before open.',

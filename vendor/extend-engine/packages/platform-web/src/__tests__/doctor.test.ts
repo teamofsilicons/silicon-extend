@@ -46,7 +46,7 @@ test('web doctor lifecycle check reports live managed Chrome process count', asy
 
     assert.equal(check.id, 'web-agent-browser-processes');
     assert.equal(check.status, 'info');
-    assert.match(check.summary ?? '', /2 live agent-device-owned Chrome processes/);
+    assert.match(check.summary ?? '', /2 live Chrome processes owned by the device engine/);
     assert.deepEqual(check.evidence?.pids, [101, 102]);
     assert.deepEqual(check.evidence?.matchReasons, ['launch-marker', 'managed-browser-home']);
   } finally {

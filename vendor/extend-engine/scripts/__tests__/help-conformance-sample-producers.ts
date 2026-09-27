@@ -294,7 +294,7 @@ export const SAMPLE_PRODUCERS: SampleProducer[] = [
     sample: FOREGROUND_SNAPSHOT_FAILURE_SAMPLE,
     render: async () => {
       const warning =
-        'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: agent-device snapshot -i';
+        'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: extend snapshot -i';
       return (
         (
           await openCliOutput({

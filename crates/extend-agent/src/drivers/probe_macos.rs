@@ -1,4 +1,4 @@
-//! What a Mac can do right now: Accessibility, Screen Recording, whether agent-device's UI
+//! What a Mac can do right now: Accessibility, Screen Recording, whether the device engine's UI
 //! testing runner can drive apps without stopping for a password, and whether the Mac is locked
 //! or asleep (then nothing that needs the screen works, and each such capability says why).
 //!
@@ -19,7 +19,7 @@ pub const ACCESSIBILITY_REASON: &str =
     "Allow Accessibility for Silicon Extend in System Settings › Privacy & Security › Accessibility.";
 pub const SCREEN_RECORDING_REASON: &str = "Allow Screen Recording for Silicon Extend in System Settings › Privacy & Security › Screen & System Audio Recording.";
 
-/// macOS's UI Automation mode, which agent-device's UI testing runner turns on.
+/// macOS's UI Automation mode, which the device engine's UI testing runner turns on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutomationMode {
     /// On right now.
@@ -84,14 +84,14 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         return finish(caps, missing, steps);
     }
 
-    // Always there with agent-device: apps, links, replay, clipboard, logs.
+    // Always there with the device engine: apps, links, replay, clipboard, logs.
     caps.extend([AppsLaunch, Links, Replay]);
     if input.supports("apps") {
         caps.push(AppsList);
     } else {
         miss(
             AppsList,
-            "agent-device doesn't support `apps` on this Mac.",
+            "The device engine doesn't support `apps` on this Mac.",
             &mut missing,
         );
     }
@@ -101,7 +101,7 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         } else {
             miss(
                 cap,
-                &format!("agent-device doesn't support `{cmd}` on this Mac."),
+                &format!("The device engine doesn't support `{cmd}` on this Mac."),
                 &mut missing,
             );
         }
@@ -132,7 +132,7 @@ pub fn build_probe(facts: &MacFacts, input: &ProbeInput<'_>) -> Probe {
         match input.supports("record") {
             false => miss(
                 ScreenRecord,
-                "agent-device doesn't support `record` on this Mac.",
+                "The device engine doesn't support `record` on this Mac.",
                 &mut missing,
             ),
             true => caps.push(ScreenRecord),
@@ -186,8 +186,11 @@ fn finish(mut caps: Vec<Capability>, missing: Vec<MissingCapability>, steps: Vec
         capabilities: caps,
         missing,
         setup: Setup::from_steps(steps),
-        agent_device_version: None,
+        engine_version: None,
         online: true,
+        awake: None,
+        sleep_state: None,
+        hardware_id: None,
     }
 }
 

@@ -209,8 +209,8 @@ test('clampGestureCoordinate returns the lower bound for non-finite coordinates'
 });
 
 // Golden parity table: the SAME JSON is asserted against the Swift twin
-// (ScrollViewportPolicy in apple/runner/AgentDeviceRunner/
-// AgentDeviceRunnerUITests/RunnerScrollViewportPolicy.swift, gated XCTest in
+// (ScrollViewportPolicy in apple/runner/SiliconExtendHelper/
+// SiliconExtendHelperUITests/RunnerScrollViewportPolicy.swift, gated XCTest in
 // UnitTests/RunnerTests+ScrollViewportPolicyTests.swift), so
 // a clip that drifts between the iOS runner and the Android/TS owner turns CI red on whichever
 // side changed, without a simulator.

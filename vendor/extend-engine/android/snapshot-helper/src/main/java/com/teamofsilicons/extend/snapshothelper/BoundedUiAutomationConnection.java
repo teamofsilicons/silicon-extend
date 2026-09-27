@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -27,7 +27,7 @@ final class BoundedUiAutomationConnection {
   static <T> T await(Attempt<T> attempt, long timeoutMs)
       throws InterruptedException, TimeoutException {
     FutureTask<T> task = new FutureTask<>(() -> connectWhenReady(attempt));
-    Thread worker = new Thread(task, "agent-device-ui-automation-connect");
+    Thread worker = new Thread(task, "silicon-extend-ui-automation-connect");
     worker.setDaemon(true);
     worker.start();
 

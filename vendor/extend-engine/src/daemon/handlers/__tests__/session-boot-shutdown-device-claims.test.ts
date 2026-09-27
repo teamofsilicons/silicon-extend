@@ -106,7 +106,7 @@ test('shutdown refuses a device held by a foreign live claim and never reaches t
     stateDir: ownerStateDir,
   });
   expect(response.error.hint).toBe(
-    'Inspect the owner with: agent-device device status --platform android --serial emulator-5554',
+    'Inspect the owner with: extend device status --platform android --serial emulator-5554',
   );
   expect(mockShutdownTargetRuntime).not.toHaveBeenCalled();
   // The refusal leaves the owner's claim exactly as it was.

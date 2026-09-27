@@ -71,7 +71,7 @@ function oneShotHelper(xml: string): AndroidAdbExecutor {
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:999999',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:999999',
         stderr: '',
       };
     }

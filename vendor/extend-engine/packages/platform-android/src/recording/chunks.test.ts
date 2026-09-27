@@ -116,13 +116,13 @@ test('continues through every owned chunk after a stop or removal failure', asyn
   const chunks = [
     {
       index: 1,
-      remotePath: '/sdcard/agent-device-recording-1.mp4',
+      remotePath: '/sdcard/silicon-extend-recording-1.mp4',
       remotePid: '41',
       remoteStartTime: '1',
     },
     {
       index: 2,
-      remotePath: '/sdcard/agent-device-recording-2.mp4',
+      remotePath: '/sdcard/silicon-extend-recording-2.mp4',
       remotePid: '42',
       remoteStartTime: '1',
     },
@@ -157,13 +157,13 @@ test('does not force-signal a pid after its path ownership changes during gracef
   await expect(
     stopChunk(transport, {
       index: 1,
-      remotePath: '/sdcard/agent-device-recording-2.mp4',
+      remotePath: '/sdcard/silicon-extend-recording-2.mp4',
       remotePid: '42',
       remoteStartTime: '1',
     }),
   ).rejects.toThrow('ownership could not be confirmed');
   expect(stops).toEqual([
-    { pid: '42', remotePath: '/sdcard/agent-device-recording-2.mp4', startTime: '1' },
+    { pid: '42', remotePath: '/sdcard/silicon-extend-recording-2.mp4', startTime: '1' },
   ]);
 });
 
@@ -181,7 +181,7 @@ test('rejects an invalid start identity without attempting a numeric PID stop', 
   await expect(
     startChunkAt(
       transport,
-      '/sdcard/agent-device-recording-2.mp4',
+      '/sdcard/silicon-extend-recording-2.mp4',
       recordingInput(),
       controller.signal,
     ),
@@ -203,7 +203,7 @@ test('gives exact SIGINT ownership ten seconds before considering force stop', a
     } as never;
     const stopping = stopChunk(transport, {
       index: 1,
-      remotePath: '/sdcard/agent-device-recording-2.mp4',
+      remotePath: '/sdcard/silicon-extend-recording-2.mp4',
       remotePid: '42',
       remoteStartTime: '7',
     });
@@ -228,7 +228,7 @@ test('forces only after the full ten-second identity polling window remains aliv
     } as never;
     const stopping = stopChunk(transport, {
       index: 1,
-      remotePath: '/sdcard/agent-device-recording-2.mp4',
+      remotePath: '/sdcard/silicon-extend-recording-2.mp4',
       remotePid: '42',
       remoteStartTime: '7',
     });
@@ -248,7 +248,7 @@ test('retries a pulled MP4 until its moov is playable and retains remote evidenc
     const chunk = [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-2.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-2.mp4',
         remotePid: '42',
         remoteStartTime: '7',
       },

@@ -100,7 +100,7 @@ export function closeSession(context: CliContext): void {
   spawnSync(
     process.execPath,
     [
-      'bin/agent-device.mjs',
+      'bin/extend-engine.mjs',
       'close',
       '--state-dir',
       context.stateDir,

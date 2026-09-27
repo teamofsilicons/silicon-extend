@@ -31,7 +31,7 @@ test('decodes only complete, ordered Android native recording evidence', () => {
     [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-100.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-100.mp4',
         remotePid: '42',
         remoteStartTime: '1',
       },
@@ -54,7 +54,7 @@ test('accepts only a durable Android manifest path in the descriptor', () => {
   expect(
     androidScreenRecordingDescriptorCodec.decode({
       backend: 'adb-screenrecord',
-      manifestPath: '/data/local/tmp/agent-device-recording-active.json',
+      manifestPath: '/data/local/tmp/silicon-extend-recording-active.json',
       outputPath: '/tmp/capture.mp4',
       scope: 'device',
       showTouches: true,
@@ -65,7 +65,7 @@ test('accepts only a durable Android manifest path in the descriptor', () => {
   expect(
     androidScreenRecordingDescriptorCodec.decode({
       backend: 'adb-screenrecord',
-      manifestPath: '/tmp/agent-device-recording-active.json',
+      manifestPath: '/tmp/silicon-extend-recording-active.json',
     }),
   ).toMatchObject({ status: 'invalid' });
 });
@@ -86,7 +86,7 @@ test('requires the device, session, and fence identity carried by the durable en
     [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-100.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-100.mp4',
         remotePid: '42',
         remoteStartTime: '1',
       },

@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-HELPER="${AGENT_DEVICE_ANDROID_HELPER:-}"
+# Silicon Extend names engine settings EXTEND_ENGINE_<X>; the fork's AGENT_DEVICE_<X> still works.
+HELPER="${EXTEND_ENGINE_ANDROID_HELPER:-${AGENT_DEVICE_ANDROID_HELPER:-}}"
 if [ -z "$HELPER" ]; then
   HELPER="${1:-}"
   [ "$#" -ge 1 ] && shift
@@ -20,7 +21,7 @@ esac
 
 if [ "$HAS_RELEASE_TAG" = 1 ]; then
   if [ "$#" -ne 3 ]; then
-    echo "Usage: AGENT_DEVICE_ANDROID_HELPER=snapshot $0 <version> <release-tag> <output-dir>" >&2
+    echo "Usage: EXTEND_ENGINE_ANDROID_HELPER=snapshot $0 <version> <release-tag> <output-dir>" >&2
     echo "   or: $0 snapshot <version> <release-tag> <output-dir>" >&2
     exit 1
   fi
@@ -29,7 +30,7 @@ if [ "$HAS_RELEASE_TAG" = 1 ]; then
   OUTPUT_DIR="$3"
 else
   if [ "$#" -ne 2 ]; then
-    echo "Usage: AGENT_DEVICE_ANDROID_HELPER=ime $0 <version> <output-dir>" >&2
+    echo "Usage: EXTEND_ENGINE_ANDROID_HELPER=ime $0 <version> <output-dir>" >&2
     echo "   or: $0 ime <version> <output-dir>" >&2
     exit 1
   fi
@@ -41,15 +42,15 @@ fi
 PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 case "$HELPER" in
-  snapshot) PACKAGE_NAME="com.callstack.agentdevice.snapshothelper" ;;
-  ime) PACKAGE_NAME="com.callstack.agentdevice.imehelper" ;;
+  snapshot) PACKAGE_NAME="com.teamofsilicons.extend.snapshothelper" ;;
+  ime) PACKAGE_NAME="com.teamofsilicons.extend.imehelper" ;;
 esac
 
 MIN_SDK=23
 TARGET_SDK=36
-APK_BASENAME="agent-device-android-$HELPER-helper-$VERSION.apk"
+APK_BASENAME="extend-engine-android-$HELPER-helper-$VERSION.apk"
 CHECKSUM_BASENAME="$APK_BASENAME.sha256"
-MANIFEST_BASENAME="agent-device-android-$HELPER-helper-$VERSION.manifest.json"
+MANIFEST_BASENAME="extend-engine-android-$HELPER-helper-$VERSION.manifest.json"
 GITHUB_SERVER="${GITHUB_SERVER_URL:-https://github.com}"
 REPOSITORY="${GITHUB_REPOSITORY:-}"
 
@@ -61,7 +62,7 @@ write_github_output() {
 
 mkdir -p "$OUTPUT_DIR"
 
-BUILD_OUTPUT="$(AGENT_DEVICE_ANDROID_HELPER="$HELPER" sh "$PROJECT_DIR/scripts/build-android-helper.sh" "$VERSION" "$OUTPUT_DIR")"
+BUILD_OUTPUT="$(EXTEND_ENGINE_ANDROID_HELPER="$HELPER" sh "$PROJECT_DIR/scripts/build-android-helper.sh" "$VERSION" "$OUTPUT_DIR")"
 APK_PATH="$(printf '%s\n' "$BUILD_OUTPUT" | awk -F= '$1 == "apk" { print $2 }')"
 VERSION_CODE="$(printf '%s\n' "$BUILD_OUTPUT" | awk -F= '$1 == "version_code" { print $2 }')"
 CHECKSUM_PATH="$OUTPUT_DIR/$CHECKSUM_BASENAME"

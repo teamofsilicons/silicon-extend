@@ -3,6 +3,11 @@
 //! The service, the `silicon-extend-client` crate, the `extend` CLI and the device agents all
 //! depend on this crate, so a field or identifier format is defined exactly once. The formats
 //! follow `understanding/TECHNICAL.md` section 1; the HTTP shapes follow `understanding/api.yaml`.
+//!
+//! What changed in each release, and what a caller must update, is in `CHANGELOG.md`.
+
+#[macro_use]
+mod macros;
 
 pub mod capability;
 pub mod envelope;
@@ -10,11 +15,12 @@ pub mod error;
 pub mod frames;
 pub mod ids;
 pub mod model;
+pub mod ting;
 
 pub use capability::{COMMANDS, Capability, CommandSpec, DeviceOs, NOT_EXPOSED};
 pub use envelope::Envelope;
 pub use error::{ApiError, ErrorCode};
-pub use ids::{DeviceId, PairingCode, SessionId};
+pub use ids::{DeviceCredential, DeviceId, PairingCode, SessionId};
 
 /// The API major this build speaks.
 pub const API_VERSION: u32 = 1;
@@ -55,3 +61,49 @@ pub const SELF_DESTRUCT_DEFAULT_MIN: u32 = 1_440;
 pub const SELF_DESTRUCT_MAX_MIN: u32 = 43_200;
 /// Largest file a device may upload.
 pub const MAX_ARTIFACT_BYTES: u64 = 1 << 30;
+
+// ───────────── 1.1.0: waking a device ─────────────
+
+/// Seconds a wake request stays open after its latest ask, unless the device wakes first.
+pub const WAKE_REQUEST_TTL_S: i64 = 1_800;
+/// Seconds before a Silicon may ask again to wake the same device (asking again refreshes the request).
+pub const WAKE_ASK_AGAIN_AFTER_S: i64 = 300;
+/// Seconds between wake notifications that sound on the device itself.
+pub const WAKE_ALERT_EVERY_S: i64 = 900;
+/// Seconds between wake Tings to a Carbon for one pair and Team.
+pub const WAKE_TING_EVERY_S: i64 = 900;
+/// Wake Tings one Carbon gets per hour at most; later asks are deferred, never refused.
+pub const WAKE_TINGS_PER_CARBON_PER_HOUR: i64 = 6;
+/// Longest note a device may attach to `wake_request_shown`, in Unicode scalar values.
+pub const WAKE_NOTE_MAX_CHARS: usize = 300;
+
+// ───────────── 1.1.0: requests and sides ─────────────
+
+/// `to` on a request routed to a Carbon, as the requesting side reads it: the requester never
+/// learns which Carbon, Silicon or session holds the device.
+pub const REQUEST_TO_HIDDEN: &str = "the Carbon who gave access to the Silicon using it";
+/// `from` on a request routed to a Carbon, when the service hides the requesting Silicon.
+/// Carbon decision (2026-09-27): the Carbon a request is routed to sees the requesting Silicon's
+/// id and reason, so a 1.1.0 service doesn't hide it; the value stays for services that do.
+pub const REQUEST_FROM_HIDDEN: &str = "a Silicon another Carbon gave access to";
+/// Length of a side tag: the first hex characters of an HMAC naming no Carbon or Team.
+pub const SIDE_TAG_LEN: usize = 16;
+
+// ───────────── 1.1.0: setup retry ─────────────
+
+/// Fewest seconds between two setup retries of one device (`POST .../setup/retry`).
+pub const SETUP_RETRY_EVERY_S: i64 = 5;
+
+/// Features an app or agent advertises in `hello.features`.
+pub mod feature {
+    /// Reruns failed setup steps on a `setup_retry` frame.
+    pub const SETUP_RETRY: &str = "setup_retry";
+}
+
+// ───────────── 1.1.0: computers paired by several Carbons ─────────────
+
+/// The `missing` reason for the terminal on a computer several Carbons paired, for pairs other
+/// than the one made by the app's first enrollment. The terminal runs as the computer's own
+/// account, so only Silicons given access by the Carbon who installed Extend on it get it
+/// (Carbon decision, 2026-09-27). It names no Carbon, since the reader may be another side.
+pub const TERMINAL_NOT_SHARED_REASON: &str = "Several Carbons paired this computer. Only Silicons given access by the Carbon who installed Silicon Extend on it can use its terminal. The screen, keyboard and apps work as usual.";

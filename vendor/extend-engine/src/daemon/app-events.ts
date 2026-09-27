@@ -51,7 +51,7 @@ export function resolveAppEventUrl(
       'UNSUPPORTED_OPERATION',
       `No app event URL template configured for ${platform}.`,
       {
-        hint: `Set AGENT_DEVICE_${platform.toUpperCase()}_APP_EVENT_URL_TEMPLATE or AGENT_DEVICE_APP_EVENT_URL_TEMPLATE, for example "myapp://agent-device/event?name={event}&payload={payload}".`,
+        hint: `Set EXTEND_ENGINE_${platform.toUpperCase()}_APP_EVENT_URL_TEMPLATE or EXTEND_ENGINE_APP_EVENT_URL_TEMPLATE, for example "myapp://extend/event?name={event}&payload={payload}".`,
       },
     );
   }
@@ -63,7 +63,7 @@ export function resolveAppEventUrl(
     .replaceAll('{platform}', encodeURIComponent(platform));
   if (eventUrl.length > MAX_APP_EVENT_URL_LENGTH) {
     throw new AppError('INVALID_ARGS', 'trigger-app-event URL exceeds maximum supported length', {
-      hint: 'Reduce payload size or shorten AGENT_DEVICE_*_APP_EVENT_URL_TEMPLATE.',
+      hint: 'Reduce payload size or shorten EXTEND_ENGINE_*_APP_EVENT_URL_TEMPLATE.',
       length: eventUrl.length,
       maxLength: MAX_APP_EVENT_URL_LENGTH,
     });

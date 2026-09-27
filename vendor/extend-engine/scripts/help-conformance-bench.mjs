@@ -339,10 +339,14 @@ function postProcessDoc(docId, text) {
 }
 
 async function cliHelp(args) {
-  const { stdout } = await execFileAsync('node', [join(ROOT, 'bin', 'agent-device.mjs'), ...args], {
-    cwd: ROOT,
-    maxBuffer: 1024 * 1024 * 10,
-  });
+  const { stdout } = await execFileAsync(
+    'node',
+    [join(ROOT, 'bin', 'extend-engine.mjs'), ...args],
+    {
+      cwd: ROOT,
+      maxBuffer: 1024 * 1024 * 10,
+    },
+  );
   return stdout.trim();
 }
 

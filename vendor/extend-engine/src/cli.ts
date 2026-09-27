@@ -41,7 +41,6 @@ import {
 import { resolveDaemonPaths } from './daemon-resolution.ts';
 import { applyDefaultPlatformBinding, resolveBindingSettings } from './cli/session-binding.ts';
 import { resolveCliOptions } from './cli/resolve-cli-options.ts';
-import { maybeRunUpgradeNotifier } from './cli/update-check.ts';
 import {
   resolveRemoteConnectionDefaults,
   type RemoteConnectionRequestMetadata,
@@ -154,12 +153,9 @@ export async function runCli(argv: string[], deps: CliDeps = DEFAULT_CLI_DEPS): 
           );
           return;
         }
-        maybeRunUpgradeNotifier({
-          command,
-          currentVersion: version,
-          stateDir: ctx.daemonPaths.baseDir,
-          flags: ctx.effectiveFlags,
-        });
+        // No upgrade notice: the engine ships inside Silicon Extend and updates with it. Upstream's
+        // notifier (./cli/update-check.ts) compares against the npm `agent-device` package and would
+        // tell a Silicon to install that instead.
         await resolveRemoteContext(ctx, deps);
         registerDaemonAuthDiagnosticValue(ctx.effectiveFlags);
         if (command === 'cdp') {

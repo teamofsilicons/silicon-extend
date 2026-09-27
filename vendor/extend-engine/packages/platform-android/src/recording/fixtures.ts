@@ -83,7 +83,7 @@ export function recordingHost(overrides: Record<string, unknown>): PlatformRunti
     },
     manifestPathFor: (remotePath: string) =>
       legacy.manifestPathFor?.(remotePath) ??
-      `${remotePath.slice(0, remotePath.lastIndexOf('/'))}/agent-device-recording-active.json`,
+      `${remotePath.slice(0, remotePath.lastIndexOf('/'))}/silicon-extend-recording-active.json`,
     readManifest: async (manifestPath: string) =>
       legacy.readManifest
         ? await legacy.readManifest(manifestPath)
@@ -119,7 +119,7 @@ export function recordingHost(overrides: Record<string, unknown>): PlatformRunti
 
 export function recordingProcess(
   remotePid: string,
-  remotePath = '/sdcard/agent-device-recording-1.mp4',
+  remotePath = '/sdcard/silicon-extend-recording-1.mp4',
 ) {
   return {
     process: { pid: remotePid, remotePath, startTime: '1' },

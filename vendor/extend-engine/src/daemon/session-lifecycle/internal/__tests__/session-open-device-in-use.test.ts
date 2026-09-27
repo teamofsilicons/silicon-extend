@@ -32,7 +32,7 @@ test('the by-session conflict reports the address, in the message, details and h
   expect(response.error?.message).toBe(`Device is already in use by session "${SCOPED_ADDRESS}".`);
   expect(response.error?.details?.session).toBe(SCOPED_ADDRESS);
   expect(String(response.error?.details?.hint)).toContain(
-    `agent-device close --session ${SCOPED_ADDRESS}`,
+    `extend close --session ${SCOPED_ADDRESS}`,
   );
 });
 
@@ -64,7 +64,7 @@ test('the foreign-workspace conflict names the owning session address', () => {
     deviceId: IOS_SIMULATOR.id,
   });
   const hint = String(response.error?.details?.hint);
-  expect(hint).toContain(`agent-device close --session ${foreignAddress}`);
+  expect(hint).toContain(`extend close --session ${foreignAddress}`);
 });
 
 // A caller that already spent a --wait budget is not helped by being told to wait, and is misled

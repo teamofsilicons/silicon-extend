@@ -9,10 +9,10 @@ tools, never against Apple. Nothing has been published.
 |---|---|
 | `macos/build-app.sh`, `macos/Info.plist.in` | Builds `target/desktop/macos/Silicon Extend.app` and a zip named for how it was signed |
 | `macos/icon/` | The app icon (`AppIcon.svg` → `make-icns.sh` → `AppIcon.icns`), Extend's mark |
-| `runtime-entry.mjs` | Extend's entry for the packaged agent-device runtime (replaces a daemon started from another install path) |
+| `runtime-entry.mjs` | Extend's entry for the packaged device engine runtime (replaces a daemon started from another install path) |
 | `stamp-runtime.mjs` | Stamps the packaged runtime's version with a content digest |
 | `packaging.sh` | Sourced by both build scripts: the checked stamp step (`stamp_runtime`) and the dist freshness check (`require_fresh_dist`) |
-| `dist-manifest.mjs` | Records which source `vendor/agent-device/dist` was built from, and checks it before packaging a dist that can't be rebuilt |
+| `dist-manifest.mjs` | Records which source `vendor/extend-engine/dist` was built from, and checks it before packaging a dist that can't be rebuilt |
 | `linux/build-package.sh` | Builds the Linux tarball and `.deb` layout (run it on Linux) |
 | `linux/build-in-docker.sh` | Runs `build-package.sh` in the linux-e2e image, then installs the `.deb` in a container and runs it |
 | `windows/build-zip.ps1` | Builds the Windows zip (run it on Windows) |
@@ -33,15 +33,23 @@ Silicon Extend.app/Contents/
   Info.plist                    LSUIElement (menu-bar only), usage descriptions, com.teamofsilicons.extend,
                                 CFBundleIconFile AppIcon
   MacOS/extend-agent            the app
-  MacOS/agent-device-macos-helper   agent-device's helper, built here and signed with the app
+  MacOS/Silicon Extend Helper   the engine's macOS helper, built here and signed with the app
+                                (1.0 named it agent-device-macos-helper; after the rename macOS
+                                asks for Accessibility and Screen Recording once more)
   Resources/AppIcon.icns        the app icon
-  Resources/agent-device/       the fork's dist/, package.json, LICENSE and the Apple sources it builds
+  Resources/engine/             the engine's dist/, package.json, LICENSE and the Apple sources it builds
                                 on first use (Apple device runners and the native helpers);
-                                bin/agent-device.mjs is Extend's runtime-entry.mjs, and the fork's
-                                own entry is bin/agent-device-cli.mjs
+                                bin/extend-engine.mjs is Extend's runtime-entry.mjs, and the engine's
+                                own entry is bin/extend-engine-cli.mjs
   Resources/node/bin/node       Node 22 (official build, downloaded and cached in target/desktop/.cache)
   Resources/node/LICENSE        Node.js's licence file
 ```
+
+What 1.1 asks for on the Carbon's Mac, besides Accessibility and Screen Recording: permission to
+show notifications (the first start asks once; a Silicon's request to wake the Mac shows as one),
+and nothing for keeping the display on during a session (an IOKit power assertion needs no
+permission). Notifications need the app bundle: `extend-agent` run from a terminal answers the
+service that it couldn't show them.
 
 The zip's name says how the app was signed:
 
@@ -66,17 +74,18 @@ deleted. Assembling a new app deletes the previous app's three zip variants and 
   `https://nodejs.org/dist/v22.23.3/SHASUMS256.txt`. A download is checked before it is cached, and
   one that fails is never cached; a cached tarball that fails is deleted and downloaded once more; a
   `NODE_TARBALL` you supply that fails is reported with both hashes and left alone.
-  The agent-device fork is rebuilt on every packaging run to include current source changes.
+  The device engine is rebuilt on every packaging run to include current source changes.
 - Mac and Linux packaging stamp the staged runtime version with a SHA-256 build suffix
   (`0.21.15+extend.<64 hex>`). The digest covers packaged code/assets, the Node platform/version
   and (on Mac) the native helper before signing. Changed code therefore triggers the existing
   daemon takeover path; identical copied artifacts keep the same identity despite paths, mtimes or
   signing timestamps. Before writing anything, `stamp-runtime.mjs` checks the staged runtime is
   complete (non-empty entries, every relative import resolvable, no symlinks). The required
-  entries include every `internal/*` entry of the fork's `tsdown.config.ts` (bin, daemon, and the
-  PNG worker, Metro companion tunnel, Maestro runScript child and update check, which agent-device
-  loads by computed paths the import check can't follow); a test fails when the fork adds one
-  that isn't listed. Both build scripts stamp through `packaging.sh`'s `stamp_runtime`, which stops
+  entries include every `internal/*` entry of the engine's `tsdown.config.ts` (bin, daemon, the
+  EXTEND_ENGINE_* settings shim `extend-env` that every entry imports first, and the PNG worker,
+  Metro companion tunnel, Maestro runScript child and update check, which the engine loads by
+  computed paths the import check can't follow); a test fails when the engine adds one that isn't
+  listed. Both build scripts stamp through `packaging.sh`'s `stamp_runtime`, which stops
   the build with why and what to do when the stamp fails or is killed by a signal (it prints
   nothing then), and fail unless the printed stamp and the staged `package.json` agree. The vendor
   source manifest and Extend's public version are not changed by packaging.
@@ -84,22 +93,27 @@ deleted. Assembling a new app deletes the previous app's three zip variants and 
   `runtime-entry.mjs` compares the runtime's real install path with the one recorded in
   `<state dir>/extend-runtime-root.json`. If a daemon of the same version was started from another
   location (the app moved from Downloads to Applications, a translocated or second copy), it stops
-  that daemon with agent-device's own `daemon stop` and agent-device starts a fresh one, which ends
-  the old daemon's sessions once. A daemon of another version is left to agent-device's own rules.
+  that daemon with the engine's own `daemon stop` and the engine starts a fresh one, which ends
+  the old daemon's sessions once. A daemon of another version is left to the engine's own rules.
   Help, `--version`, `daemon …` and remote-daemon runs are not checked. If the stop fails, stderr
   says so with the command to run, and the next command retries. Flags are read only before a
-  `--`, as agent-device's parser reads them, so text typed after `--` (`type -- --state-dir=~/x`)
+  `--`, as the engine's parser reads them, so text typed after `--` (`type -- --state-dir=~/x`)
   never picks the state directory, the help check or a remote daemon. The record keeps, per
   version, the location its daemon was started from (`{"root", "roots": {"<version>": <path>}}`),
-  and it is written before agent-device runs, also when a daemon of another release is running:
+  and it is written before the engine runs, also when a daemon of another release is running:
   a first command after an update that is killed (timeout, SIGKILL) still leaves it, so the next
   command doesn't stop the daemon that location has just started. A claim for one version never
-  covers a newer daemon agent-device keeps.
-- `extend-agent` finds the bundled agent-device and Node through `../Resources`. Setting
-  `EXTEND_AGENT_DEVICE` or `EXTEND_NODE` overrides them.
+  covers a newer daemon the engine keeps.
+- `extend-agent` finds the bundled device engine and Node through `../Resources`. Setting
+  `EXTEND_ENGINE` (1.0's `EXTEND_AGENT_DEVICE` still works) or `EXTEND_NODE` overrides them.
+- The engine's own settings are `EXTEND_ENGINE_<X>` environment variables. The engine's code reads
+  the fork's internal `AGENT_DEVICE_<X>` names, so every entry (and `runtime-entry.mjs`) first
+  imports `dist/src/internal/extend-env.js`, which copies each set `EXTEND_ENGINE_<X>` onto
+  `AGENT_DEVICE_<X>`: the new name wins, and an old name set alone still works. The runtime entry
+  also turns off the engine's update check, which looks for the upstream package.
 - Checked on 2026-09-26: the first bundle built, `plutil -lint` passed, and
   `codesign --verify --deep --strict` passed. `extend-agent probe` and `exec apps` ran from the
-  bundle with `PATH=/usr/bin:/bin`, so only the bundled Node was reachable. It found agent-device
+  bundle with `PATH=/usr/bin:/bin`, so only the bundled Node was reachable. It found the engine
   0.21.15 and listed 227 apps. The later optimized Developer ID build measured 127 MB (43 MB
   zipped); sizes change with every build.
 - Checked on 2026-09-27 (in a scratch copy, with pnpm and cargo stubbed and ad-hoc signing): the
@@ -164,7 +178,7 @@ Extend service on `:8480`: pair, a Silicon session, then commands with uploads.
   - `probe` detected Accessibility ✓ and Screen Recording ✓ (both granted to the terminal
     running the agent).
   - `open TextEdit`; `open --surface frontmost-app`.
-  - `snapshot -i`, which gave 46 nodes with `@eN` refs through agent-device's helper.
+  - `snapshot -i`, which gave 46 nodes with `@eN` refs through the engine's macOS helper.
   - `click @e6`, which answered "Tapped @e6 (511, 374)".
   - `screenshot`, which made a PNG and uploaded it to the service (a file id and URL came back).
   - `appstate`, `apps` (227 apps) and `close`.
@@ -178,7 +192,7 @@ Extend service on `:8480`: pair, a Silicon session, then commands with uploads.
   - The tray icon turned orange while in use. The window showed the pairing code, then the paired
     view with the in-use card and "Not available yet". The banner appeared at bottom centre and
     hid when the session ended.
-- **Blocked by a macOS prompt nobody could answer:** agent-device's **typing** (`fill`/`type`),
+- **Blocked by a macOS prompt nobody could answer:** the engine's **typing** (`fill`/`type`),
   **recording**, and **app-surface snapshots** go through its XCUITest runner. The first use
   showed "XCTest is trying to Enable UI Automation. Touch ID or enter your password" (it's
   `automationmodetool`: "requires user authentication"). `type` through the agent ended as
@@ -215,7 +229,7 @@ live in the named volumes `silicon-extend-linux-target` and `silicon-extend-carg
    - a snapshot, where the history reads **"7+5 = 12"**
    - `type "3*4"` plus Return, and the history reads **"3×4 = 12"**
    - `screenshot` (PNG), `clipboard write` then `clipboard read` (the round trip)
-   - `apps` and `appstate` answer `unsupported_on_device` (agent-device has none on Linux)
+   - `apps` and `appstate` answer `unsupported_on_device` (the engine has none on Linux)
    - `terminal run` (stdout, stderr, exit 0), then an exit 5 that comes back as `command_failed`
    - a reserved flag refused, and `close`
 5. With `EXTEND_E2E_SERVICE`, runs the real agent headless against that service:
@@ -225,17 +239,17 @@ live in the named volumes `silicon-extend-linux-target` and `silicon-extend-carg
    - `extend-agent stop` ends the session with `stopped_by_carbon`
    - the Carbon removes the device, and the app forgets the credential and shows a new code
 
-Two fork fixes came out of this run, both logged in `vendor/agent-device/FORK.md`:
+Two fork fixes came out of this run, both logged in `vendor/extend-engine/FORK.md`:
 - The AT-SPI depth limit (GTK4 buttons were invisible).
 - xclip clipboard writes, which always timed out.
 
-GTK4 on X11 tells AT-SPI its window sits at (0,0), so agent-device's click coordinates are right
+GTK4 on X11 tells AT-SPI its window sits at (0,0), so the engine's click coordinates are right
 only for a window at the top-left. `e2e.sh` moves the calculator there with `wmctrl`. That is an
-agent-device/GTK4 limitation, noted for later.
+engine/GTK4 limitation, noted for later.
 
 Packaging: `linux/build-in-docker.sh` builds the tarball and `.deb` into `target/desktop/linux/`,
 installs the `.deb` into the container, and runs `extend-agent probe` and a terminal command from
-`/usr/bin`. It rebuilds the bundled agent-device fork before packaging. Node is pinned to
+`/usr/bin`. It rebuilds the bundled device engine before packaging. Node is pinned to
 22.23.3; both Linux architecture checksums in `linux/node-sha256.txt` come from
 `https://nodejs.org/dist/v22.23.3/SHASUMS256.txt`. Cached and offline archives are verified.
 The `.deb` derives native dependencies and minimum versions from the agent and bundled Node
@@ -244,7 +258,7 @@ built on Debian trixie is not evidence of compatibility with older distributions
 
 ```
 bin/extend-agent
-lib/silicon-extend/agent-device/{bin,dist,linux,package.json}
+lib/silicon-extend/engine/{bin,dist,linux,package.json}
 lib/silicon-extend/node/bin/node
 share/applications/silicon-extend.desktop
 ```
@@ -257,13 +271,13 @@ share/applications/silicon-extend.desktop
   by the X11 recorder for app recording, so `dpkg-shlibdeps` can't see them).
 - `build-package.sh` rebuilds the fork with `pnpm install --frozen-lockfile && pnpm build` when pnpm
   is on `PATH`, then records what the dist was built from (`dist-manifest.mjs record`: the SHA-256
-  of every build input, and of the dist, in `vendor/agent-device/.extend-build-manifest.json`).
+  of every build input, and of the dist, in `vendor/extend-engine/.extend-build-manifest.json`).
   Without pnpm (inside the linux-e2e container, where `build-in-docker.sh` has built and recorded
   the fork on the host first) it refuses a missing `dist`, one with no record, one rebuilt since,
   and one whose inputs changed, were added or were deleted since, naming the files. Content
   hashes, not timestamps, so the container's copy checks the same as the host's tree.
-- The packaged runtime's `bin/agent-device.mjs` is Extend's `runtime-entry.mjs` (see the macOS
-  section); the fork's entry is `bin/agent-device-cli.mjs`. Node's `LICENSE` ships beside it.
+- The packaged runtime's `bin/extend-engine.mjs` is Extend's `runtime-entry.mjs` (see the macOS
+  section); the engine's entry is `bin/extend-engine-cli.mjs`. Node's `LICENSE` ships beside it.
 - `linux-e2e/package-install-check.sh` installs the `.deb` with apt into a clean `debian:trixie`
   twice: with Depends only (every library resolves for `extend-agent` and the bundled Node; version,
   probe and the Atspi import work) and with Recommends (also ffmpeg, ffprobe, xwininfo, xdotool and
@@ -290,7 +304,7 @@ This verifies local relay and file storage, not production IAM or Briefcase inte
 ## Windows
 
 `windows/build-zip.ps1` (run it on Windows) builds `extend-agent.exe` and zips it with a README.
-There's no Node and no agent-device: Windows uses Extend's own driver. The window needs WebView2,
+There's no Node and no device engine: Windows uses Extend's own driver. The window needs WebView2,
 which Windows 10 and 11 ship.
 
 **None of the Windows side has run on Windows.** From this Mac it is checked with
@@ -301,14 +315,14 @@ the driver's pure logic is unit-tested. The script itself hasn't run.
 
 ```sh
 node --test apps/desktop/*.test.mjs
-node apps/desktop/runtime-update-e2e.mjs "target/desktop/macos/Silicon Extend.app/Contents/Resources/agent-device"
-node apps/desktop/runtime-update-e2e.mjs <unpacked tarball>/lib/silicon-extend/agent-device   # Linux
+node apps/desktop/runtime-update-e2e.mjs "target/desktop/macos/Silicon Extend.app/Contents/Resources/engine"
+node apps/desktop/runtime-update-e2e.mjs <unpacked tarball>/lib/silicon-extend/engine   # Linux
 ```
 
-The second command takes a packaged runtime (or `vendor/agent-device`, into which it installs
+The second command takes a packaged runtime (or `vendor/extend-engine`, into which it installs
 Extend's entry). When a Node is bundled beside the runtime it reruns itself under that Node and
 says which Node ran; it uses the app's macOS helper (`--macos-helper` overrides it) and runs
-agent-device the way extend-agent does (environment only, arguments over stdin). It works on
+the engine the way extend-agent does (environment only, arguments over stdin). It works on
 isolated copies with an empty session store and prints:
 
 - REPRODUCED: an unstamped update in place reuses the old daemon;
@@ -326,7 +340,7 @@ update during an active device session.
 
 ### X11 recording worker development (2026-09-26)
 
-`vendor/agent-device/linux/screen-record.py` is the native recording worker under development.
+`vendor/extend-engine/linux/screen-record.py` is the native recording worker under development.
 It accepts a root screen, explicit X11 window ID or exact application class, writes H.264 MP4, publishes first-frame
 readiness, and enforces duration/file limits. SIGINT/TERM/HUP and owner exit finalize the video;
 Linux parent-death signaling also stops the encoder if its supervisor is killed.
@@ -400,6 +414,6 @@ refuses this worker, including XWayland displays.
 The public daemon and Extend driver lane is `record-runtime-e2e.py`. Set
 `RECORD_LANE=record-runtime-e2e.py` on the container command above to exercise the daemon;
 also mount the built Linux agent and set `EXTEND_RECORD_DRIVER` to its path to test Extend's
-capability probe and recording artifact handoff. Build agent-device before running this lane.
+capability probe and recording artifact handoff. Build the device engine before running this lane.
 It deliberately crashes only its own isolated daemon, verifies the recovered export, then
 stops its daemons using their own state directories.

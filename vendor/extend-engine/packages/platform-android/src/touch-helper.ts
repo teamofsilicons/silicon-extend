@@ -225,13 +225,13 @@ async function prepareAndroidTouchHelper(device: DeviceInfo): Promise<PreparedAn
 async function resolveAndroidTouchHelperArtifact(): Promise<AndroidSnapshotHelperArtifact> {
   return await resolveAndroidHelperArtifact({
     helperDirName: 'snapshot-helper',
-    manifestFileName: (version) => `agent-device-android-snapshot-helper-${version}.manifest.json`,
+    manifestFileName: (version) => `extend-engine-android-snapshot-helper-${version}.manifest.json`,
     parseManifest: (value) => {
       const manifest = parseAndroidSnapshotHelperManifest(value);
       return {
         ...manifest,
         assetName:
-          manifest.assetName ?? `agent-device-android-snapshot-helper-${manifest.version}.apk`,
+          manifest.assetName ?? `extend-engine-android-snapshot-helper-${manifest.version}.apk`,
       };
     },
     unavailableMessage:

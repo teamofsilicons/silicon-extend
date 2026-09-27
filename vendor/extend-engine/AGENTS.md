@@ -1,7 +1,12 @@
 # AGENTS.md
 
-`agent-device` is a CLI and daemon for automating Apple, Android, HarmonyOS, Vega, Linux, and web
-targets. A long-lived daemon owns sessions; registry-derived commands route to platform runtimes.
+Silicon Extend's device engine (`extend-engine`, a fork; see `FORK.md`) is a CLI and daemon for
+automating Apple, Android, HarmonyOS, Vega, Linux, and web targets. Record every change in
+`FORK.md`. Internal names (`@agent-device/*` packages, `AGENT_DEVICE_*` in code) keep the fork's
+spelling; everything a Carbon or Silicon sees says Silicon Extend (`EXTEND_ENGINE_*` settings,
+`src/extend-env.ts`).
+
+A long-lived daemon owns sessions; registry-derived commands route to platform runtimes.
 
 ## Task routing
 

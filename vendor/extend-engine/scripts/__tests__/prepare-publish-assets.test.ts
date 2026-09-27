@@ -15,13 +15,13 @@ test('prepares both Android runtime helpers through the shared publish owner', (
     path.join(scriptsDirectory, 'package-android-helper.sh'),
     `#!/bin/sh
 set -eu
-if [ "$AGENT_DEVICE_ANDROID_HELPER" = "snapshot" ]; then
+if [ "$EXTEND_ENGINE_ANDROID_HELPER" = "snapshot" ]; then
   output="$3"
 else
   output="$2"
 fi
 mkdir -p "$output"
-prefix="agent-device-android-$AGENT_DEVICE_ANDROID_HELPER-helper-$1"
+prefix="extend-engine-android-$EXTEND_ENGINE_ANDROID_HELPER-helper-$1"
 printf apk > "$output/$prefix.apk"
 printf manifest > "$output/$prefix.manifest.json"
 printf checksum > "$output/$prefix.apk.sha256"
@@ -36,7 +36,7 @@ printf checksum > "$output/$prefix.apk.sha256"
 
   assert.equal(fs.existsSync(stalePath), false);
   for (const helper of ['snapshot', 'ime']) {
-    const prefix = `agent-device-android-${helper}-helper-1.2.3`;
+    const prefix = `extend-engine-android-${helper}-helper-1.2.3`;
     const directory = path.join(root, 'android', `${helper}-helper`, 'dist');
     assert.deepEqual(fs.readdirSync(directory).sort(), [
       `${prefix}.apk`,

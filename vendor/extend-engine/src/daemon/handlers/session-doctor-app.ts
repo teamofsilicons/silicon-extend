@@ -50,7 +50,7 @@ export async function appendAppChecks(
       status: 'fail',
       summary: `Target app check failed: ${normalized.message}`,
       hint: normalized.hint ?? 'Install the app or pass an exact package/bundle id or app name.',
-      command: `agent-device apps --platform ${publicPlatformString(device)} --all`,
+      command: `extend apps --platform ${publicPlatformString(device)} --all`,
       evidence: { code: normalized.code, message: normalized.message },
     });
   }
@@ -73,7 +73,7 @@ function resolveUniqueInstalledAppMatch(
   if (matches.length > 1) {
     throw new AppError('AMBIGUOUS_MATCH', `Multiple launchable apps matched "${targetApp}"`, {
       matches: matches.map((app) => app.id),
-      hint: 'Pass an exact package/bundle id from agent-device apps --all.',
+      hint: 'Pass an exact package/bundle id from extend apps --all.',
     });
   }
   throw new AppError('APP_NOT_INSTALLED', `No launchable installed app matched "${targetApp}"`);

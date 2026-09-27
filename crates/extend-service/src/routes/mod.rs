@@ -10,6 +10,7 @@ mod ops;
 pub mod sessions;
 mod system;
 mod testing;
+pub mod wake;
 mod webhook;
 
 use std::sync::Arc;
@@ -51,6 +52,12 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v1/devices/{device_id}/attachments", post(devices::attach))
         .route("/api/v1/devices/{device_id}/setup", get(devices::setup))
         .route("/api/v1/devices/{device_id}/setup/code", post(devices::setup_code))
+        .route("/api/v1/devices/{device_id}/setup/retry", post(devices::setup_retry))
+        .route("/api/v1/devices/{device_id}/wake-requests", post(wake::create).get(wake::list))
+        .route("/api/v1/devices/{device_id}/wake-requests/answer", post(wake::answer))
+        .route("/api/v1/devices/{device_id}/wake-requests/{wake_id}", axum::routing::delete(wake::cancel))
+        .route("/api/v1/devices/{device_id}/wake-settings", put(wake::settings))
+        .route("/api/v1/ting-registration", get(wake::ting_get).put(wake::ting_turn_on))
         .route("/api/v1/devices/{device_id}/access", get(devices::access_list))
         .route("/api/v1/devices/{device_id}/access/{silicon_id}", put(devices::access_grant).delete(devices::access_revoke))
         .route("/api/v1/devices/{device_id}/activity", get(devices::activity))
@@ -68,6 +75,7 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v1/files/{file_id}/content", get(files::content))
         .route("/api/v1/device", get(device_app::me).delete(device_app::revoke))
         .route("/api/v1/device/stop", post(device_app::stop))
+        .route("/api/v1/device/enrollments", post(device_app::enrollments_create))
         .route("/api/v1/device/connect", get(device_app::socket))
         .route("/api/v1/device/artifacts/{upload_id}", put(device_app::upload))
         .route("/api/v1/testing-environment", get(testing::current))

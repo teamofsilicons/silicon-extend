@@ -116,7 +116,7 @@ test('help tool returns the workflow card, a topic guide, a tool reference, or a
   const card = await call(undefined);
   assert.equal(card.isError, false);
   assert.match(card.text, /^CLI syntax over MCP:/);
-  assert.match(card.text, /agent-device open <app> --foreground/);
+  assert.match(card.text, /extend open <app> --foreground/);
 
   const topic = await call({ topic: 'gestures' });
   assert.equal(topic.isError, false);
@@ -125,7 +125,7 @@ test('help tool returns the workflow card, a topic guide, a tool reference, or a
   // A tool name resolves to its full flag reference, aliases included.
   const command = await call({ topic: 'tap' });
   assert.equal(command.isError, false);
-  assert.match(command.text, /agent-device press/);
+  assert.match(command.text, /extend press/);
 
   // `help web` tells the reader to run `agent-device web setup` / `web doctor`; no `web`
   // MCP tool exists, so an MCP-only client must be told those are shell steps. The
@@ -133,7 +133,7 @@ test('help tool returns the workflow card, a topic guide, a tool reference, or a
   // the guide's prose — so the claim holds for this guide and every other one.
   const web = await call({ topic: 'web' });
   assert.equal(web.isError, false);
-  assert.match(web.text, /agent-device web setup/);
+  assert.match(web.text, /extend web setup/);
   const terminalOnlyLine = web.text.split('\n').find((line) => line.includes('Terminal-only'));
   assert.ok(terminalOnlyLine);
   assert.match(terminalOnlyLine, /\bweb\b/);
@@ -177,7 +177,7 @@ test('server/discover advertises both eras so a dual-era client stays modern', a
   assert.deepEqual(result.capabilities, { tools: {} });
   assert.equal(result.cacheScope, 'public');
   assert.ok(result.ttlMs > 0);
-  assert.equal(result._meta['io.modelcontextprotocol/serverInfo'].name, 'agent-device');
+  assert.equal(result._meta['io.modelcontextprotocol/serverInfo'].name, 'silicon-extend-engine');
 });
 
 test('MCP initialize answers with the legacy revision the client asked for', async () => {

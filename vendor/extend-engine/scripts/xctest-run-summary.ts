@@ -92,7 +92,7 @@ export function livenessFailure(summary: ResultSummary, expected: number): strin
   if (executed === 0) {
     return [
       `This lane executed no tests (the source says it reaches ${expected}), which xcodebuild`,
-      'reports as success. Check AGENT_DEVICE_XCUITEST_INCLUDE_UNIT_TESTS (the -D flag that',
+      'reports as success. Check EXTEND_ENGINE_XCUITEST_INCLUDE_UNIT_TESTS (the -D flag that',
       'compiles the tests in), the xctestrun test plan, the target name, and the -skip-testing',
       'entry.',
     ].join('\n');

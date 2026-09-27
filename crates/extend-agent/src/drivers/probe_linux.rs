@@ -1,5 +1,5 @@
 //! What a Linux computer can do right now: a screen (X11 or Wayland), the AT-SPI accessibility
-//! bus, and the helper programs agent-device's Linux support drives (xdotool or ydotool, a
+//! bus, and the helper programs the device engine's Linux support drives (xdotool or ydotool, a
 //! screenshot tool, a clipboard tool, xdg-open).
 //!
 //! A computer without a screen (a server) gets only `terminal` (`UNDERSTANDING.md`: "a computer
@@ -37,8 +37,9 @@ pub struct LinuxFacts {
     /// screen; the error says what to install otherwise.
     pub recording: Result<(), String>,
     pub xdg_open: bool,
-    /// logind says the session's lock screen is up (`LockedHint`).
-    pub locked: bool,
+    /// What logind says blocks the screen: the lock screen (`LockedHint`), or another account on
+    /// screen (`Active=no`).
+    pub screen: Option<ScreenBlock>,
 }
 
 fn miss(c: Capability, reason: &str, missing: &mut Vec<MissingCapability>) {
@@ -118,10 +119,10 @@ pub fn build_probe(facts: &LinuxFacts, input: &ProbeInput<'_>) -> Probe {
             steps.push(done_step("accessibility", "Turn on the accessibility bus (AT-SPI)"));
         }
         Err(why) => {
-            let reason = format!(
-                "The accessibility bus (AT-SPI) isn't answering: {why}. Install at-spi2-core, python3-gi and gir1.2-atspi-2.0, and turn on assistive technologies (GNOME: Settings › Accessibility)."
-            );
-            miss(ScreenRead, &reason, &mut missing);
+            // What went wrong in detail goes to the log; the Carbon reads what to do.
+            tracing::info!("the accessibility bus isn't answering: {why}");
+            let reason = "The accessibility bus (AT-SPI) isn't answering, so a Silicon can't read the screen. Install at-spi2-core, python3-gi and gir1.2-atspi-2.0, and turn on assistive technologies (GNOME: Settings › Accessibility).";
+            miss(ScreenRead, reason, &mut missing);
             steps.push(SetupStep {
                 key: "accessibility".into(),
                 title: "Turn on the accessibility bus (AT-SPI)".into(),
@@ -129,7 +130,10 @@ pub fn build_probe(facts: &LinuxFacts, input: &ProbeInput<'_>) -> Probe {
                 help: Some(
                     "Install at-spi2-core, python3-gi and gir1.2-atspi-2.0; GNOME: Settings › Accessibility".into(),
                 ),
-                error: Some(why.clone()),
+                error: Some(
+                    "The accessibility bus isn't answering, so a Silicon can't read the screen. Install the packages above and turn on assistive technologies, then tap Retry."
+                        .into(),
+                ),
                 input: None,
             });
         }
@@ -213,8 +217,8 @@ pub fn build_probe(facts: &LinuxFacts, input: &ProbeInput<'_>) -> Probe {
     }
     // Nothing that needs the screen works until it is unlocked. Not a setup step: the terminal
     // works while it is locked.
-    if facts.locked {
-        screen_lock::withhold(ScreenBlock::Locked, &mut caps, &mut missing);
+    if let Some(block) = facts.screen {
+        screen_lock::withhold(block, &mut caps, &mut missing);
     }
     finish(caps, missing, steps)
 }
@@ -259,8 +263,11 @@ fn finish(mut caps: Vec<Capability>, missing: Vec<MissingCapability>, steps: Vec
         } else {
             Setup::complete()
         },
-        agent_device_version: None,
+        engine_version: None,
         online: true,
+        awake: None,
+        sleep_state: None,
+        hardware_id: None,
     }
 }
 
@@ -305,7 +312,7 @@ pub fn gather() -> LinuxFacts {
         clipboard_tool,
         recording,
         xdg_open: have("xdg-open"),
-        locked: display.is_some() && screen_lock::current() == Some(ScreenBlock::Locked),
+        screen: display.and_then(|_| screen_lock::current()),
     }
 }
 
@@ -405,7 +412,7 @@ pub(crate) fn capture(program: &std::path::Path, args: &[&str], timeout: Duratio
     }
 }
 
-/// Asks the AT-SPI registry for the desktop, the same way agent-device's dumper starts.
+/// Asks the AT-SPI registry for the desktop, the same way the device engine's dumper starts.
 fn check_atspi() -> Result<(), String> {
     const SCRIPT: &str = "import gi\ngi.require_version('Atspi', '2.0')\nfrom gi.repository import Atspi\nprint(Atspi.get_desktop(0).get_child_count())";
     let Some(python) = crate::config::which("python3") else {
@@ -460,7 +467,7 @@ mod tests {
             clipboard_tool: Some("xclip".into()),
             recording: Ok(()),
             xdg_open: true,
-            locked: false,
+            screen: None,
         }
     }
 
@@ -479,7 +486,7 @@ mod tests {
         let unlocked = build_probe(&desktop(), &admitted);
         assert!(unlocked.capabilities.contains(&Capability::ScreenRead));
         let locked = LinuxFacts {
-            locked: true,
+            screen: Some(ScreenBlock::Locked),
             ..desktop()
         };
         let p = build_probe(&locked, &admitted);
@@ -488,7 +495,10 @@ mod tests {
             vec![Capability::AppsList, Capability::Logs, Capability::Takeover]
         );
         let reason = ScreenBlock::Locked.reason();
-        assert!(reason.contains("is locked") && reason.contains("Unlock it"), "{reason}");
+        assert!(
+            reason.contains("is locked") && reason.contains("Only its Carbon can unlock it"),
+            "{reason}"
+        );
         for c in DeviceOs::Linux.full_capabilities() {
             if matches!(
                 c,
@@ -544,7 +554,7 @@ mod tests {
             clipboard_tool: None,
             recording: Err("no X11 screen".into()),
             xdg_open: true,
-            locked: false,
+            screen: None,
         };
         for commands in [
             None,
@@ -571,11 +581,11 @@ mod tests {
             }
             assert_eq!(p.setup.state, SetupState::Complete);
         }
-        // Without agent-device the reason is still the missing screen: that's what the Carbon can act on.
+        // Without the device engine the reason is still the missing screen: that's what the Carbon can act on.
         let p = build_probe(
             &facts,
             &ProbeInput {
-                problem: Some("agent-device isn't available"),
+                problem: Some("the device engine isn't available"),
                 commands: None,
             },
         );
@@ -595,7 +605,7 @@ mod tests {
                 commands: Some(&cmds),
             },
         );
-        // agent-device doesn't list apps on Linux.
+        // the device engine doesn't list apps on Linux.
         assert!(p.missing.iter().any(|m| m.capability == Capability::AppsList));
         for c in [
             Capability::ScreenRead,
@@ -708,7 +718,10 @@ mod tests {
         let reason = |c| p.missing.iter().find(|m| m.capability == c).unwrap().reason.clone();
         assert!(reason(Capability::InputPointer).contains("xdotool"));
         assert!(reason(Capability::ScreenCapture).contains("scrot"));
-        assert!(reason(Capability::ScreenRead).contains("No module named 'gi'"));
+        // The Python error goes to the log; the reason says what to install.
+        let read = reason(Capability::ScreenRead);
+        assert!(read.contains("at-spi2-core") && !read.contains("No module"), "{read}");
+
         // Missing tools never block sessions: the terminal still works.
         assert_eq!(p.setup.state, SetupState::Complete);
         let facts = LinuxFacts {

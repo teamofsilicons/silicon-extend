@@ -41,7 +41,7 @@ pub(crate) mod hid {
     pub const VOLUME_UP: u64 = 8;
     pub const VOLUME_DOWN: u64 = 9;
     pub const SLEEP: u64 = 12;
-    pub const WAKE: u64 = 13;
+    // 13 is WAKE, which Extend never sends: only the Carbon wakes a device.
     pub const PLAY_PAUSE: u64 = 14;
 }
 
@@ -407,6 +407,8 @@ pub(crate) mod mock {
         pub log: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
         /// How many times a PIN was put on screen.
         pub pins_shown: Arc<Mutex<u32>>,
+        /// What FetchAttentionState answers (3 awake, 1 asleep).
+        pub attention: Arc<Mutex<u64>>,
     }
 
     pub(crate) async fn start(pin: &str) -> MockAppleTv {
@@ -416,12 +418,18 @@ pub(crate) mod mock {
             accessory: Arc::new(Mutex::new(Accessory::new(pin))),
             log: Arc::default(),
             pins_shown: Arc::default(),
+            attention: Arc::new(Mutex::new(3)),
         };
-        let (acc, log, pins) = (tv.accessory.clone(), tv.log.clone(), tv.pins_shown.clone());
+        let (acc, log, pins, attention) = (
+            tv.accessory.clone(),
+            tv.log.clone(),
+            tv.pins_shown.clone(),
+            tv.attention.clone(),
+        );
         tokio::spawn(async move {
             loop {
                 let Ok((s, _)) = l.accept().await else { return };
-                let (acc, log, pins) = (acc.clone(), log.clone(), pins.clone());
+                let (acc, log, pins, attention) = (acc.clone(), log.clone(), pins.clone(), attention.clone());
                 tokio::spawn(async move {
                     let mut c = Companion {
                         stream: s,
@@ -481,7 +489,10 @@ pub(crate) mod mock {
                                             ("com.google.ios.youtube", Value::str("YouTube")),
                                         ]),
                                     ),
-                                    "FetchAttentionState" => ("_c", Value::dict([("state", Value::Int(3))])),
+                                    "FetchAttentionState" => {
+                                        let state = *attention.lock().unwrap();
+                                        ("_c", Value::dict([("state", Value::Int(state))]))
+                                    }
                                     "_launchApp"
                                         if content.get("_bundleID").and_then(Value::as_str)
                                             == Some("com.example.missing") =>

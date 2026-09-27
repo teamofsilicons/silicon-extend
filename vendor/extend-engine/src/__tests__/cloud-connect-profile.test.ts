@@ -548,9 +548,9 @@ test('connect output makes verified configuration, deferred device allocation, a
   );
   assert.match(result.stdout, /No live device session has been created/);
   assert.match(result.stdout, /Next:/);
-  assert.match(result.stdout, /agent-device apps/);
-  assert.match(result.stdout, /agent-device open <uploaded-asset-name>/);
-  assert.doesNotMatch(result.stdout, /agent-device install/);
+  assert.match(result.stdout, /extend apps/);
+  assert.match(result.stdout, /extend open <uploaded-asset-name>/);
+  assert.doesNotMatch(result.stdout, /extend install/);
   assert.doesNotMatch(result.stdout, /lease pending/);
 });
 
@@ -577,12 +577,12 @@ test('connect JSON exposes verification, device, app, live-session, and next-ste
   assert.equal(output.app.status, 'missing');
   assert.equal(output.liveSession.status, 'not-created');
   assert.deepEqual(output.nextSteps, [
-    `agent-device connect aws-device-farm --platform ios --aws-project-arn project-arn --aws-device-arn device-arn --aws-app-arn <arn> --force --session ${output.session}`,
-    `agent-device open <bundle-id> --relaunch --session ${output.session}`,
+    `extend connect aws-device-farm --platform ios --aws-project-arn project-arn --aws-device-arn device-arn --aws-app-arn <arn> --force --session ${output.session}`,
+    `extend open <bundle-id> --relaunch --session ${output.session}`,
   ]);
   assert.deepEqual(output.leasePreparation.nextSteps, output.nextSteps);
   assert.deepEqual(output.notes, [
-    `After close, run agent-device artifacts --json --session ${output.session} for provider video and logs.`,
+    `After close, run extend artifacts --json --session ${output.session} for provider video and logs.`,
   ]);
 });
 
@@ -613,11 +613,11 @@ test('connect JSON preserves BrowserStack workflow notes from human output', asy
   assert.equal(result.code, null);
   const output = (JSON.parse(result.stdout) as { data: Record<string, any> }).data;
   assert.deepEqual(output.nextSteps, [
-    `agent-device open <package-id> --relaunch --session ${output.session}`,
+    `extend open <package-id> --relaunch --session ${output.session}`,
   ]);
   assert.deepEqual(output.notes, [
     'Use the installed package or bundle identifier in open, not the app artifact name.',
-    `After close, run agent-device artifacts --json --session ${output.session} for provider video and logs.`,
+    `After close, run extend artifacts --json --session ${output.session} for provider video and logs.`,
   ]);
 });
 
@@ -681,12 +681,12 @@ test('every command BrowserStack connect emits resolves back to the connection t
 });
 
 /**
- * A command-bearing string must carry one `--session <name>` per `agent-device`
+ * A command-bearing string must carry one `--session <name>` per `extend`
  * invocation it suggests. Counting rather than matching means an added command
  * cannot silently ship unscoped alongside a scoped sibling.
  */
 function assertCommandsAreSessionScoped(text: string, session: string): void {
-  const commands = text.match(/agent-device\s+[a-z]/g)?.length ?? 0;
+  const commands = text.match(/\bextend\s+[a-z]/g)?.length ?? 0;
   const scopes = text.split(`--session ${session}`).length - 1;
   assert.equal(scopes, commands, `unscoped suggested command in: ${text}`);
 }

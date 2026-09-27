@@ -70,7 +70,7 @@ function helperVersionResponse(args: readonly string[]): AndroidAdbExecutorResul
   if (!args.includes('--show-versioncode')) return undefined;
   return {
     exitCode: 0,
-    stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:999999',
+    stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:999999',
     stderr: '',
   };
 }

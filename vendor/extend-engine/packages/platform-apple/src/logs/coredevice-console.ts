@@ -2,7 +2,7 @@ import type { AppLogRuntimeHost } from '@agent-device/contracts/app-log-runtime'
 
 export const IOS_DEVICE_CONSOLE_CAPTURE_UNSUPPORTED = {
   message: 'iOS physical-device app console capture is not supported by the installed devicectl.',
-  hint: 'This devicectl does not expose process launch --console. Markers can still be written to app.log, but app output is not being captured. Use an iOS simulator for agent-device app logs or inspect physical-device logs in Console.app/Xcode until this Xcode toolchain exposes scriptable console capture.',
+  hint: 'This devicectl does not expose process launch --console. Markers can still be written to app.log, but app output is not being captured. Use an iOS simulator for device engine app logs or inspect physical-device logs in Console.app/Xcode until this Xcode toolchain exposes scriptable console capture.',
 } as const;
 
 export const IOS_DEVICE_CONSOLE_CAPTURE_PROBE_FAILED = {

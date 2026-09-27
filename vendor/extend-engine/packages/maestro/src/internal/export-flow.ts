@@ -46,7 +46,7 @@ type SwipeGeometry = {
 const LONG_PRESS_DURATION_WARNING =
   'long-press duration exports as Maestro longPressOn; Maestro uses its default long-press duration';
 const LABEL_SELECTOR_EXPORT_WARNING =
-  'label= selectors export as Maestro text; Maestro text matching is broader than agent-device label-only matching';
+  'label= selectors export as Maestro text; Maestro text matching is broader than label-only matching in the device engine';
 
 export function exportReplayActionsToMaestro(
   actions: SessionAction[],

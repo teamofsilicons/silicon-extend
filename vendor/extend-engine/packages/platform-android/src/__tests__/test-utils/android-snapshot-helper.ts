@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import type { AndroidAdbExecutor } from '../../adb-executor.ts';
 import type { AndroidSnapshotHelperArtifact } from '../../snapshot-helper-types.ts';
 
-const SNAPSHOT_HELPER_PACKAGE = 'com.callstack.agentdevice.snapshothelper';
+const SNAPSHOT_HELPER_PACKAGE = 'com.teamofsilicons.extend.snapshothelper';
 const SNAPSHOT_HELPER_FIXTURE_APK_PATH = fileURLToPath(
   new URL('./fixtures/android-helper-apk.fixture', import.meta.url),
 );

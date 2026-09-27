@@ -467,8 +467,8 @@ export async function startDaemonRuntime(
       codeSignature: daemonCodeSignature,
       processStartTime: daemonProcessStartTime,
     });
-    if (socketPort) stdout.write(`AGENT_DEVICE_DAEMON_PORT=${socketPort}\n`);
-    if (httpPort) stdout.write(`AGENT_DEVICE_DAEMON_HTTP_PORT=${httpPort}\n`);
+    if (socketPort) stdout.write(`EXTEND_ENGINE_DAEMON_PORT=${socketPort}\n`);
+    if (httpPort) stdout.write(`EXTEND_ENGINE_DAEMON_HTTP_PORT=${httpPort}\n`);
   };
 
   const closeServersBestEffort = (servers: DaemonServer[]): void => {

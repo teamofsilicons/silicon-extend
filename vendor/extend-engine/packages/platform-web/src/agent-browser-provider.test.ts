@@ -521,8 +521,7 @@ test('agent-browser provider adds doctor guidance for missing binary and invalid
         (error: unknown) =>
           error instanceof AppError &&
           error.code === 'TOOL_MISSING' &&
-          error.details?.hint ===
-            'Run `agent-device web setup` to install the managed web backend.',
+          error.details?.hint === 'Run `extend web setup` to install the managed web backend.',
       );
     } finally {
       fs.rmSync(missingStateDir, { recursive: true, force: true });

@@ -99,10 +99,10 @@ test('Swift runner change selects both XCUITest platform builds', () => {
 
 test('a runner XCTest source also selects the test-list and package-source check', () => {
   // Distinct from the rule above, which owns Swift *anywhere*: renaming a method under
-  // AgentDeviceRunnerUITests/ silently shrinks ios.yml's hand-written `-only-testing:` list
+  // SiliconExtendHelperUITests/ silently shrinks ios.yml's hand-written `-only-testing:` list
   // (#1781 A7), and the platform builds cannot see that — they compile fine either way.
   assert.deepEqual(
-    ids(['apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Alert.swift']),
+    ids(['apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Alert.swift']),
     [
       'swift-runner-ios',
       'swift-runner-macos',
@@ -116,7 +116,7 @@ test('a runner XCTest source also selects the test-list and package-source check
   // The bug the file filter used to have: membership is the directory, not the name.
   assert.ok(
     ids([
-      'apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTapPointPolicy.swift',
+      'apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTapPointPolicy.swift',
     ]).includes('xctest-selection'),
   );
   // Swift elsewhere in the runner still selects only the builds.

@@ -40,9 +40,9 @@ test('screenshotHarmony captures, retrieves, validates, and cleans a JPEG', asyn
   const shellCalls = runHarmonyShell.mock.calls.map(([, args]) => args);
   const hdcCalls = runHarmonyHdc.mock.calls.map(([, args]) => args);
   assert.deepEqual(shellCalls[0]?.slice(0, 2), ['snapshot_display', '-f']);
-  assert.match(String(shellCalls[0]?.[2]), /^\/data\/local\/tmp\/agent-device-screen-.+\.jpeg$/);
+  assert.match(String(shellCalls[0]?.[2]), /^\/data\/local\/tmp\/extend-engine-screen-.+\.jpeg$/);
   assert.deepEqual(hdcCalls[0]?.slice(0, 2), ['file', 'recv']);
-  assert.match(String(hdcCalls[0]?.[2]), /^\/data\/local\/tmp\/agent-device-screen-.+\.jpeg$/);
+  assert.match(String(hdcCalls[0]?.[2]), /^\/data\/local\/tmp\/extend-engine-screen-.+\.jpeg$/);
   assert.equal(hdcCalls[0]?.[3], '/tmp/capture.jpg');
   assert.deepEqual(shellCalls[1]?.slice(0, 2), ['rm', '-f']);
   assert.deepEqual(readFile.mock.calls, [['/tmp/capture.jpg']]);

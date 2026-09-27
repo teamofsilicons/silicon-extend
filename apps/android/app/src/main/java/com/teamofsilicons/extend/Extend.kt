@@ -6,6 +6,8 @@ import android.util.Log
 import com.teamofsilicons.extend.config.Config
 import com.teamofsilicons.extend.config.DeviceInfo
 import com.teamofsilicons.extend.core.ConnectionManager
+import com.teamofsilicons.extend.core.PairUi
+import com.teamofsilicons.extend.core.SetupRetry
 import com.teamofsilicons.extend.core.UiState
 import com.teamofsilicons.extend.driver.CommandExecutor
 import com.teamofsilicons.extend.net.ExtendApi
@@ -21,6 +23,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** The app's one instance of everything: settings, secrets, the connection and the driver. */
 class Extend private constructor(val context: Context) {
@@ -34,7 +38,7 @@ class Extend private constructor(val context: Context) {
             isTv = DeviceInfo.isTv(context, config),
             isFireTv = DeviceInfo.isFireTv(context),
             serviceUrl = config.serviceUrl,
-            deviceId = config.deviceId,
+            pairs = config.pairIds.map { PairUi(it) },
             environment = config.environment,
         ),
     )
@@ -49,6 +53,8 @@ class Extend private constructor(val context: Context) {
         owner = context.packageName,
     )
     private val adbWake = Channel<Unit>(Channel.CONFLATED)
+    /** One Android debugging reconnect at a time: the loop's, or a setup retry's. */
+    private val adbAttempt = Mutex()
     val executor = CommandExecutor(this)
     val connection = ConnectionManager(this)
 
@@ -57,15 +63,10 @@ class Extend private constructor(val context: Context) {
             val policy = AdbReconnectPolicy()
             while (true) {
                 val wait = when {
-                    config.deviceId == null || !adb.enabled || adb.connected -> policy.idle()
+                    !config.paired || !adb.enabled || adb.connected -> policy.idle()
                     // Discovery can't find anything until the Carbon turns Wireless debugging on.
                     adb.pairedWithCode && adb.wirelessDebuggingOff -> policy.afterFailure()
-                    else -> {
-                        val connected = try { adb.reconnect() } catch (e: CancellationException) { throw e } catch (e: Exception) { false }
-                        if (connected) runCatching { adbExecutor.recover() }
-                        onCapabilitiesMayHaveChanged()
-                        if (connected) policy.idle() else policy.afterFailure()
-                    }
+                    else -> if (reconnectAdb()) policy.idle() else policy.afterFailure()
                 }
                 if (withTimeoutOrNull(wait) { adbWake.receive() } != null) policy.reset()
             }
@@ -83,6 +84,28 @@ class Extend private constructor(val context: Context) {
     /** Try reconnecting Android debugging now (network back, Wireless debugging switched, app opened). */
     fun wakeAdbReconnect() {
         adbWake.trySend(Unit)
+    }
+
+    /** One reconnect attempt; the setup report then shows how it went. */
+    private suspend fun reconnectAdb(): Boolean = adbAttempt.withLock {
+        val connected = try { adb.reconnect() } catch (e: CancellationException) { throw e } catch (e: Exception) { false }
+        if (connected) runCatching { adbExecutor.recover() }
+        adb.lastError?.takeIf { !connected }?.let { log("Android debugging reconnect failed: $it") }
+        onCapabilitiesMayHaveChanged()
+        connected
+    }
+
+    /** A setup retry of the debugging step: reconnect at once, whatever the back-off says. */
+    fun retryAdbNow() {
+        scope.launch {
+            try {
+                if (adb.enabled && !adb.connected) reconnectAdb()
+            } finally {
+                SetupRetry.finished(SetupRetry.DEBUGGING_KEYS)
+                onCapabilitiesMayHaveChanged()
+                wakeAdbReconnect()
+            }
+        }
     }
 
     fun update(f: (UiState) -> UiState) = _state.update(f)

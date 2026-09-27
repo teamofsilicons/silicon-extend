@@ -52,7 +52,7 @@ function resolveScriptPath(): string {
 
   throw new AppError(
     'TOOL_MISSING',
-    `Cannot find ${SCRIPT_NAME}. Ensure the agent-device package is installed correctly.`,
+    `Cannot find ${SCRIPT_NAME}. Reinstall Silicon Extend to restore it.`,
   );
 }
 

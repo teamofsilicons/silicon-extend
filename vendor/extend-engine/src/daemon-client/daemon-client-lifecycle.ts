@@ -149,7 +149,7 @@ function shouldUseOwnedReplayStateDir(
 }
 
 function createOwnedReplayStateDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'agent-device-replay-daemon-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'extend-engine-replay-daemon-'));
 }
 
 export async function ensureDaemon(settings: DaemonClientSettings): Promise<EnsuredDaemon> {
@@ -177,7 +177,7 @@ async function ensureRemoteDaemon(settings: DaemonClientSettings): Promise<Ensur
   }
   throw new AppError('COMMAND_FAILED', 'Remote daemon is unavailable', {
     daemonBaseUrl: settings.remoteBaseUrl,
-    hint: 'Verify AGENT_DEVICE_DAEMON_BASE_URL points to a reachable daemon with GET /health and POST /rpc. If this CLI was connected with connect proxy, run agent-device disconnect to return to the local daemon.',
+    hint: 'Verify EXTEND_ENGINE_DAEMON_BASE_URL points to a reachable daemon with GET /health and POST /rpc. If this CLI was connected with connect proxy, run extend disconnect to return to the local daemon.',
   });
 }
 
@@ -236,7 +236,7 @@ function newerDaemonRefusedError(
       daemonPid: info.pid,
       daemonVersion,
       clientVersion,
-      hint: `Use the agent-device v${daemonVersion} CLI that started it, or stop it deliberately: agent-device daemon stop --state-dir ${shellQuoteIfNeeded(stateDir)}`,
+      hint: `Use the device engine v${daemonVersion} CLI that started it, or stop it deliberately: extend daemon stop --state-dir ${shellQuoteIfNeeded(stateDir)}`,
     },
   );
 }
@@ -685,7 +685,7 @@ function validateRemoteDaemonTrust(
     'Remote daemon base URL for non-loopback hosts requires daemon authentication',
     {
       daemonBaseUrl: remoteBaseUrl,
-      hint: 'Provide --daemon-auth-token or AGENT_DEVICE_DAEMON_AUTH_TOKEN when using a non-loopback remote daemon URL.',
+      hint: 'Provide --daemon-auth-token or EXTEND_ENGINE_DAEMON_AUTH_TOKEN when using a non-loopback remote daemon URL.',
     },
   );
 }

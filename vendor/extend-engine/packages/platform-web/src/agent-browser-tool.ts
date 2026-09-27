@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import { runCmd, type ExecResult } from '@agent-device/host-kit/command';
 import { acquireProcessLock, withProcessLock } from '@agent-device/host-kit/file';
 import {
@@ -263,7 +264,7 @@ function missingManagedToolError(status: AgentBrowserToolStatus): AppError {
     hint:
       status.nodeSupported === false
         ? `Web automation requires Node ${MINIMUM_WEB_NODE_MAJOR}+; current Node is ${hostNodeVersion()}.`
-        : 'Run `agent-device web setup` to install the managed web backend.',
+        : 'Run `extend web setup` to install the managed web backend.',
   });
 }
 
@@ -274,7 +275,7 @@ function unusableInstallError(status: AgentBrowserToolStatus): AppError {
     version: MANAGED_AGENT_BROWSER_VERSION,
     installDir: status.installDir,
     packageDir: status.packageDir,
-    hint: `Remove ${status.installDir} and run \`agent-device web setup\` again.`,
+    hint: `Remove ${status.installDir} and run \`extend web setup\` again.`,
   });
 }
 
@@ -283,14 +284,14 @@ function assertWebNodeSupported(nodeMajor: number): void {
   throw new AppError('UNSUPPORTED_OPERATION', 'Web automation requires Node 24 or newer.', {
     currentNode: hostNodeVersion(),
     requiredNodeMajor: MINIMUM_WEB_NODE_MAJOR,
-    hint: 'Run agent-device with Node 24+ for web setup and web automation.',
+    hint: 'Run the device engine with Node 24+ for web setup and web automation.',
   });
 }
 
 function resolveManagedRuntimeHomeDir(installDir: string): string {
   if (hostPlatform() === 'win32') return path.join(installDir, 'home');
   const hash = crypto.createHash('sha1').update(installDir).digest('hex').slice(0, 12);
-  return path.join(hostTemporaryDirectory(), 'agent-device-web', hash);
+  return path.join(hostTemporaryDirectory(), 'extend-engine-web', hash);
 }
 
 function resolveManagedSocketDir(installDir: string): string {
@@ -303,7 +304,10 @@ function isNoEntryError(error: unknown): boolean {
 }
 
 function defaultStateDir(): string {
-  return path.join(hostEnvironment().HOME ?? hostCurrentWorkingDirectory(), '.agent-device');
+  return path.join(
+    hostEnvironment().HOME ?? hostCurrentWorkingDirectory(),
+    ...ENGINE_HOME_DIRECTORY_SEGMENTS,
+  );
 }
 
 export function mapManagedAgentBrowserError(error: unknown): AppError {
@@ -314,6 +318,6 @@ export function mapManagedAgentBrowserError(error: unknown): AppError {
     hint:
       typeof appError.details?.hint === 'string'
         ? appError.details.hint
-        : 'Run `agent-device web setup` to install the managed web backend.',
+        : 'Run `extend web setup` to install the managed web backend.',
   });
 }

@@ -135,7 +135,7 @@ test('matches dSYMs discovered under search path and symbolicates IPS frames', a
   const output = JSON.parse(await fs.readFile(out, 'utf8')) as any;
   assert.equal(output.threads[0].frames[0].symbol, 'ViewController.crash()');
   assert.equal(output.threads[0].frames[0].symbolLocation, 44);
-  assert.equal(output.agentDeviceSymbolication.symbolicatedFrames, 1);
+  assert.equal(output.extendEngineSymbolication.symbolicatedFrames, 1);
   assert.equal(result.matchedImages[0]?.dsymPath, dsym);
 });
 
@@ -188,7 +188,7 @@ test('preserves modern two-document IPS headers while symbolicating payload fram
   assert.equal(output.slice(0, newlineIndex), header);
   const payload = JSON.parse(output.slice(newlineIndex + 1));
   assert.equal(payload.threads[0].frames[0].symbol, 'ViewController.crash()');
-  assert.equal(payload.agentDeviceSymbolication.symbolicatedFrames, 1);
+  assert.equal(payload.extendEngineSymbolication.symbolicatedFrames, 1);
   assert.equal(result.crash.appName, 'Demo');
   assert.equal(result.crash.bundleId, 'com.example.Demo');
   assert.equal(result.crash.exceptionType, 'EXC_CRASH');

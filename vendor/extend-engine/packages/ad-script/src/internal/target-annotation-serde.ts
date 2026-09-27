@@ -19,8 +19,11 @@
 
 import { AppError } from '@agent-device/kernel/errors';
 
-const TARGET_ANNOTATION_TAG = 'agent-device:target-v1';
-const MULTI_TARGET_ANNOTATION_TAG = 'agent-device:targets-v1';
+// Silicon Extend writes `# extend:target-v1` (and `# extend:targets-v1`); a script saved by the
+// fork's earlier name, `# agent-device:target-v1`, still reads the same, so scripts Silicons
+// saved with Extend 1.0 keep replaying.
+const TARGET_ANNOTATION_TAG = 'extend:target-v1';
+const MULTI_TARGET_ANNOTATION_TAG = 'extend:targets-v1';
 // Captures the rest of the line verbatim: a line claiming the tag with a
 // garbage payload is a malformed v1 annotation, never an ordinary comment.
 //
@@ -35,8 +38,10 @@ const MULTI_TARGET_ANNOTATION_TAG = 'agent-device:targets-v1';
 // matches at all) is never whitespace, so a payload section that `\S.*`
 // would reject (all-whitespace) can never reach this regex in practice.
 /** Internal-test visibility only: the pattern itself is the ReDoS regression surface. */
-export const TARGET_ANNOTATION_LINE_RE = /^#\s*agent-device:target-v(\d+)(?:\s+(\S.*))?$/;
-const MULTI_TARGET_ANNOTATION_LINE_RE = /^#\s*agent-device:targets-v(\d+)(?:\s+(\S.*))?$/;
+export const TARGET_ANNOTATION_LINE_RE =
+  /^#\s*(?:extend|agent-device):target-v(\d+)(?:\s+(\S.*))?$/;
+const MULTI_TARGET_ANNOTATION_LINE_RE =
+  /^#\s*(?:extend|agent-device):targets-v(\d+)(?:\s+(\S.*))?$/;
 
 export const TARGET_ANNOTATION_MAX_FIELD_BYTES = 256;
 export const TARGET_ANNOTATION_MAX_PAYLOAD_BYTES = 4096;

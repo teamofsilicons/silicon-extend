@@ -134,7 +134,7 @@ class FramesTest {
     @Test
     fun helloMatchesTheDocShape() {
         val hello = DeviceFrame.Hello(
-            appVersion = "1.0.0", os = "android", osVersion = "15", model = "Pixel 9", agentDeviceVersion = null,
+            appVersion = "1.0.0", os = "android", osVersion = "15", model = "Pixel 9", engineVersion = null,
             capabilities = listOf("screen.read", "screen.capture", "input.touch"),
             missing = listOf(MissingCapability("adb", "Wireless debugging is off. Turn it on in Developer options.")),
             setup = Setup(
@@ -160,6 +160,103 @@ class FramesTest {
         assertEquals("accessibility", steps[0].jsonObject["key"]!!.jsonPrimitive.content)
         assertTrue("absent help is omitted like serde's skip_serializing_if", "help" !in steps[0].jsonObject)
         assertEquals("Settings › System › Developer options › Wireless debugging", steps[1].jsonObject["help"]!!.jsonPrimitive.content)
+    }
+
+    // ───────────── 1.1 ─────────────
+
+    @Test
+    fun helloCarriesFeaturesAndNoEngineVersion() {
+        val setup = Setup("complete", listOf(SetupStep("accessibility", "Allow Silicon Extend to control the screen", "done")))
+        val o = json(Frames.encode(DeviceFrame.Hello("1.1.0", "android", "15", "Pixel 9", null, listOf("screen.read"), emptyList(), setup, Frames.FEATURES)))
+        assertEquals(listOf("setup_retry"), o["features"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertFalse("this app runs no engine: no engine_version", "engine_version" in o)
+        assertFalse("the 1.0 name is gone", "agent_device_version" in o)
+        val bare = json(Frames.encode(DeviceFrame.Hello("1.1.0", "android", null, null, null, emptyList(), emptyList(), setup)))
+        assertFalse("no features, no field (as serde's skip_serializing_if)", "features" in bare)
+    }
+
+    @Test
+    fun enrollmentCreateHasNoEngineVersion() {
+        val o = ExtendJson.encodeToJsonElement(com.teamofsilicons.extend.protocol.EnrollmentCreate.serializer(), com.teamofsilicons.extend.protocol.EnrollmentCreate("android", "15", "Pixel 9", "1.1.0")).jsonObject
+        assertFalse("engine_version" in o)
+        assertFalse("agent_device_version" in o)
+    }
+
+    @Test
+    fun awakeFramesMatchTheFixture() {
+        // contracts/v1/device/android.device.socket.wake.json
+        assertEquals(
+            json("""{"type":"awake","awake":false,"sleep_state":"screen_off","run":"0192f3a4-5b6c-7d8e-9f00-112233445566","seq":1}"""),
+            json(Frames.encode(DeviceFrame.Awake(false, "screen_off", null, "0192f3a4-5b6c-7d8e-9f00-112233445566", 1))),
+        )
+        assertEquals(
+            json("""{"type":"awake","awake":true,"input_seen":true,"run":"0192f3a4-5b6c-7d8e-9f00-112233445566","seq":2}"""),
+            json(Frames.encode(DeviceFrame.Awake(true, null, true, "0192f3a4-5b6c-7d8e-9f00-112233445566", 2))),
+        )
+    }
+
+    @Test
+    fun wakeRequestShownKeepsItsNoteShort() {
+        assertEquals(json("""{"type":"wake_request_shown","wake_id":"w1","shown":true}"""), json(Frames.encode(DeviceFrame.WakeRequestShown("w1", true))))
+        val long = Frames.encode(DeviceFrame.WakeRequestShown("w1", false, "x".repeat(400)))
+        assertEquals(Frames.WAKE_NOTE_MAX_CHARS, json(long)["note"]!!.jsonPrimitive.content.length)
+    }
+
+    @Test
+    fun wakeFramesAndSides() {
+        val full = Frames.decodeService(
+            """{"type":"wake_request","target":null,"wake_id":"w1","silicon_id":"si:chef","reason":"Check the order screen",
+               "side":"9f2c4b1a0d3e5f67","alert":true,"created_at":"2026-09-27T10:00:00Z","expires_at":"2026-09-27T10:30:00Z"}""",
+        )
+        assertEquals(
+            ServiceFrame.WakeRequest(null, "w1", "si:chef", "Check the order screen", "9f2c4b1a0d3e5f67", true, "2026-09-27T10:00:00Z", "2026-09-27T10:30:00Z"),
+            full,
+        )
+        // Redacted by the service: no Silicon, no reason; alert defaults to false.
+        val hidden = Frames.decodeService("""{"type":"wake_request","target":null,"wake_id":"w1","side":"9f2c","created_at":"a","expires_at":"b"}""") as ServiceFrame.WakeRequest
+        assertNull(hidden.siliconId)
+        assertNull(hidden.reason)
+        assertFalse(hidden.alert)
+        assertEquals(
+            ServiceFrame.WakeRequestEnded(null, "w1", "woken"),
+            Frames.decodeService("""{"type":"wake_request_ended","target":null,"wake_id":"w1","reason":"woken"}"""),
+        )
+        // A reason from a newer service is still an end.
+        assertEquals("snoozed", (Frames.decodeService("""{"type":"wake_request_ended","wake_id":"w1","reason":"snoozed"}""") as ServiceFrame.WakeRequestEnded).reason)
+        val started = Frames.decodeService("""{"type":"session_started","target":null,"session_id":"a3f","silicon_id":"si:chef","since":"2026-09-27T10:05:00Z","side":"9f2c4b1a0d3e5f67"}""")
+        assertEquals("9f2c4b1a0d3e5f67", (started as ServiceFrame.SessionStarted).side)
+        assertNull((Frames.decodeService("""{"type":"session_started","session_id":"a3f","silicon_id":"si:chef","since":"x"}""") as ServiceFrame.SessionStarted).side)
+    }
+
+    @Test
+    fun setupRetryFrames() {
+        assertEquals(ServiceFrame.SetupRetry(null, "wireless_debugging"), Frames.decodeService("""{"type":"setup_retry","target":null,"step":"wireless_debugging"}"""))
+        assertEquals(ServiceFrame.SetupRetry(null, null), Frames.decodeService("""{"type":"setup_retry","target":null,"step":null}"""))
+        assertEquals(ServiceFrame.SetupRetry(null, null), Frames.decodeService("""{"type":"setup_retry"}"""))
+    }
+
+    @Test
+    fun credentialFramesAreIgnoredAndNeverKept() {
+        val f = Frames.decodeService("""{"type":"credential","device_credential":"edc_secret_value"}""")
+        assertTrue(f is ServiceFrame.Unknown && f.type == "credential")
+        assertFalse("the credential isn't kept in the frame (it would be logged)", (f as ServiceFrame.Unknown).raw.contains("edc_secret_value"))
+    }
+
+    @Test
+    fun deviceSelfReadsTheInstanceAndFirstPair() {
+        val body = """{"type":"device_self","data":{"device_id":"7c1e09ab","name":"Living room TV","owner":{"type":"carbon","id":"c:alice"},
+            "team":"acme","os":"android_tv","in_use":null,"takeover":null,"setup":{"state":"complete","steps":[]},"environment":null,
+            "instance_id":"0192f3a4-5b6c-7d8e-9f00-112233445566","first_pair":true}}"""
+        val d = ExtendJson.decodeFromJsonElement(com.teamofsilicons.extend.protocol.DeviceSelf.serializer(), Frames.parseObject(body)!!)
+        assertEquals("0192f3a4-5b6c-7d8e-9f00-112233445566", d.instanceId)
+        assertEquals(true, d.firstPair)
+        // A 1.0 service sends neither.
+        val old = ExtendJson.decodeFromJsonElement(
+            com.teamofsilicons.extend.protocol.DeviceSelf.serializer(),
+            Frames.parseObject("""{"device_id":"7c","name":"TV","owner":{"type":"carbon","id":"c:alice"},"team":"acme"}""")!!,
+        )
+        assertNull(old.instanceId)
+        assertNull(old.firstPair)
     }
 
     @Test

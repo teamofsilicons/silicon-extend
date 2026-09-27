@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 import android.os.Bundle;
 import java.io.IOException;

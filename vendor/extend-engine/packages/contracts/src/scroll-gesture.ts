@@ -342,7 +342,7 @@ export function clampGestureCoordinate(value: number, marginPx: number, size: nu
  * threaded from the daemon would be a snapshot that predates the keyboard.
  *
  * Pure geometry, so the decision is proven against a golden table both this file and the Swift twin
- * (`ScrollViewportPolicy` in apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/
+ * (`ScrollViewportPolicy` in apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/
  * RunnerScrollViewportPolicy.swift) assert against, so drift turns CI red without a simulator. The
  * table carries only frames representable in both languages: `CGRect` standardizes a negative
  * extent into a positive height at a moved origin, so a negative `height` is tested here alone.

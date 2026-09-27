@@ -75,6 +75,14 @@ pub struct AppState {
     pub session_principals: RwLock<HashMap<(String, String), (Principal, Option<TestingSelection>)>>,
     /// Sliding-window counters for rate limits (pairing guesses, enrollments, reports).
     pub limits: tokio::sync::Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    /// Positive answers of the owner-active check (crate::membership).
+    pub owner_cache: crate::membership::OwnerCache,
+    /// (world schema, member) with a Ting waiting for that member's login: the member is a
+    /// possible sender of a pending Ting Extend holds no login for. Their next authenticated call
+    /// sends it (see [`Auth`]). Rebuilt from the database at start and when a test world opens.
+    pub waiting_logins: RwLock<std::collections::HashSet<(String, String)>>,
+    /// (world schema, Carbon) whose Ting registration per Team was checked since the start.
+    pub ting_checked: tokio::sync::Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -141,6 +149,17 @@ impl AppState {
             }
         }
         Ok(())
+    }
+
+    /// Remembers that pending Tings wait for one of these members' logins.
+    pub async fn ting_waiting(&self, world: &World, members: &[String]) {
+        if members.is_empty() {
+            return;
+        }
+        let mut w = self.waiting_logins.write().await;
+        for m in members {
+            w.insert((world.schema.clone(), m.clone()));
+        }
     }
 
     /// Clears a counter (a successful pairing forgives earlier wrong guesses).
@@ -327,6 +346,7 @@ impl AppState {
         if !self.ready_worlds.read().await.contains(&world.schema) {
             db::ensure_world(&self.pool, &world).await?;
             self.ready_worlds.write().await.insert(world.schema.clone());
+            crate::scheduler::rebuild_waiting(self, &world).await;
         }
         // Honeycomb decides expiry; Extend only reports activity.
         let _ = sqlx::query(
@@ -523,8 +543,8 @@ pub async fn selection_layer(State(state): State<Shared>, mut req: Request, next
                     .into_response();
             }
         };
+        // Since 1.1 a claim needs no Team (devices belong to the Carbons who paired them).
         if auth.require_carbon().is_ok()
-            && auth.team().is_ok()
             && let Err(e) = crate::routes::enroll::claim_world_check(&state, &selection, &bytes, auth.p.id()).await
         {
             return e.into_response();
@@ -620,12 +640,51 @@ impl FromRequestParts<Shared> for Auth {
             return Err(AppError::invalid("X-Org-ID must be one team handle."));
         }
         let p = state.authorize(token, team, sel.as_ref()).await?;
+        auth_hook(state, &world, &p).await;
         let isi = header(parts, "x-silicon-isi")
             .map(str::trim)
             .filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control))
             .map(str::to_owned);
         Ok(Self { world, sel, p, isi })
     }
+}
+
+/// After a member's call is authenticated: sends the Tings that waited for their login (they are a
+/// possible sender), and, the first time a Carbon calls after a start, registers them with Ting in
+/// each Team their login reaches where they gave access and Extend has no record for them. Both run
+/// in the background and check that the world is still open first. The check here is one lookup.
+async fn auth_hook(state: &Shared, world: &World, p: &crate::iam::Principal) {
+    let key = (world.schema.clone(), p.id().to_owned());
+    let waiting = state.waiting_logins.read().await.contains(&key);
+    let first = p.is_carbon() && state.ting_checked.lock().await.insert(key.clone());
+    if !waiting && !first {
+        return;
+    }
+    if waiting {
+        state.waiting_logins.write().await.remove(&key);
+    }
+    let (state, world, p) = (state.clone(), world.clone(), p.clone());
+    tokio::spawn(async move {
+        let Some(_fence) = state.world_open(&world).await else {
+            return;
+        };
+        if waiting {
+            crate::scheduler::deliver_for(&state, &world, p.id()).await;
+        }
+        if first {
+            let teams: Vec<String> = sqlx::query_scalar(sql!(
+                "SELECT DISTINCT team FROM {} WHERE granted_by = $1",
+                world.t("device_access")
+            ))
+            .bind(p.id())
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
+            for team in teams.iter().filter(|t| p.teams.contains(t)) {
+                crate::delivery::register_carbon_if_new(&state, &world, &p, team);
+            }
+        }
+    });
 }
 
 /// A paired device, authenticated by its credential.
@@ -729,15 +788,30 @@ pub async fn device_by_credential(state: &AppState, cred: &str) -> AppResult<Opt
     .await?;
     worlds.extend(envs.into_iter().map(|(id,)| World::test(id)));
     for world in worlds {
-        let found: Option<(String,)> = sqlx::query_as(sql!(
-            "SELECT device_id FROM {} WHERE credential_digest = $1 AND removed_at IS NULL",
+        let found: Option<(String, bool)> = sqlx::query_as(sql!(
+            "SELECT device_id, COALESCE(credential_digest = $1, false) FROM {}
+             WHERE (credential_digest = $1 OR next_credential_digest = $1) AND removed_at IS NULL",
             world.t("devices")
         ))
         .bind(&digest)
         .fetch_optional(&state.pool)
         .await
         .unwrap_or(None);
-        if let Some((id,)) = found {
+        if let Some((id, current)) = found {
+            if !current {
+                // The app already uses the credential a rotation gave it: that confirms it, and
+                // the old one stops working.
+                sqlx::query(sql!(
+                    "UPDATE {} SET credential_digest = next_credential_digest, next_credential_digest = NULL
+                     WHERE device_id = $1 AND next_credential_digest = $2",
+                    world.t("devices")
+                ))
+                .bind(&id)
+                .bind(&digest)
+                .execute(&state.pool)
+                .await?;
+                tracing::info!(world = %world.schema, device_id = id, "a device connected with its rotated credential; the old one no longer works");
+            }
             return Ok(Some((world, id)));
         }
     }

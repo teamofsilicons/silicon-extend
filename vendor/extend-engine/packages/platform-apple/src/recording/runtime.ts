@@ -560,7 +560,7 @@ function runnerDescriptorMatchesDevice(
 ): boolean {
   if (device.appleOs === 'macos') return remotePath === undefined;
   if (!isIosFamily(device)) return remotePath === undefined;
-  return remotePath !== undefined && /^tmp\/agent-device-recording-\d+\.mp4$/.test(remotePath);
+  return remotePath !== undefined && /^tmp\/silicon-extend-recording-\d+\.mp4$/.test(remotePath);
 }
 
 async function settleAppleSimulatorProcess(

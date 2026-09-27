@@ -14,8 +14,8 @@ fixture_script=root/'apps/desktop/linux-e2e/record-fixture.py'
 launcher=work/'extend-recording-fixture'
 launcher.write_text('#!/bin/sh\nexec python3 /src/apps/desktop/linux-e2e/record-fixture.py\n')
 launcher.chmod(0o755)
-cli_path=str(root/'vendor/agent-device/bin/agent-device.mjs')
-env=dict(os.environ,PATH=str(work)+':'+os.environ['PATH'],AGENT_DEVICE_STATE_DIR=str(work/'daemon'),EXTEND_RECORD_FIXTURE_PID_FILE=str(work/'fixture.pid'))
+cli_path=str(root/'vendor/extend-engine/bin/extend-engine.mjs')
+env=dict(os.environ,PATH=str(work)+':'+os.environ['PATH'],EXTEND_ENGINE_STATE_DIR=str(work/'daemon'),EXTEND_RECORD_FIXTURE_PID_FILE=str(work/'fixture.pid'))
 cli=['node',cli_path,'--state-dir',str(work/'daemon'),'--session','linux-app','--platform','linux']
 peer=None
 fixture_pid=None
@@ -64,12 +64,12 @@ try:
     desktop=subprocess.check_output(['ffmpeg','-v','error','-f','x11grab','-video_size','641x481','-i',':99','-frames:v','1','-vf','scale=1:1','-f','rawvideo','-pix_fmt','rgb24','-'])
     assert desktop[1]>200 and desktop[2]<30,('capture changed foreground or did not overlap',list(desktop))
     rejected=work/'missing.mp4'
-    result=subprocess.run(['python3',str(root/'vendor/agent-device/linux/screen-record.py'),'--out',str(rejected),'--status',str(work/'missing.json'),'--app-id','no-such-extend-app'],capture_output=True,text=True)
+    result=subprocess.run(['python3',str(root/'vendor/extend-engine/linux/screen-record.py'),'--out',str(rejected),'--status',str(work/'missing.json'),'--app-id','no-such-extend-app'],capture_output=True,text=True)
     assert result.returncode!=0 and not rejected.exists() and 'after waiting' in result.stderr,result
     duplicate=subprocess.Popen(['python3',str(fixture_script)])
     try:
         time.sleep(.5)
-        result=subprocess.run(['python3',str(root/'vendor/agent-device/linux/screen-record.py'),'--out',str(work/'ambiguous.mp4'),'--status',str(work/'ambiguous.json'),'--app-id','extend-recording-fixture'],capture_output=True,text=True)
+        result=subprocess.run(['python3',str(root/'vendor/extend-engine/linux/screen-record.py'),'--out',str(work/'ambiguous.mp4'),'--status',str(work/'ambiguous.json'),'--app-id','extend-recording-fixture'],capture_output=True,text=True)
         assert result.returncode!=0 and 'multiple mapped windows' in result.stderr and not (work/'ambiguous.mp4').exists(),result
     finally:
         duplicate.terminate();duplicate.wait(timeout=5)

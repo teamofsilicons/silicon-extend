@@ -2,6 +2,7 @@ import type { CompanionTunnelScope } from '@agent-device/contracts/remote';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ENGINE_PROJECT_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import { fileURLToPath } from 'node:url';
 import {
   ENV_COMPANION_TUNNEL_BEARER_TOKEN,
@@ -120,7 +121,7 @@ function resolveCompanionTunnelPaths(
   profileKey?: string,
   stateDir?: string,
 ): { statePath: string; logPath: string } {
-  const dir = stateDir ?? path.join(projectRoot, '.agent-device');
+  const dir = stateDir ?? path.join(projectRoot, ...ENGINE_PROJECT_DIRECTORY_SEGMENTS);
   if (!profileKey) {
     return {
       statePath: path.join(dir, `${definition.slug}.json`),

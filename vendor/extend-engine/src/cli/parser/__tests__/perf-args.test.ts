@@ -27,7 +27,7 @@ test('parseArgs accepts perf area subcommands', () => {
 test('usageForCommand advertises focused perf area subcommands', async () => {
   const help = await usageForCommand('perf');
   assert.equal(help === null, false);
-  assert.match(help ?? '', /agent-device perf frames --json/);
+  assert.match(help ?? '', /extend perf frames --json/);
   assert.match(help ?? '', /perf memory snapshot/);
   assert.match(help ?? '', /perf cpu profile report --kind xctrace --out <report\.json>/);
   assert.match(help ?? '', /perf cpu profile report --kind simpleperf --out <cpu-report\.json>/);

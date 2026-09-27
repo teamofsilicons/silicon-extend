@@ -542,7 +542,7 @@ async function loadHttpAuthHook(
   try {
     imported = (await import(pathToFileURL(resolvedPath).href)) as Record<string, unknown>;
   } catch (error) {
-    throw new AppError('COMMAND_FAILED', 'Failed to load AGENT_DEVICE_HTTP_AUTH_HOOK module', {
+    throw new AppError('COMMAND_FAILED', 'Failed to load EXTEND_ENGINE_HTTP_AUTH_HOOK module', {
       hookPath: resolvedPath,
       error: error instanceof Error ? error.message : String(error),
     });

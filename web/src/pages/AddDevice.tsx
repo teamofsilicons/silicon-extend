@@ -1,11 +1,11 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Laptop, Monitor, Smartphone, Tablet, Tv } from "lucide-solid";
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Laptop, Monitor, Smartphone, Tablet, Tv, Users } from "lucide-solid";
 import { session } from "../lib/session";
 import { toApiError, type ApiError } from "../lib/api";
 import type { AttachOs, Device } from "../lib/types";
 import { canAdvance, initialState, nameProblem, reduce, STEP_TITLE, stepsFor, type Step, type WizardEvent } from "../lib/wizard";
 import { displayPairingCode, formatCodeInput, normalizePairingCode } from "../lib/pairing";
-import { DEVICE_KINDS, DOWNLOADS, deviceKind, OS_LABEL, type DeviceKind, type DeviceKindId } from "../config";
+import { DEVICE_KINDS, DOWNLOADS, deviceKind, MULTI_CARBON_APP_VERSION, OS_LABEL, type DeviceKind, type DeviceKindId } from "../config";
 import { Link, navigate, query } from "../lib/router";
 import { Button, CopyText, ErrorNote, OnlineDot, Spinner } from "../components/ui";
 import Shader from "../components/Shader";
@@ -40,6 +40,8 @@ export default function AddDevice() {
   const [state, setState] = createSignal(initialState(preset));
   const dispatch = (event: WizardEvent) => setState((current) => reduce(current, event));
   const [lastError, setLastError] = createSignal<ApiError | null>(null);
+  /** The Team the last Silicons were given access in, for the command the done step suggests. */
+  const [grantTeam, setGrantTeam] = createSignal<string | null>(null);
   const kind = createMemo(() => deviceKind(state().kind ?? undefined));
   const order = createMemo(() => stepsFor(kind()).filter((step) => step !== "kind" || !state().device));
   /** The steps the rail shows (everything after choosing the kind), and where the Carbon is in them. */
@@ -66,7 +68,6 @@ export default function AddDevice() {
           await s.client().claimPairing({
             pairing_code: normalizePairingCode(st.code).code,
             name: st.name.trim(),
-            visibility: st.visibility,
             pair_ttl_days: st.ttlDays,
           })
         ).device;
@@ -74,7 +75,6 @@ export default function AddDevice() {
         device = await s.client().attachDevice(st.hostId!, {
           os: k.os as AttachOs,
           name: st.name.trim(),
-          visibility: st.visibility,
           pair_ttl_days: st.ttlDays,
         });
       }
@@ -94,7 +94,7 @@ export default function AddDevice() {
     <section class="page-main wizard" data-testid="add-device" data-step={state().step}>
       <header class="page-heading">
         <div>
-          <p class="eyebrow">Add a device{s.team() ? ` · ${s.team()}` : ""}</p>
+          <p class="eyebrow">Add a device</p>
           <h1 class="page-title">{kind() ? `Pair ${articleFor(kind()!)}.` : "What are you pairing?"}</h1>
           <Show when={!kind()}>
             <p class="lead">Pick the kind of device. Phones, computers and some TVs run the Extend app; the rest pair through a computer you already paired.</p>
@@ -258,21 +258,7 @@ export default function AddDevice() {
                 <Show when={state().name && nameProblem(state().name)}>
                   <p class="field-problem">{nameProblem(state().name)}</p>
                 </Show>
-                <fieldset class="radio-group">
-                  <legend>Who can see it exists</legend>
-                  <label>
-                    <input type="radio" name="visibility" checked={state().visibility === "team"} onChange={() => dispatch({ type: "set_visibility", visibility: "team" })} />
-                    <span>
-                      <strong>Team</strong> — other Carbons in {s.team()} see its name, kind and whether it's online. Only you manage it.
-                    </span>
-                  </label>
-                  <label>
-                    <input type="radio" name="visibility" checked={state().visibility === "personal"} onChange={() => dispatch({ type: "set_visibility", visibility: "personal" })} />
-                    <span>
-                      <strong>Personal</strong> — only you see it.
-                    </span>
-                  </label>
-                </fieldset>
+                <p class="fine">Only you see it on Extend. Other Carbons who pair the same device get their own, separate pair.</p>
                 <TtlSlider value={state().ttlDays} onInput={(days) => dispatch({ type: "set_ttl", days })} />
                 <ErrorNote error={shownError()} testid="pairing-error" />
                 <Nav
@@ -296,6 +282,7 @@ export default function AddDevice() {
                   <Check size={16} aria-hidden="true" /> <span><strong>{device().name}</strong> is paired{s.world().kind === "testing" ? " in the test environment" : ""}. Now finish its setup
                   {kind()?.via === "host" ? " — the host computer's Extend app walks you through it." : " on the device."}</span>
                 </p>
+                <SharedDeviceNote device={device()} />
                 <SetupSteps device={device()} onComplete={() => dispatch({ type: "setup_complete" })} />
                 <div class="wizard-nav">
                   <span />
@@ -313,8 +300,17 @@ export default function AddDevice() {
               <div class="card" data-testid="access-step">
                 <p class="eyebrow">Access</p>
                 <h2 class="card-title">Which Silicons can use {device().name}?</h2>
-                <p class="fine">You can change this any time on the device's page. Only one Silicon uses the device at a time; the others can ask it for a turn.</p>
-                <AccessPicker deviceId={device().device_id} onGranted={(ids) => dispatch({ type: "access_done", granted: [...state().granted, ...ids] })} />
+                <p class="fine">
+                  Pick Silicons from any of your Teams; each uses the device as a member of its own Team. You can change this any time on the device's page. Only one Silicon uses the device at a
+                  time; the others can ask for a turn.
+                </p>
+                <AccessPicker
+                  deviceId={device().device_id}
+                  onGranted={(ids, team) => {
+                    setGrantTeam(team);
+                    dispatch({ type: "access_done", granted: [...state().granted, ...ids] });
+                  }}
+                />
                 <div class="wizard-nav">
                   <span />
                   <Button variant="ghost" onClick={() => dispatch({ type: "skip_access" })} data-testid="skip-access">
@@ -338,10 +334,10 @@ export default function AddDevice() {
                   </p>
                   <blockquote class="ask">“Use my {kind()?.short ?? "device"} ({device().device_id}) through Extend to …”</blockquote>
                   <p class="fine">A Silicon finds it with:</p>
-                  <CopyText text={`extend device show ${device().device_id}`} />
+                  <CopyText text={`extend ${grantTeam() ? `--team ${grantTeam()} ` : ""}device show ${device().device_id}`} />
                 </Show>
                 <div class="wizard-nav">
-                  <Button onClick={() => setState(initialState())}>Add another device</Button>
+                  <Button onClick={() => (setGrantTeam(null), setState(initialState()))}>Add another device</Button>
                   <Link href={`/devices/${device().device_id}`} class="button primary" data-testid="open-device">
                     Open device page <ArrowRight size={16} aria-hidden="true" />
                   </Link>
@@ -481,6 +477,10 @@ function CodeStep(props: { code: string; onInput: (code: string) => void; onBack
           )}
         </p>
         <p class="fine">The code changes every 5 minutes and works once. If it just changed, use the new one.</p>
+        <p class="fine" data-testid="already-paired-note">
+          Someone else already paired this device? On the device, open Extend and choose <strong>Pair with another Carbon</strong> (Extend {MULTI_CARBON_APP_VERSION} or later), then enter
+          the code it shows. Your pair stays separate from theirs.
+        </p>
         <ErrorNote error={props.error} testid="code-error" />
         <Nav onBack={props.onBack} submit nextLabel="Next" disabled={!normalized().valid} />
         <p class="ticket-credits" aria-hidden="true">
@@ -489,6 +489,34 @@ function CodeStep(props: { code: string; onInput: (code: string) => void; onBack
         </p>
       </div>
     </form>
+  );
+}
+
+/**
+ * After a claim or an attach, when other Carbons paired the same device: each pair is separate, and
+ * Silicons any Carbon gives access to share the device. On a computer the terminal runs as its own
+ * account, so only the Carbon who installed Extend there can give terminal use (Carbon decision 3).
+ */
+function SharedDeviceNote(props: { device: Device }) {
+  const computer = () => props.device.kind === "computer" && !props.device.host_device_id;
+  return (
+    <Show when={props.device.paired_by_others}>
+      <div class="notice shared-note" data-testid="wizard-shared-note">
+        <p class="shared-head">
+          <Users size={15} aria-hidden="true" /> <strong>Another Carbon paired this {computer() ? "computer" : "device"} too.</strong>
+        </p>
+        <p>Your pair is separate: its own name, Silicons and pairing time. You see only your own Silicons, and only one Silicon uses the device at a time.</p>
+        <Show
+          when={computer()}
+          fallback={<p data-testid="wizard-shared-device-warning">Silicons any Carbon gives access to can use this whole device, including what others leave on it.</p>}
+        >
+          <p data-testid="wizard-shared-computer-warning">
+            Only Silicons given access by the Carbon who installed Silicon Extend on this computer can use its terminal, which runs as the computer's own account. Share a computer
+            only with Carbons you trust: a Silicon using it can reach what that account can, including what other Silicons leave on it.
+          </p>
+        </Show>
+      </div>
+    </Show>
   );
 }
 
@@ -503,8 +531,9 @@ function HostStep(props: {
   canNext: boolean;
 }) {
   const s = session();
+  // Every computer the Carbon paired, whichever Team is selected (1.1: devices belong to the Carbon).
   const [hosts] = createResource(
-    () => s.team(),
+    () => s.world(),
     async () => {
       const page = await s.client().listDevices({ scope: "mine", limit: 100 });
       return page.items.filter(
@@ -515,6 +544,10 @@ function HostStep(props: {
   const what = () => (props.kind.host === "mac" ? "Mac" : "computer");
   return (
     <div class="card" data-testid="host-step">
+      <p class="fine">
+        If another Carbon already added this {props.kind.short} through a computer, add it through that same computer: pair the computer first (on it, choose Pair with another
+        Carbon), then pick your pair of it here.
+      </p>
       <p>
         {props.kind.label} {props.kind.host === "mac" ? "pairs through a Mac you already paired" : "pairs through a Mac, Windows or Linux computer you already paired"}. It must be online
         {props.kind.os === "ios" || props.kind.os === "ipados" ? " and, for the first setup, within reach of a cable" : " and on the same network as the TV"}.

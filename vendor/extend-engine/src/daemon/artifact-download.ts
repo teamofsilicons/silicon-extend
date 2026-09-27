@@ -9,7 +9,7 @@ import {
   createByteLimitStream,
 } from '@agent-device/host-kit/archive';
 
-const TEMP_PREFIX = 'agent-device-artifact-';
+const TEMP_PREFIX = 'extend-engine-artifact-';
 const REQUEST_IDLE_TIMEOUT_MS = 60_000;
 
 export function sanitizeArtifactFilename(raw: string): string {

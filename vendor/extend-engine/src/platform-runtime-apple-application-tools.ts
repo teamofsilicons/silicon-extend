@@ -135,7 +135,7 @@ async function resolveAppleOpenTarget(
       'open --foreground requires exactly one running app on the selected iOS simulator.',
       {
         reason: 'foreground_app_ambiguous',
-        hint: 'Pass an explicit app instead: agent-device open <app> --platform ios.',
+        hint: 'Pass an explicit app instead: extend open <app> --platform ios.',
       },
     );
   }

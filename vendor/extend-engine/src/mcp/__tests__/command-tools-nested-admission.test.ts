@@ -83,7 +83,7 @@ test('a refused step is refused wherever it sits in the batch', async () => {
 
   assert.equal(result.isError, true);
   assert.match(result.content[0]?.text ?? '', /batch\.steps\[2\]\.input: iosXctestrunFile is not/);
-  assert.match(result.content[0]?.text ?? '', /AGENT_DEVICE_IOS_XCTESTRUN_FILE/);
+  assert.match(result.content[0]?.text ?? '', /EXTEND_ENGINE_IOS_XCTESTRUN_FILE/);
   assert.deepEqual(calls, [], 'no step runs when one is refused');
 });
 

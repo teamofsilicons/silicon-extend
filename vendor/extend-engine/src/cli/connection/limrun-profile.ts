@@ -18,7 +18,7 @@ export function resolveLimrunConnectProfile(options: {
   const apiKey = env.LIMRUN_API_KEY?.trim();
   if (!apiKey) {
     throw new AppError('INVALID_ARGS', 'connect limrun requires LIMRUN_API_KEY.', {
-      hint: 'Set LIMRUN_API_KEY in the environment before running agent-device connect limrun.',
+      hint: 'Set LIMRUN_API_KEY in the environment before running extend connect limrun.',
     });
   }
 

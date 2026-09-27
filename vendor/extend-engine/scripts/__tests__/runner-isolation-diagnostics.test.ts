@@ -10,7 +10,7 @@ import {
 } from '../runner-isolation-diagnostics.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
-const RUNNER = '/src/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests';
+const RUNNER = '/src/apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests';
 
 // The four warnings the base build printed on CI run 35981303070 (#2882). None is an isolation
 // diagnostic, so a log carrying only them passes.
@@ -41,7 +41,7 @@ function scan(...lines: string[]) {
 
 function log(...lines: string[]): string {
   return [
-    'CompileSwift normal arm64 (in target AgentDeviceRunnerUITests)',
+    'CompileSwift normal arm64 (in target SiliconExtendHelperUITests)',
     ...lines,
     '** TEST BUILD SUCCEEDED **',
     '',
@@ -150,7 +150,7 @@ describe('scripts/build-xcuitest-apple.sh isolation scan', () => {
     expect(result.stderr).not.toMatch(/no concurrency diagnostic on/);
     expect(
       fs.readFileSync(
-        path.join(result.derived, 'Logs', 'agent-device-build-for-testing.log'),
+        path.join(result.derived, 'Logs', 'extend-engine-build-for-testing.log'),
         'utf8',
       ),
     ).toContain(MAIN_ACTOR_ISOLATED_WARNING);

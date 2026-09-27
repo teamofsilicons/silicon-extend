@@ -406,7 +406,7 @@ test('installed package exposes Node APIs and packaged companion tunnel entrypoi
     const cliStdout = await execFileText(
       process.execPath,
       [
-        path.join(installedPackageRoot, 'bin', 'agent-device.mjs'),
+        path.join(installedPackageRoot, 'bin', 'extend-engine.mjs'),
         'metro',
         'prepare',
         '--remote-config',

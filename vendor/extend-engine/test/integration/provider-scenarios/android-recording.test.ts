@@ -65,7 +65,7 @@ test('Provider-backed integration Android record stop reattaches a matching dura
       const calls: string[][] = [];
       const pulls: PullCall[] = [];
       const outputPath = path.join(tmpDir, 'recovered.mp4');
-      const remotePath = '/sdcard/agent-device-recording-123456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-123456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
         remotePath,
@@ -83,7 +83,7 @@ test('Provider-backed integration Android record stop reattaches a matching dura
         assert.equal(data.recording, 'stopped');
         assert.equal(data.outPath, outputPath);
         assert.ok(
-          calls.some((args) => args[1]?.includes('/sdcard/agent-device-recording-active.json')),
+          calls.some((args) => args[1]?.includes('/sdcard/silicon-extend-recording-active.json')),
         );
         assert.ok(calls.some((args) => args.join(' ') === 'shell kill -2 4321'));
         assert.deepEqual(pulls, [{ remotePath, localPath: collectedRecordingPath(outputPath) }]);
@@ -103,7 +103,7 @@ test('Provider-backed integration Android record stop returns fenced completed n
       const outputPath = path.join(tmpDir, 'completed.mp4');
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
-        remotePath: '/sdcard/agent-device-recording-223456789.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-223456789.mp4',
         sessionName: 'default',
         completion: {
           backend: 'adb screenrecord',
@@ -139,7 +139,7 @@ test('Provider-backed integration Android record stop returns fenced completed n
   );
 });
 
-const ANDROID_MARKER_REMOVAL = 'shell rm -f /sdcard/agent-device-recording-active.json';
+const ANDROID_MARKER_REMOVAL = 'shell rm -f /sdcard/silicon-extend-recording-active.json';
 
 test('Provider-backed integration Android record start retires completed evidence after the emulator reassigns its recorder pid', async () => {
   await withAndroidRecordingScenario(
@@ -148,7 +148,7 @@ test('Provider-backed integration Android record start retires completed evidenc
       const calls: string[][] = [];
       const previousPath = path.join(tmpDir, 'previous.mp4');
       const outputPath = path.join(tmpDir, 'reused.mp4');
-      const remotePath = '/sdcard/agent-device-recording-523456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-523456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: previousPath,
         remotePath,
@@ -209,7 +209,7 @@ test('Provider-backed integration Android record start retires evidence stranded
     async (tmpDir) => {
       const calls: string[][] = [];
       const outputPath = path.join(tmpDir, 're-adopted.mp4');
-      const remotePath = '/sdcard/agent-device-recording-823456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-823456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: path.join(tmpDir, 'abandoned.mp4'),
         remotePath,
@@ -255,7 +255,7 @@ test('Provider-backed integration Android record start retains completed evidenc
     async (tmpDir) => {
       const calls: string[][] = [];
       const outputPath = path.join(tmpDir, 'foreign.mp4');
-      const remotePath = '/sdcard/agent-device-recording-723456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-723456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
         remotePath,
@@ -321,7 +321,7 @@ test('Provider-backed integration Android record start refuses completed evidenc
     async (tmpDir) => {
       const calls: string[][] = [];
       const outputPath = path.join(tmpDir, 'alive.mp4');
-      const remotePath = '/sdcard/agent-device-recording-623456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-623456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
         remotePath,
@@ -381,7 +381,7 @@ test('Provider-backed integration Android corrupt descriptor is retained without
       const calls: string[][] = [];
       const manifest = buildAndroidRecordingManifest({
         outPath: path.join(tmpDir, 'corrupt.mp4'),
-        remotePath: '/sdcard/agent-device-recording-323456789.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-323456789.mp4',
         sessionName: 'default',
       });
       const daemon = await createAndroidRecordingScenarioHarness({
@@ -393,7 +393,7 @@ test('Provider-backed integration Android corrupt descriptor is retained without
         const stopped = await stopAndroidRecording(daemon);
         assertRpcError(stopped, 'COMMAND_FAILED', /cannot be reattached/);
         assert.equal(
-          calls.some((args) => args[1]?.includes('agent-device-recording-active.json')),
+          calls.some((args) => args[1]?.includes('silicon-extend-recording-active.json')),
           false,
         );
         assert.equal(
@@ -415,10 +415,10 @@ test('Provider-backed integration Android cleanup-only recovery terminalizes bef
       const outputPath = path.join(tmpDir, 'retry.mp4');
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
-        remotePath: '/sdcard/agent-device-recording-423456789.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-423456789.mp4',
         sessionName: 'default',
         chunks: [],
-        pendingRemotePath: '/sdcard/agent-device-recording-423456789.mp4',
+        pendingRemotePath: '/sdcard/silicon-extend-recording-423456789.mp4',
       });
       const provider = createAndroidRecordingProvider({ calls, manifests: [manifest] });
       const daemon = await createAndroidRecordingScenarioHarness({

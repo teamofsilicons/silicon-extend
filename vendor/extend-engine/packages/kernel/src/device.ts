@@ -479,7 +479,7 @@ function buildAmbiguousDeviceHint(candidates: DeviceInfo[]): string {
   return (
     `Select the intended device explicitly, for example ${identitySelector} ` +
     `or --device ${JSON.stringify(first?.name ?? '<name>')}. ` +
-    `Run agent-device devices to list them.`
+    `Run extend devices to list them.`
   );
 }
 

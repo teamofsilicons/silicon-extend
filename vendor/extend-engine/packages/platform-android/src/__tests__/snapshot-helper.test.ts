@@ -28,9 +28,9 @@ const manifest: AndroidSnapshotHelperManifest = {
   version: '0.13.3',
   apkUrl: null,
   sha256: 'a'.repeat(64),
-  packageName: 'com.callstack.agentdevice.snapshothelper',
+  packageName: 'com.teamofsilicons.extend.snapshothelper',
   versionCode: 13003,
-  instrumentationRunner: 'com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation',
+  instrumentationRunner: 'com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation',
   minSdk: 23,
   targetSdk: 36,
   outputFormat: 'uiautomator-xml',
@@ -197,7 +197,7 @@ test('ensureAndroidSnapshotHelper installs when missing and skips a newer versio
   const skipped = await ensureAndroidSnapshotHelper({
     adb: async () => ({
       exitCode: 0,
-      stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+      stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
       stderr: '',
     }),
     artifact: { apkPath, manifest: localManifest },
@@ -439,6 +439,8 @@ test('ensureAndroidSnapshotHelper caches successful install checks per device an
       localManifest.packageName,
     ],
     ['install', '-r', apkPath],
+    // A fresh install removes the fork-named helper (best effort).
+    ['shell', 'pm', 'uninstall', 'com.callstack.agentdevice.snapshothelper'],
   ]);
 
   await fs.writeFile(apkPath, 'helper-apk');
@@ -447,7 +449,7 @@ test('ensureAndroidSnapshotHelper caches successful install checks per device an
     artifact,
     deviceKey: 'android:device-2',
   });
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
 
   forgetAndroidSnapshotHelperInstall({
     deviceKey: 'android:emulator-5554',
@@ -459,7 +461,7 @@ test('ensureAndroidSnapshotHelper caches successful install checks per device an
     artifact,
     deviceKey: 'android:emulator-5554',
   });
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 9);
 });
 
 test('ensureAndroidSnapshotHelper always policy bypasses cached install result', async () => {
@@ -519,6 +521,7 @@ test('ensureAndroidSnapshotHelper always policy bypasses cached install result',
       localManifest.packageName,
     ],
     ['install', '-r', apkPath],
+    ['shell', 'pm', 'uninstall', 'com.callstack.agentdevice.snapshothelper'],
   ]);
 });
 
@@ -563,7 +566,7 @@ test('ensureAndroidSnapshotHelper uninstalls and retries when signatures differ'
       if (args.includes('--show-versioncode')) {
         return {
           exitCode: 0,
-          stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:1',
+          stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:1',
           stderr: '',
         };
       }
@@ -588,7 +591,7 @@ test('ensureAndroidSnapshotHelper uninstalls and retries when signatures differ'
   assert.equal(result.installed, true);
   assert.equal(result.reason, 'outdated');
   assert.deepEqual(calls[1], ['install', '-r', apkPath]);
-  assert.deepEqual(calls[2], ['uninstall', 'com.callstack.agentdevice.snapshothelper']);
+  assert.deepEqual(calls[2], ['uninstall', 'com.teamofsilicons.extend.snapshothelper']);
   assert.deepEqual(calls[3], ['install', '-r', apkPath]);
 });
 
@@ -636,7 +639,7 @@ test('ensureAndroidSnapshotHelper retry install also uses provider install capab
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:1',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:1',
         stderr: '',
       };
     }
@@ -666,7 +669,7 @@ test('ensureAndroidSnapshotHelper retry install also uses provider install capab
 
   assert.equal(result.installed, true);
   assert.deepEqual(installCalls, [apkPath, apkPath]);
-  assert.deepEqual(adbCalls[1], ['uninstall', 'com.callstack.agentdevice.snapshothelper']);
+  assert.deepEqual(adbCalls[1], ['uninstall', 'com.teamofsilicons.extend.snapshothelper']);
 });
 
 test('captureAndroidSnapshotWithHelper uses injected adb executor', async () => {
@@ -705,7 +708,7 @@ test('captureAndroidSnapshotWithHelper uses injected adb executor', async () => 
     timeoutMs: 9000,
     maxDepth: 64,
     maxNodes: 100,
-    outputPath: '/sdcard/Android/data/com.callstack.agentdevice.snapshothelper/files/test.xml',
+    outputPath: '/sdcard/Android/data/com.teamofsilicons.extend.snapshothelper/files/test.xml',
   });
 
   assert.deepEqual(capturedArgs, [
@@ -730,8 +733,8 @@ test('captureAndroidSnapshotWithHelper uses injected adb executor', async () => 
     '100',
     '-e',
     'outputPath',
-    '/sdcard/Android/data/com.callstack.agentdevice.snapshothelper/files/test.xml',
-    'com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation',
+    '/sdcard/Android/data/com.teamofsilicons.extend.snapshothelper/files/test.xml',
+    'com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation',
   ]);
   assert.equal(result.xml, '<hierarchy><node index="0" /></hierarchy>');
   assert.equal(result.metadata.maxNodes, 100);
@@ -805,14 +808,14 @@ test('captureAndroidSnapshotWithHelper can read output file when chunks are disa
     '-e',
     'emitChunks',
     'false',
-    'com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation',
+    'com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation',
   ]);
   assert.deepEqual(adbCalls[1], [
     'shell',
     'sh',
     '-c',
     `'cat "$1"; status=$?; rm -f "$1"; exit "$status"'`,
-    'agent-device-snapshot-helper-output',
+    'extend-engine-snapshot-helper-output',
     outputPath,
   ]);
   assert.equal(result.xml, '<hierarchy><node index="0" /></hierarchy>');
@@ -892,7 +895,7 @@ test('captureAndroidSnapshotWithHelper reads helper output file when instrumenta
       }
       throw new Error(`unexpected args: ${args.join(' ')}`);
     },
-    outputPath: '/sdcard/Android/data/com.callstack.agentdevice.snapshothelper/files/test.xml',
+    outputPath: '/sdcard/Android/data/com.teamofsilicons.extend.snapshothelper/files/test.xml',
   });
 
   assert.equal(result.xml, '<hierarchy><node text="file fallback"/></hierarchy>');
@@ -902,8 +905,8 @@ test('captureAndroidSnapshotWithHelper reads helper output file when instrumenta
     'sh',
     '-c',
     `'cat "$1"; status=$?; rm -f "$1"; exit "$status"'`,
-    'agent-device-snapshot-helper-output',
-    '/sdcard/Android/data/com.callstack.agentdevice.snapshothelper/files/test.xml',
+    'extend-engine-snapshot-helper-output',
+    '/sdcard/Android/data/com.teamofsilicons.extend.snapshothelper/files/test.xml',
   ]);
 });
 

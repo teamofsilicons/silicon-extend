@@ -93,7 +93,7 @@ export const CAPTURED_SCOPED_SIMULATOR = {
  * `runner-process-launch.ts` against a cached xctestrun. Host destination lines are left out.
  */
 export const CAPTURED_LAUNCH_DESTINATION_NOT_FOUND_OUTPUT =
-  'Command line invocation:\n    /Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild test-without-building -only-testing AgentDeviceRunnerUITests/RunnerTests/testCommand -parallel-testing-enabled NO -test-timeouts-enabled NO -collect-test-diagnostics never -maximum-concurrent-test-simulator-destinations 1 -destination-timeout 20 -xctestrun /Users/thymikee/.agent-device/apple-runner/derived/ios-simulator/cache-327953f5ae7efca8/Build/Products/AgentDeviceRunner_AgentDeviceRunnerUITests_iphonesimulator26.2-arm64.xctestrun -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -DVTSimulatorSetLocation=/Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-simset-empty\n\n2026-09-25 14:06:21.656 xcodebuild[56376:166317816] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.\n2026-09-25 14:06:21.753 xcodebuild[56376:166317816] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.\n2026-09-25 14:06:41.674 xcodebuild[56376:166317816] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.\n2026-09-25 14:06:41.685 xcodebuild[56376:166317816] Writing error result bundle to /var/folders/65/fz9_2bsj6fzgct46vx226s8c0000gn/T/ResultBundle_2026-25-09_14-06-0041.xcresult\nxcodebuild: error: Unable to find a device matching the provided destination specifier:\n\t\t{ platform:iOS Simulator, id:9DD70D58-C485-4CE5-8743-5FED48468446 }\n\n\tThe requested device could not be found because no available devices matched the request.\n\n\tAvailable destinations for the "AgentDeviceRunner" scheme:\n\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }\n\t\t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }\n\t\t{ platform:macOS, name:Any Mac }\n\t\t{ platform:macOS, variant:Mac Catalyst, name:Any Mac }\n\t\t{ platform:tvOS, id:dvtdevice-DVTiOSDevicePlaceholder-appletvos:placeholder, name:Any tvOS Device }\n\t\t{ platform:tvOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-appletvsimulator:placeholder, name:Any tvOS Simulator Device }\n\t\t{ platform:visionOS, id:dvtdevice-DVTiOSDevicePlaceholder-xros:placeholder, name:Any visionOS Device }\n\t\t{ platform:visionOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-xrsimulator:placeholder, name:Any visionOS Simulator Device }\n\t\t{ platform:watchOS, id:dvtdevice-DVTiOSDevicePlaceholder-watchos:placeholder, name:Any watchOS Device }\n\t\t{ platform:watchOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-watchsimulator:placeholder, name:Any watchOS Simulator Device }\n';
+  'Command line invocation:\n    /Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild test-without-building -only-testing SiliconExtendHelperUITests/RunnerTests/testCommand -parallel-testing-enabled NO -test-timeouts-enabled NO -collect-test-diagnostics never -maximum-concurrent-test-simulator-destinations 1 -destination-timeout 20 -xctestrun /Users/thymikee/.agent-device/apple-runner/derived/ios-simulator/cache-327953f5ae7efca8/Build/Products/SiliconExtendHelper_SiliconExtendHelperUITests_iphonesimulator26.2-arm64.xctestrun -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -DVTSimulatorSetLocation=/Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-simset-empty\n\n2026-09-25 14:06:21.656 xcodebuild[56376:166317816] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.\n2026-09-25 14:06:21.753 xcodebuild[56376:166317816] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.\n2026-09-25 14:06:41.674 xcodebuild[56376:166317816] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.\n2026-09-25 14:06:41.685 xcodebuild[56376:166317816] Writing error result bundle to /var/folders/65/fz9_2bsj6fzgct46vx226s8c0000gn/T/ResultBundle_2026-25-09_14-06-0041.xcresult\nxcodebuild: error: Unable to find a device matching the provided destination specifier:\n\t\t{ platform:iOS Simulator, id:9DD70D58-C485-4CE5-8743-5FED48468446 }\n\n\tThe requested device could not be found because no available devices matched the request.\n\n\tAvailable destinations for the "SiliconExtendHelper" scheme:\n\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }\n\t\t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }\n\t\t{ platform:macOS, name:Any Mac }\n\t\t{ platform:macOS, variant:Mac Catalyst, name:Any Mac }\n\t\t{ platform:tvOS, id:dvtdevice-DVTiOSDevicePlaceholder-appletvos:placeholder, name:Any tvOS Device }\n\t\t{ platform:tvOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-appletvsimulator:placeholder, name:Any tvOS Simulator Device }\n\t\t{ platform:visionOS, id:dvtdevice-DVTiOSDevicePlaceholder-xros:placeholder, name:Any visionOS Device }\n\t\t{ platform:visionOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-xrsimulator:placeholder, name:Any visionOS Simulator Device }\n\t\t{ platform:watchOS, id:dvtdevice-DVTiOSDevicePlaceholder-watchos:placeholder, name:Any watchOS Device }\n\t\t{ platform:watchOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-watchsimulator:placeholder, name:Any watchOS Simulator Device }\n';
 
 export type RunnerStartupFailureFixture = Readonly<{
   /** Stable name for a focused test or a review comment. */
@@ -138,8 +138,8 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'shipped-sniff-trigger',
     output:
-      "error: Failed registering bundle identifier \"com.yourname.agentdevice.runner\" with the developer portal (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
-    note: 'Capture with AGENT_DEVICE_IOS_BUNDLE_ID set to an identifier already registered by another team, and record the `xcodebuild -version` of the machine.',
+      "error: Failed registering bundle identifier \"com.yourname.extend.helper\" with the developer portal (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
+    note: 'Capture with EXTEND_ENGINE_IOS_BUNDLE_ID set to an identifier already registered by another team, and record the `xcodebuild -version` of the machine.',
   },
   {
     id: 'app-id-not-available',
@@ -148,7 +148,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'shipped-sniff-trigger',
     output:
-      "error: App Identifier 'com.yourname.agentdevice.runner' is not available (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: App Identifier 'com.yourname.extend.helper' is not available (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'The second shape of the same cause: no "failed registering" line, so only the two-part "app identifier" + "not available" trigger can name it. Trimmed to the shipped trigger; the real sentence is still unrecorded.',
   },
   {
@@ -158,8 +158,8 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'shipped-sniff-trigger',
     output:
-      "error: Signing for \"AgentDeviceRunner\" requires a development team (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
-    note: 'Capture with AGENT_DEVICE_IOS_TEAM_ID unset on a signed-in-but-team-less account.',
+      "error: Signing for \"SiliconExtendHelper\" requires a development team (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
+    note: 'Capture with EXTEND_ENGINE_IOS_TEAM_ID unset on a signed-in-but-team-less account.',
   },
   {
     id: 'requires-development-team-message-only',
@@ -169,7 +169,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'shipped-sniff-trigger',
     output:
-      "error: Signing for \"AgentDeviceRunner\" requires a development team (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')",
+      "error: Signing for \"SiliconExtendHelper\" requires a development team (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')",
     note: 'Same text arriving in the thrown message instead of the exec details: the catch wraps a non-AppError with String(err), and the rule still has to see it.',
   },
   {
@@ -179,7 +179,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: App Identifier 'com.yourname.agentdevice.runner' is invalid (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\nnote: The simulator device is not available for this destination\n** TEST BUILD FAILED **\n",
+      "error: App Identifier 'com.yourname.extend.helper' is invalid (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\nnote: The simulator device is not available for this destination\n** TEST BUILD FAILED **\n",
     note: 'The same cross-line hazard the profile rows gave up (#2688 review): one line faults the identifier and another says something is not available, and neither line pairs them. The reason needs both in one sentence, which is what `app-id-not-available` records.',
   },
   {
@@ -187,12 +187,12 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     reason: 'signing_provisioning_profile_missing',
     site: 'build-for-testing',
     command:
-      'agent-device prepare ios-runner --platform ios --device <iPhone> --json  # AGENT_DEVICE_IOS_TEAM_ID=ZZZZZZZZZZ, fresh AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH',
+      'extend prepare ios-runner --platform ios --device <iPhone> --json  # EXTEND_ENGINE_IOS_TEAM_ID=ZZZZZZZZZZ, fresh EXTEND_ENGINE_IOS_RUNNER_DERIVED_PATH',
     xcodeVersion: 'Xcode 26.2 / Build version 17C52',
     provenance: 'captured',
     output:
-      "/Users/thymikee/.t3/worktrees/agent-device/apex-2680/apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj: error: No Accounts: Add a new account in Accounts settings. (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n/Users/thymikee/.t3/worktrees/agent-device/apex-2680/apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj: error: No profiles for 'com.callstack.agentdevice.runner' were found: Xcode couldn't find any iOS App Development provisioning profiles matching 'com.callstack.agentdevice.runner'. (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n",
-    note: 'Captured on `thymikee-iphone`, iPhone 17 Pro, iOS 27.0. Reached by pointing `AGENT_DEVICE_IOS_TEAM_ID` at a team with no certificate on a machine that is not signed into Xcode, with a fresh derived path so no cached artifact short-circuits the build. One `error:` line per target: the phrase the rule matches is not wrapped, which is the evidence the sibling rows were held for. Note the `No Accounts` line above it names nothing the rule reads — the profile row wins on its own line.',
+      "/Users/thymikee/.t3/worktrees/agent-device/apex-2680/apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj: error: No Accounts: Add a new account in Accounts settings. (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n/Users/thymikee/.t3/worktrees/agent-device/apex-2680/apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj: error: No profiles for 'com.teamofsilicons.extend.helper' were found: Xcode couldn't find any iOS App Development provisioning profiles matching 'com.teamofsilicons.extend.helper'. (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n",
+    note: 'Captured on `thymikee-iphone`, iPhone 17 Pro, iOS 27.0. Reached by pointing `EXTEND_ENGINE_IOS_TEAM_ID` at a team with no certificate on a machine that is not signed into Xcode, with a fresh derived path so no cached artifact short-circuits the build. One `error:` line per target: the phrase the rule matches is not wrapped, which is the evidence the sibling rows were held for. Note the `No Accounts` line above it names nothing the rule reads — the profile row wins on its own line.',
   },
   {
     id: 'conflicting-provisioning-settings',
@@ -201,7 +201,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: \"AgentDeviceRunner\" has conflicting provisioning settings (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: \"SiliconExtendHelper\" has conflicting provisioning settings (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'Names a profile while saying the settings disagree, so the profile row must not win. No reason is claimed until a capture proves which lever clears it.',
   },
   {
@@ -211,7 +211,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'shipped-sniff-trigger',
     output:
-      "error: Code signing is required for product type 'Application' (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: Code signing is required for product type 'Application' (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'Signing is named and nothing above it is: the reason stays unspecified on purpose.',
   },
   {
@@ -221,7 +221,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: cannot find 'AgentDeviceRunnerCommand' in scope (in target 'AgentDeviceRunnerUITests' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: cannot find 'SiliconExtendHelperCommand' in scope (in target 'SiliconExtendHelperUITests' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'Any build failure that names no signing fact must keep the cache-recovery hint.',
   },
   {
@@ -231,7 +231,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: cannot find 'AgentDeviceRunnerCommand' in scope (in target 'AgentDeviceRunnerUITests' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: cannot find 'SiliconExtendHelperCommand' in scope (in target 'SiliconExtendHelperUITests' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     args: [
       'build-for-testing',
       'PROVISIONING_PROFILE_SPECIFIER=match-development',
@@ -244,11 +244,11 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     reason: 'simulator_set_destination_not_found',
     site: 'build-for-testing',
     command:
-      '/Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj -scheme AgentDeviceRunner -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -DVTSimulatorSetLocation=/Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-simset-empty -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID=com.callstack.agentdevice.runner AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID=com.callstack.agentdevice.runner.uitests',
+      '/Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj -scheme SiliconExtendHelper -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -DVTSimulatorSetLocation=/Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-simset-empty -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID=com.teamofsilicons.extend.helper EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID=com.teamofsilicons.extend.helper.uitests',
     xcodeVersion: CAPTURED_DESTINATION_XCODE_VERSION,
     provenance: 'captured',
     output:
-      'Command line invocation:\n    /Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj -scheme AgentDeviceRunner -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -DVTSimulatorSetLocation=/Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-simset-empty -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID=com.callstack.agentdevice.runner AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID=com.callstack.agentdevice.runner.uitests\n\nBuild settings from command line:\n    AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID = com.callstack.agentdevice.runner\n    AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID = com.callstack.agentdevice.runner.uitests\n    COMPILER_INDEX_STORE_ENABLE = NO\n    ENABLE_CODE_COVERAGE = NO\n    ENABLE_DEBUG_DYLIB = NO\n    ENABLE_PREVIEWS = NO\n    ENABLE_USER_SCRIPT_SANDBOXING = NO\n    ONLY_ACTIVE_ARCH = YES\n    OTHER_SWIFT_FLAGS = $(inherited) -disable-sandbox\n\nResolve Package Graph\n\n\nResolved source packages:\n  agent-device-snapshot-presentation: /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/snapshot-presentation @ local\n\n2026-09-25 14:05:36.652 xcodebuild[34716:166287301] Writing error result bundle to /var/folders/65/fz9_2bsj6fzgct46vx226s8c0000gn/T/ResultBundle_2026-25-09_14-05-0036.xcresult\nxcodebuild: error: Unable to find a device matching the provided destination specifier:\n\t\t{ platform:iOS Simulator, id:9DD70D58-C485-4CE5-8743-5FED48468446 }\n\n\tThe requested device could not be found because no available devices matched the request.\n\n\tAvailable destinations for the "AgentDeviceRunner" scheme:\n\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }\n\t\t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }\n\t\t{ platform:macOS, name:Any Mac }\n\t\t{ platform:tvOS, id:dvtdevice-DVTiOSDevicePlaceholder-appletvos:placeholder, name:Any tvOS Device }\n\t\t{ platform:tvOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-appletvsimulator:placeholder, name:Any tvOS Simulator Device }\n\t\t{ platform:visionOS, id:dvtdevice-DVTiOSDevicePlaceholder-xros:placeholder, name:Any visionOS Device }\n\t\t{ platform:visionOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-xrsimulator:placeholder, name:Any visionOS Simulator Device }\n',
+      'Command line invocation:\n    /Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj -scheme SiliconExtendHelper -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -DVTSimulatorSetLocation=/Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-simset-empty -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID=com.teamofsilicons.extend.helper EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID=com.teamofsilicons.extend.helper.uitests\n\nBuild settings from command line:\n    EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID = com.teamofsilicons.extend.helper\n    EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID = com.teamofsilicons.extend.helper.uitests\n    COMPILER_INDEX_STORE_ENABLE = NO\n    ENABLE_CODE_COVERAGE = NO\n    ENABLE_DEBUG_DYLIB = NO\n    ENABLE_PREVIEWS = NO\n    ENABLE_USER_SCRIPT_SANDBOXING = NO\n    ONLY_ACTIVE_ARCH = YES\n    OTHER_SWIFT_FLAGS = $(inherited) -disable-sandbox\n\nResolve Package Graph\n\n\nResolved source packages:\n  agent-device-snapshot-presentation: /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/snapshot-presentation @ local\n\n2026-09-25 14:05:36.652 xcodebuild[34716:166287301] Writing error result bundle to /var/folders/65/fz9_2bsj6fzgct46vx226s8c0000gn/T/ResultBundle_2026-25-09_14-05-0036.xcresult\nxcodebuild: error: Unable to find a device matching the provided destination specifier:\n\t\t{ platform:iOS Simulator, id:9DD70D58-C485-4CE5-8743-5FED48468446 }\n\n\tThe requested device could not be found because no available devices matched the request.\n\n\tAvailable destinations for the "SiliconExtendHelper" scheme:\n\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }\n\t\t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }\n\t\t{ platform:macOS, name:Any Mac }\n\t\t{ platform:tvOS, id:dvtdevice-DVTiOSDevicePlaceholder-appletvos:placeholder, name:Any tvOS Device }\n\t\t{ platform:tvOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-appletvsimulator:placeholder, name:Any tvOS Simulator Device }\n\t\t{ platform:visionOS, id:dvtdevice-DVTiOSDevicePlaceholder-xros:placeholder, name:Any visionOS Device }\n\t\t{ platform:visionOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-xrsimulator:placeholder, name:Any visionOS Simulator Device }\n',
     device: {
       ...IOS_SIMULATOR,
       id: CAPTURED_SCOPED_SIMULATOR.udid,
@@ -261,11 +261,11 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     reason: 'build_failed_unclassified',
     site: 'build-for-testing',
     command:
-      '/Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj -scheme AgentDeviceRunner -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID=com.callstack.agentdevice.runner AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID=com.callstack.agentdevice.runner.uitests',
+      '/Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj -scheme SiliconExtendHelper -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID=com.teamofsilicons.extend.helper EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID=com.teamofsilicons.extend.helper.uitests',
     xcodeVersion: CAPTURED_DESTINATION_XCODE_VERSION,
     provenance: 'captured',
     output:
-      'Command line invocation:\n    /Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj -scheme AgentDeviceRunner -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID=com.callstack.agentdevice.runner AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID=com.callstack.agentdevice.runner.uitests\n\nBuild settings from command line:\n    AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID = com.callstack.agentdevice.runner\n    AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID = com.callstack.agentdevice.runner.uitests\n    COMPILER_INDEX_STORE_ENABLE = NO\n    ENABLE_CODE_COVERAGE = NO\n    ENABLE_DEBUG_DYLIB = NO\n    ENABLE_PREVIEWS = NO\n    ENABLE_USER_SCRIPT_SANDBOXING = NO\n    ONLY_ACTIVE_ARCH = YES\n    OTHER_SWIFT_FLAGS = $(inherited) -disable-sandbox\n\nResolve Package Graph\n\n\nResolved source packages:\n  agent-device-snapshot-presentation: /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/snapshot-presentation @ local\n\n2026-09-25 14:04:35.750 xcodebuild[28777:166276731] Writing error result bundle to /var/folders/65/fz9_2bsj6fzgct46vx226s8c0000gn/T/ResultBundle_2026-25-09_14-04-0035.xcresult\nxcodebuild: error: Unable to find a device matching the provided destination specifier:\n\t\t{ platform:iOS Simulator, id:9DD70D58-C485-4CE5-8743-5FED48468446 }\n\n\tThe requested device could not be found because no available devices matched the request.\n\n\tAvailable destinations for the "AgentDeviceRunner" scheme:\n\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }\n\t\t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }\n\t\t{ platform:macOS, name:Any Mac }\n\t\t{ platform:tvOS, id:dvtdevice-DVTiOSDevicePlaceholder-appletvos:placeholder, name:Any tvOS Device }\n\t\t{ platform:tvOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-appletvsimulator:placeholder, name:Any tvOS Simulator Device }\n\t\t{ platform:visionOS, id:dvtdevice-DVTiOSDevicePlaceholder-xros:placeholder, name:Any visionOS Device }\n\t\t{ platform:visionOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-xrsimulator:placeholder, name:Any visionOS Simulator Device }\n',
+      'Command line invocation:\n    /Applications/Xcode-26.2.0.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj -scheme SiliconExtendHelper -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -destination "platform=iOS Simulator,id=9DD70D58-C485-4CE5-8743-5FED48468446" -derivedDataPath /Users/thymikee/Developer/agent-device/.claude/worktrees/_scratch/2963-capture-derived COMPILER_INDEX_STORE_ENABLE=NO ENABLE_CODE_COVERAGE=NO ONLY_ACTIVE_ARCH=YES ENABLE_PREVIEWS=NO ENABLE_DEBUG_DYLIB=NO -IDEPackageSupportDisableManifestSandbox=1 -IDEPackageSupportDisablePluginExecutionSandbox=1 ENABLE_USER_SCRIPT_SANDBOXING=NO "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox" EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID=com.teamofsilicons.extend.helper EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID=com.teamofsilicons.extend.helper.uitests\n\nBuild settings from command line:\n    EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID = com.teamofsilicons.extend.helper\n    EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID = com.teamofsilicons.extend.helper.uitests\n    COMPILER_INDEX_STORE_ENABLE = NO\n    ENABLE_CODE_COVERAGE = NO\n    ENABLE_DEBUG_DYLIB = NO\n    ENABLE_PREVIEWS = NO\n    ENABLE_USER_SCRIPT_SANDBOXING = NO\n    ONLY_ACTIVE_ARCH = YES\n    OTHER_SWIFT_FLAGS = $(inherited) -disable-sandbox\n\nResolve Package Graph\n\n\nResolved source packages:\n  agent-device-snapshot-presentation: /Users/thymikee/Developer/agent-device/.claude/worktrees/impl-2935b/apple/snapshot-presentation @ local\n\n2026-09-25 14:04:35.750 xcodebuild[28777:166276731] Writing error result bundle to /var/folders/65/fz9_2bsj6fzgct46vx226s8c0000gn/T/ResultBundle_2026-25-09_14-04-0035.xcresult\nxcodebuild: error: Unable to find a device matching the provided destination specifier:\n\t\t{ platform:iOS Simulator, id:9DD70D58-C485-4CE5-8743-5FED48468446 }\n\n\tThe requested device could not be found because no available devices matched the request.\n\n\tAvailable destinations for the "SiliconExtendHelper" scheme:\n\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }\n\t\t{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }\n\t\t{ platform:macOS, name:Any Mac }\n\t\t{ platform:tvOS, id:dvtdevice-DVTiOSDevicePlaceholder-appletvos:placeholder, name:Any tvOS Device }\n\t\t{ platform:tvOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-appletvsimulator:placeholder, name:Any tvOS Simulator Device }\n\t\t{ platform:visionOS, id:dvtdevice-DVTiOSDevicePlaceholder-xros:placeholder, name:Any visionOS Device }\n\t\t{ platform:visionOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-xrsimulator:placeholder, name:Any visionOS Simulator Device }\n',
     device: { ...IOS_SIMULATOR, id: CAPTURED_SCOPED_SIMULATOR.udid },
     note: "Captured with the same argv and no `-DVTSimulatorSetLocation`, so xcodebuild looked in the default set, which does not hold the udid. The text is the scoped row's, word for word: only the scoped set path on the device tells the two apart. Host destination lines are left out as above.",
   },
@@ -279,7 +279,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: Provisioning profile \"match-development\" is not a valid provisioning profile (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\nError Domain=IDEProvisioningErrorDomain Code=17 \"Provisioning profile 'match-development' is not a valid provisioning profile.\"\n** TEST BUILD FAILED **\n",
+      "error: Provisioning profile \"match-development\" is not a valid provisioning profile (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\nError Domain=IDEProvisioningErrorDomain Code=17 \"Provisioning profile 'match-development' is not a valid provisioning profile.\"\n** TEST BUILD FAILED **\n",
     note: "Xcode repeats the profile inside the same line as its IDEProvisioningErrorDomain diagnostics, which is what the row reads: domain on one line and profile on another is two facts, not one complaint. Sentence and domain code are our reconstruction; Phase B capture has to record the real wording and this entry's xcodeVersion.",
   },
   {
@@ -289,7 +289,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: Provisioning profile \"match-development\" doesn't include application identifier 'com.yourname.agentdevice.runner' (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: Provisioning profile \"match-development\" doesn't include application identifier 'com.yourname.extend.helper' (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'The installed profile that does not cover this app id. Advice is the same lever, so the same reason is published; wording unrecorded.',
   },
   {
@@ -299,7 +299,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: Provisioning profile \"match-development\" has expired (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: Provisioning profile \"match-development\" has expired (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'Reinstalling the same profile clears nothing; "a valid profile" in the hint is the operative word. Wording unrecorded.',
   },
   {
@@ -309,7 +309,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "note: Using provisioning profile \"match-development\" to sign the app bundle (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\nerror: cannot find 'AgentDeviceRunnerCommand' in scope (in target 'AgentDeviceRunnerUITests' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "note: Using provisioning profile \"match-development\" to sign the app bundle (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\nerror: cannot find 'SiliconExtendHelperCommand' in scope (in target 'SiliconExtendHelperUITests' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'The hazard the bare `provisioning profile` trigger carried (#2688 review): a failing build can print the profile it used while the failure is a compile error. A benign mention must keep cache-recovery advice; it also says nothing Xcode calls code signing, which is its own honest row.',
   },
   {
@@ -319,7 +319,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "note: Using provisioning profile \"match-development\" to sign the app bundle (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\nwarning: The certificate \"Apple Development: Example Dev (ABCD1234)\" has expired.\nerror: cannot find 'AgentDeviceRunnerCommand' in scope (in target 'AgentDeviceRunnerUITests' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "note: Using provisioning profile \"match-development\" to sign the app bundle (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\nwarning: The certificate \"Apple Development: Example Dev (ABCD1234)\" has expired.\nerror: cannot find 'SiliconExtendHelperCommand' in scope (in target 'SiliconExtendHelperUITests' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     note: 'The cross-line hazard a whole-log AND cannot see (#2688 review): a benign profile note three lines above an unrelated expired-certificate warning. Both phrases are in the captured log and neither qualifies the other, so the profile stays unclassified and the reader keeps cache-recovery advice rather than being sent to replace a profile that is fine.',
   },
   {
@@ -329,7 +329,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: cannot find 'AgentDeviceRunnerCommand' in scope (in target 'AgentDeviceRunnerUITests' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: cannot find 'SiliconExtendHelperCommand' in scope (in target 'SiliconExtendHelperUITests' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     deviceReport: { developerMode: 'enabled', developerDiskImage: 'unavailable' },
     note: 'The corroborated pairing (#2683 review): a build that names no cause, on a phone core read directly as reporting its image down. Naming the image beats cache-recovery advice; the state also travels as details.developerDiskImage.',
   },
@@ -342,7 +342,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "note: Using target 'AgentDeviceRunner' for build-for-testing\nbuilding project 'AgentDeviceRunner' toward destination 'Example iPhone'\nCompileSwiftFile normal (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n",
+      "note: Using target 'SiliconExtendHelper' for build-for-testing\nbuilding project 'SiliconExtendHelper' toward destination 'Example iPhone'\nCompileSwiftFile normal (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n",
     deviceReport: { developerMode: 'enabled', developerDiskImage: 'unavailable' },
     note: "The build the host killed at its own `buildTimeoutMs`, on a phone reporting its image down (#2690 review). A slow build and a build the device refuses are different facts, and the second one is not available from a command that never finished: the reason stays unclassified with cache-recovery advice, and the image state rides along as a detail only. The shape follows the exec layer's timeout error; the 15-minute budget and the partial log are ours, so no capture stands behind them.",
   },
@@ -353,7 +353,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'invented-shape',
     output:
-      "error: \"AgentDeviceRunner\" has conflicting provisioning settings (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: \"SiliconExtendHelper\" has conflicting provisioning settings (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     deviceReport: { developerMode: 'enabled', developerDiskImage: 'unavailable' },
     note: 'The pairing that made the enrichment key on "did a row match" rather than on the unclassified reason (#2690 review): a just-rebooted phone reports its image down while the failure is a settings disagreement a row already looked at and declined to name. The row answer wins and the cache-recovery hint stays; the image state still rides along as a detail.',
   },
@@ -364,7 +364,7 @@ export const RUNNER_STARTUP_FAILURE_FIXTURES: readonly RunnerStartupFailureFixtu
     xcodeVersion: UNOBSERVED,
     provenance: 'shipped-sniff-trigger',
     output:
-      "error: Signing for \"AgentDeviceRunner\" requires a development team (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: Signing for \"SiliconExtendHelper\" requires a development team (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
     deviceReport: { developerMode: 'enabled', developerDiskImage: 'unavailable' },
     note: "A build that named its own cause keeps it: a corroborated device state never overwrites xcodebuild's own sentence (#2683).",
   },

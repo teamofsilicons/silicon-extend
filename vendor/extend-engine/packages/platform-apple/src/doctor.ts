@@ -48,7 +48,7 @@ export async function appleRunnerWarmupCheck(
     status: 'pass',
     summary:
       'iOS runner build started in the background; the first open gets faster once it completes',
-    hint: 'Run `agent-device prepare ios-runner` to wait for a fully warmed runner instead.',
+    hint: 'Run `extend prepare ios-runner` to wait for a fully warmed runner instead.',
   };
 }
 

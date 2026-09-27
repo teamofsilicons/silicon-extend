@@ -152,7 +152,7 @@ test('device-in-use against an implicit session names its store key, not "defaul
   expect(response.error.message).toContain(`session "${address}"`);
   expect(response.error.details?.session).toBe(address);
   expectAddressableRecovery(errorHint(response), address);
-  expect(errorHint(response)).toContain(`agent-device close --session ${address}`);
+  expect(errorHint(response)).toContain(`extend close --session ${address}`);
 });
 
 test('selector conflict on an implicit session names its store key, not "default"', async () => {

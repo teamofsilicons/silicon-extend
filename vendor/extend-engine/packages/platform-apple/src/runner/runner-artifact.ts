@@ -161,7 +161,7 @@ function resolveExternalXctestDerivedDataPath(xctestrunPath: string): string {
   const hash = crypto.createHash('sha1');
   hash.update(xctestrunPath);
   const suffix = hash.digest('hex').slice(0, 12);
-  return path.join(os.tmpdir(), 'agent-device-ios-xctest-derived', suffix);
+  return path.join(os.tmpdir(), 'extend-engine-ios-xctest-derived', suffix);
 }
 
 async function ensureXctestrunUnderCacheLock(params: {
@@ -414,7 +414,7 @@ export function scoreXctestrunCandidate(candidatePath: string, device: DeviceInf
   const normalizedPath = candidatePath.toLowerCase();
   const fileName = path.basename(normalizedPath);
 
-  if (fileName.startsWith('agentdevicerunner.env.')) {
+  if (fileName.startsWith('siliconextendhelper.env.')) {
     score -= 1_000;
   }
 
@@ -484,7 +484,7 @@ async function buildRunnerXctestrun(
         '-project',
         projectPath,
         '-scheme',
-        'AgentDeviceRunner',
+        'SiliconExtendHelper',
         '-parallel-testing-enabled',
         'NO',
         resolveRunnerMaxConcurrentDestinationsFlag(device),

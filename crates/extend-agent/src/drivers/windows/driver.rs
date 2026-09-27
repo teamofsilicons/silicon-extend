@@ -40,7 +40,7 @@ impl WindowsDriver {
 }
 
 /// True when the input desktop isn't the user's (locked, or the secure desktop of an admin prompt).
-pub(crate) fn locked() -> bool {
+pub(crate) fn input_desktop_foreign() -> bool {
     unsafe {
         match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_SWITCHDESKTOP) {
             Ok(desk) => {
@@ -53,6 +53,78 @@ pub(crate) fn locked() -> bool {
     }
 }
 
+/// This session's state: on screen or not, locked or not (`WTSQuerySessionInformationW`), and
+/// whether the input desktop is the user's.
+pub(crate) fn session_state() -> crate::drivers::screen_lock::WindowsSession {
+    use windows::Win32::System::RemoteDesktop::{
+        WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSActive, WTSConnectState,
+        WTSFreeMemory, WTSINFOEXW, WTSQuerySessionInformationW, WTSSessionInfoEx,
+    };
+    use windows::core::PWSTR;
+
+    /// SAFETY: reads a buffer WTSQuerySessionInformationW allocated for `class`, then frees it.
+    unsafe fn query<T: Copy>(class: windows::Win32::System::RemoteDesktop::WTS_INFO_CLASS) -> Option<T> {
+        let mut buf = PWSTR::null();
+        let mut len = 0u32;
+        unsafe {
+            WTSQuerySessionInformationW(
+                Some(WTS_CURRENT_SERVER_HANDLE),
+                WTS_CURRENT_SESSION,
+                class,
+                &mut buf,
+                &mut len,
+            )
+            .ok()?;
+            let value = (len as usize >= std::mem::size_of::<T>() && !buf.is_null())
+                .then(|| std::ptr::read_unaligned(buf.0.cast::<T>()));
+            WTSFreeMemory(buf.0.cast());
+            value
+        }
+    }
+    // WTS_SESSIONSTATE_LOCK / _UNLOCK in WTSINFOEX_LEVEL1_W.SessionFlags (Windows 8 and later).
+    const LOCK: i32 = 0;
+    const UNLOCK: i32 = 1;
+    // SAFETY: plain queries of this process's own session.
+    let (connect, info) = unsafe {
+        (
+            query::<WTS_CONNECTSTATE_CLASS>(WTSConnectState),
+            query::<WTSINFOEXW>(WTSSessionInfoEx),
+        )
+    };
+    let locked = info.filter(|i| i.Level == 1).and_then(|i| {
+        // SAFETY: Level 1 means the WTSInfoExLevel1 member is the one filled in.
+        match unsafe { i.Data.WTSInfoExLevel1.SessionFlags } {
+            LOCK => Some(true),
+            UNLOCK => Some(false),
+            _ => None,
+        }
+    });
+    crate::drivers::screen_lock::WindowsSession {
+        active: connect.map(|c| c == WTSActive),
+        locked,
+        input_desktop_foreign: input_desktop_foreign(),
+    }
+}
+
+/// Time since the last keyboard or mouse input in this session (`GetLastInputInfo`).
+pub(crate) fn input_idle() -> Option<std::time::Duration> {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    // SAFETY: fills a correctly sized struct.
+    unsafe {
+        if !GetLastInputInfo(&mut info).as_bool() {
+            return None;
+        }
+        Some(std::time::Duration::from_millis(u64::from(
+            GetTickCount().wrapping_sub(info.dwTime),
+        )))
+    }
+}
+
 fn os_version() -> Option<String> {
     static VERSION: OnceLock<Option<String>> = OnceLock::new();
     VERSION.get_or_init(super::shell::ver).clone()
@@ -61,9 +133,14 @@ fn os_version() -> Option<String> {
 #[async_trait]
 impl Driver for WindowsDriver {
     async fn probe(&self) -> Probe {
-        tokio::task::spawn_blocking(|| probe_from(locked(), os_version()))
-            .await
-            .unwrap_or_else(|_| probe_from(false, None))
+        tokio::task::spawn_blocking(|| {
+            probe_from(
+                crate::drivers::screen_lock::windows_block(session_state()),
+                os_version(),
+            )
+        })
+        .await
+        .unwrap_or_else(|_| probe_from(None, None))
     }
 
     async fn run(&self, inv: Invocation<'_>) -> Output {

@@ -22,7 +22,7 @@ const CACHE_FORMAT_VERSION = 2;
 // whichever uid ran first owns it and every other uid's publish fails EACCES
 // forever, silently — and where a document any local process could write
 // would choose the signature this client compares a running daemon against.
-const CACHE_DIRECTORY_PREFIX = 'agent-device-code-signature';
+const CACHE_DIRECTORY_PREFIX = 'extend-engine-code-signature';
 const CACHE_DIRECTORY_MODE = 0o700;
 const CACHE_DOCUMENT_MODE = 0o600;
 

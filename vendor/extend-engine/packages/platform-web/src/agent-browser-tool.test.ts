@@ -280,5 +280,5 @@ function expectedMissingInstallHint(): string {
   if (nodeMajor < 24) {
     return `Web automation requires Node 24+; current Node is ${process.version}.`;
   }
-  return 'Run `agent-device web setup` to install the managed web backend.';
+  return 'Run `extend web setup` to install the managed web backend.';
 }

@@ -100,7 +100,7 @@ test('MCP refuses an explicit daemonAuthToken argument with env guidance', async
 
   assert.equal(result.isError, true);
   assert.match(result.content[0]?.text ?? '', /daemonAuthToken is not accepted as a tool argument/);
-  assert.match(result.content[0]?.text ?? '', /AGENT_DEVICE_DAEMON_AUTH_TOKEN/);
+  assert.match(result.content[0]?.text ?? '', /EXTEND_ENGINE_DAEMON_AUTH_TOKEN/);
   assert.deepEqual(calls, [], 'a refused credential input must never reach the command route');
 });
 
@@ -121,7 +121,7 @@ test('MCP refuses an explicit metro bearerToken argument with env guidance', asy
 
   assert.equal(result.isError, true);
   assert.match(result.content[0]?.text ?? '', /bearerToken is not accepted as a tool argument/);
-  assert.match(result.content[0]?.text ?? '', /AGENT_DEVICE_METRO_BEARER_TOKEN/);
+  assert.match(result.content[0]?.text ?? '', /EXTEND_ENGINE_METRO_BEARER_TOKEN/);
   assert.deepEqual(calls, [], 'a refused credential input must never reach the command route');
 });
 

@@ -14,7 +14,7 @@ use axum::body::Bytes;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::IntoResponse;
 use extend_protocol::ErrorCode;
-use extend_protocol::model::{AuthSession, Member, MemberKind, TeamSilicon};
+use extend_protocol::model::{AuthSession, Member, MemberKind, RequestRoute, TeamSilicon};
 use extend_service::error::AppResult;
 use extend_service::files::{BriefcaseFiles, FileStore as _, NewFile};
 use extend_service::iam::{Iam, IamEvent, OboProof, Principal, TestingSelection};
@@ -63,6 +63,15 @@ impl Iam for RecordingIam {
         _: Option<&Principal>,
         _: Option<&TestingSelection>,
     ) -> AppResult<bool> {
+        unimplemented!()
+    }
+    async fn membership(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<&Principal>,
+        _: Option<&TestingSelection>,
+    ) -> extend_service::iam::Membership {
         unimplemented!()
     }
     async fn team_silicons(&self, _: &Principal, _: Option<&TestingSelection>) -> AppResult<Vec<TeamSilicon>> {
@@ -426,8 +435,8 @@ async fn ting_registers_the_recipient_once_then_sends() {
     let iam = Arc::new(RecordingIam::default());
     let ting = TingNotifier::new(url, iam.clone());
     let chef = member("si:chef", "oat_chef");
-    ting.register_recipient(&chef, None).await.unwrap();
-    ting.register_recipient(&chef, None).await.unwrap();
+    ting.register_recipient(&chef, false, None).await.unwrap();
+    ting.register_recipient(&chef, false, None).await.unwrap();
     let request_id = Uuid::now_v7();
     let reason = "Need it for 2 minutes — \"vendor\" OTP";
     ting.device_request(
@@ -440,6 +449,10 @@ async fn ting_registers_the_recipient_once_then_sends() {
             to: "si:chef",
             session_id: Some("708"),
             reason,
+            routed_to: Some(RequestRoute::Holder),
+            team: Some("acme"),
+            link: None,
+            from_hidden: false,
         },
         None,
     )
@@ -506,6 +519,10 @@ async fn ting_explains_an_unregistered_recipient() {
                 to: "si:chef",
                 session_id: None,
                 reason: "r",
+                routed_to: None,
+                team: None,
+                link: None,
+                from_hidden: false,
             },
             None,
         )
@@ -517,4 +534,92 @@ async fn ting_explains_an_unregistered_recipient() {
         "{}",
         err.0.message
     );
+}
+
+fn routed(request_id: Uuid) -> DeviceRequestTing<'static> {
+    DeviceRequestTing {
+        request_id,
+        device_id: "0d44e1f2",
+        device_name: "Family TV",
+        from: "si:chef",
+        to: "c:bob",
+        session_id: None,
+        reason: "Need it for an OTP",
+        routed_to: Some(RequestRoute::Carbon),
+        team: None,
+        link: Some("https://extend.teamofsilicons.com/devices/0d44e1f2".into()),
+        from_hidden: false,
+    }
+}
+
+#[tokio::test]
+async fn a_frozen_body_ting_already_has_counts_as_delivered() {
+    // A retry whose body changed under the same key (a rename since) gets 409 idempotency_conflict:
+    // Ting already holds a Ting under that key, so it counts as delivered.
+    let (url, seen) = stand_in(Arc::new(|_: &Received| {
+        json(
+            StatusCode::CONFLICT,
+            serde_json::json!({"error": {"code": "idempotency_conflict", "message": "The key was used with other data."}}),
+        )
+    }))
+    .await;
+    let ting = TingNotifier::new(url, Arc::new(RecordingIam::default()));
+    ting.device_request(&member("si:chef", "oat_chef"), &routed(Uuid::now_v7()), None)
+        .await
+        .expect("idempotency_conflict is delivered");
+    let seen = seen.lock().unwrap().clone();
+    let body = seen[0].json();
+    // Routed to a Carbon: no holder, no session, no requester Team; the asking Silicon is named.
+    assert_eq!(body["data"]["routed_to"], "carbon");
+    assert_eq!(body["data"]["from"], "si:chef");
+    for gone in ["session_id", "end_session", "team"] {
+        assert!(body["data"].get(gone).is_none(), "{gone}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_type_ting_does_not_know_names_the_command_for_the_team() {
+    let (url, _) = stand_in(Arc::new(|_: &Received| {
+        json(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({"error": {"code": "not_found", "message": "Unknown notification type."}}),
+        )
+    }))
+    .await;
+    let ting = TingNotifier::new(url, Arc::new(RecordingIam::default()));
+    let mut chef = member("si:chef", "oat_chef");
+    chef.team = Some("labs".into());
+    let err = ting
+        .device_request(&chef, &routed(Uuid::now_v7()), None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        extend_service::ting::missing_type(&err).as_deref(),
+        Some("extend.device.requested")
+    );
+    let hint = err.0.hint.unwrap_or_default();
+    assert!(
+        hint.contains("ting --org labs types register --type extend.device.requested"),
+        "{hint}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_self_send_is_remembered() {
+    let (url, _) = stand_in(Arc::new(|_: &Received| {
+        json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({"error": {"code": "invalid_recipient", "message": "A member can't notify themselves."}}),
+        )
+    }))
+    .await;
+    let ting = TingNotifier::new(url, Arc::new(RecordingIam::default()));
+    let bob = member("c:bob", "oat_bob");
+    assert!(!ting.self_send_refused());
+    let err = ting
+        .device_request(&bob, &routed(Uuid::now_v7()), None)
+        .await
+        .unwrap_err();
+    assert!(extend_service::ting::self_send_refusal(&err));
+    assert!(ting.self_send_refused(), "the chains skip self-sends from now on");
 }

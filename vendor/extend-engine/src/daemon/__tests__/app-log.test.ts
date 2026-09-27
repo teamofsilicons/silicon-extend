@@ -7,7 +7,7 @@ import { appendAppLogMarker, clearAppLogFiles, getAppLogPathMetadata } from '../
 
 // Pinned as a literal on purpose — see the note in packages/host-kit/src/internal/verified-file.test.ts.
 const NOT_REGULAR_FILE_HINT =
-  'agent-device only reads and writes regular files at this path. Remove the symbolic link or special file there and retry.';
+  'The device engine only reads and writes regular files at this path. Remove the symbolic link or special file there and retry.';
 
 test('marker and clear operations keep app-log file ownership in the daemon', () => {
   const root = mkdtempForTestSync('agent-device-app-log-files-');
@@ -16,7 +16,7 @@ test('marker and clear operations keep app-log file ownership in the daemon', ()
   appendAppLogMarker(outPath, 'checkpoint');
   fs.writeFileSync(`${outPath}.1`, 'rotated');
 
-  expect(fs.readFileSync(outPath, 'utf8')).toMatch(/\[agent-device\]\[mark\].* checkpoint/);
+  expect(fs.readFileSync(outPath, 'utf8')).toMatch(/\[extend-engine\]\[mark\].* checkpoint/);
   expect(getAppLogPathMetadata(outPath)).toMatchObject({ exists: true });
   expect(clearAppLogFiles(outPath)).toEqual({
     path: outPath,

@@ -136,7 +136,9 @@ const inconclusiveWriterScans = [
   [
     'one recorder and an unreadable candidate',
     {
-      writers: [{ pid: '88', remotePath: '/sdcard/agent-device-recording-9.mp4', startTime: '4' }],
+      writers: [
+        { pid: '88', remotePath: '/sdcard/silicon-extend-recording-9.mp4', startTime: '4' },
+      ],
       conclusive: false,
     },
   ],
@@ -145,7 +147,7 @@ const inconclusiveWriterScans = [
 test.each(inconclusiveWriterScans)(
   'retains evidence when the pending artifact writer scan reports %s',
   async (_name, scan) => {
-    const pendingPath = '/sdcard/agent-device-recording-9.mp4';
+    const pendingPath = '/sdcard/silicon-extend-recording-9.mp4';
     let manifest = '';
     const removed: string[] = [];
     const signalled: string[] = [];

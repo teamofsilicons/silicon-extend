@@ -8,6 +8,49 @@ physical-device or production gate. What was run, and on what, is in
 [`verification.md`](verification.md). Round 2 is not committed yet: it is the working tree on top of
 `5b3c578`.
 
+*1.0.0 went live on 2026-09-27 (the service, the website, the CLI through Honeycomb, and the apps);
+the sections below from "Needs the Carbon" on are the 1.0.0 record. What 1.1.0 still needs comes
+first.*
+
+## 1.1.0
+
+1.1.0 (devices belong to the Carbons who paired them, several Carbons per device, waking a device,
+setup retry, the device engine named Silicon Extend) is being built; its design is
+`extend-publish-drafts/release-1.1.0/design.json` with the Carbon's decisions of 2026-09-27.
+
+### Needs the Carbon
+
+- **Approve the 1.1 drafts** of `understanding/TECHNICAL.md`, `api.yaml` and `cli.yaml`, and commit
+  the `UNDERSTANDING.md` edits they follow.
+- **Answer `TECHNICAL.md` open questions 16–20**: the terminal when the installer's pair ends, the
+  terminal rule and terminal apps on the screen, the device for the iPhone lock-state check,
+  app-level Ting types, and routed requests to a Carbon who shares no Team with the asking Silicon.
+- **Ting types in every Team.** A Ting manager of each Team Extend sends in registers Extend's four
+  types (`docs/deployment.md`, "Releasing 1.1.0", step 1); in production only
+  `extend.device.requested` in `tos` exists today.
+- **Send the Ting request**, `docs/requests/ting-app-level-types.md`, to the Ting and Honeycomb
+  maintainers.
+
+### Release gates
+
+- `e2e/real-iam/realiam.py --ting` against real IAM and Ting: a Silicon reading its Carbon's directory
+  entry (200, then 404 after removal), and Ting accepting a Ting whose recipient is its own sender.
+- The rollback down step rehearsed on a copy of the production schema, and the roll-forward.
+- A release rehearsal in a test environment: the 1.1 service driven by the 1.0.0 CLI, website,
+  Android app and desktop agent; then each upgraded, including two Carbons on one Android TV and on
+  one Mac (credential rotation, carried-device linking, the remote-stop rule, the terminal rule).
+
+### Physical devices
+
+- Android: Pixel and Samsung lock screens (what the wake notification shows), an Android TV in
+  standby, a Fire TV, the keep-screen-on overlay during a session, API 26, 29, 34 and 36.
+- Mac, Windows and Linux: the awake report on lock, unlock and sleep; the wake notification; the
+  display kept on during a session and released after; session processes ended at session end
+  (including `setsid`/`start`), on macOS 15 and 26, Windows 10 and 11, Ubuntu GNOME and KDE.
+- iPhone and iPad: the renamed helper (Silicon Extend Helper) installing and replacing the old one;
+  a lock-state reading on a real device before Extend reports their awake state.
+- Apple TV, Samsung and LG: power refused while asleep or in standby, and the awake mapping.
+
 ## Needs the Carbon
 
 ### 1. The name and the GitHub repository

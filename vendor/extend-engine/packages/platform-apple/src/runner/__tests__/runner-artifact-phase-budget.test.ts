@@ -34,7 +34,13 @@ beforeEach(() => {
   projectRoot = mkdtempForTestSync('agent-device-runner-phase-root-');
   // `buildXctestrunArtifact` refuses to start a build without the runner project.
   fs.mkdirSync(
-    path.join(projectRoot, 'apple', 'runner', 'AgentDeviceRunner', 'AgentDeviceRunner.xcodeproj'),
+    path.join(
+      projectRoot,
+      'apple',
+      'runner',
+      'SiliconExtendHelper',
+      'SiliconExtendHelper.xcodeproj',
+    ),
     { recursive: true },
   );
   process.env.AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH = mkdtempForTestSync(

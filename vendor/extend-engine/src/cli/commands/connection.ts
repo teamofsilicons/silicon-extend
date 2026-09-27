@@ -462,7 +462,7 @@ function buildRuntimePreparationNoticeFromState(
 function buildDeferredRuntimeNotice(state: RemoteConnectionState): RuntimePreparationNotice {
   const nextStep = scopeCommand(
     state,
-    `agent-device metro prepare --remote-config ${shellQuoteIfNeeded(state.remoteConfigPath)}`,
+    `extend metro prepare --remote-config ${shellQuoteIfNeeded(state.remoteConfigPath)}`,
   );
   return {
     status: 'deferred',

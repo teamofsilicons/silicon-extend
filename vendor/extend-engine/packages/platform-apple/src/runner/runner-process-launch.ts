@@ -66,7 +66,7 @@ export function launchRunnerProcess(input: LaunchRunnerProcessInput): LaunchedRu
       [
         'test-without-building',
         '-only-testing',
-        'AgentDeviceRunnerUITests/RunnerTests/testCommand',
+        'SiliconExtendHelperUITests/RunnerTests/testCommand',
         '-parallel-testing-enabled',
         'NO',
         '-test-timeouts-enabled',

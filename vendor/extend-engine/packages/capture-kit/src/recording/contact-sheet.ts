@@ -80,7 +80,7 @@ export async function buildRecordingContactSheet(
   }
 
   const grid = planContactSheetSampleTimes(readMp4DurationMs(videoPath), videoPath);
-  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-device-contact-sheet-'));
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'extend-engine-contact-sheet-'));
   try {
     const extracted = await extractRecordingFrames({
       videoPath,

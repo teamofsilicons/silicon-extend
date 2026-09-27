@@ -61,7 +61,7 @@ const SCHEMA_ONLY_CLI_COMMAND_SCHEMAS = {
     text: {
       summary: 'Configure remote or provider state',
       description:
-        'Configure remote access without allocating a device. Direct providers validate credentials/resources before saving state and print the exact device/app preparation needed before open. AGENT_DEVICE_CLOUD_BASE_URL is the bridge/control-plane API origin; use AGENT_DEVICE_DAEMON_AUTH_TOKEN=adc_live_... for CI/service-token automation.',
+        'Configure remote access without allocating a device. Direct providers validate credentials/resources before saving state and print the exact device/app preparation needed before open. EXTEND_ENGINE_CLOUD_BASE_URL is the bridge/control-plane API origin; use EXTEND_ENGINE_DAEMON_AUTH_TOKEN=adc_live_... for CI/service-token automation.',
     },
     usageOverride:
       'connect [cloud|proxy|limrun|browserstack|aws-device-farm] [--remote-config <path>] [--daemon-base-url <url>] [--tenant <id>] [--run-id <id>] [--lease-id <id>] [--lease-backend <backend>] [--force] [--no-login]',
@@ -130,14 +130,14 @@ const SCHEMA_ONLY_CLI_COMMAND_SCHEMAS = {
     text: {
       summary: 'Start MCP server',
       description:
-        'Start the official stdio MCP server. It exposes structured command tools backed by the agent-device client.',
+        'Start the official stdio MCP server. It exposes structured command tools backed by the device engine client.',
     },
   },
   proxy: {
     text: {
       summary: 'Expose a local daemon through an HTTP tunnel',
       description:
-        'Expose the local daemon HTTP contract through a tunnel-friendly reverse proxy.\n\nRun this on the host that has access to simulators/devices, expose the printed local proxy URL through a tunnel, then point another machine at the tunnel URL with connect proxy.\n\nThe proxy starts or reuses a local HTTP daemon, accepts /health, /rpc, /upload and resumable /upload/* routes, and /artifacts plus /artifacts/*, and also accepts the same routes under /agent-device/*. Health is unauthenticated for reachability probes. Other routes require the generated bearer token printed at startup, or the explicit --daemon-auth-token value when provided. The proxy rewrites authorized client requests to the upstream daemon token instead of exposing the local daemon token.\n\nUse the /agent-device base path when connecting through cloudflared, ngrok, or another shared origin. Treat the bearer token as a secret; anyone with it can control the proxied daemon. This direct proxy flow does not use agent-device auth.\n\nExamples:\n  agent-device proxy --port 4310\n  cloudflared tunnel --url http://127.0.0.1:4310\n  agent-device connect proxy --daemon-base-url https://example.trycloudflare.com/agent-device --daemon-auth-token <token>',
+        'Expose the local daemon HTTP contract through a tunnel-friendly reverse proxy.\n\nRun this on the host that has access to simulators/devices, expose the printed local proxy URL through a tunnel, then point another machine at the tunnel URL with connect proxy.\n\nThe proxy starts or reuses a local HTTP daemon, accepts /health, /rpc, /upload and resumable /upload/* routes, and /artifacts plus /artifacts/*, and also accepts the same routes under /agent-device/*. Health is unauthenticated for reachability probes. Other routes require the generated bearer token printed at startup, or the explicit --daemon-auth-token value when provided. The proxy rewrites authorized client requests to the upstream daemon token instead of exposing the local daemon token.\n\nUse the /agent-device base path when connecting through cloudflared, ngrok, or another shared origin. Treat the bearer token as a secret; anyone with it can control the proxied daemon. This direct proxy flow does not use extend auth.\n\nExamples:\n  extend proxy --port 4310\n  cloudflared tunnel --url http://127.0.0.1:4310\n  extend connect proxy --daemon-base-url https://example.trycloudflare.com/agent-device --daemon-auth-token <token>',
     },
     listUsageOverride: 'proxy',
     allowedFlags: ['proxyHost', 'proxyPort', 'daemonAuthToken', 'stateDir'],
@@ -181,7 +181,7 @@ const SCHEMA_ONLY_CLI_COMMAND_SCHEMAS = {
     text: {
       summary: 'Manage web automation backend',
       description:
-        'Install and inspect the managed web automation backend used by --platform web.\n\nFirst-run flow:\n  agent-device web setup\n  agent-device open "https://example.com" --platform web\n  agent-device snapshot -i --platform web\n  agent-device close --platform web\n\nRuntime web commands do not install the backend implicitly. If the managed backend is missing, run agent-device web setup. The backend is resolved only from the managed install in the effective agent-device state dir.\n\nUse web setup to install or reuse the pinned backend. Use web doctor after setup to verify browser backend health.',
+        'Install and inspect the managed web automation backend used by --platform web.\n\nFirst-run flow:\n  extend web setup\n  extend open "https://example.com" --platform web\n  extend snapshot -i --platform web\n  extend close --platform web\n\nRuntime web commands do not install the backend implicitly. If the managed backend is missing, run extend web setup. The backend is resolved only from the managed install in the effective state dir of the device engine.\n\nUse web setup to install or reuse the pinned backend. Use web doctor after setup to verify browser backend health.',
     },
     usageOverride: 'web setup | web doctor',
     listUsageOverride: 'web setup|doctor',

@@ -5,7 +5,7 @@ import com.teamofsilicons.extend.driver.CommandFailure
 /** Parse privileged commands separately so shell flags are never consumed as Extend flags. */
 sealed interface AdbCommand {
     data class Raw(val args: List<String>) : AdbCommand
-    /** `reinstall` ([fresh]) removes the app and its data first, as agent-device does. */
+    /** `reinstall` ([fresh]) removes the app and its data first, as the device engine does. */
     data class Install(val app: String, val path: String, val fresh: Boolean) : AdbCommand
     data class Record(val action: String, val name: String = "recording", val quality: String = "normal") : AdbCommand
     data class Logs(val action: String, val label: String = "") : AdbCommand

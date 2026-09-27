@@ -39,7 +39,7 @@ export function setup(): void {
     // every invocation and push integration scenarios past their 5s budgets.
     process.env.AGENT_DEVICE_SWIFT_CACHE_DIR = path.join(
       originalTmpDir,
-      'agent-device-swift-cache',
+      'extend-engine-swift-cache',
     );
   }
   reportPrunedRunDirectories(pruneAbandonedRunDirectories(TEST_RUN_TMP_ROOT));

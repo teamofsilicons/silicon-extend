@@ -69,7 +69,7 @@ test('uses the request-scoped Android ADB executor rather than a host fallback',
 });
 
 test('finds only exact screenrecord processes for the canonical remote path', async () => {
-  const remotePath = '/sdcard/agent-device-recording-123.mp4';
+  const remotePath = '/sdcard/silicon-extend-recording-123.mp4';
   await withAndroidAdbProvider(
     {
       exec: async (args) => {
@@ -85,7 +85,7 @@ test('finds only exact screenrecord processes for the canonical remote path', as
             '/system/bin/screenrecord',
             '--bit-rate',
             '8000000',
-            '/sdcard/agent-device-recording-456.mp4',
+            '/sdcard/silicon-extend-recording-456.mp4',
             '',
           ].join('\0'),
           '43': ['/system/bin/sh', '-c', 'screenrecord', remotePath, ''].join('\0'),
@@ -107,7 +107,7 @@ test('finds only exact screenrecord processes for the canonical remote path', as
     },
   );
 });
-const writerScanRemotePath = '/sdcard/agent-device-recording-123.mp4';
+const writerScanRemotePath = '/sdcard/silicon-extend-recording-123.mp4';
 
 type WriterScanDevice = Readonly<{ pids?: string; unreadablePid?: string; writerPid?: string }>;
 

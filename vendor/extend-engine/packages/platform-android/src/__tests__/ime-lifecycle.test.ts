@@ -5,7 +5,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { mkdtempForTest } from './test-utils/tmp-dir.ts';
 import { bindAndroidAdbTestHost } from './test-utils/android-host-test-setup.ts';
 
-const HELPER_SERVICE = 'com.callstack.agentdevice.imehelper/.TestInputMethodService';
+const HELPER_SERVICE = 'com.teamofsilicons.extend.imehelper/.TestInputMethodService';
 const SETTINGS_KEY = 'agent_device_ime_helper_previous_ime';
 const PENDING_DIR = 'android-test-ime-pending';
 
@@ -22,7 +22,7 @@ vi.mock('../ime-helper.ts', async (importOriginal) => {
       version: '0.0.0',
       assetName: 'helper.apk',
       sha256: fixture.ANDROID_SNAPSHOT_HELPER_FIXTURE_ARTIFACT.manifest.sha256,
-      packageName: 'com.callstack.agentdevice.imehelper',
+      packageName: 'com.teamofsilicons.extend.imehelper',
       versionCode: 1,
       serviceComponent: HELPER_SERVICE,
       broadcastProtocol: 'android-ime-helper-v1' as const,
@@ -103,7 +103,7 @@ function fakeDeviceState(initialIme: string) {
 
   function handleShowVersionCode(): FakeAdbResult {
     return installed
-      ? ok('package:com.callstack.agentdevice.imehelper versionCode:19002')
+      ? ok('package:com.teamofsilicons.extend.imehelper versionCode:19002')
       : { exitCode: 1, stdout: '', stderr: 'not found' };
   }
 

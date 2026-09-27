@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-  name: "agent-device-snapshot-presentation",
+  name: "silicon-extend-snapshot-presentation",
   platforms: [
     .iOS(.v15),
     .macOS(.v13),

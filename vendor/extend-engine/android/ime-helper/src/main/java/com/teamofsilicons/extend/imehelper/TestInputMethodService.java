@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.imehelper;
+package com.teamofsilicons.extend.imehelper;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;
@@ -14,20 +14,20 @@ import android.view.inputmethod.InputConnection;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Minimal headless test IME for agent-device: renders no input view, injects text over a broadcast
- * channel gated by a broadcastPermission only adb shell / privileged callers hold. Treats every
- * broadcast extra as untrusted input.
+ * Minimal headless test IME for Silicon Extend's device engine: renders no input view, injects
+ * text over a broadcast channel gated by a broadcastPermission only adb shell / privileged callers
+ * hold. Treats every broadcast extra as untrusted input.
  */
 public class TestInputMethodService extends InputMethodService {
-  private static final String TAG = "AgentDeviceTestIME";
+  private static final String TAG = "SiliconExtendKeyboard";
   private static final String PROTOCOL = "android-ime-helper-v1";
 
   public static final String ACTION_INPUT_TEXT =
-      "com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT";
+      "com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT";
   public static final String ACTION_INPUT_TEXT_B64 =
-      "com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64";
+      "com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64";
   public static final String ACTION_CLEAR_TEXT =
-      "com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT";
+      "com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT";
   public static final String EXTRA_TEXT = "text";
   public static final String EXTRA_PROTOCOL = "protocol";
 

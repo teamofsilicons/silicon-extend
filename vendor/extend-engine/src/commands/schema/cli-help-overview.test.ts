@@ -10,9 +10,9 @@ test('root help is a bounded first-success decision card', async () => {
     Buffer.byteLength(help, 'utf8') <= 3000,
     `root help must stay within the 3000-byte decision-card budget, was ${Buffer.byteLength(help, 'utf8')} bytes`,
   );
-  assert.match(help, /All \d+ commands: agent-device help commands/);
+  assert.match(help, /All \d+ commands: extend help commands/);
   assert.match(help, /starting a task with a known app/);
-  assert.match(help, /agent-device open <app> --foreground/);
+  assert.match(help, /extend open <app> --foreground/);
   assert.match(help, /scroll <direction\|top\|bottom> \[amount\] --settle; back --settle/);
   assert.match(help, /Do not probe first with devices, apps, appstate, snapshot, or screenshot/);
   assert.match(help, /Copy refs exactly: @e12, @e12~s4/);
@@ -24,7 +24,7 @@ test('root help is a bounded first-success decision card', async () => {
 test('root help overview names only commands from the derived catalog', async () => {
   const help = await usage();
   const commandsSection = help.match(
-    /More commands \(exact shapes: agent-device help <command>\):\n(?<lines>[\s\S]+?)\n\nGuides/,
+    /More commands \(exact shapes: extend help <command>\):\n(?<lines>[\s\S]+?)\n\nGuides/,
   )?.groups?.lines;
   assert.ok(commandsSection, 'expected a More commands section');
 
@@ -44,7 +44,7 @@ test('help commands preserves the complete reference displaced from root help', 
   const help = await usageForCommand('commands');
   if (help === null) throw new Error('Expected commands help text');
 
-  assert.match(help, /^agent-device \S+ — commands/);
+  assert.match(help, /^Silicon Extend device engine \S+ — commands/);
   assert.match(help, /^Commands:/m);
   assert.match(help, /install-from-source\s{2,}Install app builds from URLs or CI artifacts/);
   assert.match(help, /^Global Flags:/m);

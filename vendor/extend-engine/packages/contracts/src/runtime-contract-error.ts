@@ -17,6 +17,6 @@ import { AppError } from '@agent-device/kernel/errors';
 export function invalidRuntimeContract(message: string): AppError {
   return new AppError('COMMAND_FAILED', message, {
     reason: 'runtime-contract-invalid',
-    hint: 'This is an agent-device runtime contract bug; report the selected device and command.',
+    hint: 'This is a device engine runtime contract bug; report the selected device and command with extend report.',
   });
 }

@@ -15,12 +15,12 @@ extension RunnerTests {
 
     let textField = app.textFields["agent-device-hardware-keyboard-input"]
     XCTAssertTrue(textField.waitForExistence(timeout: appExistenceTimeout))
-    let nonTextTarget = app.staticTexts["Agent Device Runner"]
+    let nonTextTarget = app.staticTexts["Silicon Extend"]
     XCTAssertTrue(nonTextTarget.waitForExistence(timeout: appExistenceTimeout))
     let nonTextFrame = nonTextTarget.frame
     XCTAssertFalse(nonTextFrame.isEmpty)
     mainOwned.app = app
-    mainOwned.bundleId = "com.callstack.agentdevice.runner"
+    mainOwned.bundleId = "com.teamofsilicons.extend.helper"
     mainOwned.processIdentifier = try XCTUnwrap(Self.processIdentifier(of: app))
 
     let focusCommand = try runnerCommandFixture(

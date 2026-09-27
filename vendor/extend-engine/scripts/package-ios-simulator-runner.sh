@@ -10,12 +10,12 @@ VERSION="$1"
 RELEASE_TAG="$2"
 OUTPUT_DIR="$3"
 
-DERIVED_PATH="${AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH:-$HOME/.agent-device/apple-runner/derived}"
+DERIVED_PATH="${EXTEND_ENGINE_IOS_RUNNER_DERIVED_PATH:-${AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH:-$HOME/.silicon-extend/engine/apple-runner/derived}}"
 PRODUCTS_DIR="$DERIVED_PATH/Build/Products"
-EXPECTED_RUNNER_BUNDLE_ID="${AGENT_DEVICE_IOS_RUNNER_RELEASE_BUNDLE_ID:-}"
-ARCHIVE_BASENAME="agent-device-ios-runner-$VERSION.app.tar.gz"
+EXPECTED_RUNNER_BUNDLE_ID="${EXTEND_ENGINE_IOS_RUNNER_RELEASE_BUNDLE_ID:-${AGENT_DEVICE_IOS_RUNNER_RELEASE_BUNDLE_ID:-}}"
+ARCHIVE_BASENAME="extend-engine-ios-runner-$VERSION.app.tar.gz"
 CHECKSUM_BASENAME="$ARCHIVE_BASENAME.sha256"
-MANIFEST_BASENAME="agent-device-ios-runner-$VERSION.manifest.json"
+MANIFEST_BASENAME="extend-engine-ios-runner-$VERSION.manifest.json"
 GITHUB_SERVER="${GITHUB_SERVER_URL:-https://github.com}"
 REPOSITORY="${GITHUB_REPOSITORY:-}"
 
@@ -71,13 +71,13 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-device-ios-runner.XXXXXX")"
+STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/extend-engine-ios-runner.XXXXXX")"
 cleanup() {
   rm -rf "$STAGE_DIR"
 }
 trap cleanup EXIT INT TERM
 
-STAGED_APP_PATH="$STAGE_DIR/agent-device-ios-runner-$VERSION.app"
+STAGED_APP_PATH="$STAGE_DIR/extend-engine-ios-runner-$VERSION.app"
 ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME"
 CHECKSUM_PATH="$OUTPUT_DIR/$CHECKSUM_BASENAME"
 MANIFEST_PATH="$OUTPUT_DIR/$MANIFEST_BASENAME"

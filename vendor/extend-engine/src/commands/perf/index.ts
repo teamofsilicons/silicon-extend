@@ -49,7 +49,7 @@ export const perfCommandMetadata = defineFieldCommandMetadata(
 
 const perfCliSchema = {
   usageOverride:
-    'perf frames --json\n  agent-device perf memory sample --json\n  agent-device perf memory snapshot [--kind android-hprof|memgraph] [--out <path>]\n  agent-device perf cpu profile start --kind xctrace [--template <name>] --out <profile.trace>\n  agent-device perf cpu profile stop --kind xctrace --out <profile.trace>\n  agent-device perf cpu profile report --kind xctrace --out <report.json>\n  agent-device perf trace start|stop --kind xctrace [--template <name>] --out <path>\n  agent-device perf cpu profile start --kind simpleperf --out <cpu.perf.data>\n  agent-device perf cpu profile stop --kind simpleperf\n  agent-device perf cpu profile report --kind simpleperf --out <cpu-report.json>\n  agent-device perf trace start|stop --kind perfetto [--out <path>]\n\n  Aggregate perf was removed in 0.21. Use one of the explicit forms above.',
+    'perf frames --json\n  extend perf memory sample --json\n  extend perf memory snapshot [--kind android-hprof|memgraph] [--out <path>]\n  extend perf cpu profile start --kind xctrace [--template <name>] --out <profile.trace>\n  extend perf cpu profile stop --kind xctrace --out <profile.trace>\n  extend perf cpu profile report --kind xctrace --out <report.json>\n  extend perf trace start|stop --kind xctrace [--template <name>] --out <path>\n  extend perf cpu profile start --kind simpleperf --out <cpu.perf.data>\n  extend perf cpu profile stop --kind simpleperf\n  extend perf cpu profile report --kind simpleperf --out <cpu-report.json>\n  extend perf trace start|stop --kind perfetto [--out <path>]\n\n  Aggregate perf was removed in 0.21. Use one of the explicit forms above.',
   usageFlags: [],
   listUsageOverride: 'perf',
   positionalArgs: ['area', 'subjectOrAction?', 'action?'],
@@ -74,7 +74,7 @@ export const perfCommandFacet = defineCommandFacet({
   text: {
     summary: 'Check frames, memory, or native profiles',
     cliDetail:
-      'Use perf frames for bounded frame-health evidence and perf memory sample for a compact process-memory reading. On iOS simulators and macOS, process sampling and captures target the resolved app executable and exclude other copies with the same name. Apple xctrace and Android Simpleperf/Perfetto captures keep raw artifacts on disk; report produces bounded agent-readable evidence. For React render internals, use agent-device react-devtools.',
+      'Use perf frames for bounded frame-health evidence and perf memory sample for a compact process-memory reading. On iOS simulators and macOS, process sampling and captures target the resolved app executable and exclude other copies with the same name. Apple xctrace and Android Simpleperf/Perfetto captures keep raw artifacts on disk; report produces bounded agent-readable evidence. For React render internals, use extend react-devtools.',
     mcpDetail:
       'For CPU profiles, start and stop write the raw artifact while report writes a compact summary; request the report when the task needs readable native CPU evidence. Profiling output is evidence only: compact state, artifact path, and size.',
   },

@@ -65,9 +65,9 @@ export async function handleDoctorCommand(params: {
   appendDoctorChecks(
     checks,
     {
-      id: 'agent-device',
+      id: 'engine',
       status: 'pass',
-      summary: `agent-device ${readVersion()} using ${stateDir}`,
+      summary: `Silicon Extend device engine ${readVersion()} using ${stateDir}`,
       evidence: { version: readVersion(), stateDir },
     },
     ...remoteConnectionChecks(req, { required: options.remote }),

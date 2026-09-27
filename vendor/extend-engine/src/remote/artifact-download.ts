@@ -166,7 +166,7 @@ async function materializeDirectoryArtifact(
 ): Promise<string> {
   // Staging beside the final entry guarantees one filesystem, so there is no EXDEV copy fallback
   // that could expose a partially copied suite.
-  const tempDir = await fs.promises.mkdtemp(path.join(destinationRoot, '.agent-device-download-'));
+  const tempDir = await fs.promises.mkdtemp(path.join(destinationRoot, '.extend-engine-download-'));
   const archivePath = path.join(tempDir, 'artifact.tar.gz');
   const stagingRoot = path.join(tempDir, 'extracted');
   try {

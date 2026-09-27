@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  buildEnvVarNames,
   buildPrimaryEnvVarName,
   parseSourceValue,
   type SourceValueDefinition,
@@ -23,12 +24,21 @@ function expectInvalidArgs(fn: () => unknown, messageFragment?: string) {
 describe('buildPrimaryEnvVarName', () => {
   test('converts camelCase keys into a prefixed SCREAMING_SNAKE env var', () => {
     expect(buildPrimaryEnvVarName('iosSimulatorDeviceSet')).toBe(
-      'AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET',
+      'EXTEND_ENGINE_IOS_SIMULATOR_DEVICE_SET',
     );
   });
 
   test('replaces characters that are illegal in env var names with underscores', () => {
-    expect(buildPrimaryEnvVarName('foo.bar-baz')).toBe('AGENT_DEVICE_FOO_BAR_BAZ');
+    expect(buildPrimaryEnvVarName('foo.bar-baz')).toBe('EXTEND_ENGINE_FOO_BAR_BAZ');
+  });
+});
+
+describe('buildEnvVarNames', () => {
+  test('reads the Silicon Extend name first, then the fork name', () => {
+    expect(buildEnvVarNames('daemonBaseUrl')).toEqual([
+      'EXTEND_ENGINE_DAEMON_BASE_URL',
+      'AGENT_DEVICE_DAEMON_BASE_URL',
+    ]);
   });
 });
 

@@ -55,8 +55,14 @@ object DebuggingPath {
         else -> "Settings › System › Developer options › USB debugging › On"
     }
 
+    /**
+     * The command an Android 8–10 phone needs once from a computer, as setup text writes it: in
+     * quotation marks, because the app's text shows no code formatting (backticks would show as they are).
+     */
+    const val TCPIP_COMMAND = "“adb tcpip 5555”"
+
     /** What the Carbon does once on an Android 8–10 phone: there is nothing to switch on in Settings for the network. */
-    const val TCPIP_STEP = "connect this phone to a computer by USB once and run `adb tcpip 5555` there (it lasts until the phone restarts)"
+    const val TCPIP_STEP = "connect this phone to a computer by USB once and run $TCPIP_COMMAND there (it lasts until the phone restarts)"
 
     /** The prompt Android shows for a new debugging key, and the answer that makes it stick. */
     const val APPROVE = "select Allow when Android asks \"Allow USB debugging?\" (tick \"Always allow from this computer\" so it doesn't ask again)"
@@ -77,7 +83,7 @@ object DebuggingPath {
     fun missingReason(what: String, tv: Boolean, fire: Boolean, sdk: Int): String = when {
         mode(sdk) == Mode.WIRELESS -> "$what needs Android debugging. Turn on Wireless or Network debugging, then connect it in the Extend app's setup."
         tv -> "$what needs Android debugging. The Carbon turns on network debugging (${legacySwitch(tv, fire)}), then connects it in the Extend app's setup."
-        else -> "$what needs Android debugging. On Android 10 and older the Carbon turns on USB debugging, runs `adb tcpip 5555` once from a computer, " +
+        else -> "$what needs Android debugging. On Android 10 and older the Carbon turns on USB debugging, runs $TCPIP_COMMAND once from a computer, " +
             "then connects it in the Extend app's setup."
     }
 
@@ -88,10 +94,27 @@ object DebuggingPath {
         enabled && tv -> "Connected before, but not connected right now; Extend keeps reconnecting to port $port. " +
             "Check that network debugging is still on (${legacySwitch(tv, fire)}), then tap Connect. To stop using it, tap Disconnect Android debugging."
         enabled -> "Connected before, but not connected right now; Extend keeps reconnecting to port $port. " +
-            "`adb tcpip 5555` lasts until the phone restarts: run it again from a computer, then tap Connect. To stop using it, tap Disconnect Android debugging."
+            "$TCPIP_COMMAND lasts until the phone restarts: run it again from a computer, then tap Connect. To stop using it, tap Disconnect Android debugging."
         tv -> "This TV runs Android $release, which has no Wireless debugging. Once network debugging is on (the step above), " +
             "tap Connect Android debugging and $APPROVE."
-        else -> "Android $release has no Wireless debugging. Once `adb tcpip 5555` has run (the step above), tap Connect Android debugging and $APPROVE."
+        else -> "Android $release has no Wireless debugging. Once $TCPIP_COMMAND has run (the step above), tap Connect Android debugging and $APPROVE."
+    }
+
+    /**
+     * The debugging step's error when Extend can't reconnect to debugging the Carbon connected:
+     * what is wrong and what to do, in plain words (the technical reason goes to the log).
+     */
+    fun reconnectFailed(tv: Boolean, sdk: Int): String = when {
+        tv -> "Extend couldn't reconnect to Android debugging on this TV. Check that network debugging is still on, then tap Retry."
+        mode(sdk) == Mode.WIRELESS -> "Extend couldn't reconnect to Android debugging on this phone. Check that Wireless debugging is on and the phone is on Wi-Fi, then tap Retry."
+        else -> "Extend couldn't reconnect to Android debugging on this phone. Network debugging turns off when the phone restarts: set it up again from a computer, then tap Retry."
+    }
+
+    /** The same step's help: where the switch is, and on Android 8–10 phones what a restart undoes. */
+    fun reconnectHelp(tv: Boolean, fire: Boolean, sdk: Int): String = when {
+        tv -> "${legacySwitch(tv, fire)}."
+        mode(sdk) == Mode.NETWORK -> "${legacySwitch(tv, fire)}. Then $TCPIP_STEP."
+        else -> "Settings › System › Developer options › Wireless debugging › On (needs Wi-Fi)."
     }
 
     /** Nothing listens on [port]: say what turns it on for this device. */

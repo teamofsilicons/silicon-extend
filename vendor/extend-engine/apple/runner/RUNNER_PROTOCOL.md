@@ -76,7 +76,7 @@ The current command names and per-command traits are defined in:
 
 - `RunnerCommand` in [`../../packages/platform-apple/src/runner/runner-contract.ts`](../../packages/platform-apple/src/runner/runner-contract.ts)
 - `RUNNER_COMMAND_TRAITS` in [`../../packages/platform-apple/src/runner/runner-command-traits.ts`](../../packages/platform-apple/src/runner/runner-command-traits.ts)
-- `CommandType` in [`AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Models.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Models.swift)
+- `CommandType` in [`SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Models.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Models.swift)
 
 ## Response Shape
 
@@ -116,23 +116,23 @@ declaration for the current rules.
 
 - **Command ids and `status` recovery.** The daemon attaches a `commandId` with `withRunnerCommandId`
   ([`runner-contract.ts`](../../packages/platform-apple/src/runner/runner-contract.ts)). The runner records commands in
-  `RunnerCommandJournal` ([`RunnerTests+CommandJournal.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+CommandJournal.swift)) and
+  `RunnerCommandJournal` ([`RunnerTests+CommandJournal.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+CommandJournal.swift)) and
   answers the `status` command in `executeStatus`
-  ([`RunnerTests+CommandDispatch.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+CommandDispatch.swift)). The daemon's recovery
+  ([`RunnerTests+CommandDispatch.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+CommandDispatch.swift)). The daemon's recovery
   decisions live in [`runner-command-recovery.ts`](../../packages/platform-apple/src/runner/runner-command-recovery.ts).
 - **`runnerMainThreadBusy`.** The runner stamps successful responses with `stampingCurrentMainThreadBusy`
-  ([`RunnerTests+Models.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Models.swift)) from `currentMainThreadBusyState()`
-  ([`RunnerTests+MainThreadWork.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+MainThreadWork.swift)), applied in `jsonResponse`
-  ([`RunnerTests+Transport.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Transport.swift)). The daemon reads the stamp in [`runner-session.ts`](../../packages/platform-apple/src/runner/runner-session.ts).
+  ([`RunnerTests+Models.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Models.swift)) from `currentMainThreadBusyState()`
+  ([`RunnerTests+MainThreadWork.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+MainThreadWork.swift)), applied in `jsonResponse`
+  ([`RunnerTests+Transport.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Transport.swift)). The daemon reads the stamp in [`runner-session.ts`](../../packages/platform-apple/src/runner/runner-session.ts).
 - **`runnerFatal`.** A field of the response data (`runnerFatal` in
-  [`RunnerTests+Models.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Models.swift)); for example, a sparse snapshot payload in
-  [`RunnerTests+Snapshot.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Snapshot.swift) sets it. The daemon reads it in
+  [`RunnerTests+Models.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Models.swift)); for example, a sparse snapshot payload in
+  [`RunnerTests+Snapshot.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Snapshot.swift) sets it. The daemon reads it in
   `resolveRunnerFatalReason` ([`runner-session.ts`](../../packages/platform-apple/src/runner/runner-session.ts)).
 - **Runner error codes** (for example `RUNNER_BUSY`, `RUNNER_WEDGED`, `MAIN_THREAD_TIMEOUT`). On the runner
-  side, wire codes are declared in `RunnerWireErrorCode` ([`RunnerTests.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests.swift));
+  side, wire codes are declared in `RunnerWireErrorCode` ([`RunnerTests.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests.swift));
   `RUNNER_BUSY` and `RUNNER_WEDGED` come from the busy gate in
-  [`RunnerTests+CommandDispatch.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+CommandDispatch.swift), and `MAIN_THREAD_TIMEOUT` from
-  the main-thread watchdog in [`RunnerTests+Transport.swift`](AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Transport.swift). The daemon
+  [`RunnerTests+CommandDispatch.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+CommandDispatch.swift), and `MAIN_THREAD_TIMEOUT` from
+  the main-thread watchdog in [`RunnerTests+Transport.swift`](SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Transport.swift). The daemon
   classifies a runner-reported code in `classifyRunnerReportedError`
   ([`runner-contract.ts`](../../packages/platform-apple/src/runner/runner-contract.ts)): codes listed in `DIAGNOSTIC_ONLY_RUNNER_ERROR_CODES`
   arrive as `COMMAND_FAILED` with `details.runnerErrorCode`, and other codes pass through as typed

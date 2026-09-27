@@ -38,12 +38,12 @@ async function resolveBundletoolInvocation(
 
   const bundletoolJar = await resolveFileOverridePath(
     environment.AGENT_DEVICE_BUNDLETOOL_JAR,
-    'AGENT_DEVICE_BUNDLETOOL_JAR',
+    'EXTEND_ENGINE_BUNDLETOOL_JAR',
   );
   if (!bundletoolJar) {
     throw new AppError(
       'TOOL_MISSING',
-      'bundletool not found in PATH. Install bundletool or set AGENT_DEVICE_BUNDLETOOL_JAR to a bundletool-all.jar path.',
+      'bundletool not found in PATH. Install bundletool or set EXTEND_ENGINE_BUNDLETOOL_JAR to a bundletool-all.jar path.',
     );
   }
   const invocation = { cmd: 'java', prefixArgs: ['-jar', bundletoolJar] } as const;
@@ -77,7 +77,7 @@ async function installAndroidAppBundle(
   }
 
   const files = requireAndroidAdbHost().files;
-  const tempDir = await files.makeTempDirectory('agent-device-aab-');
+  const tempDir = await files.makeTempDirectory('extend-engine-aab-');
   const apksPath = path.join(tempDir, 'bundle.apks');
   try {
     await runBundletool(

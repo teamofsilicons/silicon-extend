@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// The engine's package name (package.json), which marks its root above the workspace packages.
+// Silicon Extend renamed the fork's package from `agent-device`.
+const ENGINE_PACKAGE_NAME = 'silicon-extend-engine';
+
 export function resolveAgentDeviceProjectRoot(startDirectory: string): string {
   let current = startDirectory;
   let nearest: string | null = null;
@@ -10,7 +14,7 @@ export function resolveAgentDeviceProjectRoot(startDirectory: string): string {
       nearest ??= current;
       try {
         const name = (JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { name?: unknown }).name;
-        if (name === 'agent-device') return current;
+        if (name === ENGINE_PACKAGE_NAME) return current;
       } catch {}
     }
     current = path.dirname(current);

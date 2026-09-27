@@ -292,7 +292,7 @@ test('snapshotAndroid uses the injected helper artifact', async () => {
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
         stderr: '',
       };
     }
@@ -378,7 +378,7 @@ test('snapshotAndroid emits helper phase diagnostics', async () => {
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
         stderr: '',
       };
     }
@@ -420,7 +420,7 @@ test('snapshotAndroid resolves helper adb through scoped provider', async () => 
       if (args.includes('--show-versioncode')) {
         return {
           exitCode: 0,
-          stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+          stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
           stderr: '',
         };
       }
@@ -682,7 +682,7 @@ test('snapshotAndroid fails closed when the helper fails', async () => {
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
         stderr: '',
       };
     }
@@ -724,7 +724,7 @@ test('snapshotAndroid fails closed when helper returns only system windows', asy
   );
   assert.equal(
     adbCalls.some(
-      (args) => args.join(' ') === 'shell am force-stop com.callstack.agentdevice.snapshothelper',
+      (args) => args.join(' ') === 'shell am force-stop com.teamofsilicons.extend.snapshothelper',
     ),
     true,
   );
@@ -906,7 +906,7 @@ test('snapshotAndroid emits helper failure diagnostics', async () => {
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
         stderr: '',
       };
     }
@@ -963,7 +963,7 @@ test('snapshotAndroid gives an actionable hint when the helper artifact is missi
       assert.match((error as Error).message, /the bundled helper artifact was not found/);
       const hint = String((error as { details?: Record<string, unknown> }).details?.hint);
       assert.match(hint, /pnpm build:android/);
-      assert.match(hint, /prepack/);
+      assert.match(hint, /reinstall Silicon Extend/);
       assert.match(hint, /\.manifest\.json/);
       assert.match(hint, /\.apk/);
       // The npm package excludes *.idsig by design — the hint must never claim it is required.
@@ -1072,7 +1072,7 @@ test('snapshotAndroid fails closed after unparseable helper output', async () =>
   );
   assert.equal(
     calls.some(
-      (args) => args.join(' ') === 'shell am force-stop com.callstack.agentdevice.snapshothelper',
+      (args) => args.join(' ') === 'shell am force-stop com.teamofsilicons.extend.snapshothelper',
     ),
     true,
   );
@@ -1112,7 +1112,7 @@ test('snapshotAndroid re-probes helper install after helper capture failure', as
       versionProbeCount += 1;
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
         stderr: '',
       };
     }

@@ -47,7 +47,7 @@ test('sessionless iOS runner cleanup stops the runner host app', async () => {
   );
   expect(result).toBe('ok');
   expect(mockStopIosRunnerSession).toHaveBeenCalledWith(IOS_SIMULATOR.id);
-  expect(mockCloseIosApp).toHaveBeenCalledWith(IOS_SIMULATOR, 'com.callstack.agentdevice.runner');
+  expect(mockCloseIosApp).toHaveBeenCalledWith(IOS_SIMULATOR, 'com.teamofsilicons.extend.helper');
 });
 
 test('sessionless iOS runner host close is best effort', async () => {
@@ -60,7 +60,7 @@ test('sessionless iOS runner host close is best effort', async () => {
   );
   expect(result).toBe('ok');
   expect(mockStopIosRunnerSession).toHaveBeenCalledWith(IOS_SIMULATOR.id);
-  expect(mockCloseIosApp).toHaveBeenCalledWith(IOS_SIMULATOR, 'com.callstack.agentdevice.runner');
+  expect(mockCloseIosApp).toHaveBeenCalledWith(IOS_SIMULATOR, 'com.teamofsilicons.extend.helper');
 });
 
 test('sessionless cleanup leaves a provider-owned device to its provider', async () => {

@@ -140,7 +140,7 @@ export function resolveRemoteConnectionDefaults(options: {
   ) {
     throw new AppError(
       'INVALID_ARGS',
-      'Active remote connection config changed. Run agent-device connect --force to refresh it.',
+      'Active remote connection config changed. Run extend connect --force to refresh it.',
       { remoteConfig: state.remoteConfigPath },
     );
   }

@@ -64,9 +64,9 @@ test('classifies a runner install blocked by provisioning, not as a connect time
   // The installer prose around it is localized by macOS, so only the CoreDevice
   // error code and the English framework strings can be matched.
   const stderr = [
-    'AgentDeviceRunnerUITests-Runner encountered an error (Failed to install or launch the test runner.',
-    '(Underlying Error: Nie można zainstalować „AgentDeviceRunnerUITests-Runner”.',
-    'Failed to install embedded profile for com.callstack.agentdevice.runner.uitests.xctrunner :',
+    'SiliconExtendHelperUITests-Runner encountered an error (Failed to install or launch the test runner.',
+    '(Underlying Error: Nie można zainstalować „SiliconExtendHelperUITests-Runner”.',
+    'Failed to install embedded profile for com.teamofsilicons.extend.helper.uitests.xctrunner :',
     '0xe8008012 (This provisioning profile cannot be installed on this device.)))',
     '** TEST EXECUTE FAILED **',
   ].join('\n');
@@ -89,7 +89,7 @@ test('a provisioning failure is not treated as retryable infrastructure', () => 
 
 test('a live foreign runner owner is typed infrastructure', () => {
   assert.equal(isInfrastructureBootFailureReason('IOS_RUNNER_OWNED_BY_OTHER_DAEMON'), true);
-  assert.match(bootFailureHint('IOS_RUNNER_OWNED_BY_OTHER_DAEMON'), /owning agent-device session/);
+  assert.match(bootFailureHint('IOS_RUNNER_OWNED_BY_OTHER_DAEMON'), /owning device engine session/);
 });
 
 test.each([

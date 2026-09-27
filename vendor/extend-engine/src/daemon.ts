@@ -1,3 +1,5 @@
+// First, so EXTEND_ENGINE_* settings are in place before anything reads the environment.
+import './extend-env.ts';
 import { startDaemonRuntime } from './daemon/server/daemon-runtime.ts';
 import { asAppError } from '@agent-device/kernel/errors';
 

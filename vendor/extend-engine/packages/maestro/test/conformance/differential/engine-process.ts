@@ -45,7 +45,7 @@ export function classifyAgentDeviceFailure(stdout: string): 'behavioral' | 'infr
  * both: splitting it corrupts `/tmp/agent device.mjs`, and not splitting it
  * spawns the whole line as a single node option — the bug that infrastructure-
  * failed every scenario from 2026-08-25. Set the flags variable to the empty
- * string to run an entry that needs none (a built `bin/agent-device.mjs`).
+ * string to run an entry that needs none (a built `bin/extend-engine.mjs`).
  */
 const DEFAULT_CLI_ENTRY = 'src/bin.ts';
 const DEFAULT_CLI_NODE_FLAGS = '--experimental-strip-types';

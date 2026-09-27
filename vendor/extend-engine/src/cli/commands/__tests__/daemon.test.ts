@@ -171,7 +171,7 @@ test('warns in text output when a graceful stop leaves an orphaned claim', async
     );
     const rendered = (renderHuman as () => string)();
     expect(rendered).toContain('Ownership of emulator-5554 was not released cleanly');
-    expect(rendered).toContain('agent-device device release --stale');
+    expect(rendered).toContain('extend device release --stale');
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }

@@ -204,9 +204,9 @@ test('MCP applies config-backed command defaults; explicit operator input is ref
   const home = mkdtempForTestSync('agent-device-mcp-config-');
   temporaryDirectory = home;
   const configuredXctestrun = path.join(home, 'configured.xctestrun');
-  fs.mkdirSync(path.join(home, '.agent-device'));
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(home, '.agent-device', 'config.json'),
+    path.join(home, '.silicon-extend', 'engine', 'config.json'),
     JSON.stringify({ iosXctestrunFile: configuredXctestrun, appsFilter: 'all' }),
   );
   vi.stubEnv('HOME', home);

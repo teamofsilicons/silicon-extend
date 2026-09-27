@@ -57,7 +57,7 @@ class AndroidVersionsTest {
 
         val phone9 = DebuggingPath.missingReason("Installing apps", tv = false, fire = false, sdk = 28)
         assertTrue(phone9, phone9.startsWith("Installing apps needs Android debugging."))
-        assertTrue(phone9, phone9.contains("`adb tcpip 5555`"))
+        assertTrue(phone9, phone9.contains("“adb tcpip 5555”"))
         val tv9 = DebuggingPath.missingReason("Reading device logs", tv = true, fire = false, sdk = 28)
         assertTrue(tv9, tv9.contains("Developer options › Network debugging"))
         val fire = DebuggingPath.missingReason("Running adb commands", tv = true, fire = true, sdk = 28)
@@ -69,7 +69,7 @@ class AndroidVersionsTest {
 
         val refusedTv = DebuggingPath.refused(5555, tv = true, fire = false, sdk = 28)
         assertTrue(refusedTv, refusedTv.startsWith("Nothing answered on debugging port 5555. Turn on network debugging"))
-        assertTrue(DebuggingPath.refused(5555, tv = false, fire = false, sdk = 29).contains("run `adb tcpip 5555`"))
+        assertTrue(DebuggingPath.refused(5555, tv = false, fire = false, sdk = 29).contains("run “adb tcpip 5555”"))
         assertTrue(DebuggingPath.notAnswered(5555, 60, requireTls = false).contains("\"Allow USB debugging?\""))
         assertTrue(DebuggingPath.disconnected(28).contains("Revoke USB debugging authorisations"))
         assertTrue(DebuggingPath.disconnected(30).contains("Wireless debugging settings"))
@@ -82,7 +82,7 @@ class AndroidVersionsTest {
         assertTrue(DebuggingCardCopy.text(true, true, false, sdk = 28, tv = true, fire = false, release = "9", port = 5555).contains("screenshots and remote buttons"))
         val phone = DebuggingCardCopy.text(false, true, false, sdk = 28, tv = false, fire = false, release = "9", port = 5555)
         assertTrue(phone, phone.startsWith("Connected before, but not connected right now; Extend keeps reconnecting to port 5555."))
-        assertTrue(phone, phone.contains("`adb tcpip 5555` lasts until the phone restarts"))
+        assertTrue(phone, phone.contains("“adb tcpip 5555” lasts until the phone restarts"))
         assertEquals(
             "Android 11+ keeps the Wireless debugging words",
             DebuggingCardCopy.text(false, false, false),
@@ -143,7 +143,7 @@ class AndroidVersionsTest {
         assertFalse(debugging.required)
         assertEquals("todo", debugging.step.status)
         assertEquals(SettingsPage.DEVELOPER_OPTIONS, debugging.open?.page)
-        assertTrue(debugging.step.help!!, debugging.step.help!!.contains("`adb tcpip 5555`"))
+        assertTrue(debugging.step.help!!, debugging.step.help!!.contains("“adb tcpip 5555”"))
         assertFalse("restricted settings are Android 13+", r.items.first().step.help!!.contains("restricted"))
         assertTrue(r.items.first { it.step.key == "notification_access" }.step.help!!.startsWith("Settings › Apps & notifications › Special app access › Notification access"))
         assertEquals("done", SetupReport.build(signals(28, adb = true)).items.last().step.status)
@@ -163,7 +163,8 @@ class AndroidVersionsTest {
         assertEquals(listOf("accessibility", "developer_options", "network_debugging"), r.keys())
         val dev = r.items.first { it.step.key == "developer_options" }
         assertTrue(dev.step.help!!, dev.step.help!!.startsWith("On the About screen the button opens (Settings › Device Preferences › About), select Build 7 times"))
-        assertTrue("debugging also adds screenshots and remote buttons here", dev.step.help!!.endsWith("installation, logs, screenshots and remote buttons."))
+        assertTrue("debugging also adds screenshots and remote buttons here", dev.step.help!!.endsWith("app installation, device logs, screenshots and remote buttons."))
+        assertEquals("the done summary says the same", "Core device control is ready. Android debugging below adds app installation, device logs, screenshots and remote buttons.", r.doneSummary)
         assertEquals(SettingsPage.ABOUT, dev.open?.page)
         assertEquals(SettingsRoute(component = "com.android.tv.settings" to "com.android.tv.settings.about.AboutActivity"), dev.open!!.routes.first())
         val net = r.items.last()
@@ -181,7 +182,7 @@ class AndroidVersionsTest {
         fun stuck(sdk: Int, ms: Long, tv: Boolean = true) =
             SetupReport.build(signals(sdk, tv = tv, a11y = false).copy(a11yEnabled = true, a11yStartingMs = ms)).items.first().step
         val step = stuck(28, 20_000)
-        assertEquals("in_progress", step.status)
+        assertEquals("it needs the Carbon: failed, with Retry", "failed", step.status)
         assertEquals(
             "Accessibility is on for Silicon Extend TV, but Android hasn't started it. On Android 9 this can happen after Silicon Extend TV is updated: " +
                 "restart this TV and it starts by itself.",
@@ -190,6 +191,40 @@ class AndroidVersionsTest {
         assertNull("starting for a moment is normal", stuck(28, 5_000).error)
         assertNull("Android 10 rebinds it", stuck(29, 60_000).error)
         assertTrue(stuck(26, 60_000, tv = false).error!!.contains("restart this device"))
+        assertEquals("in_progress", stuck(28, 5_000).status)
+        val retrying = SetupReport.build(signals(28, tv = true, a11y = false).copy(a11yEnabled = true, a11yStartingMs = 20_000, retrying = setOf("accessibility"))).items.first().step
+        assertEquals("a retry shows as in progress", "in_progress", retrying.status)
+        assertNull(retrying.error)
+    }
+
+    @Test fun theDoneSummarySaysWhatDebuggingAddsOnEachVersion() {
+        assertEquals("Core device control is ready. Android debugging below adds app installation, device logs and recording.", SetupReport.build(signals(34)).doneSummary)
+        assertEquals("Core device control is ready. Android debugging below adds app installation, device logs, recording and screenshots.", SetupReport.build(signals(28)).doneSummary)
+        assertEquals("Core device control is ready. Android debugging below adds app installation and device logs.", SetupReport.build(signals(34, tv = true)).doneSummary)
+        assertEquals("Core device control is ready. Android debugging below adds app installation, device logs and remote buttons.", SetupReport.build(signals(30, tv = true)).doneSummary)
+    }
+
+    @Test fun debuggingThatCantReconnectIsAFailedStepWithAPlainError() {
+        fun lost(sdk: Int, tv: Boolean = false, retrying: Set<String> = emptySet()) = SetupReport.build(
+            signals(sdk, tv = tv, devOptions = true, adbOn = true).copy(adbPaired = true, adbLastError = "java.net.ConnectException: failed to connect to /127.0.0.1 (port 5555)", retrying = retrying),
+        ).items.last().step
+        val phone = lost(34)
+        assertEquals("wireless_debugging", phone.key)
+        assertEquals("failed", phone.status)
+        assertEquals("Extend couldn't reconnect to Android debugging on this phone. Check that Wireless debugging is on and the phone is on Wi-Fi, then tap Retry.", phone.error)
+        val tv = lost(28, tv = true)
+        assertEquals("network_debugging", tv.key)
+        assertEquals("Extend couldn't reconnect to Android debugging on this TV. Check that network debugging is still on, then tap Retry.", tv.error)
+        val old = lost(28)
+        assertTrue(old.error!!, old.error!!.contains("set it up again from a computer"))
+        for (step in listOf(phone, tv, old)) {
+            val e = step.error!!
+            assertFalse("no exception or port in a Carbon's error: $e", e.contains("Exception") || e.contains("5555") || e.contains("adb"))
+        }
+        assertEquals("in_progress", lost(34, retrying = setOf("wireless_debugging")).status)
+        // Never connected, or connected now: nothing failed.
+        assertEquals("todo", SetupReport.build(signals(34).copy(adbLastError = "x")).items.last().step.status)
+        assertEquals("done", SetupReport.build(signals(34, adb = true).copy(adbPaired = true, adbWifi = true)).items.last().step.status)
     }
 
     @Test fun onAndroid9ScreenshotsNeedAndroidDebugging() {
@@ -198,7 +233,7 @@ class AndroidVersionsTest {
         assertFalse(C.SCREEN_CAPTURE in phone.capabilities)
         val reason = phone.missing.first { it.capability == C.SCREEN_CAPTURE }.reason
         assertTrue(reason, reason.startsWith("Screenshots through accessibility need Android 11; this phone runs Android 9."))
-        assertTrue(reason, reason.contains("`adb tcpip 5555`"))
+        assertTrue(reason, reason.contains("“adb tcpip 5555”"))
         val connected = SetupReport.build(signals(28, adb = true))
         assertTrue(C.SCREEN_CAPTURE in connected.capabilities)
         assertTrue(connected.missing.none { it.capability == C.SCREEN_CAPTURE })

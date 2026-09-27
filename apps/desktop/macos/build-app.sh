@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds "Silicon Extend.app": the extend-agent binary, Extend's agent-device fork, a Node runtime
-# and agent-device's macOS helper. Set SIGN_IDENTITY for Developer ID signing.
+# Builds "Silicon Extend.app": the extend-agent binary, Silicon Extend's device engine, a Node
+# runtime and the engine's macOS helper. Set SIGN_IDENTITY for Developer ID signing.
 #
 #   apps/desktop/macos/build-app.sh            # release build for this Mac's architecture
 #   PROFILE=debug apps/desktop/macos/build-app.sh
@@ -23,7 +23,9 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT="$ROOT/target/desktop/macos"
 APP="$OUT/Silicon Extend.app"
 CACHE="$ROOT/target/desktop/.cache"
-AD="$ROOT/vendor/agent-device"
+ENGINE="$ROOT/vendor/extend-engine"
+# The macOS helper's name in the app: what Activity Monitor and the Privacy & Security lists show.
+HELPER_NAME="Silicon Extend Helper"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 
 step() { printf '\n== %s\n' "$*"; }
@@ -35,14 +37,15 @@ if [[ -n "${NOTARY_PROFILE:-}" && "$SIGN_IDENTITY" == "-" ]]; then
   die "NOTARY_PROFILE is set but SIGN_IDENTITY isn't: Apple notarizes only Developer ID signed apps. Set SIGN_IDENTITY='Developer ID Application: …', or unset NOTARY_PROFILE for an ad-hoc build."
 fi
 
-step "agent-device fork (pnpm install && pnpm build)"
-(cd "$AD" && pnpm install --frozen-lockfile && pnpm build)
+step "device engine (pnpm install && pnpm build)"
+(cd "$ENGINE" && pnpm install --frozen-lockfile && pnpm build)
 # What this dist was built from, so a later package without pnpm can check it (dist-manifest.mjs).
-node "$ROOT/apps/desktop/dist-manifest.mjs" record "$AD"
-# The macOS helper, built once and shipped signed inside the app so permissions stick to it.
-(cd "$AD" && pnpm build:macos-helper) >/dev/null
-HELPER="$(find "$AD/apple/macos-helper/.build" -type f -name agent-device-macos-helper -perm -u+x -ipath '*release*' | head -1)"
-[[ -n "$HELPER" ]] || die "agent-device-macos-helper didn't build: no release executable under $AD/apple/macos-helper/.build. Run (cd vendor/agent-device && pnpm build:macos-helper) to see the Swift error, fix it and build again."
+node "$ROOT/apps/desktop/dist-manifest.mjs" record "$ENGINE"
+# The macOS helper, built once and shipped signed inside the app so permissions stick to it. The
+# Swift product keeps its upstream name (agent-device-macos-helper) unless the fork renames it.
+(cd "$ENGINE" && pnpm build:macos-helper) >/dev/null
+HELPER="$(find "$ENGINE/apple/macos-helper/.build" -type f \( -name silicon-extend-macos-helper -o -name agent-device-macos-helper \) -perm -u+x -ipath '*release*' | head -1)"
+[[ -n "$HELPER" ]] || die "The macOS helper didn't build: no release executable under $ENGINE/apple/macos-helper/.build. Run (cd vendor/extend-engine && pnpm build:macos-helper) to see the Swift error, fix it and build again."
 
 step "extend-agent ($PROFILE)"
 if [[ "$PROFILE" == "release" ]]; then
@@ -89,40 +92,40 @@ step "Assemble $APP"
 ZIP_BASE="$OUT/Silicon-Extend-$VERSION-macos-$ARCH"
 rm -rf "$APP"
 rm -f "$ZIP_BASE.zip" "$ZIP_BASE-unnotarized.zip" "$ZIP_BASE-adhoc.zip" "$OUT/notarization.json"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/agent-device" "$APP/Contents/Resources/node"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/engine" "$APP/Contents/Resources/node"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/apps/desktop/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 # The app icon (Finder, and the Privacy & Security lists); icon/make-icns.sh rebuilds it from AppIcon.svg.
 cp "$ROOT/apps/desktop/macos/icon/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/THIRD_PARTY_LICENSES.txt" "$APP/Contents/Resources/"
 plutil -replace CFBundleIconFile -string AppIcon "$APP/Contents/Info.plist"
 cp "$BIN" "$APP/Contents/MacOS/extend-agent"
-cp "$HELPER" "$APP/Contents/MacOS/agent-device-macos-helper"
-# agent-device: its self-contained dist, plus the Apple sources it builds on first use
+cp "$HELPER" "$APP/Contents/MacOS/$HELPER_NAME"
+# The device engine: its self-contained dist, plus the Apple sources it builds on first use
 # (the UI testing runner for recording and other runner commands, and the helpers).
-tar -C "$AD" --exclude='.build' --exclude='.swiftpm' --exclude='DerivedData' --exclude='xcuserdata' \
+tar -C "$ENGINE" --exclude='.build' --exclude='.swiftpm' --exclude='DerivedData' --exclude='xcuserdata' \
   -cf - bin dist package.json LICENSE apple/runner apple/snapshot-presentation apple/macos-helper apple/snapshot-bridge apple/fold-helper \
-  | tar -C "$APP/Contents/Resources/agent-device" -xf -
+  | tar -C "$APP/Contents/Resources/engine" -xf -
 tar -xzf "$NODE_TARBALL" -C "$APP/Contents/Resources/node" --strip-components=1 \
   --include='*/bin/node' --include='*/LICENSE'
 BUNDLED_NODE="$APP/Contents/Resources/node/bin/node"
-RUNTIME="$APP/Contents/Resources/agent-device"
-# Extend's entry (runtime-entry.mjs) runs in front of agent-device's own: it replaces a daemon that
+RUNTIME="$APP/Contents/Resources/engine"
+# Extend's entry (runtime-entry.mjs) runs in front of the engine's own: it replaces a daemon that
 # a copy of the app at another location started, which fails once that copy is moved or deleted.
-mv "$RUNTIME/bin/agent-device.mjs" "$RUNTIME/bin/agent-device-cli.mjs"
-install -m 0755 "$ROOT/apps/desktop/runtime-entry.mjs" "$RUNTIME/bin/agent-device.mjs"
+mv "$RUNTIME/bin/extend-engine.mjs" "$RUNTIME/bin/extend-engine-cli.mjs"
+install -m 0755 "$ROOT/apps/desktop/runtime-entry.mjs" "$RUNTIME/bin/extend-engine.mjs"
 # Stamp before signing: signing timestamps must not invalidate an otherwise identical runtime.
 # The stamp must be printed and in the staged manifest: an unstamped runtime would keep reusing an
 # older daemon of the same upstream version after an update. stamp_runtime sets STAMPED, or stops
 # the build saying why (even when the stamp is killed by a signal and prints nothing).
-stamp_runtime "$BUNDLED_NODE" "$RUNTIME" "$APP/Contents/MacOS/agent-device-macos-helper"
+stamp_runtime "$BUNDLED_NODE" "$RUNTIME" "$APP/Contents/MacOS/$HELPER_NAME"
 # Read back with plutil rather than the stamp's own code (and without launching Node again).
 MANIFEST_VERSION="$(plutil -extract version raw -o - "$RUNTIME/package.json" 2>/dev/null || true)"
 MANIFEST_DIGEST="$(plutil -extract extendRuntime.sha256 raw -o - "$RUNTIME/package.json" 2>/dev/null || true)"
 STAMP_PATTERN='^[^[:space:]]+[+.]extend\.[0-9a-f]{64}$'
 if [[ ! "$STAMPED" =~ $STAMP_PATTERN || "$MANIFEST_VERSION" != "$STAMPED" || "$STAMPED" != *"extend.$MANIFEST_DIGEST" ]]; then
-  die "agent-device in $RUNTIME wasn't stamped with a build identity (stamp-runtime.mjs printed '$STAMPED'; package.json has '$MANIFEST_VERSION'). Unstamped, the app would reuse an older agent-device daemon after an update. Fix the cause stamp-runtime.mjs reported above, if any, and build again."
+  die "The device engine in $RUNTIME wasn't stamped with a build identity (stamp-runtime.mjs printed '$STAMPED'; package.json has '$MANIFEST_VERSION'). Unstamped, the app would reuse an older engine daemon after an update. Fix the cause stamp-runtime.mjs reported above, if any, and build again."
 fi
-echo "agent-device runtime $STAMPED"
+echo "device engine runtime $STAMPED"
 plutil -lint "$APP/Contents/Info.plist"
 
 step "Code signature ($SIGN_IDENTITY)"
@@ -133,7 +136,9 @@ else
   SIGN_ARGS+=(--timestamp --options runtime)
 fi
 codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/apps/desktop/macos/node-entitlements.plist" "$APP/Contents/Resources/node/bin/node"
-codesign "${SIGN_ARGS[@]}" "$APP/Contents/MacOS/agent-device-macos-helper"
+# Renamed from 1.0's agent-device-macos-helper, so macOS asks for Accessibility and Screen Recording
+# again once after the update to 1.1 (the grants follow the helper's path and identity).
+codesign "${SIGN_ARGS[@]}" --identifier com.teamofsilicons.extend.macos-helper "$APP/Contents/MacOS/$HELPER_NAME"
 codesign "${SIGN_ARGS[@]}" --entitlements "$ROOT/apps/desktop/macos/app-entitlements.plist" --identifier com.teamofsilicons.extend "$APP"
 codesign --verify --deep --strict "$APP" && echo "signature ok"
 "$APP/Contents/Resources/node/bin/node" -e 'if (new Function("return 42")() !== 42) process.exit(1)'

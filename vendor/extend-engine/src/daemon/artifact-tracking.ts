@@ -220,7 +220,7 @@ async function createDirectoryArchive(
   );
   const fileName = archiveFilename(sourceName);
   const tempDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `agent-device-download-${crypto.randomUUID()}-`),
+    path.join(os.tmpdir(), `extend-engine-download-${crypto.randomUUID()}-`),
   );
   const archivePath = path.join(tempDir, fileName);
   try {

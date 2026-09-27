@@ -64,10 +64,10 @@ export function buildLeasePreparationNotice(
   return {
     status: 'deferred',
     nextSteps: scopeNextSteps(state, [
-      'agent-device install-from-source <artifact-url> --platform ios|android',
-      'agent-device open <app-id> --relaunch',
-      'agent-device snapshot -i',
-      'agent-device devices',
+      'extend install-from-source <artifact-url> --platform ios|android',
+      'extend open <app-id> --relaunch',
+      'extend snapshot -i',
+      'extend devices',
     ]),
     message:
       'No live device session has been created. Run a device command when ready to allocate or refresh the lease.' +
@@ -234,10 +234,7 @@ function buildUnscopedConnectWorkflow(
   const leaseKind = capabilities.leaseKind;
   if (leaseKind === 'proxy') {
     return {
-      nextSteps: [
-        'agent-device devices',
-        `agent-device open ${appIdPlaceholder(state.platform)} --relaunch`,
-      ],
+      nextSteps: ['extend devices', `extend open ${appIdPlaceholder(state.platform)} --relaunch`],
     };
   }
   if (!verification && leaseKind === 'direct-device-provider') {
@@ -245,7 +242,7 @@ function buildUnscopedConnectWorkflow(
   }
   if (connectionProviderCapabilities(verification?.provider).supportsDeferredAppSelection) {
     return {
-      nextSteps: ['agent-device apps', 'agent-device open <uploaded-asset-name>'],
+      nextSteps: ['extend apps', 'extend open <uploaded-asset-name>'],
     };
   }
   const appMissing = verification?.app?.status === 'missing';
@@ -276,7 +273,7 @@ function missingAttachedAppRecovery(verification?: ConnectVerification): string[
     return [];
   }
   return [
-    `agent-device connect aws-device-farm --platform ${verification.device.platform} --aws-project-arn ${verification.project.reference} --aws-device-arn ${verification.device.reference} --aws-app-arn <arn> --force`,
+    `extend connect aws-device-farm --platform ${verification.device.platform} --aws-project-arn ${verification.project.reference} --aws-device-arn ${verification.device.reference} --aws-app-arn <arn> --force`,
   ];
 }
 
@@ -288,22 +285,19 @@ function providerArtifactNotes(state: RemoteConnectionState, includeAppIdNote: b
     // Notes carry runnable commands too, so they need the same session scoping as
     // nextSteps: an unscoped artifacts call adopts the host-global active connection
     // and can hand back another concurrent job's provider video and logs.
-    `After close, run ${scopeCommand(state, 'agent-device artifacts --json')} for provider video and logs.`,
+    `After close, run ${scopeCommand(state, 'extend artifacts --json')} for provider video and logs.`,
   ];
 }
 
 function openWorkflow(state: RemoteConnectionState): Pick<ConnectReadiness, 'nextSteps'> {
   return {
-    nextSteps: [`agent-device open ${appIdPlaceholder(state.platform)} --relaunch`],
+    nextSteps: [`extend open ${appIdPlaceholder(state.platform)} --relaunch`],
   };
 }
 
 function installThenOpenWorkflow(state: RemoteConnectionState): string[] {
   const appId = appIdPlaceholder(state.platform);
-  return [
-    `agent-device install ${appId} <app-path-or-url>`,
-    `agent-device open ${appId} --relaunch`,
-  ];
+  return [`extend install ${appId} <app-path-or-url>`, `extend open ${appId} --relaunch`];
 }
 
 function connectionVerificationStatus(
@@ -314,10 +308,10 @@ function connectionVerificationStatus(
 
 function defaultDirectProviderLifecycle(): string[] {
   return [
-    'agent-device open <package-or-bundle-id> --relaunch',
-    'agent-device snapshot -i',
-    'agent-device close',
-    'agent-device artifacts --json',
+    'extend open <package-or-bundle-id> --relaunch',
+    'extend snapshot -i',
+    'extend close',
+    'extend artifacts --json',
   ];
 }
 

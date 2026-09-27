@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public agent-device recording, running against a real isolated X11 desktop."""
+"""Public device engine recording, running against a real isolated X11 desktop."""
 import json
 import os
 from pathlib import Path
@@ -11,8 +11,8 @@ import time
 root = Path('/src')
 work = Path(tempfile.mkdtemp(prefix='runtime-recording-', dir='/tmp/out'))
 print('Artifacts:', work, flush=True)
-env = dict(os.environ, AGENT_DEVICE_STATE_DIR=str(work/'daemon'))
-cli = ['node', str(root/'vendor/agent-device/bin/agent-device.mjs'), '--state-dir', str(work/'daemon'), '--session', 'linux-recording', '--platform', 'linux']
+env = dict(os.environ, EXTEND_ENGINE_STATE_DIR=str(work/'daemon'))
+cli = ['node', str(root/'vendor/extend-engine/bin/extend-engine.mjs'), '--state-dir', str(work/'daemon'), '--session', 'linux-recording', '--platform', 'linux']
 fixture = subprocess.Popen(['python3', str(root/'apps/desktop/linux-e2e/record-fixture.py')])
 
 def encoder_bit_rate(under):
@@ -64,8 +64,8 @@ try:
     pid = identity['pid']
     proc = Path(f'/proc/{pid}')
     process_env = (proc/'environ').read_bytes().split(b'\0')
-    assert ('AGENT_DEVICE_STATE_DIR=' + str(work/'daemon')).encode() in process_env
-    assert b'agent-device' in (proc/'cmdline').read_bytes(), 'refuse to kill an unrelated PID'
+    assert ('EXTEND_ENGINE_STATE_DIR=' + str(work/'daemon')).encode() in process_env
+    assert b'extend-engine' in (proc/'cmdline').read_bytes(), 'refuse to kill an unrelated PID'
     os.kill(pid, signal.SIGKILL)
     time.sleep(1)
     stopped = command('record','stop')
@@ -80,7 +80,7 @@ try:
     print('PASS public stop recovers after daemon SIGKILL, discloses lost touch events and removes the worker status',flush=True)
     if os.environ.get('EXTEND_RECORD_DRIVER'):
         agent = os.environ['EXTEND_RECORD_DRIVER']
-        driver_env = dict(os.environ, SILICON_HOME=str(work/'extend-home'), EXTEND_AGENT_DEVICE=str(root/'vendor/agent-device/bin/agent-device.mjs'), EXTEND_TELEMETRY='off')
+        driver_env = dict(os.environ, SILICON_HOME=str(work/'extend-home'), EXTEND_ENGINE=str(root/'vendor/extend-engine/bin/extend-engine.mjs'), EXTEND_TELEMETRY='off')
         probe = subprocess.run([agent,'probe','--json'],env=driver_env,capture_output=True,text=True,check=True,timeout=30)
         report = json.loads(probe.stdout)
         assert 'screen.record' in report['capabilities'], report
@@ -92,7 +92,7 @@ try:
             assert result.returncode==0 and data['ok'],data
             return data
         try:
-            # cli.yaml's `--quality normal` is agent-device's medium (8 Mbit/s here).
+            # cli.yaml's `--quality normal` is the engine's medium (8 Mbit/s here).
             driver('record','start','driver','--scope','device','--fps','12','--hide-touches','--quality','normal')
             assert encoder_bit_rate(work/'extend-home') == '8M', 'record start --quality normal did not reach the encoder as medium'
             time.sleep(1)
@@ -104,12 +104,12 @@ try:
             assert Path(result['output']['outPath']).is_file(), 'stop moved the committed export away from its durable manifest'
             print('PASS Extend driver probe, recording start/stop, returned artifact and full decode',flush=True)
         finally:
-            subprocess.run(['node',str(root/'vendor/agent-device/bin/agent-device.mjs'),'daemon','stop','--state-dir',str(work/'extend-home/.extend-agent/agent-device'),'--clean'],env=driver_env,check=True,timeout=30)
+            subprocess.run(['node',str(root/'vendor/extend-engine/bin/extend-engine.mjs'),'daemon','stop','--state-dir',str(work/'extend-home/.extend-agent/engine'),'--clean'],env=driver_env,check=True,timeout=30)
 
 
 finally:
     try:
-        subprocess.run(['node', str(root/'vendor/agent-device/bin/agent-device.mjs'), 'daemon','stop','--state-dir',str(work/'daemon'),'--clean'],env=env,check=True,timeout=30)
+        subprocess.run(['node', str(root/'vendor/extend-engine/bin/extend-engine.mjs'), 'daemon','stop','--state-dir',str(work/'daemon'),'--clean'],env=env,check=True,timeout=30)
     finally:
         fixture.terminate()
         fixture.wait(timeout=5)

@@ -104,7 +104,7 @@ const systemButtonUnavailable = Object.freeze({
 const foldUnavailable = Object.freeze({
   available: false,
   reason: 'unsupported-platform-leaf',
-  hint: 'fold drives the hinge of a foldable iPhone simulator; the Android emulator posture control is not driven by agent-device yet.',
+  hint: 'fold drives the hinge of a foldable iPhone simulator; the Android emulator posture control is not driven by the device engine yet.',
 } as const);
 const headlessUnavailable = Object.freeze({
   available: false,

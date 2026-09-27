@@ -132,7 +132,7 @@ async function captureLiveCurrentScreenshot(
   options: DiffScreenshotCommandOptions,
 ): Promise<ResolvedInputFile> {
   const temp = await createCommandTempFile(runtime, {
-    prefix: 'agent-device-diff-current',
+    prefix: 'extend-engine-diff-current',
     ext: '.png',
   });
   try {

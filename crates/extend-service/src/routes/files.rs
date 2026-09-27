@@ -17,6 +17,7 @@ use crate::state::{Auth, Shared};
 #[derive(sqlx::FromRow)]
 struct FileRow {
     file_id: Uuid,
+    team: String,
     device_id: String,
     session_id: Option<String>,
     command_id: Option<Uuid>,
@@ -49,11 +50,12 @@ impl FileRow {
             created_by: Some(self.created_by),
             shared_with: self.shared_with,
             created_at: Some(self.created_at),
+            team: Some(self.team),
         }
     }
 }
 
-const COLS: &str = "f.file_id, f.device_id, f.session_id, f.command_id, f.created_by, f.shared_with, f.name, f.kind, f.content_type, f.size_bytes, f.url, f.self_destruct_at, f.permanent, f.created_at";
+const COLS: &str = "f.file_id, f.team, f.device_id, f.session_id, f.command_id, f.created_by, f.shared_with, f.name, f.kind, f.content_type, f.size_bytes, f.url, f.self_destruct_at, f.permanent, f.created_at";
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -64,19 +66,29 @@ pub struct ListQuery {
     cursor: Option<String>,
 }
 
+/// A Silicon sees the files it made in the Team it acts in; a Carbon, the files made on their pairs
+/// in every Team (`$1`, the Team, is still mentioned so PostgreSQL can type it).
 fn who(auth: &Auth) -> String {
     if auth.p.is_silicon() {
-        "f.created_by = $2".into()
+        "f.team = $1 AND f.created_by = $2".into()
     } else {
         format!(
-            "EXISTS (SELECT 1 FROM {} d WHERE d.device_id = f.device_id AND d.owner_id = $2)",
+            "($1::text IS NULL OR $1 IS NOT NULL) AND EXISTS (SELECT 1 FROM {} d WHERE d.device_id = f.device_id AND d.owner_id = $2)",
             auth.world.t("devices")
         )
     }
 }
 
+fn team_of(auth: &Auth) -> AppResult<Option<String>> {
+    if auth.p.is_silicon() {
+        Ok(Some(auth.team()?.to_owned()))
+    } else {
+        Ok(auth.p.team.clone())
+    }
+}
+
 pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
-    let team = auth.team()?.to_owned();
+    let team = team_of(&auth)?;
     let lim = limit(q.limit)?;
     let before: Option<Uuid> = q
         .cursor
@@ -85,7 +97,7 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
         .transpose()?
         .and_then(|c| c.parse().ok());
     let rows: Vec<FileRow> = sqlx::query_as(sql!(
-        "SELECT {COLS} FROM {} f WHERE f.team = $1 AND {}
+        "SELECT {COLS} FROM {} f WHERE {}
            AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())
            AND ($3::text IS NULL OR f.session_id = $3) AND ($4::text IS NULL OR f.device_id = $4) AND ($5::text IS NULL OR f.kind = $5)
            AND ($6::uuid IS NULL OR f.file_id < $6)
@@ -109,9 +121,9 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
 }
 
 async fn visible(state: &Shared, auth: &Auth, file_id: Uuid) -> AppResult<FileRow> {
-    let team = auth.team()?.to_owned();
+    let team = team_of(auth)?;
     sqlx::query_as(sql!(
-        "SELECT {COLS} FROM {} f WHERE f.file_id = $3 AND f.team = $1 AND {} AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())",
+        "SELECT {COLS} FROM {} f WHERE f.file_id = $3 AND {} AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())",
         auth.world.t("files"),
         who(auth)
     ))
@@ -237,7 +249,26 @@ pub async fn content(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let f = visible(&state, &auth, file_id).await?;
-    let (bytes, stored_type) = match state.files.read(&auth.p, file_id, auth.sel.as_ref()).await {
+    // Read through Briefcase as the caller, in the file's Team: a Carbon's login must reach it.
+    let mut reader = auth.p.clone();
+    if auth.p.is_carbon() && auth.p.team.as_deref() != Some(f.team.as_str()) {
+        let sign_in = || {
+            AppError::new(
+                ErrorCode::NotATeamMember,
+                format!("{}'s Extend login doesn't reach {}.", auth.p.id(), f.team),
+            )
+            .hint(format!("Sign in to Extend for {} to open files made there.", f.team))
+        };
+        if !auth.p.teams.contains(&f.team) {
+            return Err(sign_in());
+        }
+        reader = state
+            .authorize(&auth.p.token, Some(&f.team), auth.sel.as_ref())
+            .await
+            .map_err(|_| sign_in())?;
+        reader.team = Some(f.team.clone());
+    }
+    let (bytes, stored_type) = match state.files.read(&reader, file_id, auth.sel.as_ref()).await {
         Ok(found) => found,
         Err(e)
             if auth.p.is_carbon()

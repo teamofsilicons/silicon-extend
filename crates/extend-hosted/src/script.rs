@@ -1,4 +1,4 @@
-//! `replay`, `test` and `batch` for TVs, which have no agent-device to run them.
+//! `replay`, `test` and `batch` for TVs, which have no the device engine to run them.
 //!
 //! A `.ad` script is one command per line, written the way it is typed after `extend`
 //! (`tv-remote press down`, `open YouTube`). `#` comments and `context` lines are skipped,
@@ -20,7 +20,7 @@ pub(crate) struct Step {
     pub args: Vec<String>,
 }
 
-/// Parses an agent-device `.ad` script.
+/// Parses a device-engine `.ad` script.
 pub(crate) fn parse_ad(text: &str) -> Result<Vec<Step>, String> {
     let mut env: HashMap<String, String> = HashMap::new();
     let mut steps = Vec::new();

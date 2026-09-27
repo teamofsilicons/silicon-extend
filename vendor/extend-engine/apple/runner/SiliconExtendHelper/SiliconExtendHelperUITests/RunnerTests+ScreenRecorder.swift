@@ -13,7 +13,7 @@ extension RunnerTests {
     private var frameInterval: TimeInterval {
       1.0 / Double(effectiveFps)
     }
-    private let queue = DispatchQueue(label: "agent-device.runner.recorder")
+    private let queue = DispatchQueue(label: "silicon-extend.helper.recorder")
     private let lock = NSLock()
     private var assetWriter: AVAssetWriter?
     private var writerInput: AVAssetWriterInput?
@@ -101,7 +101,7 @@ extension RunnerTests {
       )
       guard writer.canAdd(input) else {
         throw NSError(
-          domain: "AgentDeviceRunner.Record",
+          domain: "SiliconExtendHelper.Record",
           code: 2,
           userInfo: [NSLocalizedDescriptionKey: "failed to add video input"]
         )
@@ -109,7 +109,7 @@ extension RunnerTests {
       writer.add(input)
       guard writer.startWriting() else {
         throw writer.error ?? NSError(
-          domain: "AgentDeviceRunner.Record",
+          domain: "SiliconExtendHelper.Record",
           code: 3,
           userInfo: [NSLocalizedDescriptionKey: "failed to start writing"]
         )
@@ -172,7 +172,7 @@ extension RunnerTests {
       if waitResult == .timedOut {
         writer.cancelWriting()
         stopFailure = NSError(
-          domain: "AgentDeviceRunner.Record",
+          domain: "SiliconExtendHelper.Record",
           code: 6,
           userInfo: [NSLocalizedDescriptionKey: "recording finalization timed out"]
         )
@@ -180,7 +180,7 @@ extension RunnerTests {
         stopFailure = appendError
       } else if writer.status == .failed {
         stopFailure = writer.error ?? NSError(
-          domain: "AgentDeviceRunner.Record",
+          domain: "SiliconExtendHelper.Record",
           code: 4,
           userInfo: [NSLocalizedDescriptionKey: "failed to finalize recording"]
         )
@@ -226,7 +226,7 @@ extension RunnerTests {
       let timestamp = CMTime(value: timestampValue, timescale: timescale)
       if !adaptor.append(pixelBuffer, withPresentationTime: timestamp) {
         startError = writer.error ?? NSError(
-          domain: "AgentDeviceRunner.Record",
+          domain: "SiliconExtendHelper.Record",
           code: 5,
           userInfo: [NSLocalizedDescriptionKey: "failed to append frame"]
         )
@@ -323,7 +323,7 @@ extension RunnerTests {
   static func recordingBootstrapError(from lastFailure: RunnerAppScreenCaptureFailure?) -> Error {
     lastFailure
       ?? NSError(
-        domain: "AgentDeviceRunner.Record",
+        domain: "SiliconExtendHelper.Record",
         code: 1,
         userInfo: [NSLocalizedDescriptionKey: "failed to capture initial frame"]
       )

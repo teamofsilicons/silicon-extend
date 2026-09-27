@@ -102,7 +102,7 @@ static id RunnerTapPointerPath(
       CGPointMake(x, y),
       CGPointMake(x2, y2),
       durationMs,
-      @"agent-device-swipe",
+      @"silicon-extend-swipe",
       RunnerSwipePointerPath
     );
   } @catch (NSException *exception) {
@@ -124,7 +124,7 @@ static id RunnerTapPointerPath(
       CGPointMake(x, y),
       CGPointMake(x2, y2),
       durationMs,
-      @"agent-device-controlled-scroll",
+      @"silicon-extend-controlled-scroll",
       RunnerControlledScrollPointerPath
     );
   } @catch (NSException *exception) {
@@ -152,7 +152,7 @@ static id RunnerTapPointerPath(
     NSString *error = RunnerCreateEventRecord(
       application,
       resolvedWindow,
-      @"agent-device-gesture-plan",
+      @"silicon-extend-gesture-plan",
       &bridge,
       &record
     );
@@ -233,7 +233,7 @@ static NSString * _Nullable RunnerTrySynthesizeTap(id application, id _Nullable 
   NSString *error = RunnerCreateEventRecord(
     application,
     resolvedWindow,
-    @"agent-device-tap",
+    @"silicon-extend-tap",
     &bridge,
     &record
   );

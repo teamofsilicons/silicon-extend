@@ -70,7 +70,7 @@ function npmCommand(args: string[]): { command: string; args: string[] } {
   if (!npmCliScript) {
     throw new AppError('TOOL_MISSING', 'npm not found in PATH', {
       nodeExecPath: hostNodeExecutablePath(),
-      hint: 'Install Node.js with npm, or add npm to PATH, and run `agent-device web setup` again.',
+      hint: 'Install Node.js with npm, or add npm to PATH, and run `extend web setup` again.',
     });
   }
   return { command: hostNodeExecutablePath(), args: [npmCliScript, ...args] };

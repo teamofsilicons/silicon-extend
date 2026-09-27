@@ -26,7 +26,7 @@ import { makeTempWorkspace } from '../../__tests__/cli-config-fixtures.ts';
 const OPERATOR_CLI_FLAGS: CliFlags = { json: false, help: false, version: false };
 
 function writeProjectConfig(project: string, entries: Record<string, unknown>): void {
-  fs.writeFileSync(path.join(project, 'agent-device.json'), JSON.stringify(entries), 'utf8');
+  fs.writeFileSync(path.join(project, 'extend-engine.json'), JSON.stringify(entries), 'utf8');
 }
 
 function declarationFor(key: 'daemonBaseUrl' | 'overlayRefs'): FlagDefinition {

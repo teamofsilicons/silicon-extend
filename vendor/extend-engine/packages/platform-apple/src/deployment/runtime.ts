@@ -198,7 +198,7 @@ async function pushAppleNotification(
   }
   await ensureAppleReady(host, device, signal);
   const payload = await host.temporaryFiles.create({
-    prefix: 'agent-device-ios-push-',
+    prefix: 'extend-engine-ios-push-',
     suffix: '.apns',
   });
   try {

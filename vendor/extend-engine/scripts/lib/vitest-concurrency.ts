@@ -13,12 +13,16 @@ export const DEFAULT_VITEST_MAX_WORKERS = 4;
  * docs/agents/testing.md). Ignored in CI, which already derives its own
  * worker count from the isolated runner's CPU pool.
  */
-export const VITEST_MAX_WORKERS_OVERRIDE_ENV = 'AGENT_DEVICE_VITEST_MAX_WORKERS';
+export const VITEST_MAX_WORKERS_OVERRIDE_ENV = 'EXTEND_ENGINE_VITEST_MAX_WORKERS';
+// The fork's name for the same override, still honoured.
+const LEGACY_VITEST_MAX_WORKERS_OVERRIDE_ENV = 'AGENT_DEVICE_VITEST_MAX_WORKERS';
 
 export function resolveVitestMaxWorkers(env: NodeJS.ProcessEnv = process.env): number | undefined {
   if (env.CI === 'true') return undefined;
 
-  const override = parsePositiveInt(env[VITEST_MAX_WORKERS_OVERRIDE_ENV]);
+  const override = parsePositiveInt(
+    env[VITEST_MAX_WORKERS_OVERRIDE_ENV] ?? env[LEGACY_VITEST_MAX_WORKERS_OVERRIDE_ENV],
+  );
   // Clamp rather than trust the override literally: a typo like `999` must not
   // oversubscribe the host the way the default cap above exists to prevent.
   // availableParallelism(), not cpus().length: Node documents the latter as

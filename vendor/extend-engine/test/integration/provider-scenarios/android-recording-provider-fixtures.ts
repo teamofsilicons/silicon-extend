@@ -122,7 +122,7 @@ function respondToManifestCommand(command: string, state: ProviderState) {
 function findManifestTarget(command: string): string | undefined {
   for (const prefix of ['test -e ', 'cat ', 'rm -f ']) {
     const target = shellPath(command, prefix);
-    if (target?.endsWith('/agent-device-recording-active.json')) return target;
+    if (target?.endsWith('/silicon-extend-recording-active.json')) return target;
   }
   return undefined;
 }
@@ -182,7 +182,7 @@ function respondToProcessSignal(command: string, processes: Map<string, NativePr
 function respondToScreenrecordCommand(command: string, processes: Map<string, NativeProcess>) {
   if (!command.startsWith('screenrecord --bit-rate ')) return undefined;
   const remotePath = command.match(
-    /(\/(?:sdcard|data\/local\/tmp)\/agent-device-recording-\d+\.mp4)/,
+    /(\/(?:sdcard|data\/local\/tmp)\/silicon-extend-recording-\d+\.mp4)/,
   )?.[1];
   if (!remotePath) return missing();
   processes.set('4321', { remotePath, startTime: '101', alive: true });
@@ -199,7 +199,7 @@ function respondToArtifactCommand(command: string) {
 }
 
 function isRecordingArtifactPath(path: string): boolean {
-  return /^\/(?:sdcard|data\/local\/tmp)\/agent-device-recording-\d+\.mp4$/.test(path);
+  return /^\/(?:sdcard|data\/local\/tmp)\/silicon-extend-recording-\d+\.mp4$/.test(path);
 }
 
 function addManifestProcesses(

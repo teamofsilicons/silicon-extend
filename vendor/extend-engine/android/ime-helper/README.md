@@ -1,7 +1,11 @@
-# Android Test IME Helper
+# Silicon Extend Keyboard (Android text-entry helper)
 
 A minimal headless `InputMethodService` used as a deterministic, Unicode-safe text-entry backend
-for local Android sessions. `onEvaluateInputViewShown()` returns `false` and
+for local Android sessions. Android lists it as "Silicon Extend Keyboard" (package
+`com.teamofsilicons.extend.imehelper`). Earlier releases installed it as
+`com.callstack.agentdevice.imehelper`; the engine removes that package when it installs this one.
+
+`onEvaluateInputViewShown()` returns `false` and
 `onCreateInputView()` returns `null`, so activating this IME contributes zero accessibility nodes
 to the UI tree -- no per-key `[group]+[text]` chrome, no clipboard/translate/voice-dictation
 buttons -- unlike the real system keyboard (Gboard et al.), which pulls its visible keyboard into
@@ -21,20 +25,20 @@ verified the same way (bundled npm-packaged dist + version-keyed manifest.json),
 
 ```sh
 VERSION="$(node -p 'require("./package.json").version')"
-AGENT_DEVICE_ANDROID_HELPER=ime sh ./scripts/build-android-helper.sh "$VERSION" .tmp/android-ime-helper
+sh ./scripts/build-android-helper.sh ime "$VERSION" .tmp/android-ime-helper
 ```
 
-The shared script needs its build-tools version named by `AGENT_DEVICE_ANDROID_BUILD_TOOLS`; see
-the [snapshot helper's Build section](../snapshot-helper/README.md#build) for the full rule.
+The shared script takes its build-tools version as its last argument or from
+`EXTEND_ENGINE_ANDROID_BUILD_TOOLS`; see the
+[snapshot helper's Build section](../snapshot-helper/README.md#build) for the full rule.
 
 ## Run
 
 ```sh
-PACKAGE="com.callstack.agentdevice.imehelper"
+PACKAGE="com.teamofsilicons.extend.imehelper"
 SERVICE="$PACKAGE/.TestInputMethodService"
-VERSION="$(node -p 'require("./package.json").version')"
 
-adb install -r ".tmp/android-ime-helper/agent-device-android-ime-helper-$VERSION.apk"
+adb install -r .tmp/android-ime-helper/*.apk
 
 # Record the current default IME before switching, so it can be restored exactly.
 PREVIOUS_IME="$(adb shell settings get secure default_input_method)"
@@ -46,11 +50,11 @@ adb shell ime set "$SERVICE"
 # WRITE_SECURE_SETTINGS, which the receiver requires; a third-party app cannot.
 TEXT_B64="$(printf '%s' '你好世界' | base64)"
 adb shell am broadcast -p "$PACKAGE" \
-  -a com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64 \
+  -a com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64 \
   --es text "$TEXT_B64"
 
 # Clear the focused field.
-adb shell am broadcast -p "$PACKAGE" -a com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT
+adb shell am broadcast -p "$PACKAGE" -a com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT
 
 # Restore the previous IME (critical -- do not skip on a real device).
 adb shell ime set "$PREVIOUS_IME"
@@ -81,7 +85,7 @@ security boundary): if present and it doesn't match, the broadcast is dropped an
 
 Switching the active IME is machine-global, not session-scoped. A crashed daemon that switched the
 IME and never restored it leaves the device with an invisible keyboard -- on a real device, this
-means the user cannot type anywhere until they manually reset their IME in Settings. The TS-side
+means nobody can type anywhere until someone resets the keyboard in Settings. The TS-side
 lifecycle (`packages/platform-android/src/ime-lifecycle.ts`) persists the previously active IME to disk
 before switching, restores it on session close/teardown, and best-effort restores any orphaned
 switch left behind by a previous crashed daemon on startup.

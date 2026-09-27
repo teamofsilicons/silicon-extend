@@ -25,7 +25,7 @@ test('projects native label selectors to text with a warning and self-parses', (
       line: 2,
       action: 'click label="Save"',
       message:
-        'label= selectors export as Maestro text; Maestro text matching is broader than agent-device label-only matching',
+        'label= selectors export as Maestro text; Maestro text matching is broader than label-only matching in the device engine',
     },
   ]);
   expect(() => inspectMaestroFlow(result.yaml, 'exported.yaml')).not.toThrow();

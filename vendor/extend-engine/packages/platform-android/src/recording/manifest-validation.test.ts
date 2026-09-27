@@ -7,7 +7,7 @@ test('validates descriptor structure independently of descriptor decoding', () =
   expect(
     isValidAndroidRecordingDescriptor({
       backend: 'adb-screenrecord',
-      manifestPath: '/sdcard/agent-device-recording-active.json',
+      manifestPath: '/sdcard/silicon-extend-recording-active.json',
       outputPath: '/tmp/capture.mp4',
       scope: 'device',
       showTouches: true,
@@ -37,7 +37,7 @@ test('rejects terminal evidence whose result coordinates diverge from its manife
     [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-1.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-1.mp4',
         remotePid: '41',
         remoteStartTime: '7',
       },
@@ -72,7 +72,7 @@ test('accepts a measured clip length in terminal evidence and refuses an uncount
     [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-1.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-1.mp4',
         remotePid: '41',
         remoteStartTime: '7',
       },

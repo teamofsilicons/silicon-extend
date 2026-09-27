@@ -5,18 +5,36 @@ import { SLT_SAKET } from "../mock/fixtures";
 export const SHOTS = "test-results/screenshots";
 mkdirSync(SHOTS, { recursive: true });
 
-export const test = base.extend<{ mock: { reset(): Promise<void>; enroll(os?: string): Promise<string>; config(c: Record<string, number>): Promise<void> } }>({
+interface MockControls {
+  reset(): Promise<void>;
+  /** A pairing code from an Extend app; `instance_of` makes it "Pair with another Carbon" on that pair's device. */
+  enroll(os?: string, options?: { instance_of?: string; app_version?: string }): Promise<string>;
+  config(c: Record<string, number>): Promise<void>;
+  /** Any other control under /__mock (fail-step, scenario, carried, awake, ting-manager, …). */
+  post(path: string, data?: Record<string, unknown>): Promise<unknown>;
+  get(path: string): Promise<unknown>;
+}
+
+export const test = base.extend<{ mock: MockControls }>({
   mock: async ({ request }, use) => {
-    const api = {
+    const api: MockControls = {
       async reset() {
         await request.post("/__mock/reset");
       },
-      async enroll(os = "android") {
-        const res = await request.post("/__mock/enroll", { data: { os } });
+      async enroll(os = "android", options = {}) {
+        const res = await request.post("/__mock/enroll", { data: { os, ...options } });
         return (await res.json()).data.pairing_code as string;
       },
       async config(c: Record<string, number>) {
         await request.post("/__mock/config", { data: c });
+      },
+      async post(path, data = {}) {
+        const res = await request.post(`/__mock/${path}`, { data });
+        return (await res.json()).data;
+      },
+      async get(path) {
+        const res = await request.get(`/__mock/${path}`);
+        return (await res.json()).data;
       },
     };
     await api.reset();

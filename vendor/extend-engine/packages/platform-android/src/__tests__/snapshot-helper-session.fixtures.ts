@@ -23,7 +23,7 @@ import { bindAndroidAdbTestHost } from './test-utils/android-host-test-setup.ts'
 
 export const ANDROID_HELPER_INSTALLED_VERSION_PROBE = {
   exitCode: 0,
-  stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+  stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
   stderr: '',
 };
 

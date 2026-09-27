@@ -53,7 +53,7 @@ extension RunnerTests {
     XCTAssertNotNil(refusal.hint)
 
     let writerFailure = NSError(
-      domain: "AgentDeviceRunner.Record",
+      domain: "SiliconExtendHelper.Record",
       code: 5,
       userInfo: [NSLocalizedDescriptionKey: "failed to append frame"]
     )
@@ -194,7 +194,7 @@ private final class MainThreadOccupancySampler {
   private(set) var sawXCTestTierSkip = false
 
   init(runner: RunnerTests) {
-    DispatchQueue(label: "agent-device.runner.tests.occupancy-sampler").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.occupancy-sampler").async {
       defer { self.done.signal() }
       while !self.isStopped {
         let busy = runner.currentMainThreadBusyState().reportsMainThreadBusy
@@ -241,7 +241,7 @@ extension RunnerTests {
     let observation = Observation()
     let observed = expectation(description: "the wedged frame was abandoned and released")
     source.armWedge()
-    DispatchQueue(label: "agent-device.runner.tests.recording-timeout").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.recording-timeout").async {
       defer {
         source.releaseWedge.signal()
         observed.fulfill()
@@ -292,7 +292,7 @@ extension RunnerTests {
     let observation = Observation()
     let observed = expectation(description: "the wedge was held for many ticks")
     source.armWedge()
-    DispatchQueue(label: "agent-device.runner.tests.recording-wedge").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.recording-wedge").async {
       defer {
         source.releaseWedge.signal()
         observed.fulfill()
@@ -332,7 +332,7 @@ extension RunnerTests {
     let observation = Observation()
     let observed = expectation(description: "stop returned during the timed-out capture")
     source.armWedge()
-    DispatchQueue(label: "agent-device.runner.tests.recording-stop").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.recording-stop").async {
       defer {
         source.releaseWedge.signal()
         observed.fulfill()
@@ -395,7 +395,7 @@ extension RunnerTests {
     XCTAssertTrue(pumpMainThread(until: { firstRecorder.appendedFrameSnapshotForTesting().count >= 2 }))
     let stopped = expectation(description: "first recording stopped during its timed-out capture")
     first.armWedge()
-    DispatchQueue(label: "agent-device.runner.tests.recording-restart").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.recording-restart").async {
       defer {
         first.releaseWedge.signal()
         stopped.fulfill()
@@ -439,7 +439,7 @@ extension RunnerTests {
       var error: Error?
     }
     let outcome = Outcome()
-    DispatchQueue(label: "agent-device.runner.tests.recording-command").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.recording-command").async {
       defer {
         occupancy.stop()
         commandFinished.fulfill()

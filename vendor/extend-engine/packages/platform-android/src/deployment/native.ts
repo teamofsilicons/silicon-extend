@@ -121,13 +121,13 @@ async function installAndroidBundle(
   if (!bundletool && !jar) {
     throw new AppError(
       'TOOL_MISSING',
-      'bundletool not found in PATH. Install bundletool or set AGENT_DEVICE_BUNDLETOOL_JAR.',
+      'bundletool not found in PATH. Install bundletool or set EXTEND_ENGINE_BUNDLETOOL_JAR.',
     );
   }
   const executable = bundletool ? 'bundletool' : 'java';
   const prefix = bundletool ? [] : ['-jar', jar!];
   const apks = await host.temporaryFiles.create({
-    prefix: 'agent-device-aab-',
+    prefix: 'extend-engine-aab-',
     suffix: '.apks',
   });
   const apksPath = apks.path;

@@ -67,7 +67,7 @@ test('sendToDaemon refuses to replace a reachable daemon newer than the client',
       (error: unknown) => {
         assert.ok(error instanceof AppError);
         assert.match(error.message, /v999\.0\.0\) is newer than this client/);
-        assert.match(String(error.details?.hint), /agent-device daemon stop --state-dir /);
+        assert.match(String(error.details?.hint), /extend daemon stop --state-dir /);
         return true;
       },
     );

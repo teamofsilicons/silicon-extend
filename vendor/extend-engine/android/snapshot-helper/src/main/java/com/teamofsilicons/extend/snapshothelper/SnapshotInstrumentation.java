@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 import android.app.Instrumentation;
 import android.app.UiAutomation;

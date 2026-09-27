@@ -39,7 +39,7 @@ export async function retainMaterializedPaths(params: {
   sessionName?: string;
   ttlMs?: number;
 }): Promise<RetainedMaterializedPaths> {
-  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-device-materialized-'));
+  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'extend-engine-materialized-'));
   try {
     const retainedInstallablePath = await copyPathInto(
       params.installablePath,

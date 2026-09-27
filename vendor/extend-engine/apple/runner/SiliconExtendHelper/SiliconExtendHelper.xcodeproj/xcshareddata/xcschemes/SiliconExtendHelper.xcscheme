@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "20EA2EC52F2CFC7B001CF0EF"
-               BuildableName = "AgentDeviceRunner.app"
-               BlueprintName = "AgentDeviceRunner"
-               ReferencedContainer = "container:AgentDeviceRunner.xcodeproj">
+               BuildableName = "SiliconExtendHelper.app"
+               BlueprintName = "SiliconExtendHelper"
+               ReferencedContainer = "container:SiliconExtendHelper.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -31,7 +31,7 @@
       shouldAutocreateTestPlan = "NO">
       <TestPlans>
          <TestPlanReference
-            reference = "container:AgentDeviceRunnerUITests.xctestplan"
+            reference = "container:SiliconExtendHelperUITests.xctestplan"
             default = "YES">
          </TestPlanReference>
       </TestPlans>
@@ -41,21 +41,10 @@
             parallelizable = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "20EA2ED22F2CFC7C001CF0EF"
-               BuildableName = "AgentDeviceRunnerTests.xctest"
-               BlueprintName = "AgentDeviceRunnerTests"
-               ReferencedContainer = "container:AgentDeviceRunner.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
                BlueprintIdentifier = "20EA2EDC2F2CFC7C001CF0EF"
-               BuildableName = "AgentDeviceRunnerUITests.xctest"
-               BlueprintName = "AgentDeviceRunnerUITests"
-               ReferencedContainer = "container:AgentDeviceRunner.xcodeproj">
+               BuildableName = "SiliconExtend.xctest"
+               BlueprintName = "SiliconExtendHelperUITests"
+               ReferencedContainer = "container:SiliconExtendHelper.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -75,9 +64,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "20EA2EC52F2CFC7B001CF0EF"
-            BuildableName = "AgentDeviceRunner.app"
-            BlueprintName = "AgentDeviceRunner"
-            ReferencedContainer = "container:AgentDeviceRunner.xcodeproj">
+            BuildableName = "SiliconExtendHelper.app"
+            BlueprintName = "SiliconExtendHelper"
+            ReferencedContainer = "container:SiliconExtendHelper.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -92,9 +81,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "20EA2EC52F2CFC7B001CF0EF"
-            BuildableName = "AgentDeviceRunner.app"
-            BlueprintName = "AgentDeviceRunner"
-            ReferencedContainer = "container:AgentDeviceRunner.xcodeproj">
+            BuildableName = "SiliconExtendHelper.app"
+            BlueprintName = "SiliconExtendHelper"
+            ReferencedContainer = "container:SiliconExtendHelper.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

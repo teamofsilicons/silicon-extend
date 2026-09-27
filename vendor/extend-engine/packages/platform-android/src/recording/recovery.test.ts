@@ -339,7 +339,7 @@ test('makes matching pending evidence cleanup-eligible and stops discovered exac
   manifest = JSON.stringify({
     ...JSON.parse(manifest),
     chunks: [],
-    pendingRemotePath: '/data/local/tmp/agent-device-recording-777.mp4',
+    pendingRemotePath: '/data/local/tmp/silicon-extend-recording-777.mp4',
   });
   await expect(
     runtime.screenRecordingReattach({ envelope: started.envelope }),
@@ -351,6 +351,6 @@ test('makes matching pending evidence cleanup-eligible and stops discovered exac
   await expect(runtime.screenRecordingCleanup({ envelope: started.envelope })).resolves.toEqual({
     status: 'cleaned',
   });
-  expect(removed).toEqual(['/data/local/tmp/agent-device-recording-777.mp4']);
+  expect(removed).toEqual(['/data/local/tmp/silicon-extend-recording-777.mp4']);
   expect(signals).toEqual(['66']);
 });

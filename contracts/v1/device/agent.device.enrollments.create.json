@@ -1,0 +1,39 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "effect": "device_enrollment",
+  "given": [
+    "device"
+  ],
+  "kind": "http",
+  "operation": "device.enrollments.create",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/device/enrollments"
+  },
+  "response": {
+    "non_null": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "required": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md §1 (Pair with another Carbon); crates/extend-agent/src/service.rs (pair_enrollment) with crates/extend-protocol types"
+}

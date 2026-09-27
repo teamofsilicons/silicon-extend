@@ -1,6 +1,6 @@
 /**
  * ADR 0012 decision 3: record-time computation of `.ad` target-binding
- * evidence (the `# agent-device:target-v1 {...}` annotation).
+ * evidence (the `# extend:target-v1 {...}` annotation).
  *
  * `computeTargetEvidence` runs decision 3's "Record-time write" steps 1-5
  * against the tree the resolver already captured; it never captures, and

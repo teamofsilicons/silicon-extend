@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
-"""A fake Extend service for testing the Android app against docs/device-protocol.md.
+"""A fake Extend service for testing the Android app against docs/device-protocol.md (1.1).
 
 Standard library only (HTTP/1.1 and a minimal RFC 6455 WebSocket on asyncio). It implements the
-device-facing half of the protocol:
+device-facing half of the protocol, for several Carbons' pairs of one device:
 
     POST   /api/v1/enrollments                 enrollment + first pairing code
+    POST   /api/v1/device/enrollments          "Pair with another Carbon" (Extend-Device auth)
     GET    /api/v1/enrollments/{id}            poll (Extend-Enrollment auth)
     GET    /api/v1/enrollments/{id}/connect    enrollment WebSocket: code rotations, then paired
-    GET    /api/v1/device/connect              device WebSocket (Extend-Device auth)
-    GET    /api/v1/device                      device_self
-    DELETE /api/v1/device                      revoke pair
+    GET    /api/v1/device/connect              device WebSocket, one per pair (Extend-Device auth)
+    GET    /api/v1/device                      device_self of the credential's pair
+    DELETE /api/v1/device                      revoke that pair
     POST   /api/v1/device/stop                 stop
     PUT    /api/v1/device/artifacts/{upload}   uploads, checked against X-Content-SHA256
 
 plus test controls:
 
-    GET  /_test/state   {"pairing_code", "paired", "device_id", "hellos", ...}
-    POST /_test/claim   pairs the waiting enrollment (what a Carbon entering the code does)
+    GET  /_test/state    {"pairing_code", "paired", "pairs": [...], "hellos", ...}
+    POST /_test/claim    pairs the waiting enrollment (what a Carbon entering the code does)
+    POST /_test/command  {"command", "args", "uploads", "pair"?} -> the result frame
+    POST /_test/frame    any service frame; "_pair" picks the pair's socket (default: the first)
+    POST /_test/close    {"code", "pair"?}
 
-With --scenario, once the device says hello it runs a list of commands and checks each result,
-printing PASS/FAIL lines, and exits non-zero if anything failed.
+Each Carbon's pair has its own device id, credential and socket; the first pair belongs to
+c:alice, the next to c:bob, then c:carol. With --scenario, once the device says hello it runs a
+list of commands and checks each result, printing PASS/FAIL lines, and exits non-zero if anything
+failed. Scenarios: phone, tv, smoke, and multi (several Carbons, waking, sides, Stop, revoke).
+
+Every adb call it makes (the scenarios look at the emulator from outside) goes to $ANDROID_SERIAL
+only: it never talks to another device.
 """
 
 import argparse
@@ -37,6 +46,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+OWNERS = [("c:alice", "Alice"), ("c:bob", None), ("c:carol", None), ("c:dave", None), ("c:erin", None), ("c:frank", None), ("c:grace", None), ("c:heidi", None)]
+MAX_PAIRS = len(OWNERS)
 
 
 def now_iso(offset_s=0):
@@ -46,6 +57,17 @@ def now_iso(offset_s=0):
 
 def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+
+async def adb(*args):
+    """Runs adb against $ANDROID_SERIAL only (the test's own emulator); returns stdout bytes."""
+    serial = os.environ.get("ANDROID_SERIAL")
+    if not serial:
+        raise RuntimeError("set ANDROID_SERIAL to the emulator's serial: the scenarios never pick a device themselves")
+    exe = os.environ.get("ADB", os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"))
+    p = await asyncio.create_subprocess_exec(exe, "-s", serial, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await p.communicate()
+    return out
 
 
 # ───────────────────────────── WebSocket ─────────────────────────────
@@ -135,28 +157,60 @@ class WebSocket:
 
 # ───────────────────────────── State ─────────────────────────────
 
+class Pair:
+    """One Carbon's pair of the device."""
+
+    def __init__(self, device_id, credential, owner, display, name, first):
+        self.device_id = device_id
+        self.credential = credential
+        self.owner = owner
+        self.display = display
+        self.name = name
+        self.first = first
+        self.ws = None
+        self.revoked = False
+        self.session = None
+        self.takeover = None
+        self.hellos = []
+        self.awakes = []
+        self.connections = 0
+        self.refuse = False
+
+    def view(self):
+        return {"device_id": self.device_id, "owner": self.owner, "name": self.name, "first_pair": self.first,
+                "connected": self.ws is not None and not self.ws.closed, "hellos": len(self.hellos),
+                "awakes": len(self.awakes), "revoked": self.revoked}
+
+
 class State:
     def __init__(self, args):
         self.args = args
         self.enrollments = {}  # id -> dict
-        self.credential = None
-        self.device_id = None
-        self.device_ws = None
-        self.hellos = []
-        self.events = asyncio.Queue()  # frames from the device other than results
+        self.pairs = {}  # device_id -> Pair, in pairing order
+        self.instance_id = str(uuid.uuid4())
+        self.events = asyncio.Queue()  # frames from the device other than results, tagged "_pair"
         self.results = {}  # id -> future
-        self.uploads = {}  # upload_id -> {name, content_type, bytes}
+        self.uploads = {}  # upload_id -> {name, content_type, bytes, pair}
         self.http_log = []
-        self.enroll_waiters = []
-        self.revoked = False
-        self.stops_http = 0
         self.environment = None
-        self.session = None
-        self.takeover = None
         self.failures = 0
         self.passes = 0
         self.scenario_started = False
-        self.device_connections = 0
+
+    @property
+    def live(self):
+        return [p for p in self.pairs.values() if not p.revoked]
+
+    @property
+    def primary(self):
+        live = self.live
+        return live[0] if live else None
+
+    def by_credential(self, auth):
+        for p in self.pairs.values():
+            if not p.revoked and auth == "Extend-Device " + p.credential:
+                return p
+        return None
 
     def waiting_enrollment(self):
         """The newest enrollment still waiting (an app shows only its latest code)."""
@@ -191,7 +245,7 @@ async def read_request(reader):
 
 
 async def respond(writer, status, obj=None, raw=None, ctype="application/json"):
-    reasons = {200: "OK", 201: "Created", 204: "No Content", 409: "Conflict", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 422: "Unprocessable Entity"}
+    reasons = {200: "OK", 201: "Created", 204: "No Content", 409: "Conflict", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 422: "Unprocessable Entity", 503: "Service Unavailable"}
     body = raw if raw is not None else (json.dumps(obj).encode() if obj is not None else b"")
     head = f"HTTP/1.1 {status} {reasons.get(status, 'OK')}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n"
     if body:
@@ -205,21 +259,36 @@ def error(code, message):
     return {"type": "error", "data": {"code": code, "message": message}}
 
 
-def device_self(st):
+def device_self(st, p):
     return {
         "type": "device_self",
         "data": {
-            "device_id": st.device_id,
-            "name": st.args.device_name,
-            "owner": {"type": "carbon", "id": "c:alice", "display_name": "Alice"},
+            "device_id": p.device_id,
+            "name": p.name,
+            "owner": {"type": "carbon", "id": p.owner, **({"display_name": p.display} if p.display else {})},
             "team": "acme",
-            "os": st.hellos[-1]["os"] if st.hellos else "android",
-            "in_use": st.session,
-            "takeover": st.takeover,
-            "setup": st.hellos[-1]["setup"] if st.hellos else {"state": "in_progress", "steps": []},
+            "os": p.hellos[-1]["os"] if p.hellos else "android",
+            "in_use": p.session,
+            "takeover": p.takeover,
+            "setup": p.hellos[-1]["setup"] if p.hellos else {"state": "in_progress", "steps": []},
             "environment": st.environment,
+            "instance_id": st.instance_id,
+            "first_pair": p.first,
         },
     }
+
+
+def new_enrollment(st, kind, data, from_pair=None):
+    eid = str(uuid.uuid4())
+    e = {
+        "id": eid, "secret": "ees_" + secrets.token_urlsafe(32)[:43], "code": new_code(), "expires": now_iso(st.args.rotate_s),
+        "paired": False, "request": data, "sockets": [], "kind": kind, "from": from_pair.device_id if from_pair else None, "pair": None,
+    }
+    st.enrollments[eid] = e
+    log("enrollment", kind, eid, "code", e["code"], "from", from_pair.device_id if from_pair else data)
+    return {"type": "enrollment", "data": {
+        "enrollment_id": eid, "enrollment_secret": e["secret"], "pairing_code": e["code"],
+        "code_expires_at": e["expires"], "rotates_every_s": st.args.rotate_s}}
 
 
 async def handle(st: State, reader, writer):
@@ -233,11 +302,17 @@ async def handle(st: State, reader, writer):
     if headers.get("upgrade", "").lower() == "websocket":
         key = headers.get("sec-websocket-key", "")
         m = re.fullmatch(r"/api/v1/enrollments/([^/]+)/connect", path)
+        pair = None
         ok = False
         if m and m.group(1) in st.enrollments and auth == "Extend-Enrollment " + st.enrollments[m.group(1)]["secret"]:
             ok = True
-        if path == "/api/v1/device/connect" and st.credential and auth == "Extend-Device " + st.credential and not st.revoked:
-            ok = True
+        if path == "/api/v1/device/connect":
+            pair = st.by_credential(auth)
+            if pair is not None and pair.refuse:
+                log("WS refused on purpose for", pair.device_id)
+                await respond(writer, 503, error("unavailable", "try again"))
+                return
+            ok = pair is not None
         if not ok:
             log("WS refused", path, "auth=", auth[:24])
             await respond(writer, 401, error("unauthorized", "bad credentials"))
@@ -252,23 +327,29 @@ async def handle(st: State, reader, writer):
         if m:
             await enrollment_socket(st, st.enrollments[m.group(1)], ws)
         else:
-            await device_socket(st, ws)
+            await device_socket(st, pair, ws)
         return
 
     log("HTTP", method, path)
     if method == "POST" and path == "/api/v1/enrollments":
         payload = json.loads(body or b"{}")
-        data = payload.get("data", {})
-        eid = str(uuid.uuid4())
-        e = {
-            "id": eid, "secret": "ees_" + secrets.token_urlsafe(32)[:43], "code": new_code(), "expires": now_iso(st.args.rotate_s),
-            "paired": False, "request": data, "sockets": [],
-        }
-        st.enrollments[eid] = e
-        log("enrollment", eid, "code", e["code"], "from", data)
-        await respond(writer, 201, {"type": "enrollment", "data": {
-            "enrollment_id": eid, "enrollment_secret": e["secret"], "pairing_code": e["code"],
-            "code_expires_at": e["expires"], "rotates_every_s": st.args.rotate_s}})
+        await respond(writer, 201, new_enrollment(st, "first", payload.get("data", {})))
+        return
+    if method == "POST" and path == "/api/v1/device/enrollments":
+        p = st.by_credential(auth)
+        if p is None:
+            await respond(writer, 401, error("unauthorized", "device credential invalid"))
+            return
+        if st.args.old_service:
+            await respond(writer, 404, error("not_found", f"No such endpoint: {method} {path}"))
+            return
+        if len(st.live) >= MAX_PAIRS:
+            await respond(writer, 409, error("conflict", f"This device is paired to {MAX_PAIRS} Carbons, the most Extend allows."))
+            return
+        if body:
+            log("FAIL-NOTE: POST /device/enrollments had a body:", body[:200])
+        await st.events.put({"type": "_http_pair_enrollment", "_pair": p.device_id})
+        await respond(writer, 201, new_enrollment(st, "pair", {}, from_pair=p))
         return
     m = re.fullmatch(r"/api/v1/enrollments/([^/]+)", path)
     if m:
@@ -281,28 +362,29 @@ async def handle(st: State, reader, writer):
             await respond(writer, 204)
             return
         if e["paired"]:
+            p = e["pair"]
             del st.enrollments[e["id"]]
-            await respond(writer, 200, {"type": "enrollment", "data": {"state": "paired", "device_id": st.device_id, "device_credential": st.credential, "environment": None}})
+            await respond(writer, 200, {"type": "enrollment", "data": {"state": "paired", "device_id": p.device_id, "device_credential": p.credential, "environment": None}})
         else:
             await respond(writer, 200, {"type": "enrollment", "data": {"state": "waiting", "pairing_code": e["code"], "code_expires_at": e["expires"]}})
         return
     if path.startswith("/api/v1/device"):
-        if not st.credential or auth != "Extend-Device " + st.credential or st.revoked:
+        p = st.by_credential(auth)
+        if p is None:
             await respond(writer, 401, error("unauthorized", "device credential invalid"))
             return
         if method == "GET" and path == "/api/v1/device":
-            await respond(writer, 200, device_self(st))
+            await respond(writer, 200, device_self(st, p))
             return
         if method == "DELETE" and path == "/api/v1/device":
-            st.revoked = True
-            await st.events.put({"type": "_http_revoke"})
+            p.revoked = True
+            await st.events.put({"type": "_http_revoke", "_pair": p.device_id})
             await respond(writer, 204)
-            if st.device_ws:
-                await st.device_ws.close(4401, "pair revoked")
+            if p.ws:
+                await p.ws.close(4401, "pair revoked")
             return
         if method == "POST" and path == "/api/v1/device/stop":
-            st.stops_http += 1
-            await st.events.put({"type": "_http_stop"})
+            await st.events.put({"type": "_http_stop", "_pair": p.device_id})
             await respond(writer, 204)
             return
         m = re.fullmatch(r"/api/v1/device/artifacts/([^/]+)", path)
@@ -311,48 +393,55 @@ async def handle(st: State, reader, writer):
             if headers.get("x-content-sha256") != digest:
                 await respond(writer, 422, error("digest_mismatch", "X-Content-SHA256 does not match"))
                 return
-            st.uploads[m.group(1)] = {"name": headers.get("x-file-name"), "content_type": headers.get("content-type"), "bytes": body}
+            st.uploads[m.group(1)] = {"name": headers.get("x-file-name"), "content_type": headers.get("content-type"), "bytes": body, "pair": p.device_id}
             os.makedirs(st.args.out, exist_ok=True)
             with open(os.path.join(st.args.out, headers.get("x-file-name") or m.group(1)), "wb") as f:
                 f.write(body)
-            log("upload", m.group(1), headers.get("x-file-name"), len(body), "bytes")
+            log("upload", m.group(1), headers.get("x-file-name"), len(body), "bytes, pair", p.device_id)
             await respond(writer, 201)
             return
     if path == "/_test/state":
         e = st.waiting_enrollment()
+        p = st.primary
         await respond(writer, 200, {
-            "pairing_code": e["code"] if e else None, "enrollment_request": e["request"] if e else None,
-            "paired": st.credential is not None and not st.revoked, "device_id": st.device_id,
-            "hellos": len(st.hellos), "last_hello": st.hellos[-1] if st.hellos else None,
-            "passes": st.passes, "failures": st.failures, "revoked": st.revoked,
-            "enrollments_created": len([p for p in st.http_log if p == ("POST", "/api/v1/enrollments")]),
+            "pairing_code": e["code"] if e else None, "enrollment_kind": e["kind"] if e else None,
+            "enrollment_request": e["request"] if e else None,
+            "paired": p is not None, "device_id": p.device_id if p else None,
+            "hellos": sum(len(x.hellos) for x in st.pairs.values()), "last_hello": p.hellos[-1] if p and p.hellos else None,
+            "pairs": [x.view() for x in st.pairs.values()],
+            "passes": st.passes, "failures": st.failures,
+            "enrollments_created": len([x for x in st.http_log if x == ("POST", "/api/v1/enrollments")]),
         })
         return
     if path == "/_test/command" and method == "POST":
-        # {"command": "snapshot", "args": ["-i"], "uploads": 0, "attachments": [...]} -> the result frame
-        if not st.device_ws:
-            await respond(writer, 409, error("offline", "device isn't connected"))
-            return
+        # {"command": "snapshot", "args": ["-i"], "uploads": 0, "attachments": [...], "pair": id?} -> the result frame
         req = json.loads(body or b"{}")
         sc = Scenario(st)
+        sc.pair = st.pairs.get(req.get("pair")) or st.primary
+        if sc.pair is None or sc.pair.ws is None:
+            await respond(writer, 409, error("offline", "device isn't connected"))
+            return
         sc.session = req.get("session_id", "a3f")
         res = await sc.cmd(req["command"], req.get("args", []), uploads=req.get("uploads", 0),
                            attachments=req.get("attachments", []), timeout_ms=req.get("timeout_ms", 30000))
         await respond(writer, 200, res)
         return
     if path == "/_test/frame" and method == "POST":
-        # Send any service frame to the device, e.g. {"type":"session_started",...}
+        # Send any service frame to the device, e.g. {"type":"session_started",...}; "_pair" picks the socket.
         frame = json.loads(body or b"{}")
-        track(st, frame)
-        if st.device_ws:
-            await st.device_ws.send(frame)
-        await respond(writer, 200, {"sent": frame.get("type")})
+        p = st.pairs.get(frame.pop("_pair", None)) or st.primary
+        track(p, frame, st)
+        if p and p.ws:
+            await p.ws.send(frame)
+        await respond(writer, 200, {"sent": frame.get("type"), "pair": p.device_id if p else None})
         return
     if path == "/_test/close" and method == "POST":
-        # Close the device socket with a code, e.g. {"code": 4409}
-        code = json.loads(body or b"{}").get("code", 1000)
-        if st.device_ws:
-            await st.device_ws.close(code, "test")
+        # Close a pair's device socket with a code, e.g. {"code": 4409}
+        req = json.loads(body or b"{}")
+        p = st.pairs.get(req.get("pair")) or st.primary
+        code = req.get("code", 1000)
+        if p and p.ws:
+            await p.ws.close(code, "test")
         await respond(writer, 200, {"closed": code})
         return
     if path == "/_test/claim" and method == "POST":
@@ -360,29 +449,38 @@ async def handle(st: State, reader, writer):
         if not e:
             await respond(writer, 404, error("no_enrollment", "nothing is waiting"))
             return
-        await claim(st, e)
-        await respond(writer, 200, {"device_id": st.device_id})
+        p = await claim(st, e)
+        await respond(writer, 200, {"device_id": p.device_id, "owner": p.owner})
         return
     await respond(writer, 404, error("unknown_command", f"No such endpoint: {method} {path}"))
 
 
 async def claim(st, e):
-    st.device_id = secrets.token_hex(4)
-    st.credential = "edc_" + secrets.token_urlsafe(32)[:43]
-    st.revoked = False
+    """What a Carbon entering the code does: a new pair for the next Carbon."""
+    n = len(st.pairs)
+    owner, display = OWNERS[n % len(OWNERS)]
+    names = ["Test Pixel", "Family phone", "Kitchen screen", "Shared device"]
+    first = e["kind"] == "first"
+    if first:
+        # A device that lost every pair starts again as a new device.
+        st.instance_id = str(uuid.uuid4()) if not st.live else st.instance_id
+    p = Pair(secrets.token_hex(4), "edc_" + secrets.token_urlsafe(32)[:43], owner, display, st.args.device_name if n == 0 else names[n % len(names)], first)
+    st.pairs[p.device_id] = p
     e["paired"] = True
-    frame = {"type": "paired", "device_id": st.device_id, "device_credential": st.credential, "environment": None}
-    log("claimed", e["code"], "-> device", st.device_id)
-    if st.args.scenario:
-        async def watchdog(hellos=len(st.hellos)):
+    e["pair"] = p
+    frame = {"type": "paired", "device_id": p.device_id, "device_credential": p.credential, "environment": None}
+    log("claimed", e["kind"], e["code"], "-> device", p.device_id, "for", owner)
+    if st.args.scenario and not st.scenario_started:
+        async def watchdog():
             await asyncio.sleep(60)
-            if len(st.hellos) == hellos:
+            if not p.hellos:
                 log("FAIL no hello within 60 s of pairing")
                 os._exit(2)
         asyncio.create_task(watchdog())
     for ws in list(e["sockets"]):
         await ws.send(frame)
         await ws.close(1000)
+    return p
 
 
 async def enrollment_socket(st, e, ws):
@@ -414,58 +512,72 @@ async def enrollment_socket(st, e, ws):
             e["sockets"].remove(ws)
 
 
-async def device_socket(st, ws):
-    if st.device_ws and not st.device_ws.closed:
-        old = st.device_ws
+async def device_socket(st, p, ws):
+    if p.ws and not p.ws.closed:
+        old = p.ws
         await old.send({"type": "superseded"})
         await old.close(4409, "superseded")
-    st.device_ws = ws
-    st.device_connections += 1
-    log("device socket open (#%d)" % st.device_connections)
+    p.ws = ws
+    p.connections += 1
+    log("device socket open: pair %s (%s) #%d" % (p.device_id, p.owner, p.connections))
     try:
         while True:
             msg = await ws.recv()
             if msg is None:
-                log("device socket closed by device, code", ws.close_code)
+                log("device socket of %s closed by device, code" % p.device_id, ws.close_code)
                 break
             frame = json.loads(msg)
             t = frame.get("type")
             if t == "result":
                 fut = st.results.get(frame.get("id"))
                 if fut and not fut.done():
+                    frame["_pair"] = p.device_id
                     fut.set_result(frame)
                 else:
                     log("unexpected result", frame.get("id"))
                 continue
             if t == "hello":
-                st.hellos.append(frame)
-                log("hello", json.dumps({k: frame[k] for k in ("os", "os_version", "model", "app_version", "capabilities")}))
+                p.hellos.append(frame)
+                log("hello", p.device_id, json.dumps({k: frame.get(k) for k in ("os", "os_version", "model", "app_version", "capabilities", "features")}))
                 if not st.scenario_started and st.args.scenario:
                     st.scenario_started = True
                     asyncio.create_task(run_scenario(st))
             else:
-                log("device ->", msg[:300])
+                log("device %s ->" % p.device_id, msg[:300])
                 if t == "takeover_done":
-                    st.takeover = None
+                    for x in st.pairs.values():
+                        x.takeover = None
+                if t == "awake":
+                    p.awakes.append(frame)
+            frame["_pair"] = p.device_id
             await st.events.put(frame)
     finally:
-        if st.device_ws is ws:
-            st.device_ws = None
+        if p.ws is ws:
+            p.ws = None
 
 
-def track(st, frame):
+def track(p, frame, st=None):
     """Keep GET /api/v1/device consistent with the frames sent (like the real service)."""
+    if p is None:
+        return
     t = frame.get("type")
+    if t in ("session_ended", "takeover_ended") and st is not None:
+        # The session may run through another pair than the socket this frame went on.
+        for x in st.pairs.values():
+            if x.session and x.session.get("session_id") == frame.get("session_id"):
+                if t == "session_ended":
+                    x.session = None
+                x.takeover = None
     if t == "session_started":
-        st.session = {"silicon_id": frame["silicon_id"], "session_id": frame["session_id"], "since": frame["since"], "paused": False}
-        st.takeover = None
+        p.session = {"silicon_id": frame["silicon_id"], "session_id": frame["session_id"], "since": frame["since"], "paused": False}
+        p.takeover = None
     elif t == "session_ended":
-        st.session = None
-        st.takeover = None
+        p.session = None
+        p.takeover = None
     elif t == "takeover":
-        st.takeover = {"takeover_id": str(uuid.uuid4()), "session_id": frame["session_id"], "reason": frame["reason"], "started_at": now_iso(), "expires_at": frame["expires_at"]}
+        p.takeover = {"takeover_id": str(uuid.uuid4()), "session_id": frame["session_id"], "reason": frame["reason"], "started_at": now_iso(), "expires_at": frame["expires_at"]}
     elif t == "takeover_ended":
-        st.takeover = None
+        p.takeover = None
 
 
 # ───────────────────────────── Scenarios ─────────────────────────────
@@ -474,6 +586,8 @@ class Scenario:
     def __init__(self, st: State):
         self.st = st
         self.session = "a3f"
+        # The pair whose socket carries this scenario's frames and commands (default: the first).
+        self.pair = st.primary
 
     def check(self, name, cond, detail=""):
         if cond:
@@ -484,14 +598,14 @@ class Scenario:
             log("FAIL", name, "--", str(detail)[:1500])
         return cond
 
-    async def send(self, frame):
-        ws = self.st.device_ws
-        if ws is None:
+    async def send(self, frame, pair=None):
+        p = pair or self.pair or self.st.primary
+        if p is None or p.ws is None:
             raise RuntimeError("device isn't connected")
-        track(self.st, frame)
-        await ws.send(frame)
+        track(p, frame, self.st)
+        await p.ws.send(frame)
 
-    async def cmd(self, command, args=(), uploads=0, attachments=(), timeout_ms=30000):
+    async def cmd(self, command, args=(), uploads=0, attachments=(), timeout_ms=30000, pair=None):
         cid = str(uuid.uuid4())
         fut = asyncio.get_running_loop().create_future()
         self.st.results[cid] = fut
@@ -500,7 +614,7 @@ class Scenario:
             "args": list(args), "attachments": list(attachments), "timeout_ms": timeout_ms,
             "upload_ids": [str(uuid.uuid4()) for _ in range(uploads)],
         }
-        await self.send(frame)
+        await self.send(frame, pair)
         try:
             res = await asyncio.wait_for(fut, timeout_ms / 1000 + 5)
         except asyncio.TimeoutError:
@@ -541,7 +655,7 @@ class Scenario:
 
 async def scenario_common_start(sc: Scenario, want_os):
     st = sc.st
-    hello = st.hellos[-1]
+    hello = st.primary.hellos[-1]
     sc.check("hello.os is %s" % want_os, hello.get("os") == want_os, hello.get("os"))
     sc.check("hello has app_version/os_version/model", all(hello.get(k) for k in ("app_version", "os_version", "model")), hello)
     sc.check("hello.setup has steps", len(hello.get("setup", {}).get("steps", [])) >= 3, hello.get("setup"))
@@ -550,7 +664,7 @@ async def scenario_common_start(sc: Scenario, want_os):
     await sc.send({"type": "ping", "nonce": 42})
     pong = await sc.expect_event("pong", 5, lambda f: f.get("nonce") == 42)
     sc.check("ping 42 -> pong 42", pong is not None)
-    await sc.send({"type": "session_started", "target": None, "session_id": sc.session, "silicon_id": "si:chef", "since": now_iso()})
+    await sc.send({"type": "session_started", "target": None, "session_id": sc.session, "silicon_id": "si:chef", "since": now_iso(), "side": "side-alice"})
     return hello
 
 
@@ -737,27 +851,25 @@ async def ui_checks(sc: Scenario, tv: bool):
     sc.check("ended session cannot issue another command", refused.get("error", {}).get("code") == "session_ended", refused)
     # Observe the now-idle app through the emulator harness, outside the ended Silicon session.
     await asyncio.sleep(0.8)
-    adb = os.environ.get("ADB", os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"))
-    dump = await asyncio.create_subprocess_exec(adb, "shell", "uiautomator", "dump", "/sdcard/extend-stopped.xml", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    await dump.communicate()
-    read = await asyncio.create_subprocess_exec(adb, "shell", "cat", "/sdcard/extend-stopped.xml", stdout=asyncio.subprocess.PIPE)
-    xml, _ = await read.communicate()
+    await adb("shell", "uiautomator", "dump", "/sdcard/extend-stopped.xml")
+    xml = await adb("shell", "cat", "/sdcard/extend-stopped.xml")
     sc.check("indicator cleared after session_ended", b"No Silicon is using this" in xml, xml.decode()[:1000])
 
     # Reconnect after the service drops the socket.
-    hellos = len(st.hellos)
-    await st.device_ws.close(1011, "restarting")
+    p = st.primary
+    hellos = len(p.hellos)
+    await p.ws.close(1011, "restarting")
     t0 = time.time()
-    while time.time() - t0 < 8 and len(st.hellos) == hellos:
+    while time.time() - t0 < 8 and len(p.hellos) == hellos:
         await asyncio.sleep(0.2)
-    sc.check("reconnects and says hello again after a drop (%.1f s)" % (time.time() - t0), len(st.hellos) > hellos)
+    sc.check("reconnects and says hello again after a drop (%.1f s)" % (time.time() - t0), len(p.hellos) > hellos)
 
     # Revoke pair from the app, with its confirmation dialog.
     sc.session = "b71"
-    await sc.send({"type": "session_started", "target": None, "session_id": sc.session, "silicon_id": "si:chef", "since": now_iso()})
+    await sc.send({"type": "session_started", "target": None, "session_id": sc.session, "silicon_id": "si:chef", "since": now_iso(), "side": "side-alice"})
     await sc.cmd("open", ["com.teamofsilicons.extend"])
     await sc.cmd("wait", ["1000"])
-    await sc.cmd("scroll", ["bottom"])
+    await reach(sc, tv, "Revoke pair")
     r = await sc.cmd("find", ["Revoke pair", "click"])
     sc.check("tap Revoke pair", r["ok"], r)
     await sc.cmd("wait", ["800"])
@@ -824,6 +936,252 @@ async def tv_scenario(sc: Scenario):
     await sc.send({"type": "session_ended", "target": None, "session_id": sc.session, "reason": "ended_by_silicon"})
 
 
+
+async def wait_for(cond, timeout, step=0.2):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if cond():
+            return True
+        await asyncio.sleep(step)
+    return cond()
+
+
+async def dumpsys_notifications():
+    return (await adb("shell", "dumpsys", "notification", "--noredact")).decode(errors="replace")
+
+
+def around(text, *needles, width=3):
+    """The lines around each needle, for a failure's detail."""
+    lines = text.splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        if any(n in line for n in needles):
+            # The record and the section it is in.
+            record = next((lines[j].strip()[:200] for j in range(i, -1, -1) if "Record(" in lines[j] or lines[j].startswith("  ") and not lines[j].startswith("   ")), "")
+            section = next((lines[j].strip() for j in range(i, -1, -1) if lines[j].startswith("  ") and not lines[j].startswith("   ")), "")
+            out.append(f"[{section}] {record} :: " + " | ".join(x.strip() for x in lines[max(0, i - width):i + width + 1]))
+    return "\n".join(out[:8])
+
+
+async def keep_on_windows():
+    """What `dumpsys window` says about windows keeping the screen on."""
+    out = (await adb("shell", "dumpsys", "window", "windows")).decode(errors="replace")
+    keeper = "Silicon Extend keeps the screen on" in out
+    badge_on = False
+    for block in out.split("Window #"):
+        if "Silicon Extend in-use badge" in block and "KEEP_SCREEN_ON" in block:
+            badge_on = True
+    return keeper, badge_on
+
+
+async def reach(sc: Scenario, tv: bool, text: str, tries: int = 25):
+    """Scrolls the Extend app's page down (the D-pad on a TV) until [text] is on screen."""
+    for _ in range(tries):
+        r = await sc.cmd("find", [text, "exists"])
+        if r.get("ok"):
+            return True
+        if tv:
+            for _ in range(2):
+                await sc.cmd("tv-remote", ["press", "down"])
+        else:
+            await sc.cmd("scroll", ["down", "--pixels", "500"])
+        await sc.cmd("wait", ["300"])
+    return False
+
+
+async def page_end(sc: Scenario, tv: bool, bottom: bool):
+    """Moves the Extend app's page to its end: a scroll on a phone, the remote's D-pad on a TV."""
+    if tv:
+        for _ in range(30):
+            await sc.cmd("tv-remote", ["press", "down" if bottom else "up"])
+    else:
+        await sc.cmd("scroll", ["bottom" if bottom else "top"])
+    await sc.cmd("wait", ["600"])
+
+
+async def multi_scenario(sc: Scenario):
+    """Several Carbons on one device (1.1): pairs, sides, waking, Stop and revoke per Carbon."""
+    st = sc.st
+    a = st.primary
+    hello = a.hellos[-1]
+    tv = hello.get("os") == "android_tv"
+    sc.check("hello.features has setup_retry", "setup_retry" in (hello.get("features") or []), hello.get("features"))
+    sc.check("hello sends no engine version (this app runs no engine)", "engine_version" not in hello and "agent_device_version" not in hello, sorted(hello))
+    sc.check("hello.app_version is 1.1.0", hello.get("app_version") == "1.1.0", hello.get("app_version"))
+    await wait_for(lambda: a.awakes, 5)
+    aw = a.awakes[0] if a.awakes else None
+    sc.check("awake right after hello, with run and seq", aw is not None and aw.get("run") and isinstance(aw.get("seq"), int), aw)
+    sc.check("the device is awake for this test (screen on, unlocked)", aw is not None and aw.get("awake") is True, aw)
+
+    # A session through Alice's pair drives the app's own screen.
+    sc.pair, sc.session = a, "a01"
+    await sc.send({"type": "session_started", "target": None, "session_id": "a01", "silicon_id": "si:chef", "since": now_iso(), "side": "side-alice"})
+    r = await sc.cmd("open", ["com.teamofsilicons.extend"])
+    await sc.cmd("wait", ["1500"])
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    sc.check("the paired screen names Alice", "Alice (c:alice)" in t or "c:alice" in t, t)
+    sc.check("the in-use card says through which Carbon", "through c:alice" in t, t)
+    await reach(sc, tv, "Pair with another Carbon")
+    r = await sc.cmd("find", ["Pair with another Carbon", "click"])
+    sc.check("tap Pair with another Carbon", r["ok"], r)
+    await sc.cmd("wait", ["1000"])
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    sc.check("the shared-device note comes first", "Silicons any Carbon gives access to can use this whole device, including what others leave on it" in t, t)
+    await sc.drain_events()
+    r = await sc.cmd("find", ["Show a pairing code", "click"])
+    sc.check("tap Show a pairing code", r["ok"], r)
+    ev = await sc.expect_event("_http_pair_enrollment", 10)
+    sc.check("the code comes from POST /api/v1/device/enrollments with a pair's credential", ev is not None and ev["_pair"] == a.device_id, ev)
+    await sc.cmd("wait", ["2500"])
+    e = st.waiting_enrollment()
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    shown = e and (e["code"][:3] + " " + e["code"][3:]) in t
+    sc.check("the other Carbon's code is on screen", shown, (e and e["code"], t[:800]))
+    if not e or e["kind"] != "pair":
+        sc.check("a pair enrollment is waiting (the rest needs a second pair)", False, e)
+        return
+    await claim(st, e)
+    b = list(st.pairs.values())[-1]
+    await wait_for(lambda: b.hellos, 20)
+    sc.check("a second connection says hello with the second credential", bool(b.hellos), b.view())
+    sc.check("the first pair's socket stayed up", a.ws is not None and not a.ws.closed)
+    await wait_for(lambda: b.awakes, 5)
+    sc.check("the second connection says awake too, same run", bool(b.awakes) and b.awakes[0].get("run") == aw.get("run"), (b.awakes[:1], aw))
+    await sc.cmd("wait", ["2500"])
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    sc.check("the app lists both Carbons with their names for the device", "c:alice" in t and "c:bob" in t and "Family phone" in t, t)
+    await sc.send({"type": "session_ended", "target": None, "session_id": "a01", "reason": "ended_by_silicon"})
+
+    # A wake request through Alice's pair.
+    wid = str(uuid.uuid4())
+    wake = {"type": "wake_request", "target": None, "wake_id": wid, "silicon_id": "si:waker", "reason": "Please unlock to check the oven timer",
+            "side": "side-alice", "alert": True, "created_at": now_iso(), "expires_at": now_iso(1800)}
+    await sc.drain_events()
+    await sc.send(wake, a)
+    shown = await sc.expect_event("wake_request_shown", 5, lambda f: f.get("wake_id") == wid)
+    if tv:
+        sc.check("a TV answers shown:false with why", shown is not None and shown.get("shown") is False and "can't show notifications" in (shown.get("note") or ""), shown)
+    else:
+        sc.check("a phone shows it: wake_request_shown true", shown is not None and shown.get("shown") is True, shown)
+        await asyncio.sleep(1.0)
+        n = await dumpsys_notifications()
+        sc.check("the wake notification names the Silicon and the reason", "si:waker" in n and "oven timer" in n, n[-3000:])
+        sc.check("it is private on the lock screen, with a public version", "vis=PRIVATE" in n and "publicVersion" in n, "")
+    sc.check("wake_request_shown came on the pair the request came through", shown is not None and shown["_pair"] == a.device_id, shown)
+    await sc.send(dict(wake, alert=False), a)
+    again = await sc.expect_event("wake_request_shown", 2, lambda f: f.get("wake_id") == wid)
+    sc.check("wake_request_shown is sent once per wake_id", again is None, again)
+
+    # Another side's session starts, and its Silicon reads notifications straight away.
+    sc.pair, sc.session = b, "b01"
+    await sc.send({"type": "session_started", "target": None, "session_id": "b01", "silicon_id": "si:bob-helper", "since": now_iso(), "side": "side-bob"})
+    if not tv:
+        r = await sc.cmd("notifications")
+        body = json.dumps(r)
+        sc.check("notifications at once: no other side's Silicon or reason", r["ok"] and "si:waker" not in body and "oven" not in body, body[:1500])
+        n = await dumpsys_notifications()
+        sc.check("dumpsys --noredact shows no other side's Silicon or reason", "si:waker" not in n and "oven timer" not in n, around(n, "si:waker", "oven timer"))
+        sc.check("the notification says a Silicon asked, naming none", "A Silicon asked to use this" in n, n[-3000:])
+    r = await sc.cmd("open", ["com.teamofsilicons.extend"])
+    await sc.cmd("wait", ["1500"])
+    await page_end(sc, tv, bottom=False)
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    sc.check("the app's own screen hides the other side's request too", "si:waker" not in t and "oven" not in t, t)
+    sc.check("the in-use card: si:bob-helper through c:bob", "si:bob-helper" in t and "through c:bob" in t, t)
+    await asyncio.sleep(1.0)
+    keeper, badge_on = await keep_on_windows()
+    if tv:
+        sc.check("TV: the badge window keeps the screen on during the session", badge_on, "")
+    else:
+        sc.check("phone: the keep-screen-on window is up during the session", keeper, "")
+
+    # Stop while the session's own pair (Bob's) is down: the Stop goes out on Alice's socket.
+    b.refuse = True
+    await b.ws.close(1011, "test: Bob's connection drops")
+    await asyncio.sleep(0.5)
+    await sc.drain_events()
+    # --first: a heads-up of the in-use notification can show its own STOP.
+    stop_task = asyncio.create_task(sc.cmd("find", ["Stop", "click", "--first"], pair=a))
+    stop = await sc.expect_event("stop", 8)
+    sc.check("Stop with the holder's socket down goes out on another pair's socket", stop is not None and stop["_pair"] == a.device_id, stop)
+    stop_task.cancel()
+    b.refuse = False
+    await sc.send({"type": "session_ended", "target": None, "session_id": "b01", "reason": "stopped_by_carbon"}, a)
+    await wait_for(lambda: b.ws is not None, 15)
+    sc.check("Bob's pair reconnects afterwards", b.ws is not None)
+    await asyncio.sleep(1.5)
+    keeper, badge_on = await keep_on_windows()
+    sc.check("the screen is no longer kept on after the session", not keeper and not badge_on, (keeper, badge_on))
+
+    # The screen goes off and comes back: awake frames in order, on every connection.
+    before = (len(a.awakes), len(b.awakes))
+    await adb("shell", "input", "keyevent", "KEYCODE_SLEEP")
+    await wait_for(lambda: len(a.awakes) > before[0] and len(b.awakes) > before[1], 8)
+    off_a = a.awakes[-1] if len(a.awakes) > before[0] else None
+    want = "standby" if tv else "screen_off"
+    sc.check(f"screen off: awake false ({want}) on both pairs", off_a and off_a["awake"] is False and off_a.get("sleep_state") == want and len(b.awakes) > before[1], (off_a, b.awakes[-1:]))
+    await asyncio.sleep(1.0)
+    mid = (len(a.awakes), len(b.awakes))
+    await adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
+    await asyncio.sleep(1.5)
+    await adb("shell", "wm", "dismiss-keyguard")
+    await wait_for(lambda: a.awakes and a.awakes[-1].get("awake") is True, 10)
+    on_a = a.awakes[-1]
+    sc.check("screen on (and unlocked): awake true", on_a.get("awake") is True, a.awakes[mid[0]:])
+    if not tv:
+        sc.check("the unlock says a person was there: input_seen", any(f.get("input_seen") is True for f in a.awakes[mid[0]:]), a.awakes[mid[0]:])
+    frames = sorted(a.awakes + b.awakes, key=lambda f: f["seq"])
+    seqs = [f["seq"] for f in frames]
+    sc.check("seq grows across both connections, one run", len(set(seqs)) == len(seqs) and len({f["run"] for f in frames}) == 1, seqs)
+    if not tv:
+        await asyncio.sleep(1.0)
+        n = await dumpsys_notifications()
+        sc.check("an awake phone drops its wake notification", "A Silicon asked to use this" not in n and "si:waker" not in n, n[-2000:])
+
+    # setup_retry with nothing failed: the app just reports again, and the socket stays up.
+    await sc.drain_events()
+    await sc.send({"type": "setup_retry", "target": None, "step": None}, a)
+    await sc.send({"type": "ping", "nonce": 77}, a)
+    pong = await sc.expect_event("pong", 5, lambda f: f.get("nonce") == 77)
+    sc.check("setup_retry is understood (the socket stays up)", pong is not None)
+
+    # Revoke Bob's pair on the device: only Bob's pair ends.
+    sc.pair, sc.session = a, "a02"
+    await sc.send({"type": "session_started", "target": None, "session_id": "a02", "silicon_id": "si:chef", "since": now_iso(), "side": "side-alice"})
+    await sc.cmd("open", ["com.teamofsilicons.extend"])
+    await sc.cmd("wait", ["1000"])
+    await reach(sc, tv, "Pair with another Carbon")
+    r = await sc.cmd("find", ["Revoke pair", "click", "--last"])
+    sc.check("tap Revoke pair on Bob's row", r["ok"], r)
+    await sc.cmd("wait", ["800"])
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    sc.check("the confirmation names the Carbon", "Revoke pair?" in t and "c:bob's account" in t, t)
+    await sc.drain_events()
+    confirm = asyncio.create_task(sc.cmd("find", ["Revoke pair", "click", "--last"], timeout_ms=8000))
+    ev = await sc.expect_event("_http_revoke", 10)
+    sc.check("confirm -> DELETE /api/v1/device with Bob's credential", ev is not None and ev["_pair"] == b.device_id, ev)
+    await confirm
+    await asyncio.sleep(1.5)
+    sc.check("Alice's pair is untouched", a.ws is not None and not a.ws.closed and not a.revoked)
+    snap = await sc.cmd("snapshot")
+    t = snap.get("text") or ""
+    sc.check("the app lists only Alice now", "c:bob" not in t and "c:alice" in t, t)
+    await sc.send({"type": "session_ended", "target": None, "session_id": "a02", "reason": "ended_by_silicon"})
+
+    # Extend unpairs the last pair: the app asks for a new pairing code.
+    before = len([x for x in st.http_log if x == ("POST", "/api/v1/enrollments")])
+    a.revoked = True
+    await a.ws.send({"type": "unpaired", "reason": "device_removed"})
+    ok = await wait_for(lambda: len([x for x in st.http_log if x == ("POST", "/api/v1/enrollments")]) > before, 15)
+    sc.check("after the last pair ends, the app asks for a new pairing code", ok)
+
+
 async def run_scenario(st: State):
     await asyncio.sleep(1.0)
     sc = Scenario(st)
@@ -832,8 +1190,10 @@ async def run_scenario(st: State):
             await phone_scenario(sc)
         elif st.args.scenario == "tv":
             await tv_scenario(sc)
+        elif st.args.scenario == "multi":
+            await multi_scenario(sc)
         elif st.args.scenario == "smoke":
-            await scenario_common_start(sc, st.hellos[-1]["os"])
+            await scenario_common_start(sc, st.primary.hellos[-1]["os"])
             r = await sc.cmd("snapshot", ["-i"])
             sc.check("snapshot -i", r["ok"], r)
     except Exception as e:  # noqa: BLE001
@@ -852,9 +1212,10 @@ async def main():
     ap.add_argument("--port", type=int, default=8490)
     ap.add_argument("--rotate-s", type=int, default=300)
     ap.add_argument("--auto-claim-after", type=float, default=None, help="pair the first enrollment after N seconds")
-    ap.add_argument("--scenario", choices=["phone", "tv", "smoke"], default=None)
+    ap.add_argument("--scenario", choices=["phone", "tv", "smoke", "multi"], default=None)
     ap.add_argument("--device-name", default="Test Pixel")
     ap.add_argument("--image", default=None, help="a PNG to send as an attachment in the TV scenario")
+    ap.add_argument("--old-service", action="store_true", help="answer POST /api/v1/device/enrollments with 404, like a 1.0 service")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
     args = ap.parse_args()
     st = State(args)

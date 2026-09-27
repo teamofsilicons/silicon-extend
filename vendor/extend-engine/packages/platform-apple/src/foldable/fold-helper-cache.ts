@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import { AppError } from '@agent-device/kernel/errors';
 import { execFailureDetails } from '@agent-device/host-kit/command';
 import { runAppleToolCommand } from '../core/tool-provider.ts';
@@ -61,7 +62,8 @@ export async function ensureFoldHelperBinary(
     );
     const toolchain = await readHostToolchainIdentity(host, deadline);
     const cacheRoot =
-      input.cacheRoot ?? path.join(host.homeDirectory(), '.agent-device', 'fold-helper');
+      input.cacheRoot ??
+      path.join(host.homeDirectory(), ...ENGINE_HOME_DIRECTORY_SEGMENTS, 'fold-helper');
     return await ensureNativeBuildCacheEntry({
       host,
       deadline,

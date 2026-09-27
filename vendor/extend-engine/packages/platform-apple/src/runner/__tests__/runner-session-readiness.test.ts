@@ -611,7 +611,7 @@ test('a build that named no cause on a device with its image down gets the devic
     new AppError('COMMAND_FAILED', 'xcodebuild build-for-testing failed', {
       reason: 'build_failed_unclassified',
       startupRuleMatched: false,
-      details: { stdout: "error: cannot find 'AgentDeviceRunnerCommand' in scope\n" },
+      details: { stdout: "error: cannot find 'SiliconExtendHelperCommand' in scope\n" },
     }),
   );
 
@@ -650,7 +650,7 @@ test('a device whose image is available claims nothing for a failure it did not 
     new AppError('COMMAND_FAILED', 'xcodebuild build-for-testing failed', {
       reason: 'build_failed_unclassified',
       startupRuleMatched: false,
-      details: { stdout: "error: cannot find 'AgentDeviceRunnerCommand' in scope\n" },
+      details: { stdout: "error: cannot find 'SiliconExtendHelperCommand' in scope\n" },
     }),
   );
 

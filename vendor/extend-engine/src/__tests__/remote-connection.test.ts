@@ -240,7 +240,7 @@ test('connect proxy notice distinguishes safe inventory from lease allocation', 
 
   assert.match(stdout, /No live device session has been created/);
   assert.match(stdout, /Run devices to inspect inventory without allocating/);
-  assert.match(stdout, /agent-device open <package-id> --relaunch/);
+  assert.match(stdout, /extend open <package-id> --relaunch/);
   assert.doesNotMatch(stdout, /snapshot/);
   assert.doesNotMatch(stdout, /install-from-source/);
   fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -407,7 +407,7 @@ test('connection status re-emits the deferred Metro command scoped to the named 
   const payload = JSON.parse(stdout) as { data: { runtimePreparation?: { nextStep?: string } } };
   assert.equal(
     payload.data.runtimePreparation?.nextStep,
-    `agent-device metro prepare --remote-config ${remoteConfigPath} --session adc-status-metro`,
+    `extend metro prepare --remote-config ${remoteConfigPath} --session adc-status-metro`,
   );
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });

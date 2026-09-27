@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AppError } from '@agent-device/kernel/errors';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import {
   accessHostFile,
   chmodHostFile,
@@ -77,11 +78,19 @@ type HelperFailure = {
 
 type HelperResult<T extends Record<string, unknown>> = HelperSuccess<T> | HelperFailure;
 
-const MACOS_HELPER_PRODUCT_NAME = 'agent-device-macos-helper';
+// The helper's Swift product (apple/macos-helper/Package.swift) and the name of the copy the engine
+// installs: macOS shows it in System Settings' privacy lists, so it names Silicon Extend. A tree
+// whose Package.swift still builds the fork's `agent-device-macos-helper` is built and installed
+// under the new name all the same.
+const MACOS_HELPER_PRODUCT_NAME = 'silicon-extend-macos-helper';
+const LEGACY_MACOS_HELPER_PRODUCT_NAME = 'agent-device-macos-helper';
+// Read under the fork's name, which a set EXTEND_ENGINE_MACOS_HELPER_BIN is copied onto
+// (src/extend-env.ts); messages name the Silicon Extend one.
 const MACOS_HELPER_ENV_PATH = 'AGENT_DEVICE_MACOS_HELPER_BIN';
+const MACOS_HELPER_ENV_LABEL = 'EXTEND_ENGINE_MACOS_HELPER_BIN';
 const MACOS_HELPER_INSTALL_ROOT = path.join(
   hostHomeDirectory(),
-  '.agent-device',
+  ...ENGINE_HOME_DIRECTORY_SEGMENTS,
   'macos-helper',
   'current',
 );
@@ -135,7 +144,10 @@ function resolveMacOsHelperPackageRoot(): string {
 }
 
 function resolveMacOsHelperSourceBinaryPath(): string {
-  return path.join(resolveMacOsHelperPackageRoot(), '.build', 'release', MACOS_HELPER_PRODUCT_NAME);
+  const releaseDir = path.join(resolveMacOsHelperPackageRoot(), '.build', 'release');
+  const current = path.join(releaseDir, MACOS_HELPER_PRODUCT_NAME);
+  const legacy = path.join(releaseDir, LEGACY_MACOS_HELPER_PRODUCT_NAME);
+  return !hostFileExistsSync(current) && hostFileExistsSync(legacy) ? legacy : current;
 }
 
 function resolveInstalledMacOsHelperPath(): string {
@@ -194,7 +206,7 @@ async function readInstalledMacOsHelperFingerprint(): Promise<string | null> {
 async function ensureMacOsHelperBinary(): Promise<string> {
   const configuredPath = await resolveExecutableOverridePath(
     readHostEnvironmentVariable(MACOS_HELPER_ENV_PATH),
-    MACOS_HELPER_ENV_PATH,
+    MACOS_HELPER_ENV_LABEL,
   );
   if (configuredPath) {
     return configuredPath;
@@ -213,12 +225,13 @@ async function ensureMacOsHelperBinary(): Promise<string> {
     // Build/install below.
   }
 
-  const sourceBinary = resolveMacOsHelperSourceBinaryPath();
-  writeHostStderr('agent-device: building macOS helper (first run or helper update)\n');
+  writeHostStderr('Silicon Extend: building the macOS helper (first run or helper update)\n');
   await runAppleToolCommand('swift', ['build', '-c', 'release', '--package-path', packageRoot], {
     cwd: packageRoot,
     timeoutMs: 120_000,
   });
+  // Resolved after the build, which decides which product name exists.
+  const sourceBinary = resolveMacOsHelperSourceBinaryPath();
   await ensureHostDirectory(MACOS_HELPER_INSTALL_ROOT);
   const tempInstalledPath = `${installedPath}.tmp`;
   await copyHostFile(sourceBinary, tempInstalledPath);
@@ -234,7 +247,10 @@ async function ensureMacOsHelperBinary(): Promise<string> {
 async function resolveMacOsHelperCommandPath(): Promise<string> {
   const configuredPath = readHostEnvironmentVariable(MACOS_HELPER_ENV_PATH)?.trim();
   if (configuredPath) {
-    const resolvedPath = await resolveExecutableOverridePath(configuredPath, MACOS_HELPER_ENV_PATH);
+    const resolvedPath = await resolveExecutableOverridePath(
+      configuredPath,
+      MACOS_HELPER_ENV_LABEL,
+    );
     if (resolvedPath) return resolvedPath;
   }
   if (hasScopedAppleToolProvider()) {

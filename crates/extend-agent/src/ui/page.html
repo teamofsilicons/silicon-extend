@@ -549,6 +549,28 @@
   .modal-sheet p.body { margin-top: 8px; font-size: 13.5px; line-height: 1.6; }
   .modal-sheet .fine { margin-top: 6px; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  /* Pair with another Carbon: a warning, not a danger. */
+  .modal-sheet.warn { border-color: var(--blue-edge); border-top-color: var(--blue); }
+  .modal-sheet.warn .eyebrow { color: var(--blue); }
+
+  /* Carbons this computer is paired to, and the code for another one. */
+  .pair-side { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .pair-side .button { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+  .add-code {
+    display: flex;
+    justify-content: center;
+    gap: 0.32em;
+    margin: 12px 0 2px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--ink);
+    font: 500 44px/1.05 var(--mono);
+    letter-spacing: 0.06em;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .add-code.waiting { color: var(--ghost); border-bottom-color: var(--line-strong); }
+  #add-expiry { text-align: center; margin-top: 6px; }
+  .wake-reason { font: 14px/1.45 var(--serif); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
 
   /* A short window (down to the 420px minimum): the code and its countdown stay above the fold. */
   @media (max-height: 500px) {
@@ -815,7 +837,7 @@
       <div class="use-row">
         <div>
           <p class="eyebrow cobalt"><span class="dot-slot" data-dot="in-use"></span>In use now</p>
-          <p class="use-line"><span class="tag silicon">Silicon</span><span class="who" id="use-who"></span> is using this <span class="word"></span></p>
+          <p class="use-line"><span class="tag silicon">Silicon</span><span class="who" id="use-who"></span> is using this <span class="word"></span><span id="use-through"></span></p>
           <p class="fine" id="use-since"></p>
         </div>
         <button class="button danger" data-action="stop"><svg aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>
@@ -839,8 +861,14 @@
     </section>
 
     <section id="superseded" class="card hidden">
-      <p class="use-line">Another copy of Silicon Extend is connected for this <span class="word"></span>. Only one copy can connect at a time: connect this one, or quit it and keep the other.</p>
-      <div class="use-actions"><button class="button primary" data-action="reconnect">Connect this copy instead</button></div>
+      <p class="use-line">Another connection took over this <span class="word"></span>'s pairs: another copy of Silicon Extend, or a copy of its credentials. Only one can connect at a time. Connect this one again, or quit it and keep the other.</p>
+      <div class="use-actions"><button class="button primary" data-action="reconnect">Connect this copy again</button></div>
+    </section>
+
+    <section id="wakes" class="card hidden">
+      <h2>Asked to wake.</h2>
+      <p class="fine">A Silicon asked to use this <span class="word"></span> while it wasn't awake. Waking and unlocking it answers every request. Its Carbon was also told through Ting.</p>
+      <ol class="rows" id="wake-list"></ol>
     </section>
 
     <section id="upgrade" class="card hidden">
@@ -875,13 +903,23 @@
     </section>
 
     <section id="paired" class="card hidden">
-      <h2>Details.</h2>
-      <dl class="details">
-        <dt id="dev-name-label">Name</dt><dd id="dev-name">—</dd>
-        <dt>Paired to</dt><dd><span id="dev-owner">—</span></dd>
-        <dt>Team</dt><dd id="dev-team">—</dd>
-        <dt>Device id</dt><dd class="mono" id="dev-id">—</dd>
-      </dl>
+      <div class="card-head">
+        <h2 id="pairs-title">Paired to.</h2>
+        <button class="button secondary" id="pair-another" data-action="ask_pair_another">Pair with another Carbon</button>
+      </div>
+      <p class="fine">Each Carbon who pairs this <span class="word"></span> has their own pair: their own name for it, their own Silicons, and their own Revoke pair.</p>
+      <ol class="rows" id="pair-list"></ol>
+    </section>
+
+    <section id="adding" class="card hidden">
+      <div class="card-head">
+        <h2>Pair with another Carbon.</h2>
+        <button class="button secondary" data-action="cancel_pair_another">Cancel</button>
+      </div>
+      <p class="fine">The other Carbon enters this code on the Extend website, under Add a device. Nobody signs in here.</p>
+      <div class="add-code waiting" id="add-code" aria-live="polite"><span>···</span><span>···</span></div>
+      <p class="fine" id="add-expiry"></p>
+      <p class="row-error hidden" id="add-error"></p>
     </section>
 
     <section id="missing" class="card hidden">
@@ -901,11 +939,25 @@
     <div class="modal-sheet">
       <p class="eyebrow">Revoke pair</p>
       <h2 id="confirm-title">Unpair this <span class="word"></span>?</h2>
-      <p class="body">This removes this <span class="word"></span> from <span id="confirm-owner">the Carbon's</span> account and ends every Silicon's access to it right away.</p>
-      <p class="fine">Afterwards this <span class="word"></span> shows a new pairing code, so you can pair it again.</p>
+      <p class="body">This removes this <span class="word"></span> from <span id="confirm-owner">the Carbon's</span> account and ends the access of every Silicon <span id="confirm-who">that Carbon</span> gave access to, right away.</p>
+      <p class="fine" id="confirm-after">Afterwards this <span class="word"></span> shows a new pairing code, so you can pair it again.</p>
       <div class="modal-actions">
         <button class="button secondary" id="confirm-cancel" data-action="cancel_revoke">Cancel</button>
-        <button class="button danger" data-action="revoke">Revoke pair</button>
+        <button class="button danger" id="confirm-revoke" data-action="revoke">Revoke pair</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="share" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="share-title">
+    <div class="modal-backdrop" data-action="cancel_share"></div>
+    <div class="modal-sheet warn">
+      <p class="eyebrow">Pair with another Carbon</p>
+      <h2 id="share-title">Share this <span class="word"></span>?</h2>
+      <p class="body" id="share-body"></p>
+      <p class="fine">Their pair is separate: their own name for this <span class="word"></span>, their own Silicons, and their own Revoke pair. Only one Silicon uses it at a time, and any of you can stop it.</p>
+      <div class="modal-actions">
+        <button class="button secondary" id="share-cancel" data-action="cancel_share">Cancel</button>
+        <button class="button primary" data-action="pair_another">Show a pairing code</button>
       </div>
     </div>
   </div>
@@ -1104,10 +1156,40 @@
     });
   }
 
-  function openConfirm(on) {
+  // The pair Revoke pair is about: its device id, its Carbon, and whether it is the last pair.
+  function pairToRevoke(target) {
+    var pairs = (state && state.pairs) || [];
+    for (var i = 0; i < pairs.length; i++) if (pairs[i].device_id === target) return pairs[i];
+    return pairs.length === 1 ? pairs[0] : null;
+  }
+  function openConfirm(on, target) {
+    if (on) {
+      var p = pairToRevoke(target);
+      if (!p) return;
+      var many = ((state && state.pairs) || []).length > 1;
+      var owner = p.owner ? '<span class="mono">' + esc(p.owner) + '</span>' : 'the Carbon';
+      $('confirm-owner').innerHTML = p.owner ? owner + "'s" : "the Carbon's";
+      $('confirm-who').innerHTML = p.owner ? owner : 'that Carbon';
+      $('confirm-title').textContent = many ? 'Revoke ' + (p.owner || 'this Carbon') + "'s pair?" : 'Unpair this ' + ((state && state.computer_word) || 'computer') + '?';
+      $('confirm-after').textContent = many
+        ? 'The other Carbons\' pairs stay, and so do their Silicons.'
+        : 'Afterwards this ' + ((state && state.computer_word) || 'computer') + ' shows a new pairing code, so you can pair it again.';
+      $('confirm-revoke').setAttribute('data-target', p.device_id);
+    }
     show('confirm', on);
     if (on) { try { $('confirm-cancel').focus(); } catch (e) {} }
   }
+  function openShare(on) {
+    show('share', on);
+    if (on) { try { $('share-cancel').focus(); } catch (e) {} }
+  }
+  // The tray menu's "Revoke pair…": the confirmation for the only pair, or the list of Carbons.
+  window.__askRevoke = function () {
+    var pairs = (state && state.pairs) || [];
+    if (pairs.length === 1) openConfirm(true, pairs[0].device_id);
+    else { try { $('paired').scrollIntoView({ block: 'start' }); } catch (e) {} }
+  };
+  window.__askPairAnother = function () { openShare(true); };
   // The tray menu's "Revoke pair…" opens the confirmation from outside, by removing `hidden`.
   if (window.MutationObserver) {
     new MutationObserver(function () {
@@ -1117,16 +1199,21 @@
     }).observe($('confirm'), { attributes: true, attributeFilter: ['class'] });
   }
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !$('confirm').classList.contains('hidden')) openConfirm(false);
+    if (e.key !== 'Escape') return;
+    if (!$('confirm').classList.contains('hidden')) openConfirm(false);
+    if (!$('share').classList.contains('hidden')) openShare(false);
   });
 
   document.addEventListener('click', function (e) {
     var el = e.target.closest('[data-action]');
     if (!el) return;
     var action = el.getAttribute('data-action');
-    if (action === 'ask_revoke') { openConfirm(true); return; }
+    if (action === 'ask_revoke') { openConfirm(true, el.getAttribute('data-target')); return; }
     if (action === 'cancel_revoke') { openConfirm(false); return; }
+    if (action === 'ask_pair_another') { openShare(true); return; }
+    if (action === 'cancel_share') { openShare(false); return; }
     if (action === 'revoke') { openConfirm(false); }
+    if (action === 'pair_another') { openShare(false); }
     var msg = { action: action };
     if (el.hasAttribute('data-step')) msg.step = el.getAttribute('data-step');
     if (el.hasAttribute('data-target')) msg.target = el.getAttribute('data-target');
@@ -1162,7 +1249,17 @@
     return '';
   }
 
+  function addCountdown() {
+    var a = state && state.adding_pair;
+    if (!a || view === 'banner') return;
+    if (!a.pairing) { $('add-expiry').textContent = a.error ? '' : 'Getting a pairing code from Extend…'; return; }
+    var left = Math.max(0, Math.round((new Date(a.pairing.expires_at) - new Date()) / 1000));
+    $('add-expiry').textContent = left > 0
+      ? 'A new code appears in ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + '.'
+      : 'Getting a new code…';
+  }
   function countdown() {
+    addCountdown();
     if (!state || view === 'banner') return;
     if (state.phase !== 'enrolling') return;
     if (!state.pairing) { $('code-expiry').textContent = 'Getting a pairing code from Extend…'; return; }
@@ -1182,6 +1279,7 @@
 
   var OS_NAME = { android: 'Android', android_tv: 'Android TV', macos: 'macOS', windows: 'Windows', linux: 'Linux', ios: 'iOS',
     ipados: 'iPadOS', tvos: 'tvOS', samsung_tv: 'Samsung TV', lg_tv: 'LG TV' };
+  var SLEEP = { screen_off: 'screen off', locked: 'locked', asleep: 'asleep', standby: 'standby', other_session: 'another account' };
   var STEP_TAG = { done: 'Done', needs_carbon: 'Needs you', in_progress: 'In progress', todo: 'To do', failed: 'Failed' };
   function stepMark(status, n) {
     var num = String(n).padStart(2, '0');
@@ -1312,13 +1410,16 @@
       show('env-state', !!envState);
     }
 
-    var d = s.device;
+    var pairs = s.pairs || [];
+    var d = pairs[0];
     var pairing = phase === 'enrolling';
     var paired = !!d && !pairing && (phase === 'online' || phase === 'reconnecting');
+    var many = pairs.length > 1;
     document.body.classList.toggle('pairing', pairing);
     // Each fact once: the top bar has the Team (as Interface's breadcrumb does) and the status,
-    // the title the device's name, Details who it's paired to, the band the session.
-    var crumb = d && d.team && !pairing ? d.team : 'This ' + word;
+    // the title the device's name, the Carbons card who it's paired to, the band the session.
+    // Several Carbons each name it and pick a Team: the top bar then says how many.
+    var crumb = many ? pairs.length + ' Carbons' : d && d.team && !pairing ? d.team : 'This ' + word;
     $('crumb-name').textContent = crumb;
 
     // The headline: a sentence for each state, or the name once paired.
@@ -1350,6 +1451,8 @@
     show('in-use', !!inUse && !takeover && paired);
     if (inUse) {
       $('use-who').textContent = inUse.silicon_id;
+      // Which Carbon's pair it came through, once several Carbons paired this computer.
+      $('use-through').innerHTML = many && inUse.carbon ? ' through <span class="mono">' + esc(inUse.carbon) + '</span>' : '';
       $('use-since').innerHTML = sinceLine(inUse);
       $('use-session').textContent = 'Session ' + inUse.session_id;
     }
@@ -1378,18 +1481,47 @@
     countdown();
 
     show('paired', !!d && !pairing);
-    // Paired, the title is the name; otherwise Details says it.
-    show('dev-name-label', !paired);
-    show('dev-name', !paired);
-    if (d) {
-      $('dev-name').textContent = d.name || '—';
-      $('dev-owner').innerHTML = d.owner ? memberTag(d.owner) + '<span class="mono">' + esc(d.owner) + '</span>' : '—';
-      $('dev-team').textContent = d.team || '—';
-      $('dev-id').textContent = d.device_id;
-      $('confirm-owner').innerHTML = d.owner ? '<span class="mono">' + esc(d.owner) + "</span>'s" : "the Carbon's";
+    $('pairs-title').textContent = many ? 'Paired to ' + pairs.length + ' Carbons.' : 'Paired to.';
+    $('pair-list').innerHTML = pairs.map(function (p) {
+      var phaseLine = '';
+      var side = '';
+      if (p.phase === 'superseded') {
+        phaseLine = '<div class="row-error">Another connection took over this pair.</div>';
+        side += '<button class="button secondary" data-action="reconnect" data-target="' + esc(p.device_id) + '">Reconnect</button>';
+      } else if (p.phase === 'upgrade_required') {
+        phaseLine = '<div class="row-error">Extend needs a newer Silicon Extend for this pair.</div>';
+      } else if (p.phase !== 'online') {
+        phaseLine = '<div class="row-sub">Reconnecting…</div>';
+      }
+      side += '<button class="button danger quiet" data-action="ask_revoke" data-target="' + esc(p.device_id) + '">Revoke pair</button>';
+      var kind = p.phase === 'online' ? 'online' : p.phase === 'superseded' || p.phase === 'upgrade_required' ? 'attention' : 'offline';
+      var who = p.owner ? memberTag(p.owner) + '<span class="mono">' + esc(p.owner) + '</span>' : 'A Carbon';
+      var named = p.name ? ' names it <b>' + esc(p.name) + '</b>' : '';
+      var terminal = p.terminal_withheld
+        ? '<div class="row-sub">Silicons this Carbon gives access to use the screen, keyboard and apps. Only the Carbon who installed Silicon Extend here gives the terminal.</div>'
+        : '';
+      return '<li><span class="row-dot">' + dot(kind) + '</span><div class="row-main"><div class="row-title">' + who + named + '</div>' +
+        '<div class="row-sub">' + (p.team ? 'Team ' + esc(p.team) + ' · ' : '') + 'device <span class="mono">' + esc(p.device_id) + '</span></div>' +
+        phaseLine + terminal + '</div><div class="row-side pair-side">' + side + '</div></li>';
+    }).join('');
+    // Pair with another Carbon: the warning first (the page's own sheet), then the code card.
+    var adding = s.adding_pair;
+    show('pair-another', !!d && !pairing && !adding && phase === 'online');
+    show('adding', !!adding && !pairing);
+    if (adding) {
+      var addCode = adding.pairing ? String(adding.pairing.code) : '';
+      $('add-code').classList.toggle('waiting', !addCode);
+      $('add-code').innerHTML = addCode
+        ? '<span>' + esc(addCode.slice(0, 3)) + '</span><span>' + esc(addCode.slice(3)) + '</span>'
+        : '<span>···</span><span>···</span>';
+      $('add-code').setAttribute('aria-label', addCode ? 'Pairing code ' + addCode.split('').join(' ') : 'Getting a pairing code');
+      $('add-error').textContent = adding.error || '';
+      show('add-error', !!adding.error);
+      addCountdown();
     }
-    show('revoke-link', !!d && !pairing);
-    if (!d || pairing) openConfirm(false);
+    $('share-body').textContent = s.share_warning || '';
+    show('revoke-link', !!d && !pairing && !many);
+    if (!d || pairing) { openConfirm(false); openShare(false); }
     show('superseded', phase === 'superseded');
     show('upgrade', phase === 'upgrade_required');
     $('download-host').textContent = s.download_host || s.download_url || '';
@@ -1438,6 +1570,19 @@
         '</div><div class="row-sub">' + withCode(r) + '</div></div></li>';
     }).join('');
 
+    var wakes = s.wake_requests || [];
+    show('wakes', wakes.length > 0 && !pairing);
+    $('wake-list').innerHTML = wakes.map(function (w) {
+      var through = many && w.carbon ? ' <span class="row-sub">through <span class="mono">' + esc(w.carbon) + '</span></span>' : '';
+      var until = clock(w.expires_at);
+      var line = w.silicon_id
+        ? '<div class="row-title"><span class="tag silicon">Silicon</span><span class="mono">' + esc(w.silicon_id) + '</span>' + through + '</div>' +
+          (w.reason ? '<div class="wake-reason">' + esc(w.reason) + '</div>' : '')
+        : '<div class="row-title">A Silicon asked to use this device' + through + '</div><div class="row-sub">Its Carbon was told through Ting.</div>';
+      return '<li><span class="row-dot">' + dot('pending') + '</span><div class="row-main">' + line +
+        (until ? '<div class="row-sub">Open until ' + esc(until) + '.</div>' : '') + '</div></li>';
+    }).join('');
+
     var carried = s.attached || [];
     show('attached', carried.length > 0);
     $('attached-list').innerHTML = carried.map(function (a) {
@@ -1454,8 +1599,10 @@
         // Outlined: the filled orange-red Stop belongs to this computer's own session.
         side = '<button class="button danger quiet" data-action="stop"' + target + ' aria-label="Stop ' + esc(a.in_use.silicon_id) + ' on ' + esc(a.name) + '"><svg aria-hidden="true"><use href="#i-stop"/></svg>Stop</button>';
       } else {
-        line = '<div class="row-sub">' + (a.online ? 'Online' : 'Offline') + '</div>';
+        var awake = !a.online ? 'Offline' : a.awake === false ? 'Online, not awake' + (a.sleep_state ? ' (' + esc(SLEEP[a.sleep_state] || a.sleep_state) + ')' : '') : 'Online';
+        line = '<div class="row-sub">' + awake + '</div>';
       }
+      if (a.wake_requested && !a.error) line += '<div class="row-sub">A Silicon asked to wake it. Only its Carbon can: turn it on, or unlock it.</div>';
       var todo = a.setup && a.setup.steps ? a.setup.steps.filter(function (x) { return x.status !== 'done'; }) : [];
       if (todo.length && !a.error) line += '<div class="row-sub">Setup: ' + esc(todo[0].title) + (todo[0].help ? '. ' + esc(todo[0].help) : '') + '</div>';
       return '<li><span class="row-dot">' + dot(kind) + '</span><div class="row-main"><div class="row-title">' + esc(a.name) +

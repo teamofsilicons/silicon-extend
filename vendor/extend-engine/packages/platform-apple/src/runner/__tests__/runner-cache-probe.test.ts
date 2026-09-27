@@ -57,7 +57,7 @@ test('probe rejects a partial cache holding only a stray xctestrun file', async 
   fs.writeFileSync(
     path.join(
       productsDir,
-      'AgentDeviceRunner_AgentDeviceRunnerUITests_iphonesimulator26.2-arm64.xctestrun',
+      'SiliconExtendHelper_SiliconExtendHelperUITests_iphonesimulator26.2-arm64.xctestrun',
     ),
     'not a real xctestrun plist',
     'utf8',

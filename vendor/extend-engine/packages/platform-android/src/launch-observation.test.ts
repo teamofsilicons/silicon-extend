@@ -73,10 +73,10 @@ async function helperNotCurrentError(): Promise<unknown> {
           version: '0.13.3',
           apkUrl: null,
           sha256,
-          packageName: 'com.callstack.agentdevice.snapshothelper',
+          packageName: 'com.teamofsilicons.extend.snapshothelper',
           versionCode: 13003,
           instrumentationRunner:
-            'com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation',
+            'com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation',
           minSdk: 23,
           targetSdk: 36,
           outputFormat: 'uiautomator-xml',

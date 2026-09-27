@@ -11,7 +11,7 @@ import path from 'node:path';
 import { activeSource, PLATFORMS, type Platform } from './swift-conditional-compilation.ts';
 
 /** The XCTest target directory; its basename is the target name the identifiers use. */
-export const RUNNER_TESTS_DIR = 'apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests';
+export const RUNNER_TESTS_DIR = 'apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests';
 
 // Every .swift file below the target directory is a member: the Xcode project uses a
 // PBXFileSystemSynchronizedRootGroup, so membership is the directory, not a file list, and a

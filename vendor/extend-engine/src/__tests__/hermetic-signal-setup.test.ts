@@ -67,7 +67,7 @@ test('a promisified execFile cannot smuggle a pkill past the guard', async () =>
   // promisify() resolves through the custom-promisify symbol rather than calling
   // the wrapper, so this path needs its own interception.
   await assert.rejects(
-    execFileAsync('pkill', ['-f', 'xcodebuild.*AgentDeviceRunner']),
+    execFileAsync('pkill', ['-f', 'xcodebuild.*SiliconExtendHelper']),
     (error: NodeJS.ErrnoException) =>
       error.code === 'ENOENT' && /Refusing to spawn/.test(error.message),
   );

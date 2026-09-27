@@ -112,7 +112,7 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
         <Button variant="primary" class="wide" onClick={() => withIam()} busy={busy() === "iam"} data-testid="sign-in-iam">
           Continue with Silicon IAM <ArrowRight size={16} aria-hidden="true" />
         </Button>
-        <p class="fine">IAM asks you to approve Extend and pick your teams, then sends you back here. Extend never sees your password.</p>
+        <p class="fine">IAM asks you to approve Extend and pick your Teams, then sends you back here. Extend never sees your password.</p>
 
         {/* Signing up is IAM's too. Test identities come from the test environment, not from sign-up. */}
         <Show when={!testing()}>

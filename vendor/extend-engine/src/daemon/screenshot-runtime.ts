@@ -388,7 +388,7 @@ function createDaemonScreenshotArtifactAdapter(): ArtifactAdapter {
       if (ref?.kind === 'path') {
         outputPath = ref.path;
       } else {
-        tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-device-screenshot-'));
+        tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'extend-engine-screenshot-'));
         outputPath = path.join(tempRoot, 'screenshot.png');
       }
       await fs.mkdir(path.dirname(outputPath), { recursive: true });

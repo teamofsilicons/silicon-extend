@@ -200,9 +200,9 @@ test('open on in-use device returns DEVICE_IN_USE before readiness checks', asyn
   expect(response?.ok).toBe(false);
   if (response && !response.ok) {
     expect(response.error.code).toBe('DEVICE_IN_USE');
-    expect(response.error.details?.hint).toContain('agent-device session list');
+    expect(response.error.details?.hint).toContain('extend session list');
     expect(response.error.details?.hint).toContain('--session busy-session');
-    expect(response.error.details?.hint).toContain('agent-device close --session busy-session');
+    expect(response.error.details?.hint).toContain('extend close --session busy-session');
   }
   expect(mockEnsureDeviceReady).not.toHaveBeenCalled();
 });
@@ -255,9 +255,9 @@ test('open on device owned by recording session returns recording recovery hint'
   if (response && !response.ok) {
     expect(response.error.code).toBe('DEVICE_IN_USE');
     expect(response.error.details?.hint).toContain('Recording session "default" owns this device');
-    expect(response.error.details?.hint).toContain('agent-device record stop --session default');
-    expect(response.error.details?.hint).toContain('agent-device close --session default');
-    expect(response.error.details?.hint).toContain('agent-device session list');
+    expect(response.error.details?.hint).toContain('extend record stop --session default');
+    expect(response.error.details?.hint).toContain('extend close --session default');
+    expect(response.error.details?.hint).toContain('extend session list');
   }
   expect(mockEnsureDeviceReady).not.toHaveBeenCalled();
 });

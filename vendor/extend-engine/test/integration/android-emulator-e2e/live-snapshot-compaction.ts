@@ -109,7 +109,7 @@ async function runSnapshot(
   evidence: { command: string; result: ExecResult }[],
 ): Promise<ExecResult> {
   const args = [
-    'bin/agent-device.mjs',
+    'bin/extend-engine.mjs',
     'snapshot',
     ...extraArgs,
     '--platform',

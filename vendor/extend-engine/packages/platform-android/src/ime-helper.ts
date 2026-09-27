@@ -19,18 +19,29 @@ import { requireAndroidAdbHost } from './adb-host.ts';
 
 const HELPER_LABEL = 'Android IME helper';
 const ANDROID_IME_HELPER_NAME = 'android-ime-helper';
-const ANDROID_IME_HELPER_PACKAGE = 'com.callstack.agentdevice.imehelper';
-const ANDROID_IME_HELPER_SERVICE = 'com.callstack.agentdevice.imehelper/.TestInputMethodService';
+const ANDROID_IME_HELPER_PACKAGE = 'com.teamofsilicons.extend.imehelper';
+const ANDROID_IME_HELPER_SERVICE = 'com.teamofsilicons.extend.imehelper/.TestInputMethodService';
+// The fork's name for the same keyboard, which an Extend 1.0 engine installed and could have left
+// active after a crash; restore treats it as the engine's own (ime-restore.ts).
+const ANDROID_IME_HELPER_LEGACY_SERVICE =
+  'com.callstack.agentdevice.imehelper/.TestInputMethodService';
 const ANDROID_IME_HELPER_PROTOCOL = 'android-ime-helper-v1';
 
 // Stable service-component id, matched literally by the manifest parser. Exported so the restore
 // lifecycle can compare the device's active IME without reading the packaged artifact from disk.
 export const ANDROID_IME_HELPER_SERVICE_COMPONENT = ANDROID_IME_HELPER_SERVICE;
+
+/** Whether `component` is the engine's test keyboard, under its Silicon Extend or its fork name. */
+export function isAndroidImeHelperServiceComponent(component: string | undefined): boolean {
+  return (
+    component === ANDROID_IME_HELPER_SERVICE || component === ANDROID_IME_HELPER_LEGACY_SERVICE
+  );
+}
 const ANDROID_IME_HELPER_INSTALL_TIMEOUT_MS = 30_000;
 const ANDROID_IME_HELPER_BROADCAST_TIMEOUT_MS = 10_000;
 
-const ACTION_INPUT_TEXT_B64 = 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64';
-const ACTION_CLEAR_TEXT = 'com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT';
+const ACTION_INPUT_TEXT_B64 = 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64';
+const ACTION_CLEAR_TEXT = 'com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT';
 
 /**
  * The IME helper this device should use: a provider that ships its own helper supplies it on the
@@ -46,7 +57,7 @@ export async function selectAndroidImeHelperArtifact(
 export async function resolveAndroidImeHelperArtifact(): Promise<AndroidImeHelperArtifact> {
   return await requireAndroidAdbHost().resolveHelperArtifact({
     helperDirName: 'ime-helper',
-    manifestFileName: (version) => `agent-device-android-ime-helper-${version}.manifest.json`,
+    manifestFileName: (version) => `extend-engine-android-ime-helper-${version}.manifest.json`,
     parseManifest: parseAndroidImeHelperManifest,
     unavailableMessage:
       'Android test IME text entry requires the bundled Android IME helper artifact, but it was not found or could not be read',

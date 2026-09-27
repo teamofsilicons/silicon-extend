@@ -173,7 +173,7 @@ extension RunnerTests {
     }
 #endif
     let fileName = URL(fileURLWithPath: requestedOutPath).lastPathComponent
-    let fallbackName = "agent-device-recording-\(Int(Date().timeIntervalSince1970 * 1000)).mp4"
+    let fallbackName = "silicon-extend-recording-\(Int(Date().timeIntervalSince1970 * 1000)).mp4"
     let safeFileName = fileName.isEmpty ? fallbackName : fileName
     return (NSTemporaryDirectory() as NSString).appendingPathComponent(safeFileName)
   }

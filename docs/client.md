@@ -34,7 +34,7 @@ let s = me.start_session(&device.device_id).await?;         // Err(code = device
 let sid = s.session_id.to_string();
 let snap = me.run(&sid, &CommandRequest {
     command: "snapshot".into(),
-    args: vec!["-i".into()],                                 // agent-device CLI tokens
+    args: vec!["-i".into()],                                 // the device engine's command-line tokens
     timeout_ms: None, self_destruct_minutes: None, permanent: false, attachments: vec![],
 }).await?;
 println!("{}", snap.text.unwrap_or_default());
@@ -74,6 +74,28 @@ argument that names a local file and replace it with `attachment:<name>`. It enf
 `team_silicons`, `setup`, `setup_code`. `devices_including_removed` also lists the Carbon's removed
 devices (with `removed_at` and `removed_reason`), whose `device()` and `activity()` stay readable.
 
+1.1 (the crate is semver-compatible: `silicon-extend-client = "1"` picks it up):
+
+- A Carbon's own devices, sessions, files and history answer in every Team, so
+  `client.authed(&token, None)` works for them; the Team you pass is still the Team `grant` gives
+  access in.
+- `stop(id)` returns `StopOutcome::Session` (the session ran through your pair) or
+  `StopOutcome::Other(DeviceStopped)` (another Carbon gave that Silicon access, so it isn't named).
+  `stop_device` keeps its 1.0 signature and fails to decode the second answer after the stop worked.
+- `revoke_in_team(id, silicon_id, team)` takes one Team's grant away; `revoke` takes every Team's.
+- `team_silicons_all()` lists the Silicons of every Team your login reaches, with how each Team's
+  read went.
+- `retry_setup(id, step)` runs a failed setup step (or every failed step with `None`) again and
+  returns `RetryResult { retrying }`; follow progress with `setup(id)`.
+- Waking: `wake(device_id, reason)` and `cancel_wake(device_id, wake_id)` (Silicons),
+  `wake_requests(device_id, query)` (both), `answer_wake(device_id, &WakeAnswer::woken())` or
+  `WakeAnswer::declined()`, and `set_wake_settings(device_id, &WakeSettings::new(true).silicon(id))`
+  (Carbons).
+- Ting: `ting_registration(team)`, `ting_registrations()` (every Team) and `ting_turn_on(team)`.
+- New response fields are optional and new enums read unknown values as `Other`, so a 1.1 client
+  reads a 1.0 service and a 1.0 client reads a 1.1 service. `crates/silicon-extend-client/CHANGELOG.md`
+  lists them.
+
 ## Tokens
 
 Refresh with `client.refresh(refresh_token, idempotency_key)`. Refresh one at a time per token and
@@ -83,13 +105,16 @@ store the new pair atomically; reusing a spent refresh token revokes the family 
 ## Building a device app
 
 The same crate has the device side: `enroll`, `enrollment`, `device_self`, `revoke_pair`,
-`device_stop`, `upload_artifact` and `ws_url`. The socket protocol is
+`device_stop`, `upload_artifact`, `ws_url`, and (1.1) `pair_enrollment(credential)` for "Pair with
+another Carbon". The socket protocol, including one socket per pair, is
 [device-protocol.md](device-protocol.md).
 
 ## Contract fixtures
 
 Every public call is recorded as a fixture in `contracts/v1/client/` by the crate's
 `contract_fixtures` test, and the service's CI replays them against a real service, so a service
-change that would break this crate fails before it ships (`contracts/README.md`). After an intended
+change that would break this crate fails before it ships (`contracts/README.md`). The released 1.0.0
+crate's fixtures are frozen in `contracts/v1/client-1.0.0/` and replayed too, so 1.0.0 callers keep
+working. After an intended
 change to what a call sends, rewrite them with
 `EXTEND_CONTRACTS_WRITE=1 cargo test -p silicon-extend-client --test contract_fixtures`.

@@ -581,7 +581,7 @@ export function androidHelperContentUnavailableError(
     androidSnapshotHelperFailureReason: contentRecovery.reason,
     attempts,
     retriable: true,
-    hint: 'Retry after the app UI stabilizes. If this persists, capture a screenshot and report the helper diagnostics; agent-device does not substitute a second snapshot engine.',
+    hint: 'Retry after the app UI stabilizes. If this persists, capture a screenshot and report the helper diagnostics; the device engine does not substitute a second snapshot engine.',
   });
 }
 
@@ -671,7 +671,7 @@ function androidSnapshotHelperCaptureHint(
   }
   return (
     normalized.hint ??
-    'Retry once. If the helper still fails, run agent-device doctor and report the diagnostic log; agent-device does not substitute a second snapshot engine.'
+    'Retry once. If the helper still fails, run extend doctor and report the diagnostic log; the device engine does not substitute a second snapshot engine.'
   );
 }
 
@@ -705,7 +705,7 @@ async function resolveAndroidSnapshotHelperArtifact(
   const helperDir = path.join(findProjectRoot(), 'android', 'snapshot-helper', 'dist');
   const manifestPath = path.join(
     helperDir,
-    `agent-device-android-snapshot-helper-${version}.manifest.json`,
+    `extend-engine-android-snapshot-helper-${version}.manifest.json`,
   );
 
   try {
@@ -720,7 +720,7 @@ async function resolveAndroidSnapshotHelperArtifact(
     );
     const apkPath = path.join(
       helperDir,
-      manifest.assetName ?? `agent-device-android-snapshot-helper-${manifest.version}.apk`,
+      manifest.assetName ?? `extend-engine-android-snapshot-helper-${manifest.version}.apk`,
     );
     await requireAndroidAdbHost().files.access(apkPath);
     return { artifact: { apkPath, manifest } };
@@ -733,7 +733,7 @@ function androidSnapshotHelperUnavailableError(errorReason: string | undefined):
   const reason = errorReason ?? 'the bundled helper artifact was not found';
   return new AppError('COMMAND_FAILED', `Android snapshot helper is unavailable: ${reason}`, {
     androidSnapshotHelperFailureReason: reason,
-    hint: 'Run `pnpm build:android` to build the helper dist for a source checkout — the runtime needs android/snapshot-helper/dist/agent-device-android-snapshot-helper-<version>.manifest.json and the .apk it references. Packaged installs ship these via the prepack script; if they are missing from a packaged install, reinstall agent-device.',
+    hint: 'Run `pnpm build:android` to build the helper dist for a source checkout — the runtime needs android/snapshot-helper/dist/extend-engine-android-snapshot-helper-<version>.manifest.json and the .apk it references. Packaged installs ship these; if they are missing from a packaged install, reinstall Silicon Extend.',
   });
 }
 

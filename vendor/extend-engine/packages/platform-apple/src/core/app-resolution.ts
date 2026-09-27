@@ -20,7 +20,12 @@ import { createTtlMemo } from '@agent-device/kernel/ttl-memo';
 const ALIASES: Record<string, string> = {
   settings: 'com.apple.Preferences',
 };
-const AGENT_DEVICE_RUNNER_BUNDLE_PREFIX = 'com.callstack.agentdevice.runner';
+// The engine's own iPhone/iPad helper, never a URL-scheme match: Silicon Extend's, and the fork's
+// earlier one a device may still have installed.
+const RUNNER_BUNDLE_ID_PREFIXES = [
+  'com.teamofsilicons.extend.helper',
+  'com.callstack.agentdevice.runner',
+] as const;
 
 const iosAppResolutionCache = createAppResolutionCache<string>();
 
@@ -179,7 +184,9 @@ export async function resolveIosSimulatorDeepLinkBundleId(
   const apps = await listSimulatorAppMetadata(device);
   const matches: SimulatorAppMetadata[] = [];
   for (const app of apps) {
-    if (app.bundleId.startsWith(AGENT_DEVICE_RUNNER_BUNDLE_PREFIX)) continue;
+    if (RUNNER_BUNDLE_ID_PREFIXES.some((prefix) => app.bundleId.startsWith(prefix))) {
+      continue;
+    }
     if (!app.path) continue;
     const schemes = await readIosSimulatorAppUrlSchemes(path.join(app.path, 'Info.plist'));
     if (schemes.has(scheme)) {

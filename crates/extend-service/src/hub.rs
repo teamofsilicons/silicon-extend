@@ -19,7 +19,15 @@ pub type DeviceKey = (String, String); // (world schema, device id)
 struct Conn {
     conn_id: Uuid,
     tx: mpsc::UnboundedSender<ServiceFrame>,
+    /// When this connection last answered a ping.
+    last_pong_at: Option<std::time::Instant>,
+    /// What the app said it can do beyond 1.0 (`hello.features`).
+    features: Vec<String>,
 }
+
+/// How recently a connection must have answered a ping for a new one replacing it to count as a
+/// take-over (logged as `connection_replaced` on the pair).
+pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Default)]
 pub struct AttachedState {
@@ -45,13 +53,51 @@ pub enum SendError {
 
 impl Hub {
     /// Registers a device socket, replacing (and superseding) any older one for the same device.
-    pub async fn register(&self, key: DeviceKey) -> (Uuid, mpsc::UnboundedReceiver<ServiceFrame>) {
+    /// The flag says whether the one it replaced was live: it answered a ping within
+    /// [`LIVE_WITHIN`], so something else took over a working connection (a copied credential, or
+    /// a second copy of the app), rather than the app reconnecting after a drop.
+    pub async fn register(&self, key: DeviceKey) -> (Uuid, mpsc::UnboundedReceiver<ServiceFrame>, bool) {
         let (tx, rx) = mpsc::unbounded_channel();
         let conn_id = Uuid::new_v4();
-        if let Some(old) = self.conns.write().await.insert(key, Conn { conn_id, tx }) {
+        let conn = Conn {
+            conn_id,
+            tx,
+            last_pong_at: None,
+            features: vec![],
+        };
+        let mut replaced_live = false;
+        if let Some(old) = self.conns.write().await.insert(key, conn) {
+            replaced_live = old.last_pong_at.is_some_and(|t| t.elapsed() <= LIVE_WITHIN);
             let _ = old.tx.send(ServiceFrame::Superseded);
         }
-        (conn_id, rx)
+        (conn_id, rx, replaced_live)
+    }
+
+    /// Records a pong on a connection.
+    pub async fn pong(&self, key: &DeviceKey, conn_id: Uuid) {
+        if let Some(c) = self.conns.write().await.get_mut(key)
+            && c.conn_id == conn_id
+        {
+            c.last_pong_at = Some(std::time::Instant::now());
+        }
+    }
+
+    /// Records what a connection's app advertised in its hello.
+    pub async fn set_features(&self, key: &DeviceKey, conn_id: Uuid, features: Vec<String>) {
+        if let Some(c) = self.conns.write().await.get_mut(key)
+            && c.conn_id == conn_id
+        {
+            c.features = features;
+        }
+    }
+
+    /// Whether the app connected for `key` advertised `feature`. `None` when nothing is connected.
+    pub async fn supports(&self, key: &DeviceKey, feature: &str) -> Option<bool> {
+        self.conns
+            .read()
+            .await
+            .get(key)
+            .map(|c| c.features.iter().any(|f| f == feature))
     }
 
     /// Removes a socket if it's still the current one. Returns true when it was.

@@ -77,7 +77,7 @@ export function buildAndroidNativeRemotePath(
   remoteDir = ANDROID_NATIVE_REMOTE_DIR,
 ): string {
   const safePackage = packageName.replaceAll(/[^A-Za-z0-9_.-]/g, '_');
-  return `${remoteDir}/agent-device-${safePackage}-${Date.now()}-${fileName}`;
+  return `${remoteDir}/extend-engine-${safePackage}-${Date.now()}-${fileName}`;
 }
 
 export async function cleanupAndroidRemotePath(

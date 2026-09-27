@@ -25,10 +25,15 @@ import {
   resolveRunnerSdkName,
 } from './apple-runner-platform.ts';
 import { computeRunnerSourceFingerprint } from './runner-source.ts';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 
-const DEFAULT_IOS_RUNNER_APP_BUNDLE_ID = 'com.callstack.agentdevice.runner';
-const RUNNER_DERIVED_ROOT = path.join(os.homedir(), '.agent-device', 'apple-runner');
-export const RUNNER_CACHE_METADATA_FILE = '.agent-device-runner-cache.json';
+const DEFAULT_IOS_RUNNER_APP_BUNDLE_ID = 'com.teamofsilicons.extend.helper';
+const RUNNER_DERIVED_ROOT = path.join(
+  os.homedir(),
+  ...ENGINE_HOME_DIRECTORY_SEGMENTS,
+  'apple-runner',
+);
+export const RUNNER_CACHE_METADATA_FILE = '.extend-engine-runner-cache.json';
 const RUNNER_CACHE_SCHEMA_VERSION = 2;
 const RUNNER_CACHE_METADATA_VALUE_MAX_LENGTH = 300;
 
@@ -572,8 +577,8 @@ export function resolveRunnerBundleBuildSettings(env: NodeJS.ProcessEnv = proces
   const appBundleId = resolveRunnerAppBundleId(env);
   const testBundleId = resolveRunnerTestBundleId(env);
   return [
-    `AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID=${appBundleId}`,
-    `AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID=${testBundleId}`,
+    `EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID=${appBundleId}`,
+    `EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID=${testBundleId}`,
   ];
 }
 

@@ -19,7 +19,7 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--helper", type=pathlib.Path, default=ROOT / "target/desktop/macos/Silicon Extend.app/Contents/MacOS/agent-device-macos-helper")
+parser.add_argument("--helper", type=pathlib.Path, default=ROOT / "target/desktop/macos/Silicon Extend.app/Contents/MacOS/Silicon Extend Helper")
 parser.add_argument("--extend", type=pathlib.Path, help="Also exercise the packaged Extend driver and selector dispatch")
 parser.add_argument("--record", action="store_true", help="Also exercise native and packaged screen recording against this fixture")
 parser.add_argument("--record-only", action="store_true", help="Exercise recording of an animated fixture without keyboard or mouse input")
@@ -421,7 +421,7 @@ raise RuntimeError('recorder never became ready')
                         extend("--end-session", "close")
                 finally:
                     contents = args.extend.parent.parent
-                    subprocess.run([str(contents / "Resources/node/bin/node"), str(contents / "Resources/agent-device/bin/agent-device.mjs"), "daemon", "stop", "--state-dir", str(home / ".extend-agent/agent-device"), "--clean"], check=True, timeout=30)
+                    subprocess.run([str(contents / "Resources/node/bin/node"), str(contents / "Resources/engine/bin/extend-engine.mjs"), "daemon", "stop", "--state-dir", str(home / ".extend-agent/engine"), "--clean"], check=True, timeout=30)
     finally:
         try:
             if remote_session:

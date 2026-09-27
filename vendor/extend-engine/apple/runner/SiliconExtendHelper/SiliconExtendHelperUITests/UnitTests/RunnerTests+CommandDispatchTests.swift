@@ -347,7 +347,7 @@ extension RunnerTests {
     let command = try runnerCommandFixture(
       #"{"command":"tap","commandId":"bounded-modal-routing","x":10,"y":20}"#
     )
-    DispatchQueue(label: "agent-device.runner.tests.modal-routing-probe").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.modal-routing-probe").async {
       do {
         box.response = try self.executeDispatched(command: command)
       } catch {
@@ -355,7 +355,7 @@ extension RunnerTests {
       }
       commandFinishedGate.signal()
     }
-    DispatchQueue(label: "agent-device.runner.tests.modal-routing-probe-verifier").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.modal-routing-probe-verifier").async {
       let commandWait = commandFinishedGate.wait(
         timeout: .now() + self.systemModalProbeBudget + 3
       )
@@ -443,7 +443,7 @@ extension RunnerTests {
     }
     let box = ResultBox()
     let tapFinished = expectation(description: "off-main tap returned")
-    DispatchQueue(label: "agent-device.runner.tests.tap-pending-target-write").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.tap-pending-target-write").async {
       box.response = try? self.executeDispatched(command: tap)
       box.penalizedPendingIdentity = self.isSnapshotXCTestChannelPenalized(bundleId: pendingBundleId)
       box.penalizedSettledIdentity = self.isSnapshotXCTestChannelPenalized(bundleId: settledBundleId)

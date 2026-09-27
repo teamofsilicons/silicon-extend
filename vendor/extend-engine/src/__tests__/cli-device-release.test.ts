@@ -124,10 +124,7 @@ test('device status --stale offers the exact release command for provably dead o
     const result = await runCliCapture(['device', 'status', '--stale'], {
       env: { AGENT_DEVICE_CLAIMS_DIR: claimsDir },
     });
-    assert.match(
-      result.stdout,
-      /Release provably dead owners with: agent-device device release --stale/,
-    );
+    assert.match(result.stdout, /Release provably dead owners with: extend device release --stale/);
   } finally {
     fs.rmSync(claimsDir, { recursive: true, force: true });
   }
@@ -162,7 +159,7 @@ test('device release --stale renders per-claim outcomes with a live-owner hint i
     });
     assert.match(result.stdout, /released android Dead Pixel session=dead-session/);
     assert.match(result.stdout, /refused android Live Pixel session=live-session[^\n]*live-owner/);
-    assert.match(result.stdout, /agent-device daemon stop --state-dir/);
+    assert.match(result.stdout, /extend daemon stop --state-dir/);
   } finally {
     fs.rmSync(claimsDir, { recursive: true, force: true });
     fs.rmSync(stateDir, { recursive: true, force: true });

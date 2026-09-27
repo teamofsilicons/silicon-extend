@@ -7,7 +7,7 @@ import {
 // Declared in contracts/ so zones below remote/ can be stated in terms of the field vocabulary;
 // re-exported here because this module is where consumers already import it from.
 export type { RemoteConnectionProfileFields } from '@agent-device/contracts/remote';
-import { buildPrimaryEnvVarName } from '@agent-device/kernel/source-value';
+import { buildEnvVarNames } from '@agent-device/kernel/source-value';
 import {
   PLATFORM_SELECTORS,
   type DeviceTarget,
@@ -143,5 +143,5 @@ export function getRemoteConfigFieldSpec(
 export function getRemoteConfigEnvNames(key: keyof RemoteConfigProfile): string[] {
   const spec = getRemoteConfigFieldSpec(key);
   if (spec?.env === false) return [];
-  return [buildPrimaryEnvVarName(key)];
+  return buildEnvVarNames(key);
 }

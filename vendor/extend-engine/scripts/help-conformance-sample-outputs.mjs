@@ -14,7 +14,7 @@ export function sampleText(sample) {
 // unchanged-interactive tail (#1167/#1172). The response carried a diff plus
 // refsGeneration, so the tail refs render pinned (ADR 0014).
 export const SETTLE_TAIL_SAMPLE = {
-  command: 'agent-device press @e37 --settle',
+  command: 'extend press @e37 --settle',
   output: `Tapped @e37 (203, 88)
 settled after 540ms: +0 -1 (~15 unchanged)
 - @e50 [text] "Suggested for you"
@@ -27,7 +27,7 @@ unchanged interactive (4):
 
 // Settled fill whose diff exposes the next target directly.
 export const SETTLE_DIFF_SAMPLE = {
-  command: `agent-device fill 'id="account-search"' "callstack" --settle`,
+  command: `extend fill 'id="account-search"' "callstack" --settle`,
   output: `Filled 9 chars
 settled after 610ms: +2 -0 (~18 unchanged)
 + @e64 [button] "@callstack.com"
@@ -37,7 +37,7 @@ settled after 610ms: +2 -0 (~18 unchanged)
 // Metamorphic twin of SETTLE_DIFF_SAMPLE on a different app and ref range, so
 // a pass cannot come from memorizing the callstack sample.
 export const SETTLE_DIFF_SAMPLE_NOTES = {
-  command: `agent-device fill 'id="notes-search"' "groceries" --settle`,
+  command: `extend fill 'id="notes-search"' "groceries" --settle`,
   output: `Filled 9 chars
 settled after 480ms: +2 -0 (~11 unchanged)
 + @e21 [button] "Groceries list"
@@ -49,7 +49,7 @@ settled after 480ms: +2 -0 (~11 unchanged)
 // scroll-to-find quiz case hangs off this — the wanted row exists but no ref
 // for it appears anywhere in the output.
 export const OFFSCREEN_TARGET_SNAPSHOT_SAMPLE = {
-  command: 'agent-device snapshot -i',
+  command: 'extend snapshot -i',
   output: `Snapshot: 8 visible nodes (12 total)
 @e1 [application] "Preferences"
 @e2 [window]
@@ -64,7 +64,7 @@ export const OFFSCREEN_TARGET_SNAPSHOT_SAMPLE = {
 
 // Never-settled press: success response, no diff, NEVER_SETTLED_HINT attached.
 export const NOT_SETTLED_SAMPLE = {
-  command: 'agent-device press @e12 --settle',
+  command: 'extend press @e12 --settle',
   output: `Tapped @e12 (166, 240)
 not settled after 10000ms
 hint: The UI kept changing for the whole settle budget (animation, carousel, or ticker?), so no settled diff is shown. Raise --timeout, wait for specific content, or take a fresh snapshot.`,
@@ -75,7 +75,7 @@ hint: The UI kept changing for the whole settle budget (animation, carousel, or 
 // (packages/capture-kit/src/snapshot/snapshot-presentation/quality-warnings.ts); lines are the structured snapshot
 // renderer (src/commands/output/snapshot.ts formatSnapshotText).
 export const PRIVATE_AX_RECOVERY_SAMPLE = {
-  command: 'agent-device snapshot -i',
+  command: 'extend snapshot -i',
   output: `Snapshot: 2 nodes
 Detected an overly complex or slow accessibility tree. Fell back to the private-ax snapshot backend. It is OK to continue; use --json to inspect snapshotQuality.reason if you need recovery details.
 @e5 [button] "Search"
@@ -85,18 +85,18 @@ Detected an overly complex or slow accessibility tree. Fell back to the private-
 // DEVICE_IN_USE from buildDeviceInUseBySessionError
 // (src/daemon/session-recovery-hints.ts) — the parity test drives that exact producer.
 export const DEVICE_IN_USE_SAMPLE = {
-  command: `agent-device press 'label="Place order"' --settle`,
+  command: `extend press 'label="Place order"' --settle`,
   output: `Error (DEVICE_IN_USE): Device is already in use by session "checkout".
-Hint: Run agent-device session list to inspect active sessions. To reuse this device, rerun the command with --session checkout. To open a new session on this device, first run agent-device close --session checkout.`,
+Hint: Run extend session list to inspect active sessions. To reuse this device, rerun the command with --session checkout. To open a new session on this device, first run extend close --session checkout.`,
 };
 
 // Enforced cross-daemon device claim conflict from
 // src/daemon/device/device-claim-conflict.ts. This path is deliberately non-retriable:
 // the exact status command is the only safe next step while ownership is live.
 export const DEVICE_CLAIM_IN_USE_SAMPLE = {
-  command: 'agent-device open Demo --platform android --serial emulator-5554',
+  command: 'extend open Demo --platform android --serial emulator-5554',
   output: `Error (DEVICE_IN_USE): android device emulator-5554 is owned by session "checkout" in workspace "/worktrees/checkout".
-Hint: Inspect the owner with: agent-device device status --platform android --serial emulator-5554`,
+Hint: Inspect the owner with: extend device status --platform android --serial emulator-5554`,
 };
 
 // ADR 0014 mutation rejection from
@@ -105,7 +105,7 @@ Hint: Inspect the owner with: agent-device device status --platform android --se
 // `~s5` pin at the boundary (interaction-touch-targets.ts), so the message
 // names the plain ref; the hint is the precise resolveRefStalenessWarning.
 export const STALE_REF_SAMPLE = {
-  command: 'agent-device press @e12~s5 --settle',
+  command: 'extend press @e12~s5 --settle',
   output: `Error (COMMAND_FAILED): Ref @e12 was minted from a superseded snapshot generation
 Hint: Ref @e12 was minted from snapshot s5 but the session's ref frame is now s7 — re-run snapshot -i.`,
 };
@@ -119,7 +119,7 @@ Hint: Ref @e12 was minted from snapshot s5 but the session's ref frame is now s7
 // so the printed refs still cannot be told apart from this output alone —
 // the agent must re-observe or narrow, not guess which @ref is the right row.
 export const AMBIGUOUS_MATCH_SAMPLE = {
-  command: 'agent-device find text "Follow"',
+  command: 'extend find text "Follow"',
   output: `Error (AMBIGUOUS_MATCH): find matched 3 elements for text "Follow". Use a more specific locator or selector.
 Hint: Multiple candidates matched. Narrow the query or pass an exact identifier.
 Candidates:
@@ -132,7 +132,7 @@ Candidates:
 // (packages/platform-apple/src/core/app-resolution.ts) — the parity test drives that
 // exact producer; the hint is defaultHintForCode('APP_NOT_INSTALLED').
 export const APP_NOT_INSTALLED_SAMPLE = {
-  command: 'agent-device open Shoply --platform ios',
+  command: 'extend open Shoply --platform ios',
   output: `Error (APP_NOT_INSTALLED): No app found matching "Shoply"
 Hint: Run apps to discover the exact installed package or bundle id, or install the app before open.`,
 };
@@ -143,24 +143,24 @@ Hint: Run apps to discover the exact installed package or bundle id, or install 
 // not-yet-created device with devices/apps.
 export const BROWSERSTACK_CONNECT_SAMPLE = {
   command:
-    'agent-device connect browserstack --platform android --device "Google Pixel 8" --provider-os-version 14.0 --provider-app bs://app-id',
+    'extend connect browserstack --platform android --device "Google Pixel 8" --provider-os-version 14.0 --provider-app bs://app-id',
   output: `Connected successfully with BrowserStack.
 Verified: Credentials, device, and uploaded app verified.
 Device: Google Pixel 8 (android 14.0) — verified
 App: sample.apk — verified
 No live device session has been created. The first device command shown below will allocate one.
 Next:
-  agent-device open <package-id> --relaunch --session adc-browserstack
+  extend open <package-id> --relaunch --session adc-browserstack
 Use the installed package or bundle identifier in open, not the app artifact name.
-After close, run agent-device artifacts --json --session adc-browserstack for provider video and logs.`,
+After close, run extend artifacts --json --session adc-browserstack for provider video and logs.`,
 };
 
 // open --foreground succeeded, but its composed snapshot failed. The session
 // remains usable, so recovery is snapshot -i rather than a second open.
 export const FOREGROUND_SNAPSHOT_FAILURE_SAMPLE = {
-  command: 'agent-device open --foreground',
+  command: 'extend open --foreground',
   output: `Opened: default
-Warning: The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: agent-device snapshot -i`,
+Warning: The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: extend snapshot -i`,
 };
 
 // Merged feed-item card on iOS (#1665): the row itself is the only ref — its
@@ -171,7 +171,7 @@ Warning: The session is open, but the initial interactive snapshot failed (COMMA
 // parent ref reaches the detail screen, whose settled diff reveals the child
 // control. Coordinates remain the last resort.
 export const MERGED_CARD_ACTIONS_SAMPLE = {
-  command: 'agent-device snapshot -i --actions',
+  command: 'extend snapshot -i --actions',
   output: `Snapshot: 4 nodes
 @e1 [application] "Bluesky"
 @e2 [window]

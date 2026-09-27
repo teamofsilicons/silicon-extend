@@ -117,7 +117,7 @@ async function resolveIosIpaInstallablePath(
   appPath: string,
   options?: InstallIosArtifactOptions,
 ): Promise<{ installPath: string; cleanup: () => Promise<void> }> {
-  const tempDir = await makeHostTemporaryDirectory('agent-device-ios-ipa-');
+  const tempDir = await makeHostTemporaryDirectory('extend-engine-ios-ipa-');
   const cleanup = async () => {
     await removeHostPath(tempDir);
   };

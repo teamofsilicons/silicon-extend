@@ -32,7 +32,7 @@ export async function runBuiltCliJson(
   env: NodeJS.ProcessEnv,
   options?: { timeoutMs?: number },
 ): Promise<CliJsonResult> {
-  const result = await runCmd(process.execPath, ['bin/agent-device.mjs', ...args], {
+  const result = await runCmd(process.execPath, ['bin/extend-engine.mjs', ...args], {
     allowFailure: true,
     env,
     timeoutMs: options?.timeoutMs ?? CLI_TIMEOUT_MS,

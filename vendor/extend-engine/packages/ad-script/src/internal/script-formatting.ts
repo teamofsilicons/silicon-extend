@@ -36,7 +36,7 @@ export function formatPortableActionLine(
 }
 
 /**
- * ADR 0012 decision 3: the `# agent-device:target-v1 {...}` line that must
+ * ADR 0012 decision 3: the `# extend:target-v1 {...}` line that must
  * immediately precede this action's line, or `[]` when the action carries no
  * target evidence. Shared by both script writers for one canonical form.
  */

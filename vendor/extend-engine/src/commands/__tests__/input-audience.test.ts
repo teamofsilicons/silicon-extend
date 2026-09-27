@@ -15,21 +15,21 @@ import { operatorInputRefusal } from '../input-audience.ts';
 test('an operator refusal names the environment variable and the config key', () => {
   assert.equal(
     operatorInputRefusal('daemonAuthToken', { operatorConfig: true }),
-    'daemonAuthToken is not accepted as a tool argument. Set the AGENT_DEVICE_DAEMON_AUTH_TOKEN environment variable (or daemonAuthToken in ~/.agent-device/config.json) for the process serving these tools.',
+    'daemonAuthToken is not accepted as a tool argument. Set the EXTEND_ENGINE_DAEMON_AUTH_TOKEN environment variable (or daemonAuthToken in ~/.silicon-extend/engine/config.json) for the process serving these tools.',
   );
 });
 
 test('an operator refusal names every environment variable that carries the value', () => {
   assert.equal(
     operatorInputRefusal('bearerToken', { envFlagKeys: ['metroBearerToken', 'daemonAuthToken'] }),
-    'bearerToken is not accepted as a tool argument. Set the AGENT_DEVICE_METRO_BEARER_TOKEN or AGENT_DEVICE_DAEMON_AUTH_TOKEN environment variable for the process serving these tools.',
+    'bearerToken is not accepted as a tool argument. Set the EXTEND_ENGINE_METRO_BEARER_TOKEN or EXTEND_ENGINE_DAEMON_AUTH_TOKEN environment variable for the process serving these tools.',
   );
 });
 
 test('a key with no environment variable points at the operator config file alone', () => {
   assert.equal(
     operatorInputRefusal('iosSimulatorDeviceSet', { envFlagKeys: [], operatorConfig: true }),
-    'iosSimulatorDeviceSet is not accepted as a tool argument. Set iosSimulatorDeviceSet in ~/.agent-device/config.json for the process serving these tools.',
+    'iosSimulatorDeviceSet is not accepted as a tool argument. Set iosSimulatorDeviceSet in ~/.silicon-extend/engine/config.json for the process serving these tools.',
   );
 });
 

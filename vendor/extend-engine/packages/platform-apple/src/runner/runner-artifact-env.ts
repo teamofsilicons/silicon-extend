@@ -45,8 +45,8 @@ export async function prepareXctestrunWithEnv(
   const dir = configuredEnvDir ? path.resolve(configuredEnvDir) : path.dirname(xctestrunPath);
   fs.mkdirSync(dir, { recursive: true });
   const safeSuffix = suffix.replaceAll(/[^a-zA-Z0-9._-]/g, '_');
-  const tmpJsonPath = path.join(dir, `AgentDeviceRunner.env.${safeSuffix}.json`);
-  const tmpXctestrunPath = path.join(dir, `AgentDeviceRunner.env.${safeSuffix}.xctestrun`);
+  const tmpJsonPath = path.join(dir, `SiliconExtendHelper.env.${safeSuffix}.json`);
+  const tmpXctestrunPath = path.join(dir, `SiliconExtendHelper.env.${safeSuffix}.xctestrun`);
   const parsed = await readXctestrunPlist(xctestrunPath);
 
   visitXctestrunTargets(parsed, (target) => mergeEnvIntoXctestrunTarget(target, envVars));

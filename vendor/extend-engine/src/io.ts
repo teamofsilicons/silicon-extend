@@ -123,7 +123,7 @@ export function createLocalArtifactAdapter(
           ? resolveLocalPath(ref.path, cwd, rootDir)
           : path.join(
               (tempRoot = await fs.mkdtemp(
-                path.join(tempDir, `agent-device-${outputOptions.field}-`),
+                path.join(tempDir, `extend-engine-${outputOptions.field}-`),
               )),
               `${outputOptions.field}${outputOptions.ext}`,
             );

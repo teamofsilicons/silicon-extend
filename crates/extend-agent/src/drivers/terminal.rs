@@ -7,9 +7,36 @@
 //! Tokens: `--cwd` and `--env` are the terminal's own flags; every other token is the command.
 //! One token is used as-is (`terminal run "ls -la | wc -l"`); several are joined with spaces
 //! (`terminal run ls -la`). Tokens after `--` are always the command.
+//!
+//! Nothing a session's terminal started outlives the session ([`end_session`]): on a computer
+//! several Carbons paired, a process left running would keep what one Silicon started running
+//! into the next Silicon's session.
+//!
+//! * Mac and Linux: every command of a session runs with `EXTEND_SESSION_MARK=<random hex>` (one
+//!   per session), which its children inherit. At the session's end every process of this
+//!   account whose environment carries the mark (read from `/proc/<pid>/environ` on Linux,
+//!   `sysctl KERN_PROCARGS2` on a Mac) is killed with its process group, so `setsid` and `&`
+//!   don't escape it.
+//! * Mac: macOS doesn't show the environment of Apple's own programs (`sleep`, `perl`, the
+//!   shells), even to the same account, so the mark finds only other programs there. Two more
+//!   ways cover the rest: each command's process group (a non-interactive shell's `&` jobs stay in
+//!   it after the shell exits) is killed at the session's end, unless its id has since gone to an
+//!   unrelated process; and the session's processes are followed by descent, through the parent
+//!   unique id the kernel keeps for each process while its parent lives (the process table is
+//!   read every half second while the session runs, and once more at its end). An Apple program
+//!   that leaves its process group (`setsid`) the instant its parent exits can still escape; one
+//!   started by anything that stays running, or any other program, can't.
+//! * Windows: every command of a session goes into one Job Object that kills everything in it
+//!   when it closes and allows no breakaway. The command starts suspended, joins the job, and only
+//!   then runs, so nothing it starts is ever outside; the job is closed at the session's end.
+//!
+//! What the OS itself starts on a command's behalf (launchd, `schtasks`, `systemd-run`, `cron`,
+//! `at`) isn't a child of the command and isn't contained; `docs/device-protocol.md` says so.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use extend_driver::cancel::CancelToken;
@@ -19,6 +46,96 @@ use tokio::io::{AsyncRead, AsyncReadExt as _};
 
 /// Bytes of each stream returned inline; the full stream is uploaded as a file past this.
 pub const INLINE_LIMIT: usize = 256 * 1024;
+
+/// The environment variable that marks a session's processes.
+pub const SESSION_MARK_VAR: &str = "EXTEND_SESSION_MARK";
+
+/// What a live session's terminal started: its mark, and on Windows its job.
+struct SessionProcesses {
+    mark: String,
+    #[cfg(windows)]
+    job: Option<job::Job>,
+    /// Mac: the unique ids of the session's processes seen so far, and the watcher's stop flag.
+    #[cfg(target_os = "macos")]
+    lineage: std::sync::Arc<lineage::Watch>,
+    /// Mac: each command's process group, with its shell's unique id (to tell a reused id).
+    #[cfg(target_os = "macos")]
+    groups: Vec<(i32, u64)>,
+}
+
+fn sessions() -> &'static Mutex<HashMap<String, SessionProcesses>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<String, SessionProcesses>>> = OnceLock::new();
+    SESSIONS.get_or_init(Default::default)
+}
+
+/// The mark for `session_id`'s processes: 128 random bits, new for each session.
+pub fn session_mark(session_id: &str) -> String {
+    let mut all = sessions().lock().unwrap();
+    all.entry(session_id.to_owned())
+        .or_insert_with(|| SessionProcesses {
+            mark: extend_protocol::ids::hex_lower(&rand::random::<[u8; 16]>()),
+            #[cfg(windows)]
+            job: None,
+            #[cfg(target_os = "macos")]
+            lineage: lineage::Watch::start(),
+            #[cfg(target_os = "macos")]
+            groups: vec![],
+        })
+        .mark
+        .clone()
+}
+
+/// Mac: notes a command's shell as a root of `session_id`'s processes.
+#[cfg(target_os = "macos")]
+fn note_root(session_id: &str, pid: Option<u32>) {
+    let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) else {
+        return;
+    };
+    let Some((unique, _)) = lineage::ids(pid) else { return };
+    let mut all = sessions().lock().unwrap();
+    if let Some(s) = all.get_mut(session_id) {
+        s.lineage.known.lock().unwrap().insert(unique);
+        // The shell leads its own process group (`process_group(0)`).
+        s.groups.push((pid, unique));
+    }
+}
+
+/// Ends every process `session_id`'s terminal started, and whatever they started in turn.
+/// Returns how many were ended (Mac and Linux; Windows closes the job and says 0).
+pub fn end_session(session_id: &str) -> usize {
+    let Some(ended) = sessions().lock().unwrap().remove(session_id) else {
+        return 0;
+    };
+    #[cfg(windows)]
+    {
+        // Closing the job's last handle kills everything in it.
+        drop(ended.job);
+        0
+    }
+    #[cfg(unix)]
+    {
+        #[cfg(target_os = "macos")]
+        let extra = ended.lineage.stop_and_collect();
+        #[cfg(not(target_os = "macos"))]
+        let extra: Vec<i32> = vec![];
+        #[cfg(target_os = "macos")]
+        for (group, shell) in &ended.groups {
+            // A group whose id now names a process that isn't the command's shell was reused:
+            // leave it. Otherwise it is the command's (its shell, or its orphaned `&` jobs).
+            if lineage::ids(*group).is_none_or(|(unique, _)| unique == *shell) {
+                // SAFETY: signalling a process group of this account's command.
+                unsafe {
+                    libc::kill(-*group, libc::SIGKILL);
+                }
+            }
+        }
+        let killed = containment::kill_marked(&ended.mark, &extra);
+        if killed > 0 {
+            tracing::info!("ended {killed} process(es) session {session_id}'s terminal left running");
+        }
+        killed
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalRequest {
@@ -130,7 +247,7 @@ pub async fn run(inv: &Invocation<'_>) -> Output {
         }
         None => home,
     };
-    execute(&req, &cwd, inv.workdir, inv.timeout, &inv.cancel).await
+    execute_in(&req, &cwd, inv.workdir, inv.timeout, &inv.cancel, Some(inv.session_id)).await
 }
 
 fn expand_home(dir: &str, home: &Path) -> PathBuf {
@@ -143,6 +260,7 @@ fn expand_home(dir: &str, home: &Path) -> PathBuf {
     }
 }
 
+/// Runs a command outside any session (nothing contains what it leaves running).
 pub async fn execute(
     req: &TerminalRequest,
     cwd: &Path,
@@ -150,16 +268,38 @@ pub async fn execute(
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Output {
+    execute_in(req, cwd, workdir, timeout, cancel, None).await
+}
+
+/// Runs a command in `session`: marked (and on Windows in the session's job), so it ends with the
+/// session at the latest.
+pub async fn execute_in(
+    req: &TerminalRequest,
+    cwd: &Path,
+    workdir: &Path,
+    timeout: Duration,
+    cancel: &CancelToken,
+    session: Option<&str>,
+) -> Output {
     let argv = shell_argv();
     let mut cmd = tokio::process::Command::new(&argv[0]);
     cmd.args(&argv[1..]);
+    if let Some(session) = session.filter(|s| !s.is_empty()) {
+        cmd.env(SESSION_MARK_VAR, session_mark(session));
+    }
     #[cfg(windows)]
     {
         // cmd.exe parses its own command line; hand it over untouched.
         cmd.raw_arg(format!("\"{}\"", req.command));
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        let suspended = if session.is_some_and(|s| !s.is_empty()) {
+            CREATE_SUSPENDED
+        } else {
+            0
+        };
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | suspended);
     }
     #[cfg(not(windows))]
     {
@@ -177,6 +317,19 @@ pub async fn execute(
         Ok(c) => c,
         Err(e) => return Output::fail("command_failed", format!("couldn't start {}: {e}", argv[0])),
     };
+    #[cfg(target_os = "macos")]
+    if let Some(session) = session.filter(|s| !s.is_empty()) {
+        note_root(session, child.id());
+    }
+    #[cfg(windows)]
+    if let Some(session) = session.filter(|s| !s.is_empty()) {
+        // Into the session's job before it runs a single instruction, then resumed.
+        if let Some(handle) = child.raw_handle()
+            && let Err(e) = job::contain(session, handle)
+        {
+            tracing::warn!("couldn't put the command in its session's job: {e}");
+        }
+    }
     let pid = child.id();
     let out_task = tokio::spawn(capture(
         child.stdout.take().expect("stdout"),
@@ -341,6 +494,333 @@ pub fn kill_tree(pid: Option<u32>) {
     }
 }
 
+/// Mac and Linux: finding and ending the processes that carry a session's mark.
+#[cfg(unix)]
+pub mod containment {
+    use super::SESSION_MARK_VAR;
+
+    /// Whether a process environment block (`NAME=value` entries separated by NULs) carries
+    /// exactly `SESSION_MARK_VAR=mark`.
+    pub fn environ_has_mark(environ: &[u8], mark: &str) -> bool {
+        let want = format!("{SESSION_MARK_VAR}={mark}");
+        environ.split(|b| *b == 0).any(|entry| entry == want.as_bytes())
+    }
+
+    /// The environment in a `KERN_PROCARGS2` buffer: argc (4 bytes), the executable path, NUL
+    /// padding, argc arguments, then the environment entries up to an empty one.
+    pub fn procargs2_environ(buf: &[u8]) -> Option<Vec<&[u8]>> {
+        let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+        let mut rest = &buf[4..];
+        // The executable path, then its NUL padding.
+        let end = rest.iter().position(|b| *b == 0)?;
+        rest = &rest[end..];
+        let start = rest.iter().position(|b| *b != 0)?;
+        rest = &rest[start..];
+        let mut parts = rest.split(|b| *b == 0);
+        for _ in 0..argc.max(0) {
+            parts.next()?;
+        }
+        Some(parts.take_while(|e| !e.is_empty()).collect())
+    }
+
+    /// Kills (SIGKILL) every process of this account carrying `mark`, and the `also` ones (found
+    /// by descent), each with its process group.
+    pub fn kill_marked(mark: &str, also: &[i32]) -> usize {
+        let me = std::process::id() as i32;
+        let mut killed = 0;
+        let mut pids = marked(mark);
+        for pid in also {
+            if !pids.contains(pid) {
+                pids.push(*pid);
+            }
+        }
+        for pid in pids {
+            if pid == me || pid <= 1 {
+                continue;
+            }
+            // SAFETY: signals to processes of this account; a gone process is fine.
+            unsafe {
+                let group = libc::getpgid(pid);
+                if group > 1 && group != libc::getpgid(me) {
+                    libc::kill(-group, libc::SIGKILL);
+                }
+                if libc::kill(pid, libc::SIGKILL) == 0 {
+                    killed += 1;
+                }
+            }
+        }
+        killed
+    }
+
+    #[cfg(target_os = "linux")]
+    fn marked(mark: &str) -> Vec<i32> {
+        use std::os::unix::fs::MetadataExt as _;
+        // SAFETY: getuid has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        let Ok(dir) = std::fs::read_dir("/proc") else {
+            return vec![];
+        };
+        dir.filter_map(Result::ok)
+            .filter_map(|e| {
+                let pid: i32 = e.file_name().to_str()?.parse().ok()?;
+                (e.metadata().ok()?.uid() == uid).then_some(pid)
+            })
+            .filter(|pid| std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| environ_has_mark(&env, mark)))
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn marked(mark: &str) -> Vec<i32> {
+        let mut pids = vec![0i32; 8192];
+        // SAFETY: the buffer is as big as its size says.
+        let n = unsafe {
+            libc::proc_listallpids(
+                pids.as_mut_ptr().cast(),
+                (pids.len() * std::mem::size_of::<i32>()) as libc::c_int,
+            )
+        };
+        if n <= 0 {
+            return vec![];
+        }
+        pids.truncate(n as usize);
+        let mut argmax: libc::c_int = 0;
+        let mut size = std::mem::size_of::<libc::c_int>();
+        let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+        // SAFETY: reads one int.
+        let ok = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                2,
+                (&mut argmax as *mut libc::c_int).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } == 0;
+        if !ok || argmax <= 0 {
+            return vec![];
+        }
+        let mut buf = vec![0u8; argmax as usize];
+        pids.into_iter()
+            .filter(|pid| {
+                let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, *pid];
+                let mut len = buf.len();
+                // SAFETY: fills `buf` up to `len`; fails for other accounts' processes.
+                let r = unsafe {
+                    libc::sysctl(
+                        mib.as_mut_ptr(),
+                        3,
+                        buf.as_mut_ptr().cast(),
+                        &mut len,
+                        std::ptr::null_mut(),
+                        0,
+                    )
+                };
+                r == 0
+                    && procargs2_environ(&buf[..len]).is_some_and(|env| env.iter().any(|e| environ_has_mark(e, mark)))
+            })
+            .collect()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn marked(_mark: &str) -> Vec<i32> {
+        vec![]
+    }
+}
+
+/// Mac: a session's processes by descent, through the parent unique id the kernel keeps from
+/// each process's fork (it survives the parent's exit, unlike the parent pid).
+#[cfg(any(target_os = "macos", all(test, unix)))]
+pub mod lineage {
+    use std::collections::HashSet;
+    #[cfg(target_os = "macos")]
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[cfg(target_os = "macos")]
+    use std::sync::{Arc, Mutex};
+
+    /// One process: pid, its unique id, and its parent's unique id at fork.
+    pub type Row = (i32, u64, u64);
+
+    /// Adds to `known` every process in `table` forked from one already known, until nothing
+    /// more is added; returns the live pids that are known.
+    pub fn expand(known: &mut HashSet<u64>, table: &[Row]) -> Vec<i32> {
+        loop {
+            let before = known.len();
+            for (_, unique, parent) in table {
+                if known.contains(parent) {
+                    known.insert(*unique);
+                }
+            }
+            if known.len() == before {
+                break;
+            }
+        }
+        table
+            .iter()
+            .filter(|(_, unique, _)| known.contains(unique))
+            .map(|(pid, _, _)| *pid)
+            .collect()
+    }
+
+    /// The session's processes seen so far, and the watcher that keeps adding to them.
+    #[cfg(target_os = "macos")]
+    pub struct Watch {
+        pub known: Mutex<HashSet<u64>>,
+        stop: AtomicBool,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Watch {
+        pub fn start() -> Arc<Watch> {
+            let w = Arc::new(Watch {
+                known: Mutex::new(HashSet::new()),
+                stop: AtomicBool::new(false),
+            });
+            let watcher = w.clone();
+            let _ = std::thread::Builder::new()
+                .name("extend-session-watch".into())
+                .spawn(move || {
+                    while !watcher.stop.load(Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if watcher.known.lock().unwrap().is_empty() {
+                            continue;
+                        }
+                        let t = table();
+                        expand(&mut watcher.known.lock().unwrap(), &t);
+                    }
+                });
+            w
+        }
+
+        /// Stops watching and returns the live pids of the session's processes.
+        pub fn stop_and_collect(&self) -> Vec<i32> {
+            self.stop.store(true, Ordering::SeqCst);
+            let t = table();
+            let mut known = self.known.lock().unwrap();
+            if known.is_empty() {
+                return vec![];
+            }
+            expand(&mut known, &t)
+        }
+    }
+
+    /// `proc_pidinfo(PROC_PIDUNIQIDENTIFIERINFO)`: (unique id, parent's unique id).
+    #[cfg(target_os = "macos")]
+    pub fn ids(pid: i32) -> Option<(u64, u64)> {
+        const PROC_PIDUNIQIDENTIFIERINFO: libc::c_int = 17;
+        // struct proc_uniqidentifierinfo: p_uuid[16], p_uniqueid, p_puniqueid, … (56 bytes today).
+        let mut buf = [0u8; 128];
+        // SAFETY: the buffer is as big as its size says.
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                PROC_PIDUNIQIDENTIFIERINFO,
+                0,
+                buf.as_mut_ptr().cast(),
+                buf.len() as libc::c_int,
+            )
+        };
+        if n < 32 {
+            return None;
+        }
+        let unique = u64::from_ne_bytes(buf[16..24].try_into().ok()?);
+        let parent = u64::from_ne_bytes(buf[24..32].try_into().ok()?);
+        Some((unique, parent))
+    }
+
+    /// Every process this account can ask about.
+    #[cfg(target_os = "macos")]
+    pub fn table() -> Vec<Row> {
+        let mut pids = vec![0i32; 8192];
+        // SAFETY: the buffer is as big as its size says.
+        let n = unsafe {
+            libc::proc_listallpids(
+                pids.as_mut_ptr().cast(),
+                (pids.len() * std::mem::size_of::<i32>()) as libc::c_int,
+            )
+        };
+        if n <= 0 {
+            return vec![];
+        }
+        pids.truncate(n as usize);
+        pids.into_iter()
+            .filter_map(|pid| ids(pid).map(|(u, p)| (pid, u, p)))
+            .collect()
+    }
+}
+
+/// Windows: one Job Object per session, closed (killing everything in it) at the session's end.
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::RawHandle;
+
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+
+    /// A job handle; dropping it closes the job.
+    pub struct Job(HANDLE);
+
+    // SAFETY: a kernel handle, used from any thread.
+    unsafe impl Send for Job {}
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: closing the handle this job owns.
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtResumeProcess(process: HANDLE) -> i32;
+    }
+
+    fn new_job() -> windows::core::Result<Job> {
+        // SAFETY: plain job-object calls on a handle this function owns.
+        unsafe {
+            let handle = CreateJobObjectW(None, windows::core::PCWSTR::null())?;
+            let job = Job(handle);
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            // Kill on close, and no JOB_OBJECT_LIMIT_BREAKAWAY_OK: nothing leaves the job.
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )?;
+            Ok(job)
+        }
+    }
+
+    /// Puts the suspended process into `session`'s job, then lets it run.
+    pub fn contain(session: &str, process: RawHandle) -> Result<(), String> {
+        let process = HANDLE(process);
+        let result = (|| {
+            let mut all = super::sessions().lock().unwrap();
+            let entry = all.get_mut(session).ok_or("the session has no mark")?;
+            if entry.job.is_none() {
+                entry.job = Some(new_job().map_err(|e| e.to_string())?);
+            }
+            let job = entry.job.as_ref().expect("just made");
+            // SAFETY: both handles are live.
+            unsafe { AssignProcessToJobObject(job.0, process) }.map_err(|e| e.to_string())
+        })();
+        // Resumed whatever happened: a command that couldn't join still runs (and still ends
+        // with its own process tree on timeout).
+        // SAFETY: the process this function was handed, created suspended.
+        unsafe {
+            NtResumeProcess(process);
+        }
+        result
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct Captured {
     text: String,
@@ -486,6 +966,132 @@ mod tests {
             };
             let out = execute(&req, dir.path(), dir.path(), Duration::from_secs(60), &token).await;
             assert_eq!(out.error.unwrap().code, "cancelled");
+        }
+
+        /// Stands in for a long-running program the Silicon started (`--ignored` runs it). On a
+        /// Mac this test binary isn't one of Apple's, so its environment can be read.
+        #[test]
+        #[ignore = "a sleeper for what_a_session_left_running_ends_with_it"]
+        fn sleeper() {
+            std::thread::sleep(Duration::from_secs(600));
+        }
+
+        /// A process started in a new session and process group (`setsid`, backgrounded) and a
+        /// plain `&` job are gone once the session ends; another session's are left alone.
+        #[tokio::test]
+        async fn what_a_session_left_running_ends_with_it() {
+            let dir = tempfile::tempdir().unwrap();
+            // perl's setsid() runs everywhere a shell does (macOS has no setsid command).
+            let sleeper = if cfg!(target_os = "macos") {
+                let me = std::env::current_exe().unwrap();
+                format!(
+                    "'{}' --ignored --exact drivers::terminal::tests::unix::sleeper --nocapture",
+                    me.display()
+                )
+            } else {
+                "sleep 600".to_owned()
+            };
+            let command = format!(
+                "perl -e 'use POSIX qw(setsid); setsid(); exec @ARGV' -- {sleeper} >/dev/null 2>&1 & echo $!; sleep 600 >/dev/null 2>&1 & echo $!"
+            );
+            let start = |session: &'static str| {
+                let dir = dir.path().to_path_buf();
+                let command = command.clone();
+                async move {
+                    let req = TerminalRequest {
+                        command,
+                        cwd: None,
+                        env: vec![],
+                    };
+                    let out = execute_in(
+                        &req,
+                        &dir,
+                        &dir,
+                        Duration::from_secs(20),
+                        &CancelToken::new(),
+                        Some(session),
+                    )
+                    .await;
+                    assert!(out.ok, "{out:?}");
+                    let pids: Vec<i32> = out.output["stdout"]
+                        .as_str()
+                        .unwrap()
+                        .split_whitespace()
+                        .map(|p| p.parse().unwrap())
+                        .collect();
+                    assert_eq!(pids.len(), 2, "{out:?}");
+                    pids
+                }
+            };
+            let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+            let left = start("c01").await;
+            let other = start("c02").await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            for pid in left.iter().chain(&other) {
+                assert!(alive(*pid), "the command's child {pid} is running");
+            }
+            end_session("c01");
+            for _ in 0..50 {
+                if !left.iter().any(|p| alive(*p)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            for pid in &left {
+                assert!(!alive(*pid), "{pid} outlived its session");
+            }
+            for pid in &other {
+                assert!(alive(*pid), "another session's process {pid} was killed");
+            }
+            // A session ends once; the other one cleans up too.
+            assert_eq!(end_session("c01"), 0);
+            end_session("c02");
+            for _ in 0..50 {
+                if !other.iter().any(|p| alive(*p)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            for pid in &other {
+                assert!(!alive(*pid), "{pid} outlived its session");
+            }
+        }
+
+        #[test]
+        fn descent_follows_forks_through_known_processes() {
+            use std::collections::HashSet;
+            // The shell (id 10) forked 11, which forked 12; 12 forked 13 after 11 exited; 20 is
+            // someone else's.
+            let table = [(101, 11, 10), (102, 12, 11), (103, 13, 12), (200, 20, 1)];
+            let mut known: HashSet<u64> = [10].into();
+            let mut found = super::super::lineage::expand(&mut known, &table);
+            found.sort();
+            assert_eq!(found, vec![101, 102, 103]);
+            // A process forked from one never seen isn't the session's.
+            let mut known: HashSet<u64> = [10].into();
+            assert!(super::super::lineage::expand(&mut known, &[(300, 30, 29)]).is_empty());
+        }
+
+        #[test]
+        fn marks_are_matched_exactly() {
+            let env = b"A=1\0EXTEND_SESSION_MARK=abc\0B=2\0";
+            assert!(containment::environ_has_mark(env, "abc"));
+            assert!(!containment::environ_has_mark(env, "ab"));
+            assert!(!containment::environ_has_mark(b"EXTEND_SESSION_MARK=abcd\0", "abc"));
+            // A KERN_PROCARGS2 buffer: argc 2, the path, padding, two arguments, the environment.
+            let mut buf = 2i32.to_ne_bytes().to_vec();
+            buf.extend_from_slice(b"/bin/sh\0\0\0sh\0-c\0HOME=/x\0EXTEND_SESSION_MARK=abc\0\0junk");
+            let env = containment::procargs2_environ(&buf).unwrap();
+            assert_eq!(env, vec![&b"HOME=/x"[..], &b"EXTEND_SESSION_MARK=abc"[..]]);
+            // Each session has its own mark, kept until the session ends.
+            let a = session_mark("m01");
+            assert_eq!(a, session_mark("m01"));
+            assert_ne!(a, session_mark("m02"));
+            assert_eq!(a.len(), 32);
+            end_session("m01");
+            end_session("m02");
+            assert_ne!(session_mark("m01"), a);
+            end_session("m01");
         }
 
         #[tokio::test]

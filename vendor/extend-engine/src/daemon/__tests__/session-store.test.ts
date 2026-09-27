@@ -732,7 +732,7 @@ test('writeSessionLog emits the target-v1 annotation immediately before its acti
   assert.ok(clickLineIndex > 0);
   assert.equal(
     lines[clickLineIndex - 1],
-    '# agent-device:target-v1 {"id":"save","role":"button","label":"Save","ancestry":[{"role":"toolbar","label":"Editor"}],"sibling":0,"viewportOrder":0,"verification":"verified"}',
+    '# extend:target-v1 {"id":"save","role":"button","label":"Save","ancestry":[{"role":"toolbar","label":"Editor"}],"sibling":0,"viewportOrder":0,"verification":"verified"}',
   );
 });
 
@@ -748,7 +748,7 @@ test('writeSessionLog never fabricates a target-v1 annotation for actions record
   recordClose(fixture.store, fixture.session);
 
   const script = writeScript(fixture);
-  assert.equal(/agent-device:target-v1/.test(script), false);
+  assert.equal(/extend:target-v1/.test(script), false);
 });
 
 // --- ADR 0012 decision 6, R7 (C5a): repair tombstones turn a post-reap

@@ -31,7 +31,7 @@ test('a remote daemon redirects an explicit --artifacts-dir to a temp path it ow
 
   const redirected = (prepared.flags as Record<string, unknown> | undefined)?.artifactsDir;
   assert.equal(typeof redirected, 'string');
-  assert.ok((redirected as string).startsWith('/tmp/agent-device-test-artifacts-'));
+  assert.ok((redirected as string).startsWith('/tmp/extend-engine-test-artifacts-'));
   assert.equal(
     prepared.clientArtifactPaths?.artifactsDir,
     path.resolve('/repo', 'remote-device-artifacts/ad-test'),
@@ -43,10 +43,10 @@ test('a remote daemon redirects the default artifacts directory too', async () =
 
   const redirected = (prepared.flags as Record<string, unknown> | undefined)?.artifactsDir;
   assert.equal(typeof redirected, 'string');
-  assert.ok((redirected as string).startsWith('/tmp/agent-device-test-artifacts-'));
+  assert.ok((redirected as string).startsWith('/tmp/extend-engine-test-artifacts-'));
   assert.equal(
     prepared.clientArtifactPaths?.artifactsDir,
-    path.resolve('/repo', '.agent-device/test-artifacts'),
+    path.resolve('/repo', '.silicon-extend/engine/test-artifacts'),
   );
 });
 

@@ -408,6 +408,11 @@ pub struct SessionCache {
     /// Unix seconds of the last refresh from the service.
     #[serde(default)]
     pub refreshed_at: i64,
+    /// The Team the session runs in (a Silicon's sessions belong to one of its Teams). Commands in
+    /// the session use it when no `--team` is given, so a session started with `--team globex`
+    /// keeps working without repeating it.
+    #[serde(default)]
+    pub team: Option<String>,
 }
 
 fn sessions_dir(plane: &Plane) -> PathBuf {

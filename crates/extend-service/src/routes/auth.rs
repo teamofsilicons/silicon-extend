@@ -24,13 +24,7 @@ async fn env_view(
     world: &crate::db::World,
 ) -> Option<TestingEnvironment> {
     let s = sel?;
-    let count: i64 = sqlx::query_scalar(sql!(
-        "SELECT count(*) FROM {} WHERE removed_at IS NULL",
-        world.t("devices")
-    ))
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(0);
+    let count = super::devices::paired_count(&state.pool, world).await.unwrap_or(0);
     Some(TestingEnvironment {
         environment_id: s.environment_id,
         name: s.name.clone(),
@@ -66,10 +60,12 @@ pub async fn refresh(
     Ok(ok("refresh", session))
 }
 
-/// Signs a login out. A Silicon signing out also ends its running sessions in this world, so
-/// Extend finds out whose login it is before revoking it: from the token being revoked (a
-/// refresh token works on its own, no Authorization header needed), else from the access token in
-/// Authorization. If IAM can't say, nothing is revoked and the error says so.
+/// Signs a login out. A Silicon signing out ends its running sessions in this world; a Carbon
+/// signing out ends the running sessions of the Silicons they gave access to, through their own
+/// pairs only, never another Carbon's (Carbon decision, 2026-09-27). So Extend finds out whose
+/// login it is before revoking it: from the token being revoked (a refresh token works on its own,
+/// no Authorization header needed), else from the access token in Authorization. If IAM can't
+/// say, nothing is revoked and the error says so.
 pub async fn logout(
     State(state): State<Shared>,
     Sel { world, sel }: Sel,
@@ -127,6 +123,11 @@ pub async fn logout(
             .await?;
             for (sid,) in running {
                 domain::end_session(&state, &world, &sid, EndReason::SiliconLoggedOut, &m).await?;
+            }
+        } else {
+            let ended = domain::end_carbon_side(&state, &world, &m.id, None, EndReason::AccessRemoved, &m).await?;
+            if !ended.is_empty() {
+                tracing::info!(member = m.id, world = %world.schema, sessions = ?ended, "the Carbon logged out; the sessions of the Silicons they gave access to ended");
             }
         }
     }

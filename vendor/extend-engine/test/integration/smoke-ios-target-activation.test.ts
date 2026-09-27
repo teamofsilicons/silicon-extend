@@ -55,7 +55,7 @@ const HANDOFF_POLL_MS = 2_000;
 
 test(
   'live iOS runner discloses a foreground repair on the command that paid for it',
-  { skip: enabled ? false : 'Set AGENT_DEVICE_IOS_E2E=1 to run the live iOS lanes.' },
+  { skip: enabled ? false : 'Set EXTEND_ENGINE_IOS_E2E=1 to run the live iOS lanes.' },
   async () => {
     const context = createContext();
     try {

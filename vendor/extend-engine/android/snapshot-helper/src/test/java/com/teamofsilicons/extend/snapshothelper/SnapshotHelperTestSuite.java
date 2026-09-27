@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 public final class SnapshotHelperTestSuite {
   private SnapshotHelperTestSuite() {}

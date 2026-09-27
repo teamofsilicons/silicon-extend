@@ -1,13 +1,37 @@
 //! Operations several handlers share: reading devices, checking who may do what, ending sessions,
-//! ending pairs, and the activity log.
+//! ending pairs and grants, sides, and the activity log.
+//!
+//! # Pairs and devices (1.1)
+//!
+//! A `devices` row is one pair: one Carbon's device, with its own id, name, credential, access list
+//! and lifetime. Its `instance_id` names the physical device; the pairs of one device share it, and
+//! one Silicon at a time holds the instance (`device_locks` has one row per instance). A computer
+//! and the devices it carries form a lock group: while a Silicon of one side uses any member, no
+//! Silicon of another side starts on any of them.
+//!
+//! The side of a session, request or wake request is its Team and the Carbon who owns its pair (the
+//! Carbon who gave the Silicon access). Each Carbon sees only their own side; a Silicon sees its own
+//! side. Other sides show only as "in use".
+//!
+//! # Lock order
+//!
+//! Every transaction that changes who may use a device takes its rows in this order:
+//! 1. `device_instances`, `FOR NO KEY UPDATE`, in `instance_id` order (a session start: its whole
+//!    lock group);
+//! 2. `devices`; 3. `device_access`; 4. `sessions` and `device_locks`; 5. `wake_requests`.
+//!
+//! Every change that ends access takes the instance row first, so it serialises with a session
+//! start's re-check, and the two can't deadlock.
 
 use extend_protocol::capability::{DeviceKind, commands_for};
 use extend_protocol::frames::ServiceFrame;
 use extend_protocol::model::{
     Device, DeviceState, EndReason, InUse, Member, MemberKind, MissingCapability, Session, SessionState, Setup,
-    Visibility,
+    SetupStep, SleepState, StepStatus, Visibility,
 };
 use extend_protocol::{Capability, DeviceOs, ErrorCode};
+use hmac::{Hmac, Mac as _};
+use sha2::Sha256;
 use sqlx::FromRow;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -20,6 +44,8 @@ use crate::state::AppState;
 #[derive(Debug, Clone, FromRow)]
 pub struct DeviceRow {
     pub device_id: String,
+    /// Informational since 1.1: the Team the Carbon had selected when pairing. It authorizes
+    /// nothing; `DeviceSelf.team` (which 1.0 apps need) and a rollback to 1.0.0 read it.
     pub team: String,
     pub owner_id: String,
     pub name: String,
@@ -40,13 +66,62 @@ pub struct DeviceRow {
     pub capabilities: serde_json::Value,
     pub missing: serde_json::Value,
     pub app_version: Option<String>,
+    /// The device engine's version (the host's, for a carried device).
+    pub engine_version: Option<String>,
     pub removed_at: Option<OffsetDateTime>,
     pub removed_reason: Option<String>,
+    pub instance_id: Uuid,
+    pub wake_muted: bool,
+    pub hardware_key: Option<String>,
+    pub duplicate: Option<String>,
+    pub provisional_until: Option<OffsetDateTime>,
+    pub first_pair: bool,
+    /// The session holding the physical device, through whichever pair.
     pub in_use_session: Option<String>,
     pub in_use_silicon: Option<String>,
     pub in_use_since: Option<OffsetDateTime>,
     pub in_use_state: Option<String>,
+    /// The pair that session runs through, its Team, and that pair's Carbon.
+    pub in_use_device_id: Option<String>,
+    pub in_use_team: Option<String>,
+    pub in_use_carbon: Option<String>,
+    pub awake: Option<bool>,
+    pub sleep_state: Option<String>,
+    pub awake_changed_at: Option<OffsetDateTime>,
+    /// Whether another Carbon has a live pair of the same device.
+    pub paired_by_others: bool,
+    /// Grants on this pair, all Teams.
     pub access_count: i64,
+    /// `{team: count}` of the grants on this pair.
+    pub access_by_team: serde_json::Value,
+    /// For a computer: the running sessions on devices carried by any pair of it,
+    /// `[{device_id, instance_id, team, carbon, owners}]` (`owners`: the Carbons with a live pair
+    /// of that carried device).
+    pub carried_busy: serde_json::Value,
+    /// Open wake requests on the physical device: `[{team, from, device_id}]`.
+    pub open_wakes: serde_json::Value,
+    /// For a carried device: its host pair's app version and name.
+    pub host_app_version: Option<String>,
+    pub host_name: Option<String>,
+}
+
+/// A running session on a device a computer carries (see [`DeviceRow::carried_busy`]).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CarriedBusy {
+    pub session_id: String,
+    pub device_id: String,
+    pub instance_id: Uuid,
+    pub team: String,
+    pub carbon: String,
+    #[serde(default)]
+    pub owners: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OpenWake {
+    pub team: String,
+    pub from: String,
+    pub device_id: String,
 }
 
 impl DeviceRow {
@@ -63,17 +138,49 @@ impl DeviceRow {
             self.host_device_id.clone().unwrap_or_else(|| self.device_id.clone()),
         )
     }
+    pub fn is_computer(&self) -> bool {
+        self.os().kind() == DeviceKind::Computer
+    }
+    /// Carbon decision (2026-09-27): the terminal runs as the computer's own account, so on a
+    /// computer several Carbons paired only Silicons given access by the Carbon who installed
+    /// Extend on it (the pair made by the app's first enrollment) get it. The others use the
+    /// screen, the keyboard and the apps.
+    pub fn terminal_withheld(&self) -> bool {
+        self.is_computer() && self.paired_by_others && !self.first_pair
+    }
+    /// What the device can do through this pair (what it reported, less what this pair may not use).
     pub fn capabilities(&self) -> Vec<Capability> {
-        serde_json::from_value(self.capabilities.clone()).unwrap_or_default()
+        let mut caps: Vec<Capability> = serde_json::from_value(self.capabilities.clone()).unwrap_or_default();
+        if self.terminal_withheld() {
+            caps.retain(|c| *c != Capability::Terminal);
+        }
+        caps
     }
     pub fn missing(&self) -> Vec<MissingCapability> {
-        serde_json::from_value(self.missing.clone()).unwrap_or_default()
+        let mut missing: Vec<MissingCapability> = serde_json::from_value(self.missing.clone()).unwrap_or_default();
+        if self.terminal_withheld() {
+            missing.retain(|m| m.capability != Capability::Terminal);
+            missing.push(MissingCapability {
+                capability: Capability::Terminal,
+                reason: extend_protocol::TERMINAL_NOT_SHARED_REASON.into(),
+            });
+        }
+        missing
     }
+    /// The setup the device reported. [`setup_of`] adds the steps the service itself knows.
     pub fn setup(&self) -> Setup {
         serde_json::from_value(self.setup.clone()).unwrap_or_else(|_| Setup::from_steps(vec![]))
     }
+    /// A carried pair refused as a duplicate, or still waiting to be recognised: it can't be used.
+    pub fn held_back(&self) -> bool {
+        self.duplicate.is_some() || self.provisional_until.is_some()
+    }
+    pub fn is_ready(&self) -> bool {
+        self.state == "ready" && !self.held_back()
+    }
+    /// Whether the Carbon who owns this pair is `p` (X-Org-ID plays no part).
     pub fn is_owner(&self, p: &Principal) -> bool {
-        p.is_carbon() && self.owner_id == p.id() && p.team.as_deref() == Some(self.team.as_str())
+        p.is_carbon() && self.owner_id == p.id()
     }
     /// Whether the pair ended. A removed device keeps its row and activity log, read-only.
     pub fn is_removed(&self) -> bool {
@@ -82,22 +189,84 @@ impl DeviceRow {
     pub fn removed_reason(&self) -> Option<EndReason> {
         self.removed_reason.as_deref().and_then(EndReason::parse)
     }
+    /// Whether the session holding the device runs through this pair.
+    pub fn held_here(&self) -> bool {
+        self.in_use_device_id.as_deref() == Some(self.device_id.as_str())
+    }
+    /// The holder's session, when it runs through this pair.
+    pub fn session_here(&self) -> Option<&str> {
+        self.in_use_session.as_deref().filter(|_| self.held_here())
+    }
+    /// Whether the holder is on the side (Team, and Carbon of this pair) given.
+    pub fn held_by_side(&self, team: &str) -> bool {
+        self.in_use_team.as_deref() == Some(team) && self.in_use_carbon.as_deref() == Some(self.owner_id.as_str())
+    }
+    pub fn carried_busy(&self) -> Vec<CarriedBusy> {
+        serde_json::from_value(self.carried_busy.clone()).unwrap_or_default()
+    }
+    pub fn open_wakes(&self) -> Vec<OpenWake> {
+        serde_json::from_value(self.open_wakes.clone()).unwrap_or_default()
+    }
+    pub fn access_in(&self, team: &str) -> i64 {
+        self.access_by_team.get(team).and_then(|v| v.as_i64()).unwrap_or(0)
+    }
+    /// Whether Extend can tell when this device wakes: an app (or, for a carried device, a host
+    /// app) of 1.1.0 or later, and not an iPhone or iPad (until a real device's lock state has
+    /// been captured).
+    pub fn wake_detectable(&self) -> bool {
+        let app = if self.host_device_id.is_some() {
+            self.host_app_version.as_deref()
+        } else {
+            self.app_version.as_deref()
+        };
+        app.is_some_and(|v| crate::routes::enroll::version_at_least(v, "1.1.0"))
+            && !matches!(self.os(), DeviceOs::Ios | DeviceOs::Ipados)
+    }
+    pub fn sleep(&self) -> Option<SleepState> {
+        self.sleep_state.as_deref().map(SleepState::parse)
+    }
 }
 
 pub fn device_select(world: &World) -> String {
     format!(
         "SELECT d.device_id, d.team, d.owner_id, d.name, d.os, d.os_version, d.model, d.address, d.visibility, d.pair_ttl_days,
                 d.paired_at, d.last_activity_at, d.last_used_at, d.last_seen_at, d.version, d.host_device_id, d.state, d.setup,
-                d.capabilities, d.missing, d.app_version, d.removed_at, d.removed_reason,
+                d.capabilities, d.missing, d.app_version,
+                COALESCE(d.agent_device_version, hp.agent_device_version) AS engine_version,
+                d.removed_at, d.removed_reason,
+                d.instance_id, d.wake_muted, d.hardware_key, d.duplicate, d.provisional_until, d.first_pair,
                 s.session_id AS in_use_session, s.silicon_id AS in_use_silicon, s.started_at AS in_use_since, s.state AS in_use_state,
-                (SELECT count(*) FROM {access} a WHERE a.device_id = d.device_id) AS access_count
+                s.device_id AS in_use_device_id, s.team AS in_use_team, sd.owner_id AS in_use_carbon,
+                i.awake, i.sleep_state, i.awake_changed_at,
+                EXISTS (SELECT 1 FROM {devices} o WHERE o.instance_id = d.instance_id AND o.removed_at IS NULL
+                          AND o.owner_id <> d.owner_id) AS paired_by_others,
+                (SELECT count(*) FROM {access} a WHERE a.device_id = d.device_id) AS access_count,
+                (SELECT COALESCE(jsonb_object_agg(t.team, t.n), '{{}}'::jsonb)
+                   FROM (SELECT a.team, count(*) AS n FROM {access} a WHERE a.device_id = d.device_id GROUP BY a.team) t) AS access_by_team,
+                CASE WHEN d.host_device_id IS NOT NULL THEN '[]'::jsonb ELSE COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object('session_id', cs.session_id, 'device_id', cs.device_id, 'instance_id', cl.instance_id, 'team', cs.team,
+                                                        'carbon', cd.owner_id,
+                                                        'owners', (SELECT jsonb_agg(o.owner_id) FROM {devices} o
+                                                                    WHERE o.instance_id = cl.instance_id AND o.removed_at IS NULL)))
+                      FROM {locks} cl JOIN {sessions} cs ON cs.session_id = cl.session_id JOIN {devices} cd ON cd.device_id = cs.device_id
+                     WHERE cl.instance_id IN (SELECT c.instance_id FROM {devices} c JOIN {devices} h ON h.device_id = c.host_device_id
+                                               WHERE h.instance_id = d.instance_id AND c.removed_at IS NULL)
+                ), '[]'::jsonb) END AS carried_busy,
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('team', w.team, 'from', w.from_id, 'device_id', w.device_id))
+                            FROM {wakes} w WHERE w.instance_id = d.instance_id AND w.state = 'open'), '[]'::jsonb) AS open_wakes,
+                hp.app_version AS host_app_version, hp.name AS host_name
          FROM {devices} d
-         LEFT JOIN {locks} l ON l.device_id = d.device_id
-         LEFT JOIN {sessions} s ON s.session_id = l.session_id",
+         JOIN {instances} i ON i.instance_id = d.instance_id
+         LEFT JOIN {devices} hp ON hp.device_id = d.host_device_id
+         LEFT JOIN {locks} l ON l.instance_id = d.instance_id
+         LEFT JOIN {sessions} s ON s.session_id = l.session_id
+         LEFT JOIN {devices} sd ON sd.device_id = s.device_id",
         access = world.t("device_access"),
         devices = world.t("devices"),
         locks = world.t("device_locks"),
         sessions = world.t("sessions"),
+        instances = world.t("device_instances"),
+        wakes = world.t("wake_requests"),
     )
 }
 
@@ -132,12 +301,39 @@ pub async fn load_device_any(state: &AppState, world: &World, device_id: &str) -
         .await?)
 }
 
+/// Every live pair of one physical device.
+pub async fn pairs_of(state: &AppState, world: &World, instance_id: Uuid) -> AppResult<Vec<DeviceRow>> {
+    Ok(sqlx::query_as::<_, DeviceRow>(sql!(
+        "{} WHERE d.instance_id = $1 AND d.removed_at IS NULL ORDER BY d.paired_at",
+        device_select(world)
+    ))
+    .bind(instance_id)
+    .fetch_all(&state.pool)
+    .await?)
+}
+
 pub fn device_not_found(device_id: &str) -> AppError {
     AppError::new(
         ErrorCode::DeviceNotFound,
-        format!("No device {device_id} is visible to you in this team and environment."),
+        format!("No device {device_id} is visible to you in this environment."),
     )
     .hint("List the devices you can see with `extend device ls`.")
+}
+
+/// A Silicon sees a device only through a grant in the Team it acts in.
+pub fn device_not_found_in(device_id: &str, team: &str) -> AppError {
+    AppError::new(
+        ErrorCode::DeviceNotFound,
+        format!("No device {device_id} is visible to you in team {team}."),
+    )
+    .hint("If a Carbon gave you access in another of your Teams, pass --team <that team>.")
+}
+
+fn not_found_for(device_id: &str, p: &Principal) -> AppError {
+    match (p.is_silicon(), p.team.as_deref()) {
+        (true, Some(team)) => device_not_found_in(device_id, team),
+        _ => device_not_found(device_id),
+    }
 }
 
 /// What the Carbon who paired a removed device hears when they try to change or use it. Everyone
@@ -173,31 +369,32 @@ pub fn device_removed(d: &DeviceRow) -> AppError {
 /// What a member may do with a device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
+    /// The Carbon who paired it (this pair).
     Owner,
+    /// A Silicon with a grant on this pair in the Team it acts in.
     Silicon,
-    /// Another Carbon in the team, for a team-visible device: read-only basics.
-    TeamViewer,
 }
 
+/// The owner of the pair (whatever X-Org-ID says), or a Silicon acting in Team T with a grant
+/// (pair, T, itself). Nobody else. Whether the owner is still in T is checked at each use
+/// ([`crate::membership::owner_active`]), not here.
 pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Principal) -> AppResult<Option<Access>> {
-    if p.team.as_deref() != Some(d.team.as_str()) {
-        return Ok(None);
-    }
     if d.is_owner(p) {
         return Ok(Some(Access::Owner));
     }
-    if p.is_silicon() {
-        let has: Option<(i32,)> = sqlx::query_as(sql!(
-            "SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2",
-            world.t("device_access")
-        ))
-        .bind(&d.device_id)
-        .bind(p.id())
-        .fetch_optional(&state.pool)
-        .await?;
-        return Ok(has.map(|_| Access::Silicon));
-    }
-    Ok((d.visibility == "team").then_some(Access::TeamViewer))
+    let (true, Some(team)) = (p.is_silicon(), p.team.as_deref()) else {
+        return Ok(None);
+    };
+    let has: Option<(i32,)> = sqlx::query_as(sql!(
+        "SELECT 1 FROM {} WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
+        world.t("device_access")
+    ))
+    .bind(&d.device_id)
+    .bind(team)
+    .bind(p.id())
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(has.map(|_| Access::Silicon))
 }
 
 fn check_device_id(device_id: &str) -> AppResult<()> {
@@ -220,17 +417,17 @@ pub async fn visible_device(
     check_device_id(device_id)?;
     let d = load_device_any(state, world, device_id)
         .await?
-        .ok_or_else(|| device_not_found(device_id))?;
+        .ok_or_else(|| not_found_for(device_id, p))?;
     if d.is_removed() {
         return Err(if d.is_owner(p) {
             device_removed(&d)
         } else {
-            device_not_found(device_id)
+            not_found_for(device_id, p)
         });
     }
     let access = access_of(state, world, &d, p)
         .await?
-        .ok_or_else(|| device_not_found(device_id))?;
+        .ok_or_else(|| not_found_for(device_id, p))?;
     Ok((d, access))
 }
 
@@ -245,17 +442,17 @@ pub async fn readable_device(
     check_device_id(device_id)?;
     let d = load_device_any(state, world, device_id)
         .await?
-        .ok_or_else(|| device_not_found(device_id))?;
+        .ok_or_else(|| not_found_for(device_id, p))?;
     if d.is_removed() {
         return if d.is_owner(p) {
             Ok((d, Access::Owner))
         } else {
-            Err(device_not_found(device_id))
+            Err(not_found_for(device_id, p))
         };
     }
     let access = access_of(state, world, &d, p)
         .await?
-        .ok_or_else(|| device_not_found(device_id))?;
+        .ok_or_else(|| not_found_for(device_id, p))?;
     Ok((d, access))
 }
 
@@ -297,89 +494,216 @@ pub async fn is_online(state: &AppState, world: &World, d: &DeviceRow) -> bool {
     true
 }
 
-pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access: Access, detail: bool) -> Device {
+/// Who a device view is for.
+#[derive(Debug, Clone, Copy)]
+pub struct Viewer<'a> {
+    pub access: Access,
+    pub id: &'a str,
+    /// The Team a Silicon acts in (its X-Org-ID).
+    pub team: Option<&'a str>,
+}
+
+impl<'a> Viewer<'a> {
+    pub fn of(access: Access, p: &'a Principal) -> Self {
+        Self {
+            access,
+            id: p.id(),
+            team: p.team.as_deref(),
+        }
+    }
+    /// The Carbon who owns the pair (the device app's own view is an owner view too).
+    pub fn owner(d: &'a DeviceRow) -> Self {
+        Self {
+            access: Access::Owner,
+            id: &d.owner_id,
+            team: None,
+        }
+    }
+}
+
+/// The setup a device's owner sees: what the device reported, plus a failing step when the service
+/// holds a carried pair back (a duplicate, or waiting to be recognised in a test environment).
+pub async fn setup_of(state: &AppState, world: &World, d: &DeviceRow) -> Setup {
+    let mut setup = d.setup();
+    let what = format!("This {}", kind_word(d.os()));
+    let step = match (d.duplicate.as_deref(), d.provisional_until) {
+        (Some(dup), _) if dup.starts_with("own:") => {
+            let other = dup.trim_start_matches("own:");
+            let (name, host): (Option<String>, Option<String>) = match load_device_any(state, world, other).await {
+                Ok(Some(o)) => (Some(o.name), o.host_name),
+                _ => (None, None),
+            };
+            Some(SetupStep {
+                key: "duplicate_device".into(),
+                title: "Added twice".into(),
+                status: StepStatus::Failed,
+                help: None,
+                error: Some(format!(
+                    "{what} is already added as {} ({other}) through {}; remove one of them.",
+                    name.unwrap_or_else(|| "another device".into()),
+                    host.unwrap_or_else(|| "a computer".into())
+                )),
+                input: None,
+            })
+        }
+        (Some(_), _) => Some(SetupStep {
+            key: "duplicate_device".into(),
+            title: "Added through another computer".into(),
+            status: StepStatus::Failed,
+            help: None,
+            error: Some(format!(
+                "{what} is already added to Extend through another computer. Add it through that computer instead: \
+                 on its Extend app choose Pair with another Carbon, then add the {} there.",
+                kind_word(d.os())
+            )),
+            input: None,
+        }),
+        (None, Some(_)) => Some(SetupStep {
+            key: "recognising".into(),
+            title: format!(
+                "Waiting for {} to recognise this device",
+                d.host_name.as_deref().unwrap_or("the computer")
+            ),
+            status: StepStatus::InProgress,
+            help: None,
+            error: None,
+            input: None,
+        }),
+        (None, None) => None,
+    };
+    if let Some(step) = step {
+        setup.steps.insert(0, step);
+        setup = Setup::from_steps(setup.steps);
+    }
+    setup
+}
+
+/// A device as `viewer` may see it (see the module docs for sides).
+pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer: Viewer<'_>, detail: bool) -> Device {
     let os = d.os();
     // A removed device's host may still be connected; the device itself is gone.
     let removed = d.is_removed();
     let online = !removed && is_online(state, world, d).await;
+    let owner_view = viewer.access == Access::Owner;
     let owner = Member {
         kind: MemberKind::Carbon,
         id: d.owner_id.clone(),
         display_name: None,
     };
-    let base = Device {
+    let expires = d.last_activity_at + time::Duration::days(i64::from(d.pair_ttl_days));
+    let days_left = ((expires - OffsetDateTime::now_utc()).whole_hours() as f64 / 24.0)
+        .ceil()
+        .max(0.0) as i64;
+    let holder = || match (&d.in_use_session, &d.in_use_silicon, d.in_use_since) {
+        (Some(s), Some(si), Some(since)) => s.parse().ok().map(|session_id| InUse {
+            silicon_id: si.clone(),
+            session_id,
+            since,
+            paused: d.in_use_state.as_deref() == Some("paused"),
+            team: None,
+        }),
+        _ => None,
+    };
+    // What the viewer may see of who holds the device, and of what its computer carries.
+    let busy = d.carried_busy();
+    let (in_use, in_use_by_other, in_use_by_other_carried) = if owner_view {
+        let other_carried: Vec<&CarriedBusy> = busy.iter().filter(|b| b.carbon != viewer.id).collect();
+        if d.held_here() {
+            (
+                holder().map(|mut u| {
+                    u.team = d.in_use_team.clone();
+                    u
+                }),
+                false,
+                false,
+            )
+        } else if d.in_use_session.is_some() {
+            (None, true, false)
+        } else if !other_carried.is_empty() {
+            let carried_only = other_carried.iter().all(|b| !b.owners.iter().any(|o| o == viewer.id));
+            (None, true, carried_only)
+        } else {
+            (None, false, false)
+        }
+    } else {
+        let team = viewer.team.unwrap_or_default();
+        let own = d.in_use_silicon.as_deref() == Some(viewer.id);
+        let other_carried = busy.iter().any(|b| !(b.team == team && b.carbon == d.owner_id));
+        if d.in_use_session.is_some() && (own || (d.held_here() && d.held_by_side(team))) {
+            (holder(), false, false)
+        } else if d.in_use_session.is_some() || other_carried {
+            (None, true, false)
+        } else {
+            (None, false, false)
+        }
+    };
+    let awake = if online { d.awake } else { None };
+    let sleep_state = if online && d.awake == Some(false) {
+        d.sleep()
+    } else {
+        None
+    };
+    let last_sleep_state = if !online && !removed { d.sleep() } else { None };
+    let wakes = d.open_wakes();
+    let open_wake_requests = if owner_view {
+        wakes.iter().filter(|w| w.device_id == d.device_id).count()
+    } else {
+        wakes
+            .iter()
+            .filter(|w| w.from == viewer.id && Some(w.team.as_str()) == viewer.team)
+            .count()
+    } as i64;
+    let mut caps = d.capabilities();
+    if !online {
+        caps.clear();
+    }
+    let same_device = if !owner_view && d.paired_by_others && !removed {
+        same_device(state, world, d, viewer).await
+    } else {
+        None
+    };
+    let wake_requests = if detail && !removed {
+        Some(crate::wake::open_views(state, world, d, viewer).await)
+    } else {
+        None
+    };
+    Device {
         device_id: d
             .device_id
             .parse()
             .unwrap_or_else(|_| extend_protocol::DeviceId::random()),
         name: d.name.clone(),
         os,
-        os_version: None,
-        model: None,
+        os_version: d.os_version.clone(),
+        model: d.model.clone(),
         kind: os.kind(),
         owner,
-        team: Some(d.team.clone()),
-        visibility: if d.visibility == "personal" {
-            Visibility::Personal
+        team: if owner_view {
+            None
         } else {
-            Visibility::Team
+            viewer.team.map(str::to_owned)
         },
-        host_device_id: None,
-        state: if d.state == "ready" {
+        visibility: Visibility::Personal,
+        host_device_id: d.host_device_id.as_ref().and_then(|h| h.parse().ok()),
+        state: if d.is_ready() {
             DeviceState::Ready
         } else {
             DeviceState::Setup
         },
         online,
-        last_seen_at: None,
-        in_use: None,
-        last_used_at: None,
-        paired_at: None,
-        pair_ttl_days: None,
-        pair_expires_at: None,
-        days_left: None,
-        access_count: None,
-        app_version: None,
-        version: None,
-        capabilities: None,
-        missing: None,
-        commands: None,
-        removed_at: d.removed_at,
-        removed_reason: d.removed_reason(),
-    };
-    if access == Access::TeamViewer {
-        return base;
-    }
-    let expires = d.last_activity_at + time::Duration::days(i64::from(d.pair_ttl_days));
-    let days_left = ((expires - OffsetDateTime::now_utc()).whole_hours() as f64 / 24.0)
-        .ceil()
-        .max(0.0) as i64;
-    let in_use = match (&d.in_use_session, &d.in_use_silicon, d.in_use_since) {
-        (Some(s), Some(si), Some(since)) => s.parse().ok().map(|session_id| InUse {
-            silicon_id: si.clone(),
-            session_id,
-            since,
-            paused: d.in_use_state.as_deref() == Some("paused"),
-        }),
-        _ => None,
-    };
-    let mut caps = d.capabilities();
-    if !online {
-        caps.clear();
-    }
-    Device {
-        os_version: d.os_version.clone(),
-        model: d.model.clone(),
-        host_device_id: d.host_device_id.as_ref().and_then(|h| h.parse().ok()),
         last_seen_at: d.last_seen_at,
         in_use,
-        last_used_at: d.last_used_at,
+        last_used_at: if owner_view { d.last_used_at } else { None },
         paired_at: Some(d.paired_at),
         pair_ttl_days: Some(d.pair_ttl_days),
         // A removed device's pair no longer runs out; it already ended.
         pair_expires_at: (!removed).then_some(expires),
         days_left: (!removed).then_some(days_left),
-        access_count: Some(d.access_count),
+        access_count: Some(if owner_view {
+            d.access_count
+        } else {
+            d.access_in(viewer.team.unwrap_or_default())
+        }),
         app_version: d.app_version.clone(),
         version: Some(d.version),
         capabilities: detail.then(|| caps.clone()),
@@ -406,8 +730,50 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, access:
             m
         }),
         commands: detail.then(|| commands_for(&caps).into_iter().map(str::to_owned).collect()),
-        ..base
+        removed_at: d.removed_at,
+        removed_reason: d.removed_reason(),
+        engine_version: d.engine_version.clone(),
+        agent_device_version: d.engine_version.clone(),
+        awake,
+        sleep_state,
+        last_sleep_state,
+        awake_changed_at: if owner_view { d.awake_changed_at } else { None },
+        wake_detectable: (!removed).then(|| d.wake_detectable()),
+        in_use_by_other,
+        in_use_by_other_carried,
+        open_wake_requests: (!removed).then_some(open_wake_requests),
+        wake_requests,
+        wake_muted: owner_view.then_some(d.wake_muted),
+        paired_by_others: owner_view.then_some(d.paired_by_others),
+        same_device,
     }
+}
+
+/// Silicon views: the other pairs of the same physical device the Silicon has a grant on in the
+/// same Team (another Carbon's id for it).
+async fn same_device(
+    state: &AppState,
+    world: &World,
+    d: &DeviceRow,
+    viewer: Viewer<'_>,
+) -> Option<Vec<extend_protocol::DeviceId>> {
+    let team = viewer.team?;
+    let ids: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT o.device_id FROM {} o JOIN {} a ON a.device_id = o.device_id
+         WHERE o.instance_id = $1 AND o.device_id <> $2 AND o.removed_at IS NULL AND a.team = $3 AND a.silicon_id = $4
+         ORDER BY o.device_id",
+        world.t("devices"),
+        world.t("device_access")
+    ))
+    .bind(d.instance_id)
+    .bind(&d.device_id)
+    .bind(team)
+    .bind(viewer.id)
+    .fetch_all(&state.pool)
+    .await
+    .ok()?;
+    let ids: Vec<_> = ids.into_iter().filter_map(|(i,)| i.parse().ok()).collect();
+    (!ids.is_empty()).then_some(ids)
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -452,6 +818,7 @@ impl SessionRow {
             device: None,
             capabilities: None,
             commands: None,
+            team: Some(self.team.clone()),
         }
     }
 }
@@ -468,6 +835,7 @@ pub async fn load_session(state: &AppState, world: &World, session_id: &str) -> 
     .await?)
 }
 
+/// Writes one activity row on a pair, for a device-level or Carbon action (no Team).
 #[allow(clippy::too_many_arguments)]
 pub async fn log(
     state: &AppState,
@@ -478,8 +846,25 @@ pub async fn log(
     session_id: Option<&str>,
     details: serde_json::Value,
 ) {
+    log_in(state, world, device_id, actor, action, session_id, None, details).await;
+}
+
+/// Writes one activity row on a pair. `team` is the acting Silicon's Team. Rows stay per pair, so
+/// each Carbon's log is their own side; `details` never name another side's Silicon, Carbon, Team
+/// or session.
+#[allow(clippy::too_many_arguments)]
+pub async fn log_in(
+    state: &AppState,
+    world: &World,
+    device_id: &str,
+    actor: &Member,
+    action: &str,
+    session_id: Option<&str>,
+    team: Option<&str>,
+    details: serde_json::Value,
+) {
     let res = sqlx::query(sql!(
-        "INSERT INTO {} (id, device_id, actor_kind, actor_id, action, session_id, details) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO {} (id, device_id, actor_kind, actor_id, action, session_id, details, team) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         world.t("activity")
     ))
     .bind(Uuid::now_v7())
@@ -492,6 +877,7 @@ pub async fn log(
     .bind(action)
     .bind(session_id)
     .bind(details)
+    .bind(team)
     .execute(&state.pool)
     .await;
     if let Err(e) = res {
@@ -507,6 +893,106 @@ pub fn system_member() -> Member {
     }
 }
 
+// ───────────── Sides and lock groups ─────────────
+
+/// The first [`extend_protocol::SIDE_TAG_LEN`] hex characters of HMAC-SHA256(salt, owner + "\n" +
+/// team). Equal exactly when the sides are equal inside one lock group; they name no Carbon or
+/// Team, and differ between devices (each group host has its own salt).
+pub fn side_tag(salt: &str, owner_id: &str, team: &str) -> String {
+    let mut mac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(salt.as_bytes()).expect("HMAC takes any key length");
+    mac.update(owner_id.as_bytes());
+    mac.update(b"\n");
+    mac.update(team.as_bytes());
+    let hex = extend_protocol::ids::hex_lower(&mac.finalize().into_bytes());
+    hex[..extend_protocol::SIDE_TAG_LEN].to_owned()
+}
+
+/// A lock group: a computer's instance and every instance carried by any pair of it. A carried
+/// device's group is its computer's.
+#[derive(Debug, Clone)]
+pub struct LockGroup {
+    pub host: Uuid,
+    /// Every instance in the group, the host's included, in `instance_id` order (the lock order).
+    pub members: Vec<Uuid>,
+}
+
+pub async fn lock_group<'c>(db: impl sqlx::PgExecutor<'c>, world: &World, instance: Uuid) -> AppResult<LockGroup> {
+    let rows: Vec<(Uuid, bool)> = sqlx::query_as(sql!(
+        "WITH host AS (
+             SELECT COALESCE((SELECT h.instance_id FROM {devices} c JOIN {devices} h ON h.device_id = c.host_device_id
+                               WHERE c.instance_id = $1 AND c.removed_at IS NULL LIMIT 1), $1) AS id)
+         SELECT host.id, true FROM host
+         UNION
+         SELECT c.instance_id, false FROM {devices} c JOIN {devices} h ON h.device_id = c.host_device_id, host
+          WHERE h.instance_id = host.id AND c.removed_at IS NULL AND h.removed_at IS NULL",
+        devices = world.t("devices")
+    ))
+    .bind(instance)
+    .fetch_all(db)
+    .await?;
+    let host = rows.iter().find(|(_, h)| *h).map_or(instance, |(i, _)| *i);
+    let mut members: Vec<Uuid> = rows.into_iter().map(|(i, _)| i).collect();
+    members.sort();
+    members.dedup();
+    Ok(LockGroup { host, members })
+}
+
+/// Takes the lock order's first step: these instance rows, `FOR NO KEY UPDATE`, in id order.
+pub async fn lock_instances(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    world: &World,
+    instances: &[Uuid],
+) -> AppResult<()> {
+    let mut ids = instances.to_vec();
+    ids.sort();
+    ids.dedup();
+    sqlx::query(sql!(
+        "SELECT instance_id FROM {} WHERE instance_id = ANY($1) ORDER BY instance_id FOR NO KEY UPDATE",
+        world.t("device_instances")
+    ))
+    .bind(&ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// The salt a lock group's side tags are keyed with: its host instance's.
+pub async fn group_salt(state: &AppState, world: &World, instance: Uuid) -> AppResult<String> {
+    let group = lock_group(&state.pool, world, instance).await?;
+    let salt: Option<String> = sqlx::query_scalar(sql!(
+        "SELECT side_salt FROM {} WHERE instance_id = $1",
+        world.t("device_instances")
+    ))
+    .bind(group.host)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(salt.unwrap_or_default())
+}
+
+/// The side tag of (Team, the Carbon who owns `device_id`) on that device's lock group.
+pub async fn side_of(state: &AppState, world: &World, d: &DeviceRow, team: &str) -> AppResult<String> {
+    Ok(side_tag(
+        &group_salt(state, world, d.instance_id).await?,
+        &d.owner_id,
+        team,
+    ))
+}
+
+/// Records activity on every live pair of a physical device: a pair lasts while the device has
+/// activity, through any pair (UNDERSTANDING.md, Pairing).
+pub async fn bump_activity<'c>(db: impl sqlx::PgExecutor<'c>, world: &World, instance: Uuid) -> AppResult<()> {
+    sqlx::query(sql!(
+        "UPDATE {} SET last_activity_at = now() WHERE instance_id = $1 AND removed_at IS NULL",
+        world.t("devices")
+    ))
+    .bind(instance)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+// ───────────── Ending sessions ─────────────
+
 /// Ends a session: releases the device, tells the device, and logs why. Safe to call twice.
 pub async fn end_session(
     state: &AppState,
@@ -514,6 +1000,19 @@ pub async fn end_session(
     session_id: &str,
     reason: EndReason,
     actor: &Member,
+) -> AppResult<Option<SessionRow>> {
+    end_session_with(state, world, session_id, reason, actor, serde_json::Value::Null).await
+}
+
+/// [`end_session`], with more to say in the `session_ended` activity row (`{"stopped_by":
+/// "another_carbon"}` when a Carbon who paired the device through another pair stopped it).
+pub async fn end_session_with(
+    state: &AppState,
+    world: &World,
+    session_id: &str,
+    reason: EndReason,
+    actor: &Member,
+    extra: serde_json::Value,
 ) -> AppResult<Option<SessionRow>> {
     let mut tx = state.pool.begin().await?;
     let row: Option<SessionRow> = sqlx::query_as(sql!(
@@ -538,7 +1037,8 @@ pub async fn end_session(
         .write()
         .await
         .remove(&(world.schema.clone(), session_id.to_owned()));
-    if let Some(d) = load_device(state, world, &row.device_id).await? {
+    let device = load_device(state, world, &row.device_id).await?;
+    if let Some(d) = &device {
         let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
         let _ = state
             .hub
@@ -555,21 +1055,32 @@ pub async fn end_session(
             )
             .await;
     }
-    log(
+    let mut details = serde_json::json!({"reason": reason.as_str(), "explain": reason.explain()});
+    if let (Some(d), Some(extra)) = (details.as_object_mut(), extra.as_object()) {
+        d.extend(extra.clone());
+    }
+    log_in(
         state,
         world,
         &row.device_id,
         actor,
         "session_ended",
         Some(session_id),
-        serde_json::json!({"reason": reason.as_str(), "explain": reason.explain()}),
+        Some(&row.team),
+        details,
     )
     .await;
     tracing::info!(world = %world.schema, session_id, reason = reason.as_str(), "session ended");
+    if let Some(d) = device {
+        // Wake requests the holder's side hid can show again; and on a computer several Carbons
+        // paired, credentials a Silicon could have copied during the session stop working.
+        crate::wake::resend_group(state, world, d.instance_id).await;
+        rotate_credentials(state, world, d.instance_id).await;
+    }
     Ok(Some(row))
 }
 
-/// Ends every running session on a device.
+/// Ends every running session on a pair.
 pub async fn end_device_sessions(
     state: &AppState,
     world: &World,
@@ -590,14 +1101,295 @@ pub async fn end_device_sessions(
     Ok(())
 }
 
-/// Ends a pair: sessions end, access goes, the credential stops working, the log stays readable.
-/// Devices paired through this one (when it's a host) end with it.
+/// Ends the running sessions of the Silicons one Carbon gave access to: every session through that
+/// Carbon's pairs, in `team` or in every Team. Never another Carbon's side.
+pub async fn end_carbon_side(
+    state: &AppState,
+    world: &World,
+    carbon: &str,
+    team: Option<&str>,
+    reason: EndReason,
+    actor: &Member,
+) -> AppResult<Vec<String>> {
+    let ids: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT s.session_id FROM {} s JOIN {} d ON d.device_id = s.device_id
+         WHERE d.owner_id = $1 AND s.state <> 'ended' AND ($2::text IS NULL OR s.team = $2)",
+        world.t("sessions"),
+        world.t("devices")
+    ))
+    .bind(carbon)
+    .bind(team)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut ended = Vec::new();
+    for (id,) in ids {
+        if end_session(state, world, &id, reason, actor).await?.is_some() {
+            ended.push(id);
+        }
+    }
+    Ok(ended)
+}
+
+/// Replaces the credentials of a computer several Carbons paired, at the end of a session in its
+/// lock group: its terminal runs as the computer's account, so a Silicon could have copied any
+/// pair's credential from it during the session. Each pair gets a new one over its own connection
+/// (or at its next connect), and the old one stops working once the app confirms. Android pairs are
+/// never rotated (their credentials are sealed with the app's keystore key), a computer one Carbon
+/// paired exposes nothing new, and apps older than 1.1.0 can't take a new credential.
+pub async fn rotate_credentials(state: &AppState, world: &World, instance: Uuid) {
+    let result = async {
+        let group = lock_group(&state.pool, world, instance).await?;
+        let pairs = pairs_of(state, world, group.host).await?;
+        let owners: std::collections::HashSet<&str> = pairs.iter().map(|p| p.owner_id.as_str()).collect();
+        let eligible = pairs.first().is_some_and(DeviceRow::is_computer)
+            && owners.len() >= 2
+            && pairs.iter().all(|p| {
+                p.app_version
+                    .as_deref()
+                    .is_some_and(|v| crate::routes::enroll::version_at_least(v, "1.1.0"))
+            });
+        if !eligible {
+            return AppResult::Ok(());
+        }
+        for p in &pairs {
+            send_new_credential(state, world, &p.device_id).await?;
+        }
+        tracing::info!(world = %world.schema, instance = %group.host, pairs = pairs.len(), "rotated the credentials of a computer several Carbons paired");
+        Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        tracing::error!(world = %world.schema, instance = %instance, error = %e, "rotating credentials failed");
+    }
+}
+
+/// Makes a new credential for a pair, keeps its digest as the one waiting for confirmation (a
+/// second rotation before the app confirms replaces it), and sends it on the pair's connection.
+/// Returns whether it was sent. The credential itself is never stored or logged.
+pub async fn send_new_credential(state: &AppState, world: &World, device_id: &str) -> AppResult<bool> {
+    let key = (world.schema.clone(), device_id.to_owned());
+    if !state.hub.is_connected(&key).await {
+        // A rotation is owed: the pair's next connection gets a new credential in its greeting.
+        // The marker can never equal a credential's digest (64 hex characters), so it authenticates
+        // nothing.
+        sqlx::query(sql!(
+            "UPDATE {} SET next_credential_digest = COALESCE(next_credential_digest, 'pending:' || device_id)
+             WHERE device_id = $1 AND removed_at IS NULL",
+            world.t("devices")
+        ))
+        .bind(device_id)
+        .execute(&state.pool)
+        .await?;
+        return Ok(false);
+    }
+    let credential = extend_protocol::ids::new_secret(extend_protocol::ids::DEVICE_CREDENTIAL_PREFIX);
+    let digest = extend_protocol::ids::secret_digest(&credential);
+    let stored = sqlx::query(sql!(
+        "UPDATE {} SET next_credential_digest = $2 WHERE device_id = $1 AND removed_at IS NULL",
+        world.t("devices")
+    ))
+    .bind(device_id)
+    .bind(&digest)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if stored == 0 {
+        return Ok(false);
+    }
+    Ok(state
+        .hub
+        .send(
+            &key,
+            ServiceFrame::Credential {
+                device_credential: extend_protocol::DeviceCredential::new(credential),
+            },
+        )
+        .await)
+}
+
+// ───────────── Ending grants and pairs ─────────────
+
+/// Which grants [`revoke_grants`] ends.
+#[derive(Debug, Clone, Copy)]
+pub enum RevokeScope<'a> {
+    /// One Silicon's grants on one pair: in one Team, or in every Team.
+    Pair {
+        device_id: &'a str,
+        silicon_id: &'a str,
+        team: Option<&'a str>,
+    },
+    /// A Silicon's grants in a Team, on every pair (it left the Team).
+    Silicon { silicon_id: &'a str, team: &'a str },
+    /// Every grant a Carbon gave in a Team, on all their pairs (they left the Team). The devices
+    /// stay paired.
+    Carbon { carbon_id: &'a str, team: &'a str },
+}
+
+/// Why grants ended, for the activity log, the sessions and the wake requests they end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantEnd {
+    /// The Carbon took access away.
+    Removed,
+    /// The Silicon or the Carbon left the Silicon's Team.
+    LeftTeam,
+}
+
+/// A grant that [`revoke_grants`] ended.
+#[derive(Debug, Clone)]
+pub struct Revoked {
+    pub device_id: String,
+    pub silicon_id: String,
+    pub team: String,
+}
+
+/// Ends grants: deletes them under the lock order (so a session start either sees no grant or
+/// has its new session ended here), ends the sessions they allowed, withdraws their open wake
+/// requests, and logs `access_revoked` on each pair with the Team. Shared by the revoke route,
+/// IAM events, the owner-active check and the membership sweep.
+pub async fn revoke_grants(
+    state: &AppState,
+    world: &World,
+    scope: RevokeScope<'_>,
+    why: GrantEnd,
+    actor: &Member,
+) -> AppResult<Vec<Revoked>> {
+    let access = world.t("device_access");
+    let devices = world.t("devices");
+    let (cond, binds): (&str, Vec<Option<&str>>) = match scope {
+        RevokeScope::Pair {
+            device_id,
+            silicon_id,
+            team,
+        } => (
+            "a.device_id = $1 AND a.silicon_id = $2 AND ($3::text IS NULL OR a.team = $3)",
+            vec![Some(device_id), Some(silicon_id), team],
+        ),
+        RevokeScope::Silicon { silicon_id, team } => (
+            "a.silicon_id = $1 AND a.team = $2 AND $3::text IS NULL",
+            vec![Some(silicon_id), Some(team), None],
+        ),
+        RevokeScope::Carbon { carbon_id, team } => (
+            "a.granted_by = $1 AND a.team = $2 AND $3::text IS NULL",
+            vec![Some(carbon_id), Some(team), None],
+        ),
+    };
+    let mut tx = state.pool.begin().await?;
+    let instances: Vec<(Uuid,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT DISTINCT d.instance_id FROM {access} a JOIN {devices} d ON d.device_id = a.device_id WHERE {cond}"
+    )))
+    .bind(binds[0])
+    .bind(binds[1])
+    .bind(binds[2])
+    .fetch_all(&mut *tx)
+    .await?;
+    if instances.is_empty() {
+        return Ok(vec![]);
+    }
+    lock_instances(&mut tx, world, &instances.iter().map(|(i,)| *i).collect::<Vec<_>>()).await?;
+    let gone: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM {access} a WHERE {cond} RETURNING a.device_id, a.silicon_id, a.team"
+    )))
+    .bind(binds[0])
+    .bind(binds[1])
+    .bind(binds[2])
+    .fetch_all(&mut *tx)
+    .await?;
+    // Read under the instance locks: a session started just before is visible here, and one
+    // starting after this commits finds no grant.
+    let mut sessions = Vec::new();
+    for (device_id, silicon_id, team) in &gone {
+        let running: Vec<(String,)> = sqlx::query_as(sql!(
+            "SELECT session_id FROM {} WHERE device_id = $1 AND silicon_id = $2 AND team = $3 AND state <> 'ended'",
+            world.t("sessions")
+        ))
+        .bind(device_id)
+        .bind(silicon_id)
+        .bind(team)
+        .fetch_all(&mut *tx)
+        .await?;
+        sessions.extend(running.into_iter().map(|(s,)| s));
+    }
+    tx.commit().await?;
+    let (session_reason, wake_reason, reason_word) = match why {
+        GrantEnd::Removed => (
+            EndReason::AccessRemoved,
+            extend_protocol::model::WakeEndReason::AccessRemoved,
+            None,
+        ),
+        GrantEnd::LeftTeam => (
+            EndReason::LeftTeam,
+            extend_protocol::model::WakeEndReason::LeftTeam,
+            Some("left_team"),
+        ),
+    };
+    let mut out = Vec::new();
+    for (device_id, silicon_id, team) in gone {
+        let mut details = serde_json::json!({"silicon_id": silicon_id});
+        if let Some(r) = reason_word {
+            details["reason"] = serde_json::json!(r);
+        }
+        log_in(
+            state,
+            world,
+            &device_id,
+            actor,
+            "access_revoked",
+            None,
+            Some(&team),
+            details,
+        )
+        .await;
+        crate::wake::withdraw(
+            state,
+            world,
+            crate::wake::Withdraw::Asker {
+                device_id: &device_id,
+                silicon_id: &silicon_id,
+                team: &team,
+            },
+            wake_reason,
+        )
+        .await;
+        out.push(Revoked {
+            device_id,
+            silicon_id,
+            team,
+        });
+    }
+    for sid in sessions {
+        end_session(state, world, &sid, session_reason, actor).await?;
+    }
+    Ok(out)
+}
+
+/// Ends one pair: its sessions (and those of devices carried through it) end, its grants go, its
+/// open wake requests are withdrawn, its credential stops working, and `unpaired` goes to its own
+/// socket only. The physical device and its other pairs are untouched. The log stays readable.
 pub fn unpair<'a>(
     state: &'a AppState,
     world: &'a World,
     device_id: &'a str,
     reason: EndReason,
     actor: &'a Member,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
+    unpair_with(
+        state,
+        world,
+        device_id,
+        reason,
+        actor,
+        serde_json::json!({"reason": reason.as_str()}),
+    )
+}
+
+/// [`unpair`], with the details its activity row gets.
+pub fn unpair_with<'a>(
+    state: &'a AppState,
+    world: &'a World,
+    device_id: &'a str,
+    reason: EndReason,
+    actor: &'a Member,
+    details: serde_json::Value,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
     Box::pin(async move {
         let Some(d) = load_device(state, world, device_id).await? else {
@@ -614,18 +1406,51 @@ pub fn unpair<'a>(
         for (child,) in hosted {
             unpair(state, world, &child, reason, actor).await?;
         }
-        sqlx::query(sql!("DELETE FROM {} WHERE device_id = $1", world.t("device_access")))
-            .bind(device_id)
-            .execute(&state.pool)
-            .await?;
-        sqlx::query(sql!(
-            "UPDATE {} SET removed_at = now(), removed_reason = $2, credential_digest = NULL WHERE device_id = $1",
+        let mut tx = state.pool.begin().await?;
+        lock_instances(&mut tx, world, &[d.instance_id]).await?;
+        let ended = sqlx::query(sql!(
+            "UPDATE {} SET removed_at = now(), removed_reason = $2, credential_digest = NULL, next_credential_digest = NULL
+             WHERE device_id = $1 AND removed_at IS NULL",
             world.t("devices")
         ))
         .bind(device_id)
         .bind(reason.as_str())
-        .execute(&state.pool)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        sqlx::query(sql!("DELETE FROM {} WHERE device_id = $1", world.t("device_access")))
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
+        // A carried pair refused as a duplicate of this one can be checked again at its host's
+        // next report.
+        if let Some(key) = &d.hardware_key {
+            sqlx::query(sql!(
+                "UPDATE {} SET duplicate = NULL WHERE hardware_key = $1 AND removed_at IS NULL AND duplicate IS NOT NULL",
+                world.t("devices")
+            ))
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query(sql!(
+            "UPDATE {} SET duplicate = NULL WHERE duplicate = $1 AND removed_at IS NULL",
+            world.t("devices")
+        ))
+        .bind(format!("own:{device_id}"))
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
+        if ended == 0 {
+            return Ok(());
+        }
+        crate::wake::withdraw(
+            state,
+            world,
+            crate::wake::Withdraw::Pair { device_id },
+            extend_protocol::model::WakeEndReason::DeviceRemoved,
+        )
+        .await;
         if let Some(host) = &d.host_device_id {
             let _ = state
                 .hub
@@ -655,16 +1480,7 @@ pub fn unpair<'a>(
             EndReason::PairExpired => "pair_expired",
             _ => "removed",
         };
-        log(
-            state,
-            world,
-            device_id,
-            actor,
-            action,
-            None,
-            serde_json::json!({"reason": reason.as_str()}),
-        )
-        .await;
+        log(state, world, device_id, actor, action, None, details).await;
         Ok(())
     })
 }
@@ -681,4 +1497,22 @@ pub fn kind_word(os: DeviceOs) -> &'static str {
 
 pub fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_tags_are_short_stable_and_keyed() {
+        let a = side_tag("salt-one", "c:alice", "acme");
+        assert_eq!(a.len(), extend_protocol::SIDE_TAG_LEN);
+        assert!(a.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(a, side_tag("salt-one", "c:alice", "acme"));
+        assert_ne!(a, side_tag("salt-one", "c:alice", "globex"));
+        assert_ne!(a, side_tag("salt-one", "c:bob", "acme"));
+        assert_ne!(a, side_tag("salt-two", "c:alice", "acme"));
+        // The separator keeps (owner, team) pairs apart.
+        assert_ne!(side_tag("s", "c:a", "bc"), side_tag("s", "c:ab", "c"));
+    }
 }

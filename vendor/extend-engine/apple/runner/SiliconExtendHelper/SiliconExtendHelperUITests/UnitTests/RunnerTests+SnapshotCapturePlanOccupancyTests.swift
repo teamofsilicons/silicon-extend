@@ -25,7 +25,7 @@ private final class RunnerBlockingSnapshotStub: NSObject {
     RunnerBlockingSnapshotGate.entered.signal()
     _ = RunnerBlockingSnapshotGate.release.wait(timeout: .now() + Self.leakGuard)
     throw NSError(
-      domain: "AgentDeviceRunner.tests",
+      domain: "SiliconExtendHelper.tests",
       code: 1,
       userInfo: [NSLocalizedDescriptionKey: "blocked tree snapshot released"]
     )
@@ -97,7 +97,7 @@ extension RunnerTests {
     snapshotXCTestPenaltyWarmupExemption.isPending = true
     let captureTarget = MainActor.assumeIsolated {
       mainOwned.app = app
-      mainOwned.bundleId = "com.callstack.agentdevice.runner.tree-capture-test"
+      mainOwned.bundleId = "com.teamofsilicons.extend.helper.tree-capture-test"
       return takeSnapshotCaptureTarget(app: app)
     }
     RunnerBlockingSnapshotGate.release = DispatchSemaphore(value: 0)
@@ -124,7 +124,7 @@ extension RunnerTests {
     }
     let box = ResultBox()
     let planned = expectation(description: "capture plan answered while the tree XPC grinds")
-    DispatchQueue(label: "agent-device.runner.tests.plan-occupancy").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.plan-occupancy").async {
       do {
         box.payload = try self.runSnapshotCapturePlan(
           Self.regularVisiblePlan,
@@ -206,7 +206,7 @@ extension RunnerTests {
     XCTAssertFalse(app.frame.isEmpty)
     let captureTarget = MainActor.assumeIsolated {
       mainOwned.app = app
-      mainOwned.bundleId = "com.callstack.agentdevice.runner.query-sweep-slice-test"
+      mainOwned.bundleId = "com.teamofsilicons.extend.helper.query-sweep-slice-test"
       return takeSnapshotCaptureTarget(app: app)
     }
     RunnerSlowSweepQueryGate.reset()
@@ -229,7 +229,7 @@ extension RunnerTests {
     }
     let box = ResultBox()
     let planned = expectation(description: "query-sweep plan answered")
-    DispatchQueue(label: "agent-device.runner.tests.query-sweep-slice").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.query-sweep-slice").async {
       do {
         box.payload = try self.runSnapshotCapturePlan(
           [.querySweep],
@@ -293,7 +293,7 @@ extension RunnerTests {
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
     MainActor.assumeIsolated {
       mainOwned.app = app
-      mainOwned.bundleId = "com.callstack.agentdevice.runner.query-sweep-timeout-test"
+      mainOwned.bundleId = "com.teamofsilicons.extend.helper.query-sweep-timeout-test"
     }
     snapshotXCTestPenaltyWarmupExemption.isPending = false
     clearSnapshotXCTestChannelPenalty(reason: "test-setup")
@@ -322,7 +322,7 @@ extension RunnerTests {
     }
     let box = ResultBox()
     let planned = expectation(description: "slow-sweep plan answered")
-    DispatchQueue(label: "agent-device.runner.tests.query-sweep-timeout").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.query-sweep-timeout").async {
       do {
         box.payload = try self.runSnapshotCapturePlan(
           [.querySweep, .privateAX],

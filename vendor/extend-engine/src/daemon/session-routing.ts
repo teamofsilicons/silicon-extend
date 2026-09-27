@@ -296,7 +296,7 @@ function buildAmbiguousWorkspaceSessionError(candidates: SessionRef[]): AppError
       sessions: addresses,
       platforms,
       hint:
-        `Run agent-device session list to inspect them. ` +
+        `Run extend session list to inspect them. ` +
         `Add ${platformSelectors} to run in that platform's session, ` +
         `or pass --session <address> copied from that list.`,
     },

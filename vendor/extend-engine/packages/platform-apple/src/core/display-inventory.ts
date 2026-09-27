@@ -97,7 +97,7 @@ export async function queryAppleDisplayInventory(
 ): Promise<AppleDisplayInventory> {
   try {
     const outcome = await runIosDevicectlJsonRequest({
-      jsonPrefix: 'agent-device-apple-displays',
+      jsonPrefix: 'extend-engine-apple-displays',
       args: ['devicectl', 'device', 'info', 'displays', '--device', device.id],
       timeoutMs: options.timeoutMs ?? IOS_APPLE_DISPLAY_PROBE_TIMEOUT_MS,
       signal: options.signal,

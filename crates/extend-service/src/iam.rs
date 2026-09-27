@@ -57,6 +57,29 @@ impl Principal {
     }
 }
 
+/// IAM's answer to "is this member still in this Team?", as far as Extend may act on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Membership {
+    /// IAM answered with the member's directory entry.
+    Active,
+    /// IAM answered 404 for the member's entry, right after the same reader read its own entry in
+    /// the Team, which proves the reader can read the Team's directory: a definite "not a member".
+    Gone,
+    /// IAM couldn't say: a 403 (the reader's scopes don't cover it, or IAM hides the entry), any
+    /// other error, or no signed-in member to ask. Extend deletes nothing on this.
+    Unknown,
+}
+
+impl Membership {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Gone => "gone",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// A proof for one delegated request to another application.
 #[derive(Debug, Clone)]
 pub struct OboProof {
@@ -126,6 +149,16 @@ pub trait Iam: Send + Sync {
         reader: Option<&Principal>,
         sel: Option<&TestingSelection>,
     ) -> AppResult<bool>;
+    /// Whether `member_id` is still in `team`, read as `reader`, in the three states of
+    /// [`Membership`]. Unlike [`Iam::member_active`] (which only ever refuses a grant), this answer
+    /// can end access, so a 403, an error or a missing reader is `Unknown`, never "not a member".
+    async fn membership(
+        &self,
+        team: &str,
+        member_id: &str,
+        reader: Option<&Principal>,
+        sel: Option<&TestingSelection>,
+    ) -> Membership;
     /// The Silicons in the principal's team (for choosing who gets access).
     async fn team_silicons(
         &self,
@@ -218,6 +251,18 @@ impl AuthCache {
             .filter(|((_, _, e), (_, p))| *e == env && pick(p))
             .max_by_key(|(_, (at, _))| *at)
             .map(|(_, (_, p))| p.clone())
+    }
+    /// Every token Extend saw `member` use in `env` recently (before a webhook forgets them).
+    pub async fn tokens_of(&self, member: &str, env: Option<Uuid>) -> Vec<String> {
+        let entries = self.entries.read().await;
+        let mut out: Vec<String> = entries
+            .iter()
+            .filter(|((_, _, e), (_, p))| *e == env && p.id() == member)
+            .map(|(_, (_, p))| p.token.clone())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
     pub async fn forget_token(&self, token: &str) {
         let digest = ids::secret_digest(token);
@@ -556,6 +601,57 @@ impl Iam for SdkIam {
         }
     }
 
+    async fn membership(
+        &self,
+        team: &str,
+        member_id: &str,
+        reader: Option<&Principal>,
+        sel: Option<&TestingSelection>,
+    ) -> Membership {
+        let Some(reader) = reader else {
+            return Membership::Unknown;
+        };
+        if ids::member_kind(member_id).is_none() {
+            return Membership::Unknown;
+        }
+        let Ok(client) = self.client(sel) else {
+            return Membership::Unknown;
+        };
+        let client = client.with_credential(Credential::bearer(&reader.token));
+        // First the reader's own entry: only a reader that can read the Team's directory makes a
+        // 404 for the member mean "not a member" rather than "hidden from this reader".
+        match client
+            .members()
+            .directory_member(team, &format!("{}[{team}]", reader.id()), Some("id,org"))
+            .await
+        {
+            Ok(entry) if entry.id.as_deref() == Some(reader.id()) => {}
+            Ok(_) => return Membership::Unknown,
+            Err(e) => {
+                tracing::debug!(team, reader = reader.id(), error = %e, "IAM refused the reader's own directory entry");
+                return Membership::Unknown;
+            }
+        }
+        match client
+            .members()
+            .directory_member(team, &format!("{member_id}[{team}]"), Some("id,org"))
+            .await
+        {
+            Ok(entry)
+                if entry.id.as_deref() == Some(member_id)
+                    && entry.org.as_ref().is_some_and(|o| o.id.as_str() == team) =>
+            {
+                Membership::Active
+            }
+            Ok(_) => Membership::Unknown,
+            Err(silicon_iam_client::Error::Api(api)) if api.status == 404 => Membership::Gone,
+            Err(e) => {
+                tracing::debug!(team, member = member_id, reader = reader.id(), error = %e, "IAM couldn't say whether a member is active");
+                Membership::Unknown
+            }
+        }
+    }
+
     async fn team_silicons(
         &self,
         principal: &Principal,
@@ -580,6 +676,7 @@ impl Iam for SdkIam {
                     out.push(extend_protocol::model::TeamSilicon {
                         id,
                         display_name: m.display_name.or(m.name),
+                        team: None,
                     });
                 }
             }
@@ -926,6 +1023,19 @@ struct LocalToken {
     refresh: bool,
 }
 
+/// How the local IAM answers directory reads made to decide on membership ([`Iam::membership`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaderMode {
+    /// Answers from its member list whoever asks (and without a reader): always definite.
+    Open,
+    /// Like a strict real IAM (`EXTEND_LOCAL_IAM_READERS=strict`): no reader, or a reader that
+    /// isn't in the Team, can't tell; a Silicon reading a Carbon's entry gets 403 (unknown).
+    Strict,
+    /// Tests: IAM hides Carbons from Silicon readers with a 404, so a Silicon reader hears "gone"
+    /// for an active Carbon. Everything else as `Strict`.
+    HideCarbonsFromSilicons,
+}
+
 /// A development IAM. Members come from `EXTEND_LOCAL_MEMBERS` (or anyone, when that is empty);
 /// the SLT is the member id, optionally with `@team+team`. Refused in production.
 pub struct LocalIam {
@@ -934,6 +1044,7 @@ pub struct LocalIam {
     open: bool,
     tokens: RwLock<HashMap<String, LocalToken>>,
     pool: sqlx::PgPool,
+    readers: std::sync::RwLock<ReaderMode>,
 }
 
 impl LocalIam {
@@ -945,7 +1056,17 @@ impl LocalIam {
             open,
             tokens: RwLock::new(HashMap::new()),
             pool,
+            readers: std::sync::RwLock::new(ReaderMode::Open),
         }
+    }
+
+    /// Changes how directory reads for [`Iam::membership`] are answered.
+    pub fn set_reader_mode(&self, mode: ReaderMode) {
+        *self.readers.write().unwrap_or_else(std::sync::PoisonError::into_inner) = mode;
+    }
+
+    fn reader_mode(&self) -> ReaderMode {
+        *self.readers.read().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Adds or removes a member's team (the dev stand-in for IAM membership changes).
@@ -1161,6 +1282,40 @@ impl Iam for LocalIam {
                 .is_some_and(|t| t.iter().any(|x| x == team)))
     }
 
+    async fn membership(
+        &self,
+        team: &str,
+        member_id: &str,
+        reader: Option<&Principal>,
+        _sel: Option<&TestingSelection>,
+    ) -> Membership {
+        let Some(kind) = ids::member_kind(member_id) else {
+            return Membership::Unknown;
+        };
+        let listed = |teams: Option<Vec<String>>| teams.is_some_and(|t| t.iter().any(|x| x == team));
+        let mode = self.reader_mode();
+        if mode != ReaderMode::Open {
+            let Some(reader) = reader else {
+                return Membership::Unknown;
+            };
+            // The reader's own entry first, as SdkIam reads it.
+            if !listed(self.teams_of(reader.id()).await) {
+                return Membership::Unknown;
+            }
+            if reader.is_silicon() && kind == MemberKind::Carbon {
+                match mode {
+                    ReaderMode::HideCarbonsFromSilicons => return Membership::Gone,
+                    _ => return Membership::Unknown,
+                }
+            }
+        }
+        if listed(self.teams_of(member_id).await) {
+            Membership::Active
+        } else {
+            Membership::Gone
+        }
+    }
+
     async fn team_silicons(
         &self,
         principal: &Principal,
@@ -1174,6 +1329,7 @@ impl Iam for LocalIam {
             .map(|(id, _)| extend_protocol::model::TeamSilicon {
                 id: id.clone(),
                 display_name: None,
+                team: None,
             })
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));

@@ -13,7 +13,7 @@ extension RunnerTests {
     }
 
     let finished = expectation(description: "off-main caller finished")
-    DispatchQueue(label: "agent-device.runner.tests.post-snapshot-delay").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.post-snapshot-delay").async {
       self.setNeedsPostSnapshotInteractionDelay()
       finished.fulfill()
     }
@@ -48,7 +48,7 @@ extension RunnerTests {
     let releaseMain = DispatchSemaphore(value: 0)
     let finished = expectation(description: "invalidation returned while main was blocked")
 
-    DispatchQueue(label: "agent-device.runner.tests.snapshot-invalidation").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.snapshot-invalidation").async {
       _ = try? self.runMainThreadWork(
         "command_execution",
         timeout: 0,

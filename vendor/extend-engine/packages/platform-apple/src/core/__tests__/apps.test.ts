@@ -108,7 +108,7 @@ test('resolveMacOsHelperPackageRootFrom finds helper package from source and dis
   }
 });
 
-test('AGENT_DEVICE_MACOS_HELPER_BIN rejects relative override paths', async () => {
+test('EXTEND_ENGINE_MACOS_HELPER_BIN rejects relative override paths', async () => {
   const previousHelperPath = process.env.AGENT_DEVICE_MACOS_HELPER_BIN;
   process.env.AGENT_DEVICE_MACOS_HELPER_BIN = './agent-device-macos-helper';
 
@@ -634,12 +634,19 @@ test('resolveIosApp caches display-name bundle matches but bypasses exact bundle
 
 test('resolveIosSimulatorDeepLinkBundleId maps custom URL scheme to installed user app', async () => {
   const appPath = '/fake/ReactNavigationExample.app';
-  const runnerPath = '/fake/AgentDeviceRunner.app';
+  const runnerPath = '/fake/SiliconExtendHelper.app';
+  // The fork-named helper an older engine installed is filtered out the same way.
+  const legacyRunnerPath = '/fake/AgentDeviceRunner.app';
   const listing = JSON.stringify({
+    'com.teamofsilicons.extend.helper': {
+      ApplicationType: 'User',
+      CFBundleDisplayName: 'SiliconExtendHelper',
+      Path: runnerPath,
+    },
     'com.callstack.agentdevice.runner': {
       ApplicationType: 'User',
       CFBundleDisplayName: 'AgentDeviceRunner',
-      Path: runnerPath,
+      Path: legacyRunnerPath,
     },
     'org.reactnavigation.playground': {
       ApplicationType: 'User',
@@ -654,6 +661,7 @@ test('resolveIosSimulatorDeepLinkBundleId maps custom URL scheme to installed us
       if (args[0] === 'plutil' && args[1] === '-convert') {
         const plistPath = args[5] ?? '';
         if (
+          plistPath.endsWith('SiliconExtendHelper.app/Info.plist') ||
           plistPath.endsWith('AgentDeviceRunner.app/Info.plist') ||
           plistPath.endsWith('ReactNavigationExample.app/Info.plist')
         ) {

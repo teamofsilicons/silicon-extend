@@ -14,7 +14,7 @@ import {
 import type { AndroidAdbExecutor, AndroidAdbProvider } from '../adb-executor.ts';
 import { mkdtempForTest } from './test-utils/tmp-dir.ts';
 
-const PACKAGE = 'com.callstack.agentdevice.imehelper';
+const PACKAGE = 'com.teamofsilicons.extend.imehelper';
 
 const manifest = {
   name: 'android-ime-helper' as const,
@@ -23,7 +23,7 @@ const manifest = {
   sha256: 'a'.repeat(64),
   packageName: PACKAGE,
   versionCode: 19002,
-  serviceComponent: 'com.callstack.agentdevice.imehelper/.TestInputMethodService',
+  serviceComponent: 'com.teamofsilicons.extend.imehelper/.TestInputMethodService',
   broadcastProtocol: 'android-ime-helper-v1' as const,
 };
 
@@ -46,7 +46,7 @@ test('sendAndroidImeHelperText package-scopes the broadcast and base64-encodes U
   // Package-scoped delivery to the in-process receiver; the app-side WRITE_SECURE_SETTINGS
   // permission gate (asserted in ime-helper-security.test.ts) is the trust boundary.
   assert.deepEqual(capturedArgs.slice(0, 6), ['shell', 'am', 'broadcast', '-p', PACKAGE, '-a']);
-  assert.equal(capturedArgs[6], 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64');
+  assert.equal(capturedArgs[6], 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64');
   const textIndex = capturedArgs.indexOf('text');
   assert.ok(textIndex > 0);
   const payloadBase64 = capturedArgs[textIndex + 1];
@@ -63,7 +63,7 @@ test('clearAndroidImeHelperText broadcasts ACTION_CLEAR_TEXT without a text extr
 
   assert.ok(capturedArgs);
   assert.deepEqual(capturedArgs.slice(0, 5), ['shell', 'am', 'broadcast', '-p', PACKAGE]);
-  assert.ok(capturedArgs.includes('com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT'));
+  assert.ok(capturedArgs.includes('com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT'));
   assert.ok(!capturedArgs.includes('text'));
 });
 

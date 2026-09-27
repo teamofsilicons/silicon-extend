@@ -2,6 +2,7 @@ import { AppError, asAppError } from '@agent-device/kernel/errors';
 import {
   inspectInstalledAndroidHelper,
   installAndroidHelperPackage,
+  removeLegacyAndroidHelperPackage,
   verifyAndroidHelperApkChecksum,
 } from './helper-package-install.ts';
 import {
@@ -184,6 +185,7 @@ export async function ensureAndroidSnapshotHelper(options: {
   }
 
   rememberInstalledSnapshotHelper(installCacheKey, versionCode);
+  await removeLegacyAndroidHelperPackage(adb, packageName);
   return {
     packageName,
     versionCode,

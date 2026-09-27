@@ -202,7 +202,13 @@ test('a reporter sees the shipped suite-start, skip, and test-start values', asy
 
   expect(hooks.map((entry) => entry.hook)).toEqual([...RETRY_SUITE_HOOKS]);
 
-  const suiteArtifactsDir = path.join(root, '.agent-device', 'test-artifacts', 'suite-reporter');
+  const suiteArtifactsDir = path.join(
+    root,
+    '.silicon-extend',
+    'engine',
+    'test-artifacts',
+    'suite-reporter',
+  );
   expect(hookValue(hooks, 0, 'onSuiteStart')).toEqual({
     total: 2,
     runnable: 1,
@@ -248,7 +254,8 @@ test('reporter step and result sessions track the running attempt, not the start
   const { root, hooks, suite, exitCode } = await runRetrySuite();
   const testArtifactsDir = path.join(
     root,
-    '.agent-device',
+    '.silicon-extend',
+    'engine',
     'test-artifacts',
     'suite-reporter',
     '02-retry.ad',
@@ -364,7 +371,13 @@ test('sharded runs give the reporter shard-scoped sessions and device identity',
     total: 2,
     runnable: 1,
     skipped: 0,
-    artifactsDir: path.join(root, '.agent-device', 'test-artifacts', 'suite-reporter-shard'),
+    artifactsDir: path.join(
+      root,
+      '.silicon-extend',
+      'engine',
+      'test-artifacts',
+      'suite-reporter-shard',
+    ),
     shardMode: 'all',
     shardCount: 2,
   });

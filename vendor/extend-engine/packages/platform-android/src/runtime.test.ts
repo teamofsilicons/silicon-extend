@@ -230,7 +230,7 @@ test('Android refuses the fold fact on every kind', async () => {
     expect(binding.facts.operations.setFoldPose).toEqual({
       available: false,
       reason: 'unsupported-platform-leaf',
-      hint: 'fold drives the hinge of a foldable iPhone simulator; the Android emulator posture control is not driven by agent-device yet.',
+      hint: 'fold drives the hinge of a foldable iPhone simulator; the Android emulator posture control is not driven by the device engine yet.',
     });
     expect(binding.operations.setFoldPose).toBeUndefined();
   }

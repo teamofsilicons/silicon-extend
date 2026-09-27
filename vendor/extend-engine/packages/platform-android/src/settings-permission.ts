@@ -108,7 +108,7 @@ async function requireAndroidPermissionUser(device: DeviceInfo): Promise<number>
     'Could not determine which Android user the session runs as, so no permission was changed.',
     {
       deviceId: device.id,
-      hint: `Check adb -s ${device.id} shell am get-current-user — if the device is still booting, retry once it reports a user. agent-device refuses to change permissions it cannot scope, because pm would silently apply them to user 0.`,
+      hint: `Check adb -s ${device.id} shell am get-current-user — if the device is still booting, retry once it reports a user. The device engine refuses to change permissions it cannot scope, because pm would silently apply them to user 0.`,
     },
   );
 }

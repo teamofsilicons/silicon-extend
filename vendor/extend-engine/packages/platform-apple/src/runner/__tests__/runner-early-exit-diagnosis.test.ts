@@ -22,9 +22,9 @@ beforeEach(resetAllProcessMemosForTests);
 // macOS localizes the installer prose, so the machine-readable anchors are the
 // CoreDevice error code and the English framework strings around it.
 const PROVISIONING_FAILURE_LOG = [
-  'AgentDeviceRunnerUITests-Runner encountered an error (Failed to install or launch the test runner.',
-  '(Underlying Error: Nie można zainstalować „AgentDeviceRunnerUITests-Runner”.',
-  'Failed to install embedded profile for com.callstack.agentdevice.runner.uitests.xctrunner :',
+  'SiliconExtendHelperUITests-Runner encountered an error (Failed to install or launch the test runner.',
+  '(Underlying Error: Nie można zainstalować „SiliconExtendHelperUITests-Runner”.',
+  'Failed to install embedded profile for com.teamofsilicons.extend.helper.uitests.xctrunner :',
   '0xe8008012 (This provisioning profile cannot be installed on this device.))))',
   '** TEST EXECUTE FAILED **',
 ].join('\n');
@@ -104,7 +104,7 @@ test('a busy connecting device keeps its own targeted hint', async () => {
 test('the quoted tail is the end of the log, not its beginning', async () => {
   // A runner that retried for minutes writes far more than an error detail may carry; the anchors are
   // in what it said last, so a bound that kept the head would classify every boot as a timeout.
-  const log = `${'Compiling swift module AgentDeviceRunnerUITests\n'.repeat(4_000)}${PROVISIONING_FAILURE_LOG}`;
+  const log = `${'Compiling swift module SiliconExtendHelperUITests\n'.repeat(4_000)}${PROVISIONING_FAILURE_LOG}`;
   const error = (await buildRunnerEarlyExitError({
     session: sessionFailingWith(log),
     port: 8100,

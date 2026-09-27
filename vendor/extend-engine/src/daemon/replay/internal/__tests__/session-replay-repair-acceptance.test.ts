@@ -70,7 +70,7 @@ beforeEach(() => {
 });
 
 const SAVE_ANNOTATION =
-  '# agent-device:target-v1 {"id":"save","role":"button","label":"Save","ancestry":[],"sibling":0,"viewportOrder":0,"verification":"verified"}';
+  '# extend:target-v1 {"id":"save","role":"button","label":"Save","ancestry":[],"sibling":0,"viewportOrder":0,"verification":"verified"}';
 
 test('a healed script survives repair + fresh-session replay: self-contained open, every selector step annotated, no bare @ref', async () => {
   const root = mkdtempForTestSync('agent-device-replay-repair-accept-');
@@ -177,7 +177,7 @@ test('a healed script survives repair + fresh-session replay: self-contained ope
  */
 function assertHealedScriptStructure(healedScript: string): void {
   expect(healedScript).not.toMatch(/@e\d/);
-  const annotationCount = (healedScript.match(/# agent-device:target-v1/g) ?? []).length;
+  const annotationCount = (healedScript.match(/# extend:target-v1/g) ?? []).length;
   expect(annotationCount).toBe(2); // the corrective press + the confirm click
   const parsed = parseReplayScriptDetailed(healedScript);
   expect(parsed.actions.map((a) => a.command)).toEqual(['open', 'press', 'click']);

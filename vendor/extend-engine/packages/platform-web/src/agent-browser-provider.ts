@@ -31,8 +31,7 @@ import { DEFAULT_SCROLL_AMOUNT } from '@agent-device/contracts/scroll-gesture';
 
 const AGENT_BROWSER = 'agent-browser';
 const AGENT_BROWSER_TIMEOUT_MS = 30_000;
-const AGENT_BROWSER_DOCTOR_HINT =
-  'Run `agent-device web setup` to install the managed web backend.';
+const AGENT_BROWSER_DOCTOR_HINT = 'Run `extend web setup` to install the managed web backend.';
 
 type AgentBrowserProviderOptions = {
   session?: string;

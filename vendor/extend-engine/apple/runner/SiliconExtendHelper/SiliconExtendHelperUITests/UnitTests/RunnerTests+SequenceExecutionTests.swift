@@ -187,7 +187,7 @@ extension RunnerTests {
       invalidateCachedTarget(reason: "unit_test_cleanup")
       app.terminate()
     }
-    let label = app.staticTexts["Agent Device Runner"]
+    let label = app.staticTexts["Silicon Extend"]
     XCTAssertTrue(label.waitForExistence(timeout: appExistenceTimeout))
     let point = CGPoint(x: label.frame.midX, y: label.frame.midY)
     mainOwned.accessibilityHealth = .unavailable

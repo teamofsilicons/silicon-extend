@@ -96,7 +96,7 @@ test('starts a missing runner build opportunistically and reports the wait comma
   assert.match(check?.summary ?? '', /started in the background/);
   assert.equal(
     check?.hint,
-    'Run `agent-device prepare ios-runner` to wait for a fully warmed runner instead.',
+    'Run `extend prepare ios-runner` to wait for a fully warmed runner instead.',
   );
   assert.deepEqual(mockPrewarmRunnerCache.mock.calls, [[IOS_SIMULATOR, {}]]);
 });

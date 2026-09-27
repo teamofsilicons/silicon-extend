@@ -11,7 +11,7 @@ import { approveDownloadSourceUrl } from './install-source-network.ts';
 import * as networkTransport from './install-source-network-transport.ts';
 
 const MAX_REDIRECTS = 5;
-const DEFAULT_USER_AGENT = 'agent-device';
+const DEFAULT_USER_AGENT = 'silicon-extend-engine';
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const NETWORK_ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const FORBIDDEN_HEADERS = new Set([

@@ -95,6 +95,7 @@ fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf) -> Config {
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     }
 }
 
@@ -214,7 +215,7 @@ impl Device {
                 os_version: Some("1".into()),
                 model: Some("Fake".into()),
                 app_version: "1.0.0".into(),
-                agent_device_version: None,
+                engine_version: None,
             })
             .await
             .unwrap();
@@ -257,10 +258,11 @@ impl Device {
             os,
             os_version: Some("15".into()),
             model: Some("Fake".into()),
-            agent_device_version: None,
+            engine_version: None,
             capabilities: os.full_capabilities().to_vec(),
             missing: vec![],
             setup: Setup::complete(),
+            features: vec![],
         });
         ws.send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
             .await
@@ -948,7 +950,8 @@ async fn starting_a_session_registers_the_silicon_with_ting() {
         .await
         .run(&env.base);
     let ting = env.state.local_ting.clone().unwrap();
-    assert!(ting.registered.lock().await.is_empty());
+    // (Pairing registers the Carbon in the Team they paired in; the Silicon comes at its session.)
+    assert!(!ting.registered.lock().await.iter().any(|(_, _, m)| m == "si:chef"));
     env.client
         .authed(&chef, Some("acme"))
         .start_session(&device.id.parse().unwrap())
@@ -1026,7 +1029,7 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
             .lock()
             .await
             .iter()
-            .any(|t| t["request_id"] == known.to_string() && t["reason"] == "Need it for an OTP")
+            .any(|t| t["data"]["request_id"] == known.to_string() && t["data"]["reason"] == "Need it for an OTP")
     );
     // The recipient was registered with its own login on the way.
     assert!(
@@ -1035,31 +1038,52 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
             .await
             .contains(&(None, "acme".to_owned(), "si:chef".to_owned()))
     );
+    // With no login for any sender, the attempt doesn't count: it waits for the member's next call.
     let (delivery, attempts, error) = request_row(&state, unknown).await;
-    assert_eq!((delivery.as_str(), attempts), ("pending", 2));
-    assert!(error.unwrap().contains("holds no signed-in login for si:ghost"));
-
-    for _ in 0..4 {
-        scheduler::retry_requests(&state, &world).await.unwrap();
-    }
-    let (delivery, attempts, error) = request_row(&state, unknown).await;
-    assert_eq!((delivery.as_str(), attempts), ("failed", scheduler::REQUEST_ATTEMPTS));
+    assert_eq!((delivery.as_str(), attempts), ("pending", 1));
+    assert!(error.unwrap().contains("holds no login for si:ghost"));
+    // After 24 hours it gives up anyway.
+    sqlx::query("UPDATE extend.requests SET created_at = now() - interval '25 hours' WHERE request_id = $1")
+        .bind(unknown)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    scheduler::retry_requests(&state, &world).await.unwrap();
+    let (delivery, _, error) = request_row(&state, unknown).await;
+    assert_eq!(delivery, "failed");
     let error = error.unwrap();
     assert!(
-        error.contains("holds no signed-in login for si:ghost") && error.contains("gave up after 6 attempts"),
+        error.contains("holds no login for si:ghost") && error.contains("24 hours"),
         "{error}"
     );
-    // Nothing more is tried, and the device's log says it failed.
+
+    // Counted attempts (Ting unreachable) back off, and give up after 6.
+    let flaky = insert_request(&state, "0a1b2c3d", "si:sous", "Another reason").await;
+    ting.unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..8 {
+        sqlx::query("UPDATE extend.requests SET ting_next_at = now() - interval '1 second' WHERE request_id = $1 AND delivery = 'pending'")
+            .bind(flaky)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        scheduler::retry_requests(&state, &world).await.unwrap();
+    }
+    let (delivery, attempts, error) = request_row(&state, flaky).await;
+    assert_eq!((delivery.as_str(), attempts), ("failed", scheduler::REQUEST_ATTEMPTS));
+    let error = error.unwrap();
+    assert!(error.contains("gave up after 6 attempts"), "{error}");
+    // Nothing more is tried, and the device's log says each failed.
     scheduler::retry_requests(&state, &world).await.unwrap();
-    assert_eq!(request_row(&state, unknown).await.1, scheduler::REQUEST_ATTEMPTS);
+    assert_eq!(request_row(&state, flaky).await.1, scheduler::REQUEST_ATTEMPTS);
     let logged: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM extend.activity WHERE action = 'request_failed' AND details->>'request_id' = $1",
+        "SELECT count(*) FROM extend.activity WHERE action = 'request_failed' AND details->>'request_id' IN ($1, $2)",
     )
     .bind(unknown.to_string())
+    .bind(flaky.to_string())
     .fetch_one(&state.pool)
     .await
     .unwrap();
-    assert_eq!(logged, 1);
+    assert_eq!(logged, 2);
 }
 
 // ───────────────────────────── Files ─────────────────────────────
@@ -1393,7 +1417,12 @@ async fn file_content_is_served_to_its_silicon_and_owner_with_ranges() {
 // ───────────────────────────── Requests ─────────────────────────────
 
 async fn sent_reasons(ting: &extend_service::ting::LocalNotifier) -> Vec<serde_json::Value> {
-    ting.sent.lock().await.iter().map(|t| t["reason"].clone()).collect()
+    ting.sent
+        .lock()
+        .await
+        .iter()
+        .map(|t| t["data"]["reason"].clone())
+        .collect()
 }
 
 #[tokio::test]

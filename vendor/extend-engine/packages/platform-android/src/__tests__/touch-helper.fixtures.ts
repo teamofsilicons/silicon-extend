@@ -12,9 +12,9 @@ export const ANDROID_TOUCH_HELPER_MANIFEST = {
   version: '0.17.0',
   assetName: 'helper.apk',
   sha256: 'a'.repeat(64),
-  packageName: 'com.callstack.agentdevice.snapshothelper',
+  packageName: 'com.teamofsilicons.extend.snapshothelper',
   versionCode: 17000,
-  instrumentationRunner: 'com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation',
+  instrumentationRunner: 'com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation',
   statusProtocol: 'android-snapshot-helper-v1' as const,
 };
 

@@ -47,7 +47,7 @@ import time
 root = Path('/src')
 out = Path(tempfile.mkdtemp(prefix='cover-recording-', dir='/tmp/out'))
 fixture_script = root / 'apps/desktop/linux-e2e/record-fixture.py'
-worker = Path(os.environ.get('RECORD_WORKER', root / 'vendor/agent-device/linux/screen-record.py'))
+worker = Path(os.environ.get('RECORD_WORKER', root / 'vendor/extend-engine/linux/screen-record.py'))
 window_manager = os.environ.get('RECORD_WM', '')
 print('Artifacts:', out, '| window manager:', window_manager or 'none', '| worker:', worker, flush=True)
 

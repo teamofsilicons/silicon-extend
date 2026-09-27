@@ -7,7 +7,7 @@ import { ensureAppLogPath, rotateAppLogIfNeeded } from '../app-log-files.ts';
 
 // Pinned as a literal on purpose — see the note in packages/host-kit/src/internal/verified-file.test.ts.
 const NOT_REGULAR_FILE_HINT =
-  'agent-device only reads and writes regular files at this path. Remove the symbolic link or special file there and retry.';
+  'The device engine only reads and writes regular files at this path. Remove the symbolic link or special file there and retry.';
 
 test('rotateAppLogIfNeeded rotates files and discards the oldest generation', () => {
   const root = mkdtempForTestSync('agent-device-app-log-rotate-');

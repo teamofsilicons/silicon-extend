@@ -22,7 +22,7 @@ test('an unambiguous environment gets the exact runnable open command', async ()
 
   expect(hint).toBe(
     'One booted device found ("iPhone 16", udid booted-1) with xyz.blueskyweb.app running. ' +
-      'Run: agent-device open xyz.blueskyweb.app --platform ios --udid booted-1',
+      'Run: extend open xyz.blueskyweb.app --platform ios --udid booted-1',
   );
   expect(resolveSoleForegroundApp).toHaveBeenCalledWith({ simulatorSetPath: undefined });
 });
@@ -43,7 +43,7 @@ test('a custom simulator set is echoed back so the printed command is the one th
 
   expect(hint).toBe(
     'One booted device found ("iPhone 16", udid booted-1) with xyz.blueskyweb.app running. ' +
-      'Run: agent-device open xyz.blueskyweb.app --platform ios --udid booted-1 ' +
+      'Run: extend open xyz.blueskyweb.app --platform ios --udid booted-1 ' +
       "--ios-simulator-device-set '/tmp/agent-device sim set'",
   );
 });

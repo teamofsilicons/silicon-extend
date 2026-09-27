@@ -63,6 +63,10 @@ data class SetupSignals(
     val adbLastError: String?,
     val afterRestart: DebuggingAfterRestart.Status,
     val dpadSupported: Boolean,
+    /** The Carbon connected Android debugging and hasn't disconnected it in the app. */
+    val adbPaired: Boolean = false,
+    /** Steps being retried right now ([SetupRetry]): they show as in progress. */
+    val retrying: Set<String> = emptySet(),
 ) {
     companion object {
         /** When the service was first seen on in Settings but not running, for [a11yStartingMs]. */
@@ -112,6 +116,8 @@ data class SetupSignals(
                 adbLastError = adb.lastError,
                 afterRestart = DebuggingAfterRestart.status(context, adb),
                 dpadSupported = ExtendAccessibilityService.dpadSupported,
+                adbPaired = adb.enabled,
+                retrying = SetupRetry.active(),
             )
         }
     }
@@ -124,6 +130,8 @@ data class SetupReport(
     val missing: List<MissingCapability>,
     /** Whether a restart turned Wireless debugging off after it was connected (the app then asks the Carbon). */
     val debuggingAfterRestart: DebuggingAfterRestart.Status = DebuggingAfterRestart.Status.NONE,
+    /** What Android debugging adds on this device and Android version ("installation", "logs", …). */
+    val debuggingAdds: List<String> = emptyList(),
 ) {
     val setup: Setup
         get() {
@@ -142,6 +150,20 @@ data class SetupReport(
      */
     val optionalNeedsCarbon: Boolean
         get() = items.any { !it.required && it.step.status == "needs_carbon" }
+
+    /** Steps that failed, which the Carbon (or `extend device setup --retry`) can run again. */
+    val failed: List<SetupStep>
+        get() = items.map { it.step }.filter { it.status == SetupRetry.FAILED }
+
+    /** The paired screen's line under "Setup is done": what Android debugging adds here, or that it needs the Carbon. */
+    val doneSummary: String
+        get() = when {
+            optionalNeedsCarbon -> "Core device control is ready. Android debugging needs you again: see the step below."
+            items.any { !it.required && it.step.status == SetupRetry.FAILED } ->
+                "Core device control is ready. Android debugging stopped working: see the step below."
+            debuggingAdds.isEmpty() -> "Core device control is ready."
+            else -> "Core device control is ready. Android debugging below adds ${list(debuggingAdds)}."
+        }
 
     companion object {
         fun compute(context: Context, config: Config): SetupReport = build(SetupSignals.read(context, config))
@@ -175,13 +197,15 @@ data class SetupReport(
                     "If Android says it's a restricted setting: Settings › Apps › $label › ⋮ (top right) › Allow restricted settings, then try again."
                 else -> "Settings › Accessibility › $label (under Downloaded apps or Installed services on some phones) › On."
             }
+            // Stuck (on but never started): failed, so the Carbon sees it needs them; a retry looks again.
+            val stuck = a11yStuck(s)
             items += SetupItem(
                 SetupStep(
                     "accessibility",
                     if (tv) "Allow $app to control this TV" else "Allow $app to control the screen",
-                    status(s.a11yConnected, pending = s.a11yEnabled),
+                    if (stuck != null && "accessibility" !in s.retrying) SetupRetry.FAILED else status(s.a11yConnected, pending = s.a11yEnabled),
                     help = a11yHelp,
-                    error = a11yStuck(s),
+                    error = stuck?.takeIf { "accessibility" !in s.retrying },
                 ),
                 required = true,
                 open = target(SettingsPage.ACCESSIBILITY),
@@ -240,15 +264,8 @@ data class SetupReport(
                 )
             }
 
-            // Android debugging adds installation, logs and recording (and, before Android 11,
-            // screenshots; on TVs before Android 13, remote buttons).
-            val adds = buildList {
-                add("installation"); add("logs")
-                if (!tv) add("recording")
-                if (s.sdk < ScreenshotPath.ACCESSIBILITY_SDK) add("screenshots")
-                if (tv && !s.dpadSupported) add("remote buttons")
-            }
-            val optionalNote = " Then connect Android debugging below to enable ${adds.dropLast(1).joinToString(", ")} and ${adds.last()}."
+            val adds = debuggingAdds(s.sdk, tv, s.dpadSupported)
+            val optionalNote = " Then connect Android debugging below to enable ${list(adds)}."
             items += SetupItem(
                 SetupStep(
                     "developer_options",
@@ -269,9 +286,21 @@ data class SetupReport(
                 find = FindHelp.developerOptions(tv),
             )
             val debuggingFind = FindHelp.debugging(tv, s.sdk)
-            val restart = restartStep(s.afterRestart, tv, s.adbLastError, target(SettingsPage.WIRELESS_DEBUGGING), debuggingFind)
+            val debuggingKey = DebuggingPath.stepKey(tv, s.sdk)
+            val restart = restartStep(
+                s.afterRestart, tv, s.adbLastError, target(SettingsPage.WIRELESS_DEBUGGING), debuggingFind,
+                retrying = debuggingKey in s.retrying || "network_debugging" in s.retrying || "wireless_debugging" in s.retrying,
+            )
+            val lost = reconnectFailure(s)
             items += when {
                 restart != null -> restart
+                lost != null -> SetupItem(
+                    lost,
+                    required = false,
+                    open = target(if (DebuggingPath.mode(s.sdk) == DebuggingPath.Mode.WIRELESS && !tv) SettingsPage.WIRELESS_DEBUGGING else SettingsPage.DEVELOPER_OPTIONS),
+                    actionLabel = if (DebuggingPath.mode(s.sdk) == DebuggingPath.Mode.WIRELESS && !tv) "Open Wireless debugging" else "Open Developer options",
+                    find = debuggingFind,
+                )
                 DebuggingPath.mode(s.sdk) == DebuggingPath.Mode.NETWORK -> SetupItem(
                     SetupStep(
                         DebuggingPath.stepKey(tv, s.sdk),
@@ -317,7 +346,39 @@ data class SetupReport(
 
             val a11yReason = "Turn on $label in accessibility settings: $a11yHelp"
             val (caps, missing) = capabilities(s, a11yReason, items.firstOrNull { it.step.key == "notification_access" }?.step?.help)
-            return SetupReport(items, caps, missing, s.afterRestart)
+            return SetupReport(items, caps, missing, s.afterRestart, adds)
+        }
+
+        /**
+         * What Android debugging adds on this device: installation and logs everywhere, recording on
+         * phones and tablets, screenshots before Android 11 (no accessibility screenshots), and the
+         * remote's buttons on TVs before Android 13 (no accessibility D-pad).
+         */
+        fun debuggingAdds(sdk: Int, tv: Boolean, dpadSupported: Boolean): List<String> = buildList {
+            add("app installation"); add("device logs")
+            if (!tv) add("recording")
+            if (sdk < ScreenshotPath.ACCESSIBILITY_SDK) add("screenshots")
+            if (tv && !dpadSupported) add("remote buttons")
+        }
+
+        /** "a, b and c". */
+        fun list(items: List<String>): String =
+            if (items.size <= 1) items.joinToString("") else items.dropLast(1).joinToString(", ") + " and " + items.last()
+
+        /**
+         * The debugging step when the Carbon connected Android debugging and Extend can't reconnect
+         * to it now (null otherwise; after a restart turned Wireless debugging off, [restartStep]
+         * says so instead). `failed`, with what to do, so the Carbon can retry it from the website,
+         * the CLI or this app; `in_progress` while a retry runs. The technical reason stays in the
+         * app's log and on the Android debugging card.
+         */
+        fun reconnectFailure(s: SetupSignals): SetupStep? {
+            if (!s.adbPaired || s.adbConnected || s.adbLastError == null) return null
+            if (s.afterRestart != DebuggingAfterRestart.Status.NONE) return null
+            val key = DebuggingPath.stepKey(s.tv, s.sdk)
+            val title = if (key == "wireless_debugging") "Turn on wireless debugging" else "Turn on network debugging"
+            if (key in s.retrying) return SetupStep(key, title, "in_progress", help = "Trying to reconnect to Android debugging…")
+            return SetupStep(key, title, SetupRetry.FAILED, help = DebuggingPath.reconnectHelp(s.tv, s.fire, s.sdk), error = DebuggingPath.reconnectFailed(s.tv, s.sdk))
         }
 
         /** How long the service may be on without running before the step says why. */
@@ -399,7 +460,14 @@ data class SetupReport(
          * each with the after-restart reason. Only Wireless debugging (Android 11+) goes off with a
          * restart this way, so [status] is NONE on older versions.
          */
-        fun restartStep(status: DebuggingAfterRestart.Status, tv: Boolean, lastError: String?, open: SettingsTarget?, find: FindHelp? = null): SetupItem? {
+        fun restartStep(
+            status: DebuggingAfterRestart.Status,
+            tv: Boolean,
+            lastError: String?,
+            open: SettingsTarget?,
+            find: FindHelp? = null,
+            retrying: Boolean = false,
+        ): SetupItem? {
             val key = if (tv) "network_debugging" else "wireless_debugging"
             val noun = if (tv) "TV" else "phone"
             val path = "Settings › System${if (tv) " (or Device Preferences)" else ""} › Developer options › Wireless debugging › On (needs Wi-Fi)"
@@ -413,13 +481,17 @@ data class SetupReport(
                         "but until it is back on they can't install apps, read device logs, record the screen or run adb commands here. $path. Extend reconnects by itself. " +
                         "To stop using Android debugging instead, tap Disconnect Android debugging in the Extend app on this $noun.",
                 )
+                // Reconnecting by itself: in progress until an attempt fails, then failed (with Retry)
+                // while Extend keeps trying. Why it failed (lastError) goes to the log and the card.
                 DebuggingAfterRestart.Status.RECONNECTING -> SetupStep(
                     key,
                     "Turn wireless debugging back on",
-                    "in_progress",
+                    if (lastError != null && !retrying) SetupRetry.FAILED else "in_progress",
                     help = "Wireless debugging is on again; Extend is reconnecting to it. If this doesn't finish within a minute, open Extend on this $noun " +
                         "and pair Android debugging again below.",
-                    error = lastError?.let { "Last try: ${it.trimEnd('.')}." },
+                    error = if (lastError != null && !retrying) {
+                        "Extend couldn't reconnect to wireless debugging on this $noun. Check that it is on Wi-Fi, then tap Retry, or pair Android debugging again in the Extend app."
+                    } else null,
                 )
             }
             return SetupItem(step, required = false, open = open, actionLabel = "Open Wireless debugging", find = find)

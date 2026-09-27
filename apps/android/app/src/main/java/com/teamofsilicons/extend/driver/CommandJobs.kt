@@ -20,18 +20,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * don't answer: nothing could carry the answer.
  */
 class CommandJobs(private val scope: CoroutineScope) {
-    private class Entry(val job: Job, val sessionId: String, val command: String)
+    private class Entry(val job: Job, val sessionId: String, val command: String, val pairId: String)
 
     private val entries = ConcurrentHashMap<String, Entry>()
     private val reasons = ConcurrentHashMap<String, CommandError>()
 
-    fun submit(frame: ServiceFrame.Command, run: suspend () -> DeviceFrame.Result, send: (DeviceFrame.Result) -> Unit) {
+    /** [pairId]: the pair whose connection the command came on, and which carries its answer. */
+    fun submit(frame: ServiceFrame.Command, run: suspend () -> DeviceFrame.Result, send: (DeviceFrame.Result) -> Unit, pairId: String = "") {
         val answered = AtomicBoolean(false)
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val result = run()
             if (answered.compareAndSet(false, true)) send(Frames.fitResult(result))
         }
-        entries[frame.id] = Entry(job, frame.sessionId, frame.command)
+        entries[frame.id] = Entry(job, frame.sessionId, frame.command, pairId)
         job.invokeOnCompletion { cause ->
             entries.remove(frame.id)
             val reason = reasons.remove(frame.id)
@@ -60,6 +61,11 @@ class CommandJobs(private val scope: CoroutineScope) {
     /** Cancels everything without answers: the socket they would answer on is gone. */
     fun cancelAll() {
         entries.values.forEach { it.job.cancel() }
+    }
+
+    /** Cancels, without answers, the commands that came on [pairId]'s connection, which is gone. */
+    fun cancelPair(pairId: String) {
+        entries.values.filter { it.pairId == pairId }.forEach { it.job.cancel() }
     }
 
     val running: Int get() = entries.size

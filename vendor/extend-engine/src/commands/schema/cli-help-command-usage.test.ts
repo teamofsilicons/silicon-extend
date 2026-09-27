@@ -50,13 +50,13 @@ test('usageForCommand documents the screenshot diff input containers', async () 
 test('usageForCommand resolves longpress help', async () => {
   const help = await usageForCommand('longpress');
   assert.equal(help === null, false);
-  assert.match(help ?? '', /agent-device longpress <x y\|@ref\|selector> \[durationMs\]/);
+  assert.match(help ?? '', /extend longpress <x y\|@ref\|selector> \[durationMs\]/);
 });
 
 test('usageForCommand documents tv-remote longpress preset', async () => {
   const help = await usageForCommand('tv-remote');
   assert.equal(help === null, false);
-  assert.match(help ?? '', /agent-device tv-remote \[press\|longpress\]/);
+  assert.match(help ?? '', /extend tv-remote \[press\|longpress\]/);
   assert.match(help ?? '', /--duration-ms <ms>/);
   assert.match(help ?? '', /longpress holds for 500ms by default/);
 });
@@ -64,14 +64,14 @@ test('usageForCommand documents tv-remote longpress preset', async () => {
 test('usageForCommand supports legacy long-press alias', async () => {
   const help = await usageForCommand('long-press');
   assert.equal(help === null, false);
-  assert.match(help ?? '', /agent-device longpress <x y\|@ref\|selector> \[durationMs\]/);
+  assert.match(help ?? '', /extend longpress <x y\|@ref\|selector> \[durationMs\]/);
   assert.doesNotMatch(help ?? '', /agent-device long-press/);
 });
 
 test('usageForCommand supports tap alias for press', async () => {
   const help = await usageForCommand('tap');
   assert.equal(help === null, false);
-  assert.match(help ?? '', /agent-device press/);
+  assert.match(help ?? '', /extend press/);
   assert.doesNotMatch(help ?? '', /agent-device tap/);
 });
 
@@ -86,7 +86,7 @@ test('usageForCommand documents keyboard dismissal flow', async () => {
 test('usageForCommand explains focused perf evidence', async () => {
   const help = await usageForCommand('perf');
   assert.equal(help === null, false);
-  assert.match(help ?? '', /agent-device perf frames/);
+  assert.match(help ?? '', /extend perf frames/);
   assert.match(help ?? '', /report --kind xctrace --out <report\.json>/);
   assert.match(help ?? '', /profile report --kind simpleperf --out <cpu-report\.json>/);
   assert.match(help ?? '', /report produces bounded agent-readable evidence/);
@@ -101,7 +101,7 @@ test('usageForCommand includes Maestro replay flag', async () => {
   assert.match(help, /--maestro/);
   assert.match(help, /supported Maestro YAML subset/);
   assert.match(help, /unsupported syntax fails loudly/);
-  assert.match(help, /agent-device help maestro/);
+  assert.match(help, /extend help maestro/);
   assert.doesNotMatch(help, /issues\/558/);
 });
 
@@ -134,7 +134,7 @@ test('command help keeps scroll and gesture planning guidance', async () => {
 test('usageForCommand documents prepare ios-runner', async () => {
   const help = await usageForCommand('prepare');
   if (help === null) throw new Error('Expected prepare help text');
-  assert.match(help, /Usage:\s+agent-device prepare ios-runner --platform ios\|macos/);
+  assert.match(help, /Usage:\s+extend prepare ios-runner --platform ios\|macos/);
   assert.match(help, /Prepare platform helper infrastructure/);
   assert.match(help, /--timeout <ms>/);
   assert.match(help, /XCTest runner/);
@@ -145,7 +145,7 @@ test('usageForCommand documents prepare ios-runner', async () => {
   assert.doesNotMatch(help, /clean:daemon|pnpm/);
   assert.match(
     help,
-    /not a recovery step for "runner already owned by another agent-device daemon"/,
+    /not a recovery step for "runner already owned by another device engine daemon"/,
   );
   assert.match(help, /Runner build\/start output is written to the session runner\.log/);
 });
@@ -172,14 +172,14 @@ test('debug command help stays scoped to symbolication', async () => {
   assert.match(help, /debug symbols --artifact/);
   assert.match(help, /intentionally narrow/);
   assert.match(help, /use logs for app logs, network for HTTP evidence, perf for performance/);
-  assert.doesNotMatch(help, /agent-device debug perf/);
-  assert.doesNotMatch(help, /agent-device debug logs/);
+  assert.doesNotMatch(help, /extend debug perf/);
+  assert.doesNotMatch(help, /extend debug logs/);
 });
 
 test('proxy command help describes tunnel usage', async () => {
   const help = await usageForCommand('proxy');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /Usage:\s+agent-device proxy/);
+  assert.match(help, /Usage:\s+extend proxy/);
   assert.match(help, /cloudflared tunnel --url http:\/\/127\.0\.0\.1:4310/);
   assert.match(help, /--host <host>\s+Proxy: host interface to bind/);
   assert.match(help, /--port <port>\s+Proxy: TCP port to bind/);
@@ -187,14 +187,14 @@ test('proxy command help describes tunnel usage', async () => {
   assert.match(help, /--state-dir <path>\s+Daemon state directory/);
   assert.match(help, /\/agent-device\/\*/);
   assert.match(help, /https:\/\/example\.trycloudflare\.com\/agent-device/);
-  assert.match(help, /does not use agent-device auth/);
+  assert.match(help, /does not use extend auth/);
   assert.doesNotMatch(help, /agent-device-proxy/);
 });
 
 test('takeover command help documents lease-bound foreground and host API flows', async () => {
   const help = await usageForCommand('takeover');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /Usage:\s+agent-device takeover/);
+  assert.match(help, /Usage:\s+extend takeover/);
   assert.match(help, /foreground command pauses state-changing agent commands/);
   assert.match(help, /until Ctrl\+C/);
   assert.match(help, /\/admin\/human-control\/holds/);
@@ -205,9 +205,9 @@ test('takeover command help documents lease-bound foreground and host API flows'
 test('connect command help lists lease id in usage and flags', async () => {
   const help = await usageForCommand('connect');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /Usage:\s+agent-device connect .*--daemon-base-url <url>/);
+  assert.match(help, /Usage:\s+extend connect .*--daemon-base-url <url>/);
   assert.match(help, /--daemon-base-url <url>\s+Explicit remote HTTP daemon base URL/);
-  assert.match(help, /Usage:\s+agent-device connect .*--lease-id <id>/);
+  assert.match(help, /Usage:\s+extend connect .*--lease-id <id>/);
   assert.match(help, /--lease-id <id>\s+Lease identifier bound to tenant\/run admission scope/);
   assert.doesNotMatch(help, /--project-root <path>/);
   assert.doesNotMatch(help, /--public-base-url <url>/);
@@ -223,19 +223,16 @@ test('install-from-source command help describes all source types', async () => 
 test('session command help includes daemon state directory discovery', async () => {
   const help = await usageForCommand('session');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /Usage:\s+agent-device session list \| session state-dir/);
+  assert.match(help, /Usage:\s+extend session list \| session state-dir/);
   assert.match(help, /effective daemon state directory/);
 });
 
 test('web command help includes managed backend setup', async () => {
   const help = await usageForCommand('web');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /^agent-device \S+ — web/);
+  assert.match(help, /^Silicon Extend device engine \S+ — web/);
   assert.match(help, /managed, pinned agent-browser backend/);
-  assert.match(
-    help,
-    /agent-device web setup[\s\S]*agent-device open https:\/\/example\.com --platform web/,
-  );
+  assert.match(help, /extend web setup[\s\S]*extend open https:\/\/example\.com --platform web/);
   assert.match(help, /Before first use, set up and verify the managed backend/);
   assert.doesNotMatch(help, /do not install the backend implicitly/);
   assert.doesNotMatch(help, /web status/);
@@ -244,7 +241,7 @@ test('web command help includes managed backend setup', async () => {
 test('command usage describes test suite flags', async () => {
   const help = await usageForCommand('test');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /Usage:\s+agent-device test <path-or-glob>\.\.\./);
+  assert.match(help, /Usage:\s+extend test <path-or-glob>\.\.\./);
   assert.match(help, /Run one or more replay scripts as a serial test suite/);
   assert.match(help, /--maestro/);
   assert.match(help, /--fail-fast/);
@@ -275,7 +272,7 @@ test('command usage describes delayed typing flags', async () => {
 test('snapshot command usage documents diff alias', async () => {
   const help = await usageForCommand('snapshot');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /agent-device snapshot \[--diff\]/);
+  assert.match(help, /extend snapshot \[--diff\]/);
   assert.match(help, /--timeout <ms>/);
   assert.match(
     help,
@@ -288,7 +285,7 @@ test('snapshot command usage documents diff alias', async () => {
 test('snapshot documents the synopsis-hidden record flag', async () => {
   const help = await usageForCommand('snapshot');
   if (help === null) throw new Error('Expected command help text');
-  assert.doesNotMatch(help, /agent-device snapshot \[[^\n]*--record/);
+  assert.doesNotMatch(help, /extend snapshot \[[^\n]*--record/);
   assert.match(help, /--record\s+Force-record this action/);
 });
 
@@ -313,7 +310,7 @@ test('command usage shows command flags without global flags', async () => {
 test('back command usage documents explicit mode flags', async () => {
   const help = await usageForCommand('back');
   if (help === null) throw new Error('Expected command help text');
-  assert.match(help, /agent-device back \[--in-app\|--system\]/);
+  assert.match(help, /extend back \[--in-app\|--system\]/);
   assert.match(help, /--in-app/);
   assert.match(help, /--system/);
 });
@@ -326,7 +323,7 @@ test('open command usage documents surface and console log flags', async () => {
   assert.match(help, /--launch-console <path>/);
   assert.match(help, /iOS simulator launch console/);
   assert.match(help, /Use --platform to bind URL\/deep-link opens/);
-  assert.match(help, /agent-device open "Expo Go" exp:\/\/127\.0\.0\.1:8081 --platform ios/);
+  assert.match(help, /extend open "Expo Go" exp:\/\/127\.0\.0\.1:8081 --platform ios/);
 });
 
 test('replay command usage keeps Maestro target binding guidance', async () => {
@@ -358,7 +355,7 @@ test('command usage keeps detailed descriptions', async () => {
   assert.match(help, /Prepare a React Native development server or ask connected apps to reload/);
   assert.match(help, /metro reload/);
   assert.match(help, /--metro-host <host>/);
-  assert.match(help, /AGENT_DEVICE_METRO_BEARER_TOKEN/);
+  assert.match(help, /EXTEND_ENGINE_METRO_BEARER_TOKEN/);
 });
 
 test('metro command usage documents session-hint reload priority, expo bundle kind, and PM detection', async () => {

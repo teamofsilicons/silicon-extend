@@ -31,7 +31,7 @@ import { activeSource, PLATFORMS } from '../swift-conditional-compilation.ts';
 import { readSwiftSources, RUNNER_TESTS_DIR } from '../xctest-declarations.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
-const TARGET = 'AgentDeviceRunnerUITests';
+const TARGET = 'SiliconExtendHelperUITests';
 const ENTRY_POINT = `${TARGET}/${ENTRY_POINT_METHOD}`;
 
 function source(text: string) {
@@ -171,7 +171,7 @@ describe('the real tree', () => {
     fs.writeFileSync(packageManifestPath, '// fixture package manifest\n');
     const sourcePath = path.join(
       root,
-      'apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Fixture.swift',
+      'apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Fixture.swift',
     );
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
     fs.writeFileSync(sourcePath, 'extension RunnerTests {\n  func testLeaksIntoPackage() {}\n}\n');

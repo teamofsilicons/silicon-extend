@@ -368,10 +368,10 @@ export function assertSafeDerivedCleanup(
   }
   throw new AppError(
     'COMMAND_FAILED',
-    'Refusing to clean AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH automatically',
+    'Refusing to clean EXTEND_ENGINE_IOS_RUNNER_DERIVED_PATH automatically',
     {
       derivedPath,
-      hint: `Unset AGENT_DEVICE_IOS_CLEAN_DERIVED, or move AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH under a subdirectory of ${path.join(findProjectRoot(), '.tmp')}.`,
+      hint: `Unset EXTEND_ENGINE_IOS_CLEAN_DERIVED, or move EXTEND_ENGINE_IOS_RUNNER_DERIVED_PATH under a subdirectory of ${path.join(findProjectRoot(), '.tmp')}.`,
     },
   );
 }

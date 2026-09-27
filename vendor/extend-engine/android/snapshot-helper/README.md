@@ -1,10 +1,15 @@
-# Android Snapshot Helper
+# Silicon Extend Snapshot Helper (Android)
 
 Small instrumentation APK used to capture Android accessibility snapshots without relying on
 `uiautomator dump`'s fixed idle wait behavior. The helper enables Android's interactive-window
 retrieval flag and serializes every accessible window root returned by `UiAutomation.getWindows()`
 so keyboards and system overlays can appear in the same snapshot. If interactive window roots are
 unavailable, it falls back to the active-window root.
+
+Android lists it as "Silicon Extend Snapshot Helper" (package
+`com.teamofsilicons.extend.snapshothelper`). Earlier releases installed it as
+`com.callstack.agentdevice.snapshothelper`; the engine removes that package when it installs this
+one.
 
 The helper is intentionally provider-neutral. Local `adb`, cloud ADB tunnels, and remote device
 providers can all install and run the same APK as long as they can execute ADB-style operations.
@@ -15,30 +20,29 @@ requires a stable signing certificate for `adb install -r` upgrades.
 
 ```sh
 VERSION="$(node -p 'require("./package.json").version')"
-AGENT_DEVICE_ANDROID_HELPER=snapshot sh ./scripts/build-android-helper.sh "$VERSION" .tmp/android-snapshot-helper
+sh ./scripts/build-android-helper.sh snapshot "$VERSION" .tmp/android-snapshot-helper
 ```
 
 The build uses Android SDK command-line tools directly. It expects `ANDROID_HOME` or
 `ANDROID_SDK_ROOT` to point at an SDK with `platforms/android-36`, and it compiles with the
-build-tools version named by `AGENT_DEVICE_ANDROID_BUILD_TOOLS` (or the script's last positional).
+build-tools version named by `EXTEND_ENGINE_ANDROID_BUILD_TOOLS` (or the script's last argument).
 CI must name that version; a local build without it uses the newest version under `build-tools`
 and says so on stderr.
-`pnpm prepack` builds the npm-bundled helper into `android/snapshot-helper/dist`; npm users get
-that APK in the package and the first helper-backed `snapshot` installs it automatically when
-missing or outdated.
+`pnpm build:android` builds the bundled helpers into `android/snapshot-helper/dist` and
+`android/ime-helper/dist`; the first helper-backed `snapshot` installs the helper automatically when
+it is missing or outdated.
 
 ## Run
 
 ```sh
-VERSION="$(node -p 'require("./package.json").version')"
-adb install -r ".tmp/android-snapshot-helper/agent-device-android-snapshot-helper-$VERSION.apk"
+adb install -r .tmp/android-snapshot-helper/*.apk
 adb shell am instrument -w \
   -e waitForIdleTimeoutMs 500 \
   -e waitForIdleQuietMs 100 \
   -e timeoutMs 8000 \
   -e maxDepth 128 \
   -e maxNodes 5000 \
-  com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation
+  com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation
 ```
 
 `maxDepth` also caps recursive traversal depth inside the helper.
@@ -59,11 +63,11 @@ is the default and matches the `Run` section above.
 ```sh
 # Read the interactive-window viewport without capturing a snapshot.
 adb shell am instrument -w -e mode viewport \
-  com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation
+  com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation
 
 # Inject a planned touch gesture, described by a base64 JSON payload.
 adb shell am instrument -w -e mode gesture -e payloadBase64 "$PAYLOAD" \
-  com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation
+  com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation
 ```
 
 The `gesture` payload is a base64-encoded JSON object using protocol `android-touch-plan-v1`:
@@ -99,7 +103,8 @@ the XML body after the header block, as described below. The response protocol l
 ## Output Contract
 
 The APK emits instrumentation status records using
-`agentDeviceProtocol=android-snapshot-helper-v1`.
+`agentDeviceProtocol=android-snapshot-helper-v1` (the key keeps the upstream spelling: the engine
+reads it, and nobody else sees it).
 
 The XML node attributes intentionally mirror acquisition facts decoded by the host, including
 `visible-to-user`, `drawing-order`, bounds, text/description/id, interaction booleans, and window

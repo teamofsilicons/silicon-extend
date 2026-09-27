@@ -67,10 +67,7 @@ test('keeps normal status compact while retaining proven-stale claims for explic
     assert.equal(normal.code, null);
     assert.equal(normal.calls.length, 0);
     assert.match(normal.stdout, /Live Pixel: live/);
-    assert.match(
-      normal.stdout,
-      /1 stale claim hidden; inspect with: agent-device device status --stale/,
-    );
+    assert.match(normal.stdout, /1 stale claim hidden; inspect with: extend device status --stale/);
     assert.doesNotMatch(normal.stdout, /Stale Pixel/);
 
     const stale = await runCliCapture(['device', 'status', '--stale', '--json'], {
@@ -88,7 +85,7 @@ test('keeps normal status compact while retaining proven-stale claims for explic
     });
     assert.match(
       scoped.stdout,
-      /inspect with: agent-device device status --device 'Stale Pixel; echo no' --stale/,
+      /inspect with: extend device status --device 'Stale Pixel; echo no' --stale/,
     );
   } finally {
     fs.rmSync(claimsDir, { recursive: true, force: true });

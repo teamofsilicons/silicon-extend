@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
                         actions = SetupActions(
                             // POST_NOTIFICATIONS is a runtime permission from Android 13 (the step exists only there).
                             requestNotifications = { if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                            // A failed step's Retry: the same as the website's (setup_retry).
+                            retry = { key -> extend.connection.retrySetup(key) },
                             // Every route to the page in turn, as a new task; what opened, or a message when none did.
                             open = { target -> SettingsLauncher.open(this, target, state.isTv) },
                             // A screen from a step's "Can't find it?" list, by its component, as a new task.
@@ -101,8 +103,7 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("service_url")?.let { url ->
             if (url.trimEnd('/') != extend.config.serviceUrl) {
                 extend.config.serviceUrl = url
-                extend.secrets.clearCredential()
-                extend.config.clearPair()
+                extend.connection.forgetPairsLocally()
                 changed = true
             }
         }
@@ -114,8 +115,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (intent.getBooleanExtra("forget_pair", false)) {
-            extend.secrets.clearCredential()
-            extend.config.clearPair()
+            // Every Carbon's pair on this device, as a fresh install would start.
+            extend.connection.forgetPairsLocally()
             changed = true
         }
         if (changed) {

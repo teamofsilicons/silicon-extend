@@ -332,8 +332,8 @@ async function killRunnerXcodebuildProcesses(
   ownerToken: string | undefined,
 ): Promise<void> {
   const pattern = ownerToken
-    ? `xcodebuild.*test-without-building.*AgentDeviceRunner\\.env\\.session-${escapeRegex(deviceId)}-${escapeRegex(ownerToken)}-`
-    : `xcodebuild.*test-without-building.*AgentDeviceRunner\\.env\\.session-${escapeRegex(deviceId)}-[0-9]`;
+    ? `xcodebuild.*test-without-building.*SiliconExtendHelper\\.env\\.session-${escapeRegex(deviceId)}-${escapeRegex(ownerToken)}-`
+    : `xcodebuild.*test-without-building.*SiliconExtendHelper\\.env\\.session-${escapeRegex(deviceId)}-[0-9]`;
   for (const signal of ['TERM', 'KILL'] as const) {
     try {
       await runAppleToolCommand('pkill', [`-${signal}`, '-f', pattern], {

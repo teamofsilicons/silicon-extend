@@ -323,7 +323,7 @@ test('state sentinel exists before spawning companion worker', async () => {
 
 test('legacy state without bridge scope is stopped before respawn', async () => {
   const projectRoot = mkdtempForTestSync('agent-device-metro-companion-legacy-');
-  const statePath = path.join(projectRoot, '.agent-device', 'metro-companion.json');
+  const statePath = path.join(projectRoot, '.silicon-extend', 'engine', 'metro-companion.json');
   try {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     fs.writeFileSync(

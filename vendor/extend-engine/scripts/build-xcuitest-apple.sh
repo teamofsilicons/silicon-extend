@@ -1,13 +1,20 @@
 #!/bin/sh
 set -eu
 
-PLATFORM="${AGENT_DEVICE_XCUITEST_PLATFORM:-}"
-PROJECT_PATH="apple/runner/AgentDeviceRunner/AgentDeviceRunner.xcodeproj"
-SCHEME="AgentDeviceRunner"
-DEFAULT_IOS_RUNNER_APP_BUNDLE_ID="com.callstack.agentdevice.runner"
+# Silicon Extend names every engine setting EXTEND_ENGINE_<X>; the fork's AGENT_DEVICE_<X> still
+# works, and the new name wins when both are set.
+setting() {
+  eval "printf '%s' \"\${EXTEND_ENGINE_$1:-\${AGENT_DEVICE_$1:-}}\""
+}
+
+PLATFORM="$(setting XCUITEST_PLATFORM)"
+PROJECT_PATH="apple/runner/SiliconExtendHelper/SiliconExtendHelper.xcodeproj"
+SCHEME="SiliconExtendHelper"
+DEFAULT_IOS_RUNNER_APP_BUNDLE_ID="com.teamofsilicons.extend.helper"
+ENGINE_HOME="$HOME/.silicon-extend/engine"
 
 if [ -z "$PLATFORM" ]; then
-  echo "AGENT_DEVICE_XCUITEST_PLATFORM is required (ios, macos, tvos, visionos)" >&2
+  echo "EXTEND_ENGINE_XCUITEST_PLATFORM is required (ios, macos, tvos, visionos)" >&2
   exit 1
 fi
 
@@ -37,7 +44,7 @@ resolve_default_destination() {
       resolve_simulator_destination 'visionOS' 'Apple Vision' || printf '%s\n' 'generic/platform=visionOS Simulator'
       ;;
     *)
-      echo "Unsupported AGENT_DEVICE_XCUITEST_PLATFORM: $PLATFORM" >&2
+      echo "Unsupported EXTEND_ENGINE_XCUITEST_PLATFORM: $PLATFORM" >&2
       exit 1
       ;;
   esac
@@ -80,26 +87,26 @@ try {
 resolve_default_derived_path() {
   case "$PLATFORM" in
     ios)
-      printf '%s\n' "$HOME/.agent-device/apple-runner/derived"
+      printf '%s\n' "$ENGINE_HOME/apple-runner/derived"
       ;;
     macos)
-      printf '%s\n' "$HOME/.agent-device/apple-runner/derived/macos"
+      printf '%s\n' "$ENGINE_HOME/apple-runner/derived/macos"
       ;;
     tvos)
-      printf '%s\n' "$HOME/.agent-device/apple-runner/derived/tvos"
+      printf '%s\n' "$ENGINE_HOME/apple-runner/derived/tvos"
       ;;
     visionos)
-      printf '%s\n' "$HOME/.agent-device/apple-runner/derived/visionos"
+      printf '%s\n' "$ENGINE_HOME/apple-runner/derived/visionos"
       ;;
     *)
-      echo "Unsupported AGENT_DEVICE_XCUITEST_PLATFORM: $PLATFORM" >&2
+      echo "Unsupported EXTEND_ENGINE_XCUITEST_PLATFORM: $PLATFORM" >&2
       exit 1
       ;;
   esac
 }
 
 resolve_clean_path() {
-  if [ -n "${AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH:-}" ]; then
+  if [ -n "$(setting IOS_RUNNER_DERIVED_PATH)" ]; then
     printf '%s\n' "$DERIVED_PATH"
     return
   fi
@@ -112,38 +119,44 @@ resolve_clean_path() {
       printf '%s\n' "$DERIVED_PATH"
       ;;
     *)
-      echo "Unsupported AGENT_DEVICE_XCUITEST_PLATFORM: $PLATFORM" >&2
+      echo "Unsupported EXTEND_ENGINE_XCUITEST_PLATFORM: $PLATFORM" >&2
       exit 1
       ;;
   esac
 }
 
-DESTINATION="${AGENT_DEVICE_XCUITEST_DESTINATION:-$(resolve_default_destination)}"
-DERIVED_PATH="${AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH:-$(resolve_default_derived_path)}"
+DESTINATION="$(setting XCUITEST_DESTINATION)"
+DESTINATION="${DESTINATION:-$(resolve_default_destination)}"
+DERIVED_PATH="$(setting IOS_RUNNER_DERIVED_PATH)"
+DERIVED_PATH="${DERIVED_PATH:-$(resolve_default_derived_path)}"
 CLEAN_PATH="$(resolve_clean_path)"
-RUNNER_APP_BUNDLE_ID="${AGENT_DEVICE_IOS_BUNDLE_ID:-${AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID:-$DEFAULT_IOS_RUNNER_APP_BUNDLE_ID}}"
-RUNNER_TEST_BUNDLE_ID="${AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID:-$RUNNER_APP_BUNDLE_ID.uitests}"
+RUNNER_APP_BUNDLE_ID="$(setting IOS_BUNDLE_ID)"
+RUNNER_APP_BUNDLE_ID="${RUNNER_APP_BUNDLE_ID:-$(setting IOS_RUNNER_APP_BUNDLE_ID)}"
+RUNNER_APP_BUNDLE_ID="${RUNNER_APP_BUNDLE_ID:-$DEFAULT_IOS_RUNNER_APP_BUNDLE_ID}"
+RUNNER_TEST_BUNDLE_ID="$(setting IOS_RUNNER_TEST_BUNDLE_ID)"
+RUNNER_TEST_BUNDLE_ID="${RUNNER_TEST_BUNDLE_ID:-$RUNNER_APP_BUNDLE_ID.uitests}"
 SIGNING_BUILD_SETTINGS=""
 
 if [ "$PLATFORM" = "macos" ]; then
   SIGNING_BUILD_SETTINGS="CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM="
 fi
 
-if is_truthy "${AGENT_DEVICE_IOS_CLEAN_DERIVED:-}"; then
+if is_truthy "$(setting IOS_CLEAN_DERIVED)"; then
   rm -rf "$CLEAN_PATH"
 fi
 
 SWIFT_FLAGS='$(inherited) -disable-sandbox -D AGENT_DEVICE_RUNNER_ISOLATION_CANARY'
-if is_truthy "${AGENT_DEVICE_XCUITEST_INCLUDE_UNIT_TESTS:-}"; then
+if is_truthy "$(setting XCUITEST_INCLUDE_UNIT_TESTS)"; then
   SWIFT_FLAGS="$SWIFT_FLAGS -D AGENT_DEVICE_RUNNER_UNIT_TESTS"
 fi
 
 # Optional arch override. A generic simulator destination leaves the active arch
 # undefined; Xcode versions differ on the default (26.6 picks x86_64, which runs
-# under Rosetta on arm64 hosts). Set AGENT_DEVICE_XCUITEST_ARCHS=arm64 to pin it.
+# under Rosetta on arm64 hosts). Set EXTEND_ENGINE_XCUITEST_ARCHS=arm64 to pin it.
 ARCH_BUILD_SETTINGS=""
-if [ -n "${AGENT_DEVICE_XCUITEST_ARCHS:-}" ]; then
-  ARCH_BUILD_SETTINGS="ARCHS=$AGENT_DEVICE_XCUITEST_ARCHS"
+XCUITEST_ARCHS="$(setting XCUITEST_ARCHS)"
+if [ -n "$XCUITEST_ARCHS" ]; then
+  ARCH_BUILD_SETTINGS="ARCHS=$XCUITEST_ARCHS"
 fi
 
 build_for_testing() {
@@ -152,8 +165,8 @@ build_for_testing() {
     -scheme "$SCHEME" \
     -destination "$DESTINATION" \
     -derivedDataPath "$DERIVED_PATH" \
-    AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID="$RUNNER_APP_BUNDLE_ID" \
-    AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID="$RUNNER_TEST_BUNDLE_ID" \
+    EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID="$RUNNER_APP_BUNDLE_ID" \
+    EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID="$RUNNER_TEST_BUNDLE_ID" \
     COMPILER_INDEX_STORE_ENABLE=NO \
     ENABLE_CODE_COVERAGE=NO \
     ONLY_ACTIVE_ARCH=YES \
@@ -174,10 +187,10 @@ REUSED_DERIVED_DATA=0
 if [ -d "$DERIVED_PATH/Build/Intermediates.noindex" ]; then
   REUSED_DERIVED_DATA=1
 fi
-touch apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerIsolationCanary.swift
+touch apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerIsolationCanary.swift
 mkdir -p "$DERIVED_PATH/Logs"
-BUILD_LOG="$DERIVED_PATH/Logs/agent-device-build-for-testing.log"
-BUILD_STATUS_FILE="$DERIVED_PATH/Logs/agent-device-build-for-testing.status"
+BUILD_LOG="$DERIVED_PATH/Logs/extend-engine-build-for-testing.log"
+BUILD_STATUS_FILE="$DERIVED_PATH/Logs/extend-engine-build-for-testing.status"
 {
   BUILD_STATUS=0
   build_for_testing 2>&1 || BUILD_STATUS=$?
@@ -196,7 +209,7 @@ if ! node --experimental-strip-types scripts/runner-isolation-diagnostics.ts "$B
   exit 1
 fi
 
-if ! is_truthy "${AGENT_DEVICE_XCUITEST_SKIP_ICON_PATCH:-}"; then
+if ! is_truthy "$(setting XCUITEST_SKIP_ICON_PATCH)"; then
   node --experimental-strip-types scripts/patch-xcuitest-runner-icon.ts "$DERIVED_PATH"
 fi
 node scripts/write-xcuitest-cache-metadata.mjs "$PLATFORM" "$DERIVED_PATH" "$DESTINATION"

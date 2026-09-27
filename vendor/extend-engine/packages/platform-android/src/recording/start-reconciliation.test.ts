@@ -48,7 +48,7 @@ test('reconciles coherent completed evidence before output preparation or launch
   });
   const started = await runtime.screenRecordingStart(newInput());
   expect(calls).toEqual([
-    'artifact:/sdcard/agent-device-recording-1.mp4',
+    'artifact:/sdcard/silicon-extend-recording-1.mp4',
     'manifest',
     'prepare',
     'launch',
@@ -90,7 +90,7 @@ test('retires completed evidence whose recorder pid was reassigned, signaling no
   });
   const started = await runtime.screenRecordingStart(newInput());
   expect(calls).toEqual([
-    'artifact:/sdcard/agent-device-recording-1.mp4',
+    'artifact:/sdcard/silicon-extend-recording-1.mp4',
     'manifest',
     'prepare',
     'launch',
@@ -251,7 +251,7 @@ test.each([
         [
           {
             index: 1,
-            remotePath: '/sdcard/agent-device-recording-1.mp4',
+            remotePath: '/sdcard/silicon-extend-recording-1.mp4',
             remotePid: '41',
             remoteStartTime: '7',
           },
@@ -362,7 +362,7 @@ test('retires evidence a re-adopted device identity stranded, before output prep
   const rig = evidenceRig(strandedEvidence(completedEvidence()));
   const runtime = await rig.bind({ inspect: async () => 'missing' });
   const started = await runtime.screenRecordingStart(newInput());
-  expect(rig.calls).toEqual(retirementOf('/sdcard/agent-device-recording-1.mp4'));
+  expect(rig.calls).toEqual(retirementOf('/sdcard/silicon-extend-recording-1.mp4'));
   await started.pendingHandle.transfer().forceCleanup();
 });
 
@@ -394,7 +394,7 @@ test('retires a stranded interrupted launch and drops the artifact it never comm
   const rig = evidenceRig(strandedEvidence(interruptedEvidence()));
   const runtime = await rig.bind({ findRunning: async () => [] });
   const started = await runtime.screenRecordingStart(newInput());
-  expect(rig.calls).toEqual(retirementOf('/sdcard/agent-device-recording-9.mp4'));
+  expect(rig.calls).toEqual(retirementOf('/sdcard/silicon-extend-recording-9.mp4'));
   await started.pendingHandle.transfer().forceCleanup();
 });
 
@@ -422,7 +422,7 @@ test('refuses a stranded interrupted launch whose writers cannot be read', async
     code: 'COMMAND_FAILED',
     details: {
       reason: 'native_recording_recorder_unproven',
-      remotePath: '/sdcard/agent-device-recording-9.mp4',
+      remotePath: '/sdcard/silicon-extend-recording-9.mp4',
     },
   });
   expect(rig.calls).toEqual([]);
@@ -435,7 +435,7 @@ test('retires stranded evidence parked in the fallback directory', async () => {
       chunks: [
         {
           index: 1,
-          remotePath: '/data/local/tmp/agent-device-recording-1.mp4',
+          remotePath: '/data/local/tmp/silicon-extend-recording-1.mp4',
           remotePid: '41',
           remoteStartTime: '7',
         },
@@ -445,7 +445,7 @@ test('retires stranded evidence parked in the fallback directory', async () => {
   );
   const runtime = await rig.bind({ inspect: async () => 'missing' });
   const started = await runtime.screenRecordingStart(newInput());
-  expect(rig.calls).toEqual(retirementOf('/data/local/tmp/agent-device-recording-1.mp4'));
+  expect(rig.calls).toEqual(retirementOf('/data/local/tmp/silicon-extend-recording-1.mp4'));
   await started.pendingHandle.transfer().forceCleanup();
 });
 
@@ -469,7 +469,7 @@ function openEvidence() {
     [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-1.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-1.mp4',
         remotePid: '41',
         remoteStartTime: '7',
       },
@@ -485,7 +485,7 @@ function interruptedEvidence() {
     recordingInput(),
     1,
     [],
-    '/sdcard/agent-device-recording-9.mp4',
+    '/sdcard/silicon-extend-recording-9.mp4',
     'local',
   );
 }
@@ -504,7 +504,7 @@ function completedEvidence() {
       [
         {
           index: 1,
-          remotePath: '/sdcard/agent-device-recording-1.mp4',
+          remotePath: '/sdcard/silicon-extend-recording-1.mp4',
           remotePid: '41',
           remoteStartTime: '7',
         },

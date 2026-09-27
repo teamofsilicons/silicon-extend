@@ -37,7 +37,7 @@ test('a TypeScript-only Apple change selects the iOS and macOS lanes without a S
 });
 
 test('a Swift runner change selects both builds and every Apple lane', () => {
-  assert.deepEqual(lanes('apple/runner/AgentDeviceRunner/Sources/Foo.swift'), [
+  assert.deepEqual(lanes('apple/runner/SiliconExtendHelper/Sources/Foo.swift'), [
     'swift-runner-ios',
     'swift-runner-macos',
     'replay-ios',

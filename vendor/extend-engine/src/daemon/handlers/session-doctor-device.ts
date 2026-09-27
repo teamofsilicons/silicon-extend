@@ -61,7 +61,7 @@ export async function appendDeviceInventoryCheck(
       status: 'fail',
       summary: normalized.message,
       hint: normalized.hint,
-      command: 'agent-device devices',
+      command: 'extend devices',
       evidence: { code: normalized.code, details: normalized.details },
     });
     return { devices: [], platform: selector.platform, target: selector.target };
@@ -89,8 +89,8 @@ export function resolveDoctorDeviceForAppCheck(
         ? 'Boot a device, or adjust --platform/--target/--device/--udid/--serial.'
         : 'Pass --platform/--target/--device/--udid/--serial so doctor checks the intended device.',
     command: inventory.platform
-      ? `agent-device devices --platform ${inventory.platform}`
-      : 'agent-device devices',
+      ? `extend devices --platform ${inventory.platform}`
+      : 'extend devices',
     evidence: {
       targetApp,
       booted: booted.map((device) => ({
@@ -261,9 +261,7 @@ function plural(count: number, singular: string): string {
 }
 
 function deviceInventoryCommand(selector: Pick<DeviceInventoryRequest, 'platform'>): string {
-  return selector.platform
-    ? `agent-device devices --platform ${selector.platform}`
-    : 'agent-device devices';
+  return selector.platform ? `extend devices --platform ${selector.platform}` : 'extend devices';
 }
 
 function deviceInventoryEvidence(

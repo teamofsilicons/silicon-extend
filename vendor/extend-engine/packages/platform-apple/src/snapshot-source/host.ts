@@ -233,7 +233,7 @@ export function snapshotSourceSocketPath(
   const ownerKey = createHash('sha256').update(ownerId).digest('hex').slice(0, 12);
   return path.join(
     SNAPSHOT_SOCKET_ROOT,
-    `agent-device-ax-${targetKey}-${host.processId()}-${ownerKey}`,
+    `extend-engine-ax-${targetKey}-${host.processId()}-${ownerKey}`,
     'snapshot.sock',
   );
 }

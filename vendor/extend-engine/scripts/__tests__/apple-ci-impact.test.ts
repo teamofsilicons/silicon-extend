@@ -116,7 +116,7 @@ test('restored native products are rebuilt before caching and icon patching', ()
   expect(steps[patchIndex]?.if).toBeUndefined();
   expect(steps[patchIndex]?.run).toContain('scripts/patch-xcuitest-runner-icon.ts');
   expect(fs.readFileSync(path.join(repoRoot, 'scripts/build-xcuitest-apple.sh'), 'utf8')).toContain(
-    'if ! is_truthy "${AGENT_DEVICE_XCUITEST_SKIP_ICON_PATCH:-}"; then',
+    'if ! is_truthy "$(setting XCUITEST_SKIP_ICON_PATCH)"; then',
   );
 });
 
@@ -147,7 +147,7 @@ test('macOS clean-install proof follows live UI replay', () => {
 
 test('native runner and golden-table changes run XCTest; TypeScript runtime changes use live E2E', () => {
   for (const file of [
-    'apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests.swift',
+    'apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests.swift',
     'apple/snapshot-presentation/Sources/Presenter.swift',
     'packages/platform-apple/src/runner/runner-icon.ts',
     'contracts/fixtures/scroll-gesture.json',

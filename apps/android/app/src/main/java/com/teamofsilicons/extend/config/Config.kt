@@ -10,8 +10,8 @@ import com.teamofsilicons.extend.protocol.ExtendJson
 import com.teamofsilicons.extend.protocol.TestingEnvironment
 
 /**
- * Non-secret settings and what the app remembers about its pair. The device credential itself
- * lives in [com.teamofsilicons.extend.security.SecretStore].
+ * Non-secret settings and what the app remembers about its pairs. The credentials themselves live
+ * in [com.teamofsilicons.extend.security.SecretStore].
  */
 class Config(context: Context) {
     private val prefs = context.getSharedPreferences("extend_config", Context.MODE_PRIVATE)
@@ -30,10 +30,21 @@ class Config(context: Context) {
         get() = prefs.getBoolean(KEY_FORCE_TV, false)
         set(value) = prefs.edit().putBoolean(KEY_FORCE_TV, value).apply()
 
-    var deviceId: String?
-        get() = prefs.getString(KEY_DEVICE_ID, null)
-        set(value) = prefs.edit().putString(KEY_DEVICE_ID, value).apply()
+    /**
+     * The device id of each Carbon's pair of this device, in the order they were made. 1.0 kept
+     * one ([KEY_DEVICE_ID]); it is read as the first until the list is written.
+     */
+    var pairIds: List<String>
+        get() = prefs.getString(KEY_PAIR_IDS, null)?.split(',')?.filter { it.isNotBlank() }
+            ?: listOfNotNull(prefs.getString(KEY_DEVICE_ID, null))
+        set(value) = prefs.edit().putString(KEY_PAIR_IDS, value.joinToString(",")).remove(KEY_DEVICE_ID).apply()
 
+    /** The first pair's device id (the app's first enrollment), or null when unpaired. */
+    val deviceId: String? get() = pairIds.firstOrNull()
+
+    val paired: Boolean get() = pairIds.isNotEmpty()
+
+    /** The test environment this device is in. Every pair of one device is in the same one. */
     var environment: TestingEnvironment?
         get() = prefs.getString(KEY_ENVIRONMENT, null)?.let {
             runCatching { ExtendJson.decodeFromString(TestingEnvironment.serializer(), it) }.getOrNull()
@@ -43,8 +54,14 @@ class Config(context: Context) {
             value?.let { ExtendJson.encodeToString(TestingEnvironment.serializer(), it) },
         ).apply()
 
-    fun clearPair() {
-        prefs.edit().remove(KEY_DEVICE_ID).remove(KEY_ENVIRONMENT).apply()
+    /** One Carbon's pair ended; the environment goes with the last one. */
+    fun clearPair(deviceId: String) {
+        val rest = pairIds.filter { it != deviceId }
+        if (rest.isEmpty()) clearPairs() else pairIds = rest
+    }
+
+    fun clearPairs() {
+        prefs.edit().remove(KEY_PAIR_IDS).remove(KEY_DEVICE_ID).remove(KEY_ENVIRONMENT).apply()
     }
 
     fun webSocketUrl(path: String): String {
@@ -60,7 +77,9 @@ class Config(context: Context) {
     companion object {
         private const val KEY_SERVICE_URL = "service_url"
         private const val KEY_FORCE_TV = "force_tv"
+        /** 1.0: the one pair's device id. */
         private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_PAIR_IDS = "pair_ids"
         private const val KEY_ENVIRONMENT = "environment"
     }
 }
@@ -124,6 +143,13 @@ object DeviceInfo {
 
     fun isFireTv(context: Context): Boolean =
         context.packageManager.hasSystemFeature(FIRE_TV)
+
+    /** What the app calls this device in sentences: "TV", "tablet" or "phone". */
+    fun noun(context: Context, tv: Boolean): String = when {
+        tv -> "TV"
+        runCatching { context.resources.configuration.smallestScreenWidthDp }.getOrDefault(0) >= 600 -> "tablet"
+        else -> "phone"
+    }
 
     /** `android` or `android_tv`. */
     fun os(context: Context, config: Config): String = if (isTv(context, config)) "android_tv" else "android"

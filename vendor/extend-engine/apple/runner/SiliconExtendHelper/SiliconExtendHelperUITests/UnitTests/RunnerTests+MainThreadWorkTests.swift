@@ -10,7 +10,7 @@ extension RunnerTests {
     let box = ResultBox()
     let finished = expectation(description: "off-main caller finished")
 
-    DispatchQueue(label: "agent-device.runner.tests.off-main").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.off-main").async {
       do {
         box.observedMainThread = try self.runMainThreadWork(
           "command_execution",
@@ -42,7 +42,7 @@ extension RunnerTests {
     let observedAbandoned = DispatchSemaphore(value: 0)
     let timedOut = expectation(description: "off-main caller timed out")
 
-    DispatchQueue(label: "agent-device.runner.tests.timeout").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.timeout").async {
       do {
         _ = try self.runMainThreadWork(
           "command_execution",
@@ -65,7 +65,7 @@ extension RunnerTests {
       observedAbandoned.signal()
       timedOut.fulfill()
     }
-    DispatchQueue(label: "agent-device.runner.tests.release-timeout").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.release-timeout").async {
       _ = observedAbandoned.wait(timeout: .now() + 2)
       releaseWork.signal()
     }
@@ -101,11 +101,11 @@ extension RunnerTests {
 
   func testRunMainThreadWorkRethrowsWorkThatFailedAtTheTimeoutBoundary() {
     let outcome = runMainThreadWorkFinishingAtTheTimeoutBoundary { () throws -> Int in
-      throw NSError(domain: "agent-device.runner.tests", code: 7)
+      throw NSError(domain: "silicon-extend.helper.tests", code: 7)
     }
 
     XCTAssertNil(outcome.value)
-    XCTAssertEqual((outcome.error as NSError?)?.domain, "agent-device.runner.tests")
+    XCTAssertEqual((outcome.error as NSError?)?.domain, "silicon-extend.helper.tests")
     XCTAssertEqual((outcome.error as NSError?)?.code, 7)
     XCTAssertEqual(outcome.abandonedCount, 0)
     XCTAssertEqual(outcome.onAbandonedCalls, 0)
@@ -124,7 +124,7 @@ extension RunnerTests {
     let commandEntered = DispatchSemaphore(value: 0)
     let finished = expectation(description: "optional work was offered during and after the command")
 
-    DispatchQueue(label: "agent-device.runner.tests.in-flight-command").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.in-flight-command").async {
       _ = try? self.runMainThreadWork(
         "command_execution",
         timeout: 5,
@@ -134,7 +134,7 @@ extension RunnerTests {
         _ = releaseCommand.wait(timeout: .now() + 3)
       }
     }
-    DispatchQueue(label: "agent-device.runner.tests.optional-work").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.optional-work").async {
       defer { finished.fulfill() }
       guard commandEntered.wait(timeout: .now() + 3) == .success else { return }
       do {
@@ -195,7 +195,7 @@ extension RunnerTests {
     let releaseWork = DispatchSemaphore(value: 0)
     let finished = expectation(description: "optional work was offered while abandoned and after drain")
 
-    DispatchQueue(label: "agent-device.runner.tests.abandoned-then-drained").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.abandoned-then-drained").async {
       defer { finished.fulfill() }
       _ = try? self.runMainThreadWork(
         "command_execution",
@@ -271,7 +271,7 @@ extension RunnerTests {
     }
     defer { mainThreadWorkTimedOutForTesting = nil }
 
-    DispatchQueue(label: "agent-device.runner.tests.timeout-boundary").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.timeout-boundary").async {
       do {
         outcome.value = try self.runMainThreadWork(
           "command_execution",

@@ -51,14 +51,14 @@ const BATCH_STEP_EXAMPLES: readonly BatchCommandStep[] = [
  */
 function buildBatchCliDetail(): string {
   const prose = [
-    'Each step is {"command":"<name>","input":{...}}, and input is that command\'s structured input object rather than its terminal spelling: a CLI positional becomes a named field (target, text, direction) and a CLI flag becomes a camelCase key (--settle -> "settle":true, -i -> "interactiveOnly":true). There is no positional step form; args, argv, positionals, and flags are not step fields. agent-device help <command> lists arguments in CLI spelling only. The examples below carry the structured spelling; over MCP, the command tool schema states it in full.',
+    'Each step is {"command":"<name>","input":{...}}, and input is that command\'s structured input object rather than its terminal spelling: a CLI positional becomes a named field (target, text, direction) and a CLI flag becomes a camelCase key (--settle -> "settle":true, -i -> "interactiveOnly":true). There is no positional step form; args, argv, positionals, and flags are not step fields. extend help <command> lists arguments in CLI spelling only. The examples below carry the structured spelling; over MCP, the command tool schema states it in full.',
     'Steps run serially in one daemon request against the same session, in order. Mutating UI verbs are included (press, click, fill, longpress, scroll, back), which is where the round-trip saving is; --on-error stop halts at the first failing step.',
     `Available through batch: ${[...STRUCTURED_BATCH_COMMAND_NAMES].sort().join(', ')}.`,
     'Every other command is excluded: batch and replay never nest, and session, daemon, connection, and host tooling commands own lifecycle a batch request cannot carry. Run those on their own.',
   ].join(' ');
   const examples = [
-    `  agent-device batch --steps '${JSON.stringify(BATCH_STEP_EXAMPLES)}'`,
-    '  agent-device batch --steps-file ./steps.json --json',
+    `  extend batch --steps '${JSON.stringify(BATCH_STEP_EXAMPLES)}'`,
+    '  extend batch --steps-file ./steps.json --json',
   ].join('\n');
   return `${prose}\n\nExamples:\n${examples}`;
 }

@@ -358,7 +358,7 @@ export function buildAppleMemorySnapshotSupport(device: DeviceInfo): {
       memgraph: false,
       method: APPLE_MEMGRAPH_SNAPSHOT_METHOD,
       reason:
-        'Physical iOS device memgraph capture is not exposed through reliable local agent-device tooling.',
+        'Physical iOS device memgraph capture is not exposed through reliable local device engine tooling.',
       hint: 'Use perf memory sample for a compact resident-memory reading, or reproduce on an iOS simulator/macOS target for memgraph capture.',
     };
   }
@@ -397,7 +397,7 @@ async function captureIosDeviceFramePerf(
   appBundleId: string,
   processes: IosDeviceProcessInfo[],
 ): Promise<IosDeviceFramePerfCapture> {
-  const tempDir = await makeHostTemporaryDirectory('agent-device-ios-frame-perf-');
+  const tempDir = await makeHostTemporaryDirectory('extend-engine-ios-frame-perf-');
   const tracePath = path.join(tempDir, 'animation-hitches.trace');
   try {
     const record = await recordAppleXctraceTimedTrace({
@@ -510,7 +510,7 @@ async function captureIosDevicePerfTable(
   device: DeviceInfo,
   appBundleId: string,
 ): Promise<IosDevicePerfCapture> {
-  const tempDir = await makeHostTemporaryDirectory('agent-device-ios-perf-');
+  const tempDir = await makeHostTemporaryDirectory('extend-engine-ios-perf-');
   const tracePath = path.join(tempDir, 'sample.trace');
   try {
     const record = await recordAppleXctraceTimedTrace({

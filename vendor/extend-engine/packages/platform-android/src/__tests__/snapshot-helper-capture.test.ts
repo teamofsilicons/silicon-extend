@@ -40,7 +40,7 @@ test('one-shot capture that resolves during cancellation retires before rejectin
       'shell',
       'am',
       'force-stop',
-      'com.callstack.agentdevice.snapshothelper',
+      'com.teamofsilicons.extend.snapshothelper',
     ]);
     // The retirement stop must not inherit the aborted command signal; it bounds itself.
     assert.ok(!options?.signal?.aborted);

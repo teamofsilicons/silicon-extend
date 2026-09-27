@@ -555,7 +555,7 @@ const SAVE_EVIDENCE: TargetAnnotationV1 = {
 };
 
 const SAVE_EVIDENCE_LINE =
-  '# agent-device:target-v1 {"id":"save","role":"button","label":"Save","ancestry":[{"role":"toolbar","label":"Editor"},{"role":"window"}],"sibling":0,"viewportOrder":0,"scrollRegion":{"role":"scrollview","id":"editor-scroll"},"verification":"verified"}';
+  '# extend:target-v1 {"id":"save","role":"button","label":"Save","ancestry":[{"role":"toolbar","label":"Editor"},{"role":"window"}],"sibling":0,"viewportOrder":0,"scrollRegion":{"role":"scrollview","id":"editor-scroll"},"verification":"verified"}';
 
 test('a target-v1 annotation immediately preceding an action line attaches to that action', () => {
   const script = [
@@ -572,7 +572,7 @@ test('a targets-v1 annotation binds both drag endpoints to one action', () => {
   const source = { ...SAVE_EVIDENCE, id: 'source', label: 'Source' };
   const destination = { ...SAVE_EVIDENCE, id: 'destination', label: 'Destination' };
   const script = [
-    `# agent-device:targets-v1 ${JSON.stringify({ source, destination })}`,
+    `# extend:targets-v1 ${JSON.stringify({ source, destination })}`,
     'gesture drag id="source" id="destination" 800 500 0',
   ].join('\n');
   const action = parseReplayScriptDetailed(script).actions[0];
@@ -607,7 +607,7 @@ test('a target-v1 annotation as the last line of the script (no action follows) 
 });
 
 test('a malformed target-v1 payload is rejected as INVALID_ARGS, not silently dropped', () => {
-  const script = ['# agent-device:target-v1 {not json', 'click @e12 "Save"'].join('\n');
+  const script = ['# extend:target-v1 {not json', 'click @e12 "Save"'].join('\n');
   assert.throws(
     () => parseReplayScriptDetailed(script),
     (error: unknown) => error instanceof AppError && error.code === 'INVALID_ARGS',
@@ -632,7 +632,7 @@ test.each([
 });
 
 test('an unknown future target-vN comment is an ordinary comment: no binding requirement, no evidence attached', () => {
-  const script = ['# agent-device:target-v2 {"whatever":true}', '', 'click @e12 "Save"'].join('\n');
+  const script = ['# extend:target-v2 {"whatever":true}', '', 'click @e12 "Save"'].join('\n');
   const { actions } = parseReplayScriptDetailed(script);
   assert.equal(actions.length, 1);
   assert.equal(actions[0]?.targetEvidence, undefined);
@@ -669,7 +669,7 @@ test('session-recorded actions without target evidence never gain a fabricated a
     { ts: Date.now(), command: 'click', positionals: ['@e12'], flags: {} },
   ];
   const script = formatReplayScriptForTest(actions);
-  assert.equal(/agent-device:target-v1/.test(script), false);
+  assert.equal(/extend:target-v1/.test(script), false);
 });
 
 test('formatDivergenceActionLabel categorically drops fill/type text but keeps the target', async () => {

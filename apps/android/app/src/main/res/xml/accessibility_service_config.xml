@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- canTakeScreenshot (Android 11+) and isAccessibilityTool (Android 12+) are ignored on older
-     versions; screenshots there go through Android debugging (driver/ScreenshotPath.kt). -->
+     versions; screenshots there go through Android debugging (driver/ScreenshotPath.kt).
+     typeViewScrolled: Android 8.0/8.1 clear a scrolled list's cached nodes only for a service that
+     receives it (Android 9+ always do), so a snapshot after a scroll saw the old rows without it.
+     typeViewClicked and typeViewSelected tell a click that it did something (the TV fallback). -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeWindowContentChanged|typeViewScrolled|typeViewClicked|typeViewSelected"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canPerformGestures="true"

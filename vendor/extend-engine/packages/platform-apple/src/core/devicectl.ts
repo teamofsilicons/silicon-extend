@@ -88,7 +88,7 @@ export async function listIosDeviceApps(
   filter: 'user-installed' | 'all',
 ): Promise<IosAppInfo[]> {
   const payload = await runIosDevicectlJsonCommand(device, {
-    jsonPrefix: 'agent-device-ios-apps',
+    jsonPrefix: 'extend-engine-ios-apps',
     args: ['devicectl', 'device', 'info', 'apps', '--device', device.id, '--include-all-apps'],
     failureMessage: 'Failed to list iOS apps',
     parseFailureMessage: 'Failed to parse iOS apps list',
@@ -98,7 +98,7 @@ export async function listIosDeviceApps(
 
 async function listIosDeviceProcesses(device: DeviceInfo): Promise<IosDeviceProcessInfo[]> {
   const payload = await runIosDevicectlJsonCommand(device, {
-    jsonPrefix: 'agent-device-ios-processes',
+    jsonPrefix: 'extend-engine-ios-processes',
     args: ['devicectl', 'device', 'info', 'processes', '--device', device.id],
     failureMessage: 'Failed to list iOS processes',
     parseFailureMessage: 'Failed to parse iOS process list',
@@ -123,7 +123,7 @@ export async function terminateIosDeviceApp(device: DeviceInfo, bundleId: string
   if (!processInfo) return;
 
   await runIosDevicectlJsonCommand(device, {
-    jsonPrefix: 'agent-device-ios-process-terminate',
+    jsonPrefix: 'extend-engine-ios-process-terminate',
     args: [
       'devicectl',
       'device',
@@ -350,7 +350,7 @@ export const IOS_DEVICECTL_DEFAULT_HINT =
   'Ensure the iOS device is unlocked, trusted, and available in Xcode > Devices, then retry.';
 
 const IOS_DEVICE_PROCESS_LIST_HINT =
-  "This Xcode/CoreDevice toolchain must support 'devicectl device info processes' with JSON runningProcesses so agent-device can resolve app process IDs. Inspect diagnostics for the exact devicectl API failure.";
+  "This Xcode/CoreDevice toolchain must support 'devicectl device info processes' with JSON runningProcesses so the device engine can resolve app process IDs. Inspect diagnostics for the exact devicectl API failure.";
 
 /**
  * What to tell a caller whose device reports its own Developer Mode toggle off (#2683). This is the

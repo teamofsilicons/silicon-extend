@@ -999,7 +999,7 @@ test('sendToDaemon hints to disconnect when a remote daemon is unavailable', asy
       assert.ok(thrown instanceof Error);
       assert.equal((thrown as any).code, 'COMMAND_FAILED');
       assert.equal(thrown.message, 'Remote daemon is unavailable');
-      assert.match(String((thrown as any).details?.hint ?? ''), /agent-device disconnect/);
+      assert.match(String((thrown as any).details?.hint ?? ''), /extend disconnect/);
     });
   } finally {
     restoreHttpRequest();

@@ -9,7 +9,7 @@ export async function webBrowserLifecycleCheck(stateDir: string): Promise<Doctor
       id: 'web-agent-browser-processes',
       status: 'info',
       summary:
-        'Managed web backend is not installed; no agent-device-owned browser processes counted.',
+        'Managed web backend is not installed; no browser processes owned by the device engine counted.',
       evidence: { stateDir, installed: false },
     };
   }
@@ -20,8 +20,8 @@ export async function webBrowserLifecycleCheck(stateDir: string): Promise<Doctor
       status: summary.count > 0 ? 'info' : 'pass',
       summary:
         summary.count > 0
-          ? `${summary.count} live agent-device-owned Chrome process${summary.count === 1 ? '' : 'es'} detected.`
-          : 'No live agent-device-owned Chrome processes detected.',
+          ? `${summary.count} live Chrome process${summary.count === 1 ? '' : 'es'} owned by the device engine detected.`
+          : 'No live Chrome processes owned by the device engine detected.',
       evidence: {
         stateDir,
         installed: true,
@@ -34,7 +34,7 @@ export async function webBrowserLifecycleCheck(stateDir: string): Promise<Doctor
     return {
       id: 'web-agent-browser-processes',
       status: 'info',
-      summary: 'Could not inspect live agent-device-owned Chrome processes.',
+      summary: 'Could not inspect live Chrome processes owned by the device engine.',
       hint: 'Run doctor again from a shell with permission to inspect local processes.',
       evidence: { stateDir, error: error instanceof Error ? error.message : String(error) },
     };

@@ -49,7 +49,7 @@ test("sign in, pair a device with live setup, manage it, stop a Silicon, remove 
   await page.getByTestId("open-device").click();
   await expect(page.getByTestId("device-name")).toHaveText(name);
 
-  // Rename, pair lifetime and visibility (PATCH with If-Match).
+  // Rename and pair lifetime (PATCH with If-Match). Visibility is gone in 1.1.
   await page.getByTestId("rename").click();
   await page.getByTestId("rename-input").fill(`${name} renamed`);
   await page.getByTestId("rename-save").click();
@@ -57,12 +57,10 @@ test("sign in, pair a device with live setup, manage it, stop a Silicon, remove 
   await page.getByTestId("ttl-slider").fill("9");
   await page.getByTestId("ttl-save").click();
   await expect(page.getByTestId("pair-expires")).toContainText("in 9 days");
-  await page.getByTestId("visibility-personal").check();
-  await expect(page.getByTestId("toast").last()).toContainText("Visible only to you");
+  await expect(page.getByTestId("visibility-personal")).toHaveCount(0);
   const summaries = page.getByTestId("activity-summary");
   await expect(summaries.filter({ hasText: `Renamed from \u201c${name}\u201d to \u201c${name} renamed\u201d` })).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Stays paired 9 days without activity" })).toHaveCount(1);
-  await expect(summaries.filter({ hasText: "Visible only to its owner" })).toHaveCount(1);
 
   // A Silicon starts using it; the Carbon stops it from the website.
   const chef = await login("si:chef");

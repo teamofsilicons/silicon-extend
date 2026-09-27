@@ -641,7 +641,7 @@ test('iosRunnerOverrides reports no route when the runner names one it does not 
 test('TEXT_ENTRY_ROUTES names every route the Swift runner assigns', () => {
   const runnerTestsDir = path.resolve(
     import.meta.dirname,
-    '../../../../../apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests',
+    '../../../../../apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests',
   );
   const swiftRoutes = new Set<string>();
   for (const entry of fs.readdirSync(runnerTestsDir)) {

@@ -104,7 +104,7 @@ test('daemon runtime starts HTTP transport in-process and shuts down cleanly', a
     assert.notEqual(runtime, null);
     assert.equal(typeof runtime?.httpPort, 'number');
     assert.equal(runtime?.socketPort, undefined);
-    assert.match(stdout.join(''), /^AGENT_DEVICE_DAEMON_HTTP_PORT=\d+\n$/);
+    assert.match(stdout.join(''), /^EXTEND_ENGINE_DAEMON_HTTP_PORT=\d+\n$/);
     assert.deepEqual(stderr, []);
 
     const info = JSON.parse(fs.readFileSync(paths.infoPath, 'utf8')) as DaemonInfoFile;
@@ -162,8 +162,8 @@ test('daemon runtime publishes dual transport metadata', async () => {
     assert.notEqual(runtime, null);
     assert.equal(typeof runtime?.httpPort, 'number');
     assert.equal(typeof runtime?.socketPort, 'number');
-    assert.match(stdout.join(''), /AGENT_DEVICE_DAEMON_PORT=\d+/);
-    assert.match(stdout.join(''), /AGENT_DEVICE_DAEMON_HTTP_PORT=\d+/);
+    assert.match(stdout.join(''), /EXTEND_ENGINE_DAEMON_PORT=\d+/);
+    assert.match(stdout.join(''), /EXTEND_ENGINE_DAEMON_HTTP_PORT=\d+/);
 
     const info = JSON.parse(fs.readFileSync(paths.infoPath, 'utf8')) as DaemonInfoFile;
     assert.equal(info.httpPort, runtime?.httpPort);
@@ -264,7 +264,7 @@ test('daemon entrypoint publishes HTTP metadata and cleans up on shutdown', asyn
   try {
     const portLine = await waitForStdoutLine(
       daemon.child.stdout,
-      /^AGENT_DEVICE_DAEMON_HTTP_PORT=\d+$/,
+      /^EXTEND_ENGINE_DAEMON_HTTP_PORT=\d+$/,
       5_000,
     );
     const httpPort = Number(portLine.split('=')[1]);

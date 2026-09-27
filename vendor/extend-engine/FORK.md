@@ -2,7 +2,8 @@
 
 Forked from https://github.com/callstack/agent-device at commit `bce6f52` (2026-09-25, v0.21.15), MIT licensed.
 
-Silicon Extend runs this fork on Mac and Linux computers (and on a Mac hosting an iPhone or iPad) to
+Silicon Extend runs this fork, which it calls the device engine (`vendor/extend-engine`, package
+`silicon-extend-engine`), on Mac and Linux computers (and on a Mac hosting an iPhone or iPad) to
 read the screen and act on it. Every change made for Extend is listed below, newest first, so it can
 be offered upstream or carried across an upstream sync. Each entry names its files. Entries marked
 *uncommitted* were in the working tree on 2026-09-27 and not yet in a commit.
@@ -11,9 +12,49 @@ Every vitest file an Extend change touched is run by Silicon Extend's CI (`.gith
 job `fork`); when an entry adds or changes a test file, add it to that list too.
 
 Outside this tree: Extend's packaging installs its own entry, `apps/desktop/runtime-entry.mjs`, as
-the packaged runtime's `bin/agent-device.mjs` and ships this fork's entry beside it as
-`bin/agent-device-cli.mjs`; it also appends `+extend.<sha256>` to the packaged `package.json`
+the packaged runtime's `bin/extend-engine.mjs` and ships this fork's entry beside it as
+`bin/extend-engine-cli.mjs`; it also appends `+extend.<sha256>` to the packaged `package.json`
 version. Neither changes the fork's source; see `apps/desktop/README.md`.
+
+## 2026-09-27 — Renamed to Silicon Extend's device engine (*uncommitted*)
+
+Silicon Extend 1.1 names this fork the device engine everywhere a Carbon or Silicon can see it.
+Internal names nobody sees (the `@agent-device/*` workspace packages, TypeScript symbols, module
+paths, the `AGENT_DEVICE_*` names the code reads) keep the fork's spelling, so an upstream sync
+stays a plain merge.
+
+- **Directory and package.** `vendor/agent-device` moved to `vendor/extend-engine` (`git mv`, so
+  history follows). `package.json`: name `silicon-extend-engine`, `private: true`, a description
+  that says what it is for Extend, no upstream homepage, repository, bugs, `mcpName` or keywords;
+  the bin is `extend-engine` → `bin/extend-engine.mjs` (was `bin/agent-device.mjs`), and the `ad`
+  script is `engine`. `pnpm-lock.yaml` was regenerated for the changes below.
+- **Settings are `EXTEND_ENGINE_<X>`.** New `src/extend-env.ts` copies every set
+  `EXTEND_ENGINE_<X>` onto `AGENT_DEVICE_<X>` (the new name wins; an old name set alone still
+  works). It is imported first by `src/bin.ts` and `src/daemon.ts`, by `bin/extend-engine.mjs`
+  (before the dist entry), and by Extend's `apps/desktop/runtime-entry.mjs`; `tsdown.config.ts`
+  builds it as its own entry, `dist/src/internal/extend-env.js`, so that plain-JavaScript entry can
+  import it. Nothing in the engine reads a setting while its modules load, so the bundler's module
+  order within a chunk doesn't matter. Test: `src/extend-env.test.ts` (added to CI's `fork` list).
+- **Upstream material nothing in Extend builds, tests or ships was removed:** `website/` (the
+  docs site, also dropped from `pnpm-workspace.yaml`), `examples/` (dropped from `typecheck`),
+  `skills/`, `.github/` (upstream CI; Extend's CI is at the repository root), `glama.json`,
+  `smithery.yaml`, `server.json` (dropped from `files`), `CONTRIBUTING.md`, `SECURITY.md`,
+  `.worktreeinclude`, the mutation-testing setup (`stryker.config.json`,
+  `vitest.mutation.config.ts`, the `@stryker-mutator/*` dev dependencies and the `mutation:*`
+  scripts), the dead-code tooling (`.fallowrc.json`, `fallow-baselines/`,
+  `fallow-production-exports.json`, the `fallow` dev dependency and its scripts and build approval),
+  the upstream release and MCP-registry scripts (`release:*`, `sync:mcp-metadata`,
+  `check:mcp-metadata`, `version`, `prepack`), the `test-app:*` scripts, and three unreferenced
+  notes in `docs/`. `scripts/` still holds upstream tooling for some of them (`scripts/mutation`,
+  `scripts/sync-mcp-metadata.mjs`, `scripts/release-mark-dev.mjs`); nothing runs it.
+- `README.md` is rewritten for Extend; `AGENTS.md` and `CONTEXT.md` name the device engine. The
+  ADRs and evidence notes in `docs/` are unchanged upstream history: they quote code strings and
+  upstream issue links as they are.
+- Not in this entry: the iPhone/iPad helper (`apple/runner`), the macOS helper's Swift product
+  and the Android helpers (`android/`) are renamed in their own entries.
+- Files: `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsdown.config.ts`,
+  `bin/extend-engine.mjs`, `src/extend-env.ts` (+ test), `src/bin.ts`, `src/daemon.ts`,
+  `README.md`, `AGENTS.md`, `CONTEXT.md`, this file, and the removals above.
 
 ## 2026-09-27 — Linux: the whole app window is drawn again at record start; `--quality` picks the bit rate (*uncommitted*)
 

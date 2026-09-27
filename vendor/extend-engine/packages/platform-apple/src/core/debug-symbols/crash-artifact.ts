@@ -93,8 +93,8 @@ function writeIpsArtifact(
     const symbol = addressMap.get(addressKey(match.image, match.address))?.text;
     if (symbol) writeIpsFrameSymbol(match.frame, symbol);
   }
-  document.payload.agentDeviceSymbolication = {
-    tool: 'agent-device debug symbols',
+  document.payload.extendEngineSymbolication = {
+    tool: 'extend debug symbols',
     symbolicatedFrames: [...addressMap.values()].filter((entry) => entry.text).length,
   };
   const payload = `${JSON.stringify(document.payload, null, 2)}\n`;

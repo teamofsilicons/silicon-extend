@@ -214,7 +214,7 @@ function handleRunnerCommandStatusRecovery(
     lifecycleState,
     error: new AppError(
       'COMMAND_FAILED',
-      `Runner command "${command.command}" lost its transport response and lifecycle status was ${lifecycleState ? `"${lifecycleState}"` : 'missing'}, so agent-device invalidated the runner session instead of replaying the command.`,
+      `Runner command "${command.command}" lost its transport response and lifecycle status was ${lifecycleState ? `"${lifecycleState}"` : 'missing'}, so the device engine invalidated the runner session instead of replaying the command.`,
       {
         command: command.command,
         commandId: command.commandId,
@@ -358,14 +358,14 @@ function completedWithoutRetainedResponseHint(
   command: string,
   readinessPreflight: RunnerReadinessPreflightRecoveryDetails,
 ): string {
-  return `${lostResponseReadinessContext(readinessPreflight)}The runner is still reachable and reports "${command}" already completed, so agent-device kept the session open and will not replay it. Run snapshot -i to inspect the current UI, then continue from that observed state.`;
+  return `${lostResponseReadinessContext(readinessPreflight)}The runner is still reachable and reports "${command}" already completed, so the device engine kept the session open and will not replay it. Run snapshot -i to inspect the current UI, then continue from that observed state.`;
 }
 
 function runnerReportedFailureHint(
   command: string,
   readinessPreflight: RunnerReadinessPreflightRecoveryDetails,
 ): string {
-  return `${lostResponseReadinessContext(readinessPreflight)}The runner is still reachable and reports "${command}" failed after the transport response was lost, so agent-device kept the session open and did not replay it. Run snapshot -i to inspect the current UI and retry with a selector visible in that snapshot.`;
+  return `${lostResponseReadinessContext(readinessPreflight)}The runner is still reachable and reports "${command}" failed after the transport response was lost, so the device engine kept the session open and did not replay it. Run snapshot -i to inspect the current UI and retry with a selector visible in that snapshot.`;
 }
 
 function inFlightAfterLostResponseHint(
@@ -373,7 +373,7 @@ function inFlightAfterLostResponseHint(
   lifecycleState: string,
   readinessPreflight: RunnerReadinessPreflightRecoveryDetails,
 ): string {
-  return `${lostResponseReadinessContext(readinessPreflight)}The runner is still reachable and reports "${command}" is ${lifecycleState}, so agent-device kept the session open and will not replay it. Wait briefly, run snapshot -i to inspect the current UI, then continue from that observed state.`;
+  return `${lostResponseReadinessContext(readinessPreflight)}The runner is still reachable and reports "${command}" is ${lifecycleState}, so the device engine kept the session open and will not replay it. Wait briefly, run snapshot -i to inspect the current UI, then continue from that observed state.`;
 }
 
 function lostResponseReadinessContext(
@@ -412,7 +412,7 @@ function readReadinessPreflightRecoveryDetails(
 }
 
 function unknownLifecycleStateHint(command: string): string {
-  return `The runner did not confirm that "${command}" reached a safe terminal state, so agent-device kept the conservative invalidation path. Run snapshot -i before retrying if the UI may have changed.`;
+  return `The runner did not confirm that "${command}" reached a safe terminal state, so the device engine kept the conservative invalidation path. Run snapshot -i before retrying if the UI may have changed.`;
 }
 
 function emitRunnerInvalidationDecision(params: {

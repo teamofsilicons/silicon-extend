@@ -1,7 +1,7 @@
 import type { AndroidSnapshotHelperArtifact } from '@agent-device/platform-android/mechanics';
 import { fileURLToPath } from 'node:url';
 
-const SNAPSHOT_HELPER_PACKAGE = 'com.callstack.agentdevice.snapshothelper';
+const SNAPSHOT_HELPER_PACKAGE = 'com.teamofsilicons.extend.snapshothelper';
 const SNAPSHOT_HELPER_FIXTURE_APK_PATH = fileURLToPath(
   new URL('./fixtures/android-helper-apk.fixture', import.meta.url),
 );

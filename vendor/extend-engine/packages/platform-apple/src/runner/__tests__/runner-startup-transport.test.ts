@@ -387,7 +387,7 @@ function makeReadyRunnerSession(): RunnerSession {
 test('resolveRunnerEarlyExitHint surfaces busy-connecting guidance', () => {
   const hint = resolveRunnerEarlyExitHint(
     'Runner did not accept connection (xcodebuild exited early)',
-    'Ineligible destinations for the "AgentDeviceRunner" scheme:\n{ error:Device is busy (Connecting to iPhone) }',
+    'Ineligible destinations for the "SiliconExtendHelper" scheme:\n{ error:Device is busy (Connecting to iPhone) }',
     '',
   );
   assert.match(hint, /still connecting/i);

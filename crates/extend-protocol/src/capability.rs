@@ -289,7 +289,9 @@ pub struct CommandSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
+    /// A command of the device engine. (The variant keeps its 1.0 name; nobody sees it.)
     AgentDevice,
+    /// A command Extend adds around the engine.
     Extend,
 }
 
@@ -566,7 +568,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     ),
 ];
 
-/// agent-device commands Extend does not relay, with the Extend replacement where there is one.
+/// Device engine commands Extend does not relay, with the Extend replacement where there is one.
 pub const NOT_EXPOSED: &[(&str, Option<&str>)] = &[
     ("devices", Some("extend device ls")),
     ("connect", Some("extend session connect <session_id>")),
@@ -606,7 +608,7 @@ pub const NOT_EXPOSED: &[(&str, Option<&str>)] = &[
     ("capabilities", None),
 ];
 
-/// Flags that choose a device or session inside agent-device. Extend chooses those, so they're refused.
+/// Flags that choose a device or session inside the device engine. Extend chooses those, so they're refused.
 pub const RESERVED_FLAGS: &[&str] = &[
     "--platform",
     "--device",

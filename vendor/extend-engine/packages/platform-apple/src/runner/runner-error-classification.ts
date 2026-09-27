@@ -12,7 +12,7 @@ import {
 import { MAIN_THREAD_TIMEOUT_RUNNER_CODE, RUNNER_BUSY_RUNNER_CODE } from './runner-contract.ts';
 
 export const RUNNER_CACHE_RECOVERY_HINT =
-  'If runner build products look stale or corrupted, run `pnpm clean:xcuitest` in a local checkout, or remove ~/.agent-device/apple-runner/derived, then retry.';
+  'If runner build products look stale or corrupted, run `pnpm clean:xcuitest` in a local checkout, or remove ~/.silicon-extend/engine/apple-runner/derived, then retry.';
 
 /**
  * Details evidence a rule requires beyond code and message. A predicate rather than a
@@ -203,7 +203,7 @@ type RunnerErrorRule = {
  */
 const PROFILE_UNUSABLE: RunnerErrorRule['buildFailure'] = {
   reason: 'signing_provisioning_profile_missing',
-  hint: 'Install/select a valid iOS provisioning profile, or set AGENT_DEVICE_IOS_PROVISIONING_PROFILE.',
+  hint: 'Install/select a valid iOS provisioning profile, or set EXTEND_ENGINE_IOS_PROVISIONING_PROFILE.',
 };
 
 /**
@@ -353,7 +353,7 @@ export const RUNNER_ERROR_RULES: readonly RunnerErrorRule[] = [
     verdicts: {},
     buildFailure: {
       reason: 'bundle_identifier_already_registered',
-      hint: 'Set AGENT_DEVICE_IOS_BUNDLE_ID to a unique reverse-DNS value (for example, com.yourname.agentdevice.runner), then retry.',
+      hint: 'Set EXTEND_ENGINE_IOS_BUNDLE_ID to a unique reverse-DNS value (for example, com.yourname.extend.helper), then retry.',
     },
   },
   {
@@ -365,7 +365,7 @@ export const RUNNER_ERROR_RULES: readonly RunnerErrorRule[] = [
     verdicts: {},
     buildFailure: {
       reason: 'bundle_identifier_already_registered',
-      hint: 'Set AGENT_DEVICE_IOS_BUNDLE_ID to a unique reverse-DNS value (for example, com.yourname.agentdevice.runner), then retry.',
+      hint: 'Set EXTEND_ENGINE_IOS_BUNDLE_ID to a unique reverse-DNS value (for example, com.yourname.extend.helper), then retry.',
     },
   },
   {
@@ -374,7 +374,7 @@ export const RUNNER_ERROR_RULES: readonly RunnerErrorRule[] = [
     verdicts: {},
     buildFailure: {
       reason: 'signing_no_development_team',
-      hint: 'Configure signing in Xcode or set AGENT_DEVICE_IOS_TEAM_ID for physical-device runs.',
+      hint: 'Configure signing in Xcode or set EXTEND_ENGINE_IOS_TEAM_ID for physical-device runs.',
     },
   },
   {
@@ -440,7 +440,7 @@ export const RUNNER_ERROR_RULES: readonly RunnerErrorRule[] = [
     verdicts: {},
     buildFailure: {
       reason: 'signing_unspecified',
-      hint: 'Enable Automatic Signing in Xcode or provide AGENT_DEVICE_IOS_TEAM_ID and optional AGENT_DEVICE_IOS_SIGNING_IDENTITY.',
+      hint: 'Enable Automatic Signing in Xcode or provide EXTEND_ENGINE_IOS_TEAM_ID and optional EXTEND_ENGINE_IOS_SIGNING_IDENTITY.',
     },
   },
   {

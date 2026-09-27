@@ -16,7 +16,7 @@ const DEVICE: DeviceInfo = {
   kind: 'emulator',
   booted: true,
 };
-const HELPER_SERVICE = 'com.callstack.agentdevice.imehelper/.TestInputMethodService';
+const HELPER_SERVICE = 'com.teamofsilicons.extend.imehelper/.TestInputMethodService';
 const STATE_DIR = '/state';
 
 const ARTIFACT: AndroidImeHelperArtifact = {
@@ -26,7 +26,7 @@ const ARTIFACT: AndroidImeHelperArtifact = {
     version: '0.0.0',
     assetName: 'helper.apk',
     sha256: 'f'.repeat(64),
-    packageName: 'com.callstack.agentdevice.imehelper',
+    packageName: 'com.teamofsilicons.extend.imehelper',
     versionCode: 1,
     serviceComponent: HELPER_SERVICE,
     broadcastProtocol: 'android-ime-helper-v1',

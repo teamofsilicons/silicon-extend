@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const binPath = path.join(repoRoot, 'bin', 'agent-device.mjs');
+const binPath = path.join(repoRoot, 'bin', 'extend-engine.mjs');
 
 const options = {
   platform: 'ios',

@@ -22,7 +22,7 @@ static const int kDefaultIdleTimeoutSeconds = 60;
 
 static void bridgeLog(NSString *message)
 {
-  fprintf(stderr, "[agent-device-snapshot-bridge] %s\n", message.UTF8String ?: "(no message)");
+  fprintf(stderr, "[silicon-extend-snapshot-bridge] %s\n", message.UTF8String ?: "(no message)");
   fflush(stderr);
 }
 

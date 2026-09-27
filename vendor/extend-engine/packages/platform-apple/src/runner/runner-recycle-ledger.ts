@@ -87,7 +87,7 @@ export function buildRunnerRecycleBudgetExhaustedError(
   });
   return new AppError(
     'COMMAND_FAILED',
-    `iOS runner was already restarted during this request and "${command.command}" still failed, so agent-device stopped instead of paying for another runner boot.`,
+    `iOS runner was already restarted during this request and "${command.command}" still failed, so the device engine stopped instead of paying for another runner boot.`,
     {
       command: command.command,
       commandId: command.commandId,

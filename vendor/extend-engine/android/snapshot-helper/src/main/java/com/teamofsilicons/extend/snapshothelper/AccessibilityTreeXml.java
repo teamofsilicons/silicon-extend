@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 import android.graphics.Rect;
 import android.os.Build;
@@ -170,7 +170,7 @@ final class AccessibilityTreeXml {
     return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && node.isHeading();
   }
 
-  // Declared residue (agent-device #1832): long-clickable is not serialized. Adding it is a helper
+  // Declared residue (upstream #1832): long-clickable is not serialized. Adding it is a helper
   // protocol change (new attribute + host parser + field on the wire node).
   private static void appendDrawingOrderAttribute(StringBuilder xml, AccessibilityNodeInfo node) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

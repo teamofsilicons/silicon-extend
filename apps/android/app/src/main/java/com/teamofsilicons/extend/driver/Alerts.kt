@@ -1,7 +1,7 @@
 package com.teamofsilicons.extend.driver
 
 /**
- * System and app pop-ups, derived from the screen tree the way agent-device does on Android:
+ * System and app pop-ups, derived from the screen tree the way the device engine does on Android:
  * runtime permission prompts, `AlertDialog`s, and small dialog windows.
  */
 data class AlertInfo(

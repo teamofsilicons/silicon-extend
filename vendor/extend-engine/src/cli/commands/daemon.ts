@@ -82,7 +82,7 @@ function orphanedClaimWarnings(orphaned: DaemonStopResult['claimsOrphaned']): st
   if (orphaned.length === 0) return [];
   const devices = orphaned.map((claim) => claim.deviceId).join(', ');
   return [
-    `Ownership of ${devices} was not released cleanly; the claim now blocks other owners until it is settled. Inspect with: agent-device device status --stale, then release with: agent-device device release --stale.`,
+    `Ownership of ${devices} was not released cleanly; the claim now blocks other owners until it is settled. Inspect with: extend device status --stale, then release with: extend device release --stale.`,
   ];
 }
 

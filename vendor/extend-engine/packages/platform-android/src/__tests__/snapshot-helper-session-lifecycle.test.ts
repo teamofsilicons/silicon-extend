@@ -428,5 +428,5 @@ function countForceStops(options: SessionProviderOptions): number {
 }
 
 function isHelperRuntimeForceStop(args: readonly string[]): boolean {
-  return args.join(' ') === 'shell am force-stop com.callstack.agentdevice.snapshothelper';
+  return args.join(' ') === 'shell am force-stop com.teamofsilicons.extend.snapshothelper';
 }

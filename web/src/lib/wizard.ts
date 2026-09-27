@@ -7,10 +7,12 @@
  *
  * The device is created when the name is submitted (the pairing endpoint needs code and name
  * together; attaching needs host and name). From then on there is no going back past `setup`:
- * the device exists, and leaving the wizard leaves it paired.
+ * the device exists, and leaving the wizard leaves it paired. Since 1.1 there is no visibility
+ * choice (a device is only ever visible to the Carbons who paired it), and access is given after
+ * the claim, per Team.
  */
 import { deviceKind, type DeviceKind, type DeviceKindId } from "../config";
-import type { Device, Visibility } from "./types";
+import type { Device } from "./types";
 import { normalizePairingCode } from "./pairing";
 
 export type Step = "kind" | "guide" | "code" | "host" | "name" | "setup" | "access" | "done";
@@ -27,7 +29,6 @@ export interface WizardState {
   code: string;
   hostId: string | null;
   name: string;
-  visibility: Visibility;
   ttlDays: number;
   /** Set once Extend created the device. */
   device: Device | null;
@@ -46,7 +47,6 @@ export type WizardEvent =
   | { type: "set_code"; code: string }
   | { type: "set_host"; hostId: string }
   | { type: "set_name"; name: string }
-  | { type: "set_visibility"; visibility: Visibility }
   | { type: "set_ttl"; days: number }
   | { type: "submit" }
   | { type: "created"; device: Device }
@@ -63,7 +63,6 @@ export function initialState(kind: DeviceKindId | null = null): WizardState {
     code: "",
     hostId: null,
     name: "",
-    visibility: "team",
     ttlDays: 14,
     device: null,
     submitting: false,
@@ -129,8 +128,6 @@ export function reduce(state: WizardState, event: WizardEvent): WizardState {
       return { ...state, hostId: event.hostId, error: null };
     case "set_name":
       return { ...state, name: event.name, error: null };
-    case "set_visibility":
-      return { ...state, visibility: event.visibility };
     case "set_ttl":
       return { ...state, ttlDays: Math.min(30, Math.max(1, Math.round(event.days))) };
     case "next":

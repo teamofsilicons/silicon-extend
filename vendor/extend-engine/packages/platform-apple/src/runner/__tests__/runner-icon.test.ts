@@ -47,8 +47,8 @@ function applyPlutilMutation(args: string[]): void {
 
 function makeProductApps(root: string, configuration: string): [string, string] {
   const productsDir = path.join(root, 'Build', 'Products', configuration);
-  const sourceAppPath = path.join(productsDir, 'AgentDeviceRunner.app');
-  const runnerAppPath = path.join(productsDir, 'AgentDeviceRunnerUITests-Runner.app');
+  const sourceAppPath = path.join(productsDir, 'SiliconExtendHelper.app');
+  const runnerAppPath = path.join(productsDir, 'SiliconExtendHelperUITests-Runner.app');
   fs.mkdirSync(sourceAppPath, { recursive: true });
   fs.mkdirSync(runnerAppPath, { recursive: true });
   return [sourceAppPath, runnerAppPath];

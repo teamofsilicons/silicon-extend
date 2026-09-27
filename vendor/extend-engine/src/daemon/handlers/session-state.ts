@@ -351,7 +351,7 @@ export async function handleSessionStateCommands(params: {
         'DEVICE_IN_USE',
         'Cannot shut down an active session device directly. Use close --shutdown to end the session and turn off the simulator/emulator.',
         {
-          hint: `Run agent-device close --shutdown --session ${sessionName}`,
+          hint: `Run extend close --shutdown --session ${sessionName}`,
           session: sessionName,
           platform: publicPlatformString(device),
           target: device.target ?? 'mobile',

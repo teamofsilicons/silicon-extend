@@ -34,7 +34,7 @@ pub fn parse_start_apps(json: &str) -> Result<Vec<StartApp>, String> {
 }
 
 /// Windows' own tools and shell folders, hidden from `apps` unless `--all` is given (like
-/// agent-device hides system apps).
+/// the device engine hides system apps).
 pub fn is_system_app(app: &StartApp) -> bool {
     let id = app.app_id.to_ascii_lowercase();
     id.starts_with("microsoft.windows.")
@@ -48,7 +48,7 @@ pub fn visible_apps(apps: &[StartApp], all: bool) -> Vec<&StartApp> {
     apps.iter().filter(|a| all || !is_system_app(a)).collect()
 }
 
-/// agent-device's `apps` text: one `Name (id)` line per app.
+/// the device engine's `apps` text: one `Name (id)` line per app.
 pub fn apps_text(apps: &[&StartApp], all: bool) -> String {
     let mut out = String::new();
     if !all {

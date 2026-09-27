@@ -29,9 +29,14 @@ class ExtendNotificationListener : NotificationListenerService() {
         val category: String?,
     )
 
+    /**
+     * The device's notifications, without Silicon Extend's own: its wake notification can name
+     * another side's Silicon and reason, and the in-use one names the Silicon reading them.
+     */
     fun items(): List<Item> {
         val pm = packageManager
         return activeNotifications.orEmpty()
+            .filter { isVisibleToSilicons(it.packageName, packageName) }
             .sortedByDescending { it.postTime }
             .map { sbn ->
                 val extras = sbn.notification.extras
@@ -55,6 +60,9 @@ class ExtendNotificationListener : NotificationListenerService() {
     companion object {
         @Volatile var instance: ExtendNotificationListener? = null
             private set
+
+        /** Whether a notification from [pkg] is listed for a Silicon ([own]: this app's package). */
+        fun isVisibleToSilicons(pkg: String?, own: String): Boolean = pkg != own
 
         fun component(context: Context) = ComponentName(context, ExtendNotificationListener::class.java)
     }

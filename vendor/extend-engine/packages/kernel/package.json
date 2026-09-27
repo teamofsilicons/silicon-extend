@@ -33,6 +33,10 @@
       "types": "./src/errors.ts",
       "default": "./src/errors.ts"
     },
+    "./extend-names": {
+      "types": "./src/extend-names.ts",
+      "default": "./src/extend-names.ts"
+    },
     "./keyed-lock": {
       "types": "./src/keyed-lock.ts",
       "default": "./src/keyed-lock.ts"

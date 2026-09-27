@@ -4,20 +4,23 @@
 //
 // The identity covers content only, not the install path, so timestamps and signing don't count.
 // Where a daemon was started from is runtime-entry.mjs's job: packaging installs it as the runtime's
-// bin/agent-device.mjs, and it replaces a daemon that an identical copy at another location started.
+// bin/extend-engine.mjs, and it replaces a daemon that an identical copy at another location started.
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The packaged agent-device can't start without these: the CLI wrapper, its entry and the daemon,
-// and the entries it loads by a computed path, which the import check below can't follow (every
-// `internal/*` entry in vendor/agent-device/tsdown.config.ts): the PNG worker thread (screenshots),
-// the Metro companion tunnel, the Maestro runScript HTTP child and the update check.
+// The packaged device engine can't start without these: the CLI wrapper, its entry and the daemon,
+// the EXTEND_ENGINE_* settings shim every entry imports first, and the entries it loads by a
+// computed path, which the import check below can't follow (every `internal/*` entry in
+// vendor/extend-engine/tsdown.config.ts): the PNG worker thread (screenshots), the Metro companion
+// tunnel, the Maestro runScript HTTP child and the update check.
+export const PACKAGE_NAME = 'silicon-extend-engine';
 export const REQUIRED_ENTRIES = Object.freeze([
-  'bin/agent-device.mjs',
+  'bin/extend-engine.mjs',
   'dist/src/internal/bin.js',
   'dist/src/internal/daemon.js',
+  'dist/src/internal/extend-env.js',
   'dist/src/internal/png-worker.js',
   'dist/src/internal/companion-tunnel.js',
   'dist/src/internal/run-script-http-child.js',
@@ -30,7 +33,7 @@ export const STAMPED_VERSION = /^\S+[+.]extend\.[0-9a-f]{64}$/;
 // Relative module specifiers in built JavaScript: static `from '…'`, side-effect `import '…'` and
 // dynamic `import('…')`, in single, double or back quotes without interpolation.
 const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)(["'`])(\.{1,2}\/[^"'`$\n]+?)\1/g;
-const REBUILD = 'Rebuild the fork (cd vendor/agent-device && pnpm install --frozen-lockfile && pnpm build) and package again.';
+const REBUILD = 'Rebuild the device engine (cd vendor/extend-engine && pnpm install --frozen-lockfile && pnpm build) and package again.';
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -56,7 +59,7 @@ function isFileWithContent(file) {
 export function stampRuntime(root, nativeFiles = []) {
   const manifestPath = path.join(root, 'package.json');
   if (!existsSync(manifestPath)) {
-    throw new Error(`Can't stamp ${root}: it has no package.json, so it isn't a staged agent-device. Pass the staged agent-device directory.`);
+    throw new Error(`Can't stamp ${root}: it has no package.json, so it isn't a staged device engine. Pass the staged engine directory.`);
   }
   let manifest;
   try {
@@ -64,14 +67,14 @@ export function stampRuntime(root, nativeFiles = []) {
   } catch (error) {
     throw new Error(`Can't stamp ${root}: its package.json isn't valid JSON (${error.message}), so the staging is damaged. ${REBUILD}`);
   }
-  if (manifest?.name !== 'agent-device' || typeof manifest.version !== 'string') {
-    throw new Error(`Can't stamp ${root}: its package.json is not agent-device's (name ${JSON.stringify(manifest?.name)}), so there is nothing to stamp. Pass the staged agent-device directory.`);
+  if (manifest?.name !== PACKAGE_NAME || typeof manifest.version !== 'string') {
+    throw new Error(`Can't stamp ${root}: its package.json is not the device engine's (name ${JSON.stringify(manifest?.name)}, not ${JSON.stringify(PACKAGE_NAME)}), so there is nothing to stamp. Pass the staged engine directory.`);
   }
   // Missing or partial builds must not acquire a valid identity, so nothing is written until the
   // entry points, native helpers and every relative import in bin/ and dist/ check out.
   const missingEntries = REQUIRED_ENTRIES.filter((entry) => !isFileWithContent(path.join(root, entry)));
   if (missingEntries.length) {
-    throw new Error(`Can't stamp ${root}: ${missingEntries.join(', ')} ${missingEntries.length === 1 ? 'is' : 'are'} missing or empty, so this agent-device build is incomplete and Silicon Extend couldn't start it. ${REBUILD}`);
+    throw new Error(`Can't stamp ${root}: ${missingEntries.join(', ')} ${missingEntries.length === 1 ? 'is' : 'are'} missing or empty, so this device engine build is incomplete and Silicon Extend couldn't start it. ${REBUILD}`);
   }
   for (const file of nativeFiles) {
     if (!isFileWithContent(file)) {
@@ -142,7 +145,7 @@ function invokedAsScript() {
 if (invokedAsScript()) {
   const [root, ...nativeFiles] = process.argv.slice(2);
   if (!root) {
-    console.error('Usage: stamp-runtime.mjs <staged-agent-device> [native-helper ...]');
+    console.error('Usage: stamp-runtime.mjs <staged-engine> [native-helper ...]');
     process.exit(2);
   }
   try {

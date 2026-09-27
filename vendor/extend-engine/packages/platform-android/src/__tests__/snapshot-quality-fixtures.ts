@@ -14,7 +14,7 @@ export const androidSnapshotQualityHelperArtifact = ANDROID_SNAPSHOT_HELPER_FIXT
 
 const installedHelperProbe = {
   exitCode: 0,
-  stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode:13004',
+  stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode:13004',
   stderr: '',
 };
 

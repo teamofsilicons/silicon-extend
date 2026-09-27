@@ -110,7 +110,7 @@ export function terminateApp(udid: string, appId: string): void {
 export function stopDaemon(repoRoot: string, stateDir: string): void {
   const result = spawnSync(
     process.execPath,
-    ['bin/agent-device.mjs', 'daemon', 'stop', '--state-dir', stateDir, '--clean', '--json'],
+    ['bin/extend-engine.mjs', 'daemon', 'stop', '--state-dir', stateDir, '--clean', '--json'],
     {
       cwd: repoRoot,
       env: { ...process.env, AGENT_DEVICE_NO_UPDATE_NOTIFIER: '1' },

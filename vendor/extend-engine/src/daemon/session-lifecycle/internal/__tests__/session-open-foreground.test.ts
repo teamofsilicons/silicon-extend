@@ -248,7 +248,7 @@ test('a snapshot-capture failure never masks the successful open', async () => {
     });
     expect(result.data?.warnings).toEqual([
       'pre-existing warning',
-      'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: agent-device snapshot -i',
+      'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: extend snapshot -i',
     ]);
   }
 });
@@ -283,7 +283,7 @@ test('a THROWN snapshot-capture failure never masks the successful open either',
     expect(error?.message).toBe('runner crashed mid-capture');
     expect(error?.diagnosticId).toBe('diag-thrown-1');
     expect(result.data?.warnings).toEqual([
-      'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: runner crashed mid-capture). Run: agent-device snapshot -i',
+      'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: runner crashed mid-capture). Run: extend snapshot -i',
     ]);
   }
 });

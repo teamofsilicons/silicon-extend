@@ -52,7 +52,7 @@ export function buildDeviceClaimInspectionCommand(
     : publicPlatformString(device);
   const selector = isApplePlatform(device.platform) ? '--udid' : '--serial';
   return [
-    `agent-device device ${subcommand}`,
+    `extend device ${subcommand}`,
     `--platform ${shellQuoteIfNeeded(publicPlatform)}`,
     `${selector} ${shellQuoteIfNeeded(device.id)}`,
     ...(subcommand === 'release' || deviceClaimRequiresStaleInspection(conflict.classification)

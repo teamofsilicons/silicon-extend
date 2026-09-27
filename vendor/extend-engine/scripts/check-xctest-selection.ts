@@ -3,7 +3,7 @@
 // (#1781 A7). Also ensures those unit-test methods are stripped from the Apple runner source
 // copied into the npm package.
 //
-// Three lanes run the `AgentDeviceRunnerUITests` bundle, and each reaches a different set:
+// Three lanes run the `SiliconExtendHelperUITests` bundle, and each reaches a different set:
 //
 //   - host    macos.yml, macOS host, every PR: the whole bundle as compiled for macOS, minus
 //             `-skip-testing:` — the pure runner-decision tests, whose guard is

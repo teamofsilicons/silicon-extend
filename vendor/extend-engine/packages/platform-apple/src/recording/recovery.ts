@@ -479,7 +479,7 @@ function isOptionalCanonicalRemotePath(value: unknown): value is string | undefi
 }
 
 function isCanonicalRunnerRemotePath(value: unknown): value is string {
-  return typeof value === 'string' && /^tmp\/agent-device-recording-\d+\.mp4$/.test(value);
+  return typeof value === 'string' && /^tmp\/silicon-extend-recording-\d+\.mp4$/.test(value);
 }
 
 function descriptorMatchesAppleDevice(

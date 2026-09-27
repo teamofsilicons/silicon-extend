@@ -31,14 +31,14 @@ const SKIPPED_ROOT_FILES = new Set(['README.md', 'RUNNER_PROTOCOL.md']);
 // The isolation scan's positive control compiles only in scripts/build-xcuitest-apple.sh builds:
 // the repo gates and the prebuilt release runner. Runners built from this package omit it.
 const SKIPPED_RUNNER_FILE_PATHS = new Set([
-  path.join('AgentDeviceRunner', 'AgentDeviceRunnerUITests', 'RunnerIsolationCanary.swift'),
+  path.join('SiliconExtendHelper', 'SiliconExtendHelperUITests', 'RunnerIsolationCanary.swift'),
 ]);
 // XCTest discovers instance methods named test*; anything matching this that survives stripping
 // would ship to (and compile on) every user's machine. Only the runner's command-loop entrypoint
 // is a legitimate test method in the packaged source.
 const SHIPPED_TEST_METHOD_ALLOWLIST = new Map([
   [
-    path.join('AgentDeviceRunner', 'AgentDeviceRunnerUITests', 'RunnerTests.swift'),
+    path.join('SiliconExtendHelper', 'SiliconExtendHelperUITests', 'RunnerTests.swift'),
     new Set(['testCommand']),
   ],
 ]);

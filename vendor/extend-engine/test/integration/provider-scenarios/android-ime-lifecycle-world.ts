@@ -12,9 +12,9 @@ export type AndroidProviderShellState = {
   userRotation: string;
 };
 
-const IME_INPUT_TEXT_ACTION = 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64';
-const IME_CLEAR_TEXT_ACTION = 'com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT';
-const IME_PACKAGE = 'com.callstack.agentdevice.imehelper';
+const IME_INPUT_TEXT_ACTION = 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64';
+const IME_CLEAR_TEXT_ACTION = 'com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT';
+const IME_PACKAGE = 'com.teamofsilicons.extend.imehelper';
 const IME_PROTOCOL = 'android-ime-helper-v1';
 
 export function androidImeInputTextBroadcast(text: string): string[] {
@@ -64,12 +64,12 @@ export function androidImeLifecycleAdbResult(
   state: AndroidProviderShellState | undefined,
 ): AndroidImeAdbResult | undefined {
   if (
-    key === 'shell cmd package list packages --show-versioncode com.callstack.agentdevice.imehelper'
+    key === 'shell cmd package list packages --show-versioncode com.teamofsilicons.extend.imehelper'
   ) {
     // A newer provider-installed helper takes the actual durable activation/recovery path without
     // adding an unrelated helper-installation fixture to each scenario.
     return {
-      stdout: 'package:com.callstack.agentdevice.imehelper versionCode:999999\n',
+      stdout: 'package:com.teamofsilicons.extend.imehelper versionCode:999999\n',
       stderr: '',
       exitCode: 0,
     };

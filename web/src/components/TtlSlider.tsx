@@ -26,7 +26,7 @@ export function TtlSlider(props: { value: number; onInput: (days: number) => voi
         <span>30 days</span>
       </div>
       <p class="fine">
-        A Silicon using the device, or you changing its settings, counts as activity. When the time runs out the device unpairs itself and every Silicon loses access.
+        A Silicon using the device, or you changing its settings, counts as activity. When the time runs out your pair ends and every Silicon you gave access to loses it.
       </p>
     </div>
   );

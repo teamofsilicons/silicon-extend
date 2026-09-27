@@ -284,7 +284,8 @@ fn install_and_push_refuse_inputs_that_are_not_local_files() {
     for (argv, says) in [
         (
             &["install", "com.example.app", "0192f0c4-7b1a-7c3e-9a4d-2b6f1e8c5a70"][..],
-            "extend file get 0192f0c4-7b1a-7c3e-9a4d-2b6f1e8c5a70 --out ./app.apk",
+            // Suggested to a Silicon, so it names the Team.
+            "extend --team acme file get 0192f0c4-7b1a-7c3e-9a4d-2b6f1e8c5a70 --out ./app.apk",
         ),
         (
             &["install", "com.example.app", "https://briefcase.example/f/abc"],

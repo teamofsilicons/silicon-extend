@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test, vi } from 'vitest';
 
-const HELPER_SERVICE = 'com.callstack.agentdevice.imehelper/.TestInputMethodService';
+const HELPER_SERVICE = 'com.teamofsilicons.extend.imehelper/.TestInputMethodService';
 const NORMAL_IME = 'com.google.android.inputmethod.latin/.LatinIME';
 
 // probeAndroidTestIme reads the helper's service component from the bundled artifact; inject a
@@ -18,7 +18,7 @@ vi.mock('../ime-helper.ts', async (importOriginal) => {
         version: '0.0.0',
         assetName: 'helper.apk',
         sha256: 'a'.repeat(64),
-        packageName: 'com.callstack.agentdevice.imehelper',
+        packageName: 'com.teamofsilicons.extend.imehelper',
         versionCode: 1,
         serviceComponent: HELPER_SERVICE,
         broadcastProtocol: 'android-ime-helper-v1' as const,

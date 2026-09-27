@@ -22,7 +22,7 @@ test('prepareMetroRuntime starts Metro, bridges through proxy, and writes runtim
   const tempRoot = mkdtempForTestSync('agent-device-metro');
   const projectRoot = path.join(tempRoot, 'project');
   const binDir = path.join(tempRoot, 'bin');
-  const runtimeFilePath = path.join(projectRoot, '.agent-device', 'metro-runtime.json');
+  const runtimeFilePath = path.join(projectRoot, '.silicon-extend', 'engine', 'metro-runtime.json');
   const metroPort = await findFreePort();
   const proxyPort = await findFreePort();
   const requests: string[] = [];
@@ -517,7 +517,7 @@ test('prepareMetroRuntime rejects incomplete proxy configuration', async () => {
     (error) =>
       error instanceof AppError &&
       error.code === 'INVALID_ARGS' &&
-      error.message.includes('AGENT_DEVICE_METRO_BEARER_TOKEN'),
+      error.message.includes('EXTEND_ENGINE_METRO_BEARER_TOKEN'),
   );
 
   await assert.rejects(

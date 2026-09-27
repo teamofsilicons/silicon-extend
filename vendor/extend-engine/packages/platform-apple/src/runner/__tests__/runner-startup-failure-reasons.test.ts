@@ -83,7 +83,13 @@ beforeEach(() => {
   projectRoot = mkdtempForTestSync('agent-device-startup-failure-root-');
   // `buildXctestrunArtifact` refuses to start a build without the runner project.
   fs.mkdirSync(
-    path.join(projectRoot, 'apple', 'runner', 'AgentDeviceRunner', 'AgentDeviceRunner.xcodeproj'),
+    path.join(
+      projectRoot,
+      'apple',
+      'runner',
+      'SiliconExtendHelper',
+      'SiliconExtendHelper.xcodeproj',
+    ),
     { recursive: true },
   );
   derivedPath = mkdtempForTestSync('agent-device-startup-failure-derived-');
@@ -210,7 +216,7 @@ function assertToolOutputReachable(
     return;
   }
   const nestedDetails = envelope.details?.details as Record<string, unknown> | undefined;
-  assert.match(String(nestedDetails?.stdout), /AgentDeviceRunner/);
+  assert.match(String(nestedDetails?.stdout), /SiliconExtendHelper/);
 }
 
 test('every startup failure reason has a recorded fixture', () => {
@@ -277,7 +283,7 @@ test('an argv that names a provisioning profile is not evidence of a signing fai
 
   assert.equal(envelope.details?.reason, RUNNER_STARTUP_FAILURE_UNCLASSIFIED_REASON);
   assert.match(String(envelope.hint), CACHE_RECOVERY_HINT);
-  assert.doesNotMatch(String(envelope.hint), /AGENT_DEVICE_IOS_PROVISIONING_PROFILE/);
+  assert.doesNotMatch(String(envelope.hint), /EXTEND_ENGINE_IOS_PROVISIONING_PROFILE/);
 });
 
 test('a signing sentence that arrives only in the thrown message is still classified', async () => {
@@ -288,7 +294,7 @@ test('a signing sentence that arrives only in the thrown message is still classi
   const envelope = await driveBuildFailure(messageOnly);
 
   assert.equal(envelope.details?.reason, 'signing_no_development_team');
-  assert.match(String(envelope.hint), /AGENT_DEVICE_IOS_TEAM_ID/);
+  assert.match(String(envelope.hint), /EXTEND_ENGINE_IOS_TEAM_ID/);
 });
 
 test('the failure the build catch publishes does not classify itself', async () => {
@@ -325,14 +331,14 @@ test('an app identifier named without the availability fact is not read as a tak
   const nearMiss: RunnerStartupFailureFixture = {
     ...buildFixtureById('app-id-not-available'),
     output:
-      "error: App Identifier 'com.yourname.agentdevice.runner' is invalid (in target 'AgentDeviceRunner' from project 'AgentDeviceRunner')\n** TEST BUILD FAILED **\n",
+      "error: App Identifier 'com.yourname.extend.helper' is invalid (in target 'SiliconExtendHelper' from project 'SiliconExtendHelper')\n** TEST BUILD FAILED **\n",
   };
 
   const envelope = await driveBuildFailure(nearMiss);
 
   assert.equal(envelope.details?.reason, RUNNER_STARTUP_FAILURE_UNCLASSIFIED_REASON);
   assert.match(String(envelope.hint), CACHE_RECOVERY_HINT);
-  assert.doesNotMatch(String(envelope.hint), /AGENT_DEVICE_IOS_BUNDLE_ID/);
+  assert.doesNotMatch(String(envelope.hint), /EXTEND_ENGINE_IOS_BUNDLE_ID/);
 });
 
 test('a conflicting-settings failure is not answered with missing-profile advice', async () => {
@@ -344,7 +350,7 @@ test('a conflicting-settings failure is not answered with missing-profile advice
 
   assert.equal(envelope.details?.reason, RUNNER_STARTUP_FAILURE_UNCLASSIFIED_REASON);
   assert.match(String(envelope.hint), CACHE_RECOVERY_HINT);
-  assert.doesNotMatch(String(envelope.hint), /AGENT_DEVICE_IOS_PROVISIONING_PROFILE/);
+  assert.doesNotMatch(String(envelope.hint), /EXTEND_ENGINE_IOS_PROVISIONING_PROFILE/);
 });
 
 /**

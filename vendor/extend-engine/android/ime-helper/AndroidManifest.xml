@@ -1,16 +1,16 @@
 <manifest
     xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.callstack.agentdevice.imehelper">
+    package="com.teamofsilicons.extend.imehelper">
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36" />
 
     <application
         android:debuggable="false"
-        android:label="Agent Device Test IME"
+        android:label="Silicon Extend Keyboard"
         android:theme="@android:style/Theme.NoDisplay">
 
         <service
             android:name=".TestInputMethodService"
-            android:label="Agent Device Test IME"
+            android:label="Silicon Extend Keyboard"
             android:permission="android.permission.BIND_INPUT_METHOD"
             android:exported="true"
             android:directBootAware="true">

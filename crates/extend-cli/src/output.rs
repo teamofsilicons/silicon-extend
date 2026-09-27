@@ -149,6 +149,14 @@ impl Out {
         }
     }
 
+    /// Something worth knowing that is not a problem, on stderr (text mode only; `--json` carries
+    /// it in the data where it matters).
+    pub fn note(&self, message: &str) {
+        if !self.json {
+            errln!("{} {message}", self.colors.paint(Stream::Err, "36", "note:"));
+        }
+    }
+
     /// `-v`: one line on stderr.
     pub fn verbose(&self, line: impl FnOnce() -> String) {
         if self.verbose {

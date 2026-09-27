@@ -12,8 +12,8 @@ extension RunnerTests {
   private func loadSnapshotQualityStatesFixture() throws -> [String] {
     let fixtureURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent() // UnitTests
-      .deletingLastPathComponent() // AgentDeviceRunnerUITests
-      .deletingLastPathComponent() // AgentDeviceRunner
+      .deletingLastPathComponent() // SiliconExtendHelperUITests
+      .deletingLastPathComponent() // SiliconExtendHelper
       .deletingLastPathComponent() // runner
       .deletingLastPathComponent() // apple
       .deletingLastPathComponent() // repo root

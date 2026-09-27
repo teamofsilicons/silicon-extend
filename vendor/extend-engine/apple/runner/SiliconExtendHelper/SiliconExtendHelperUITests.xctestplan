@@ -16,9 +16,9 @@
   "testTargets" : [
     {
       "target" : {
-        "containerPath" : "container:AgentDeviceRunner.xcodeproj",
+        "containerPath" : "container:SiliconExtendHelper.xcodeproj",
         "identifier" : "20EA2EDC2F2CFC7C001CF0EF",
-        "name" : "AgentDeviceRunnerUITests"
+        "name" : "SiliconExtendHelperUITests"
       }
     }
   ],

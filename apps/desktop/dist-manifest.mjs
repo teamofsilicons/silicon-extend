@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Which source a built agent-device fork (vendor/agent-device/dist) was built from.
+// Which source a built device engine (vendor/extend-engine/dist) was built from.
 //
-//   node apps/desktop/dist-manifest.mjs record <agent-device>   after `pnpm build`
-//   node apps/desktop/dist-manifest.mjs check <agent-device>    before packaging a dist it can't rebuild
+//   node apps/desktop/dist-manifest.mjs record <engine>   after `pnpm build`
+//   node apps/desktop/dist-manifest.mjs check <engine>    before packaging a dist it can't rebuild
 //
-// `record` writes <agent-device>/.extend-build-manifest.json: the SHA-256 of every file the build
+// `record` writes <engine>/.extend-build-manifest.json: the SHA-256 of every file the build
 // reads (src, packages, the manifests and build configs) and of the dist it produced. `check`
 // compares the tree with it and names what changed since: an edited file, a new one, and a
 // deleted one, which a "newer than the dist" test can't see. Content hashes, not timestamps, so a
@@ -21,7 +21,7 @@ const INPUT_DIRECTORIES = ['src', 'packages'];
 const INPUT_FILES = /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsdown\.config\.ts|tsconfig[^/]*\.json)$/;
 // Never inputs: installed dependencies and what builds and type checks write.
 const PRUNED = new Set(['node_modules', 'dist', 'dist-types', '.build', '.swiftpm', '.tmp', 'coverage']);
-const REBUILD = 'Rebuild it where pnpm is: (cd vendor/agent-device && pnpm install --frozen-lockfile && pnpm build) && node apps/desktop/dist-manifest.mjs record vendor/agent-device, then package again.';
+const REBUILD = 'Rebuild it where pnpm is: (cd vendor/extend-engine && pnpm install --frozen-lockfile && pnpm build) && node apps/desktop/dist-manifest.mjs record vendor/extend-engine, then package again.';
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -102,7 +102,7 @@ export function check(root) {
   for (const file of Object.keys(now)) if (!(file in manifest.sources)) added.push(file);
   const differences = [...listed('changed:', changed), ...listed('added:', added), ...listed('deleted:', deleted)];
   if (!differences.length) return { fresh: true };
-  return { fresh: false, reason: `${where} was built from other source than vendor/agent-device has now (${differences.join('; ')}), so it may not contain the current code. ${REBUILD}` };
+  return { fresh: false, reason: `${where} was built from other source than vendor/extend-engine has now (${differences.join('; ')}), so it may not contain the current code. ${REBUILD}` };
 }
 
 function invokedAsScript() {
@@ -117,7 +117,7 @@ function invokedAsScript() {
 if (invokedAsScript()) {
   const [command, root] = process.argv.slice(2);
   if (!['record', 'check'].includes(command) || !root) {
-    console.error('Usage: dist-manifest.mjs record|check <agent-device directory>');
+    console.error('Usage: dist-manifest.mjs record|check <engine directory>');
     process.exit(2);
   }
   try {

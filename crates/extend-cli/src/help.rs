@@ -44,7 +44,7 @@ pub const NODES: &[Node] = &[
         path: "logout",
         usage: "extend logout",
         who: "Carbon or Silicon",
-        purpose: "Sign out and delete the saved tokens. A Silicon signing out ends its running sessions.",
+        purpose: "Sign out and delete the saved tokens. A Silicon signing out ends its running sessions. A Carbon signing out ends the running sessions of the Silicons they gave access to (on their own pairs only, never another Carbon's).",
         used_with: "Sign in again later with `extend login <slt>`.",
         flags: &[],
         examples: &[],
@@ -63,12 +63,16 @@ pub const NODES: &[Node] = &[
     },
     Node {
         path: "team",
-        usage: "extend team ls | extend team silicons | extend team use <handle>",
+        usage: "extend team ls | extend team silicons [--all-teams] | extend team use <handle>",
         who: "Carbon or Silicon",
         purpose: "List the teams this login reaches, the Silicons in the team (to grant access), or choose the default team.",
-        used_with: "Any command also takes --team <handle> for one run.",
-        flags: &[],
-        examples: &["extend team use acme"],
+        used_with: "Any command also takes --team <handle> for one run. A Silicon works in one Team at a time: the Team it was given access in. A Carbon's devices show in every Team, and a grant goes into the Team you pick with --team (default: the default team). \
+`extend team silicons --all-teams` lists the Silicons of every Team your login reaches, with a TEAM column, and says which Teams couldn't be read and why. A Team you don't see isn't one your Extend login reaches: sign in to Extend again and select it.",
+        flags: &[(
+            "--all-teams",
+            "silicons: every Team your login reaches, not only --team's",
+        )],
+        examples: &["extend team use acme", "extend team silicons --all-teams"],
     },
     Node {
         path: "config",
@@ -90,29 +94,36 @@ pub const NODES: &[Node] = &[
     },
     Node {
         path: "device",
-        usage: "extend device <ls|show|pair|attach|setup|setup-code|rename|visibility|ttl|stop|rm|access|activity|requests>",
+        usage: "extend device <ls|show|pair|attach|setup|setup-code|rename|ttl|stop|rm|access|activity|requests|wake|wake-requests>",
         who: "Carbon or Silicon",
         purpose: "Find devices (Silicons: the ones you can use) and manage them (Carbons: the ones you paired).",
-        used_with: "A Silicon runs `extend device ls`, then `extend device show <device_id>` to see what it can do there, then `extend session new <device_id>`.",
+        used_with: "A Silicon runs `extend device ls`, then `extend device show <device_id>` to see what it can do there, then `extend session new <device_id>`. A device that isn't awake still works for the terminal and Android debugging; for its screen, ask its Carbon with `extend device wake <device_id> --reason \"...\"`. \
+A device belongs to the Carbons who paired it: a Carbon sees every device they paired, whichever Team is selected, and nobody else sees it. Several Carbons can pair one device (\"Pair with another Carbon\" in its Extend app); each pair is separate.",
         flags: &[],
         examples: &["extend device ls", "extend device show 7c1e09ab"],
     },
     Node {
         path: "device ls",
-        usage: "extend device ls [--online] [--os <os>] [--team-visible] [--removed] [--json]",
+        usage: "extend device ls [--online] [--os <os>] [--removed] [--json]",
         who: "Carbon or Silicon",
-        purpose: "Silicon: every device you have access to. Carbon: every device you paired; --team-visible lists other Carbons' team-visible devices.",
-        used_with: "Pick a device id from here for `extend device show` or `extend session new`. Every page is read, so the list is complete (it says so if it had to stop early).",
+        purpose: "Silicon: every device you have access to in your Team. Carbon: every device you paired, in every Team.",
+        used_with: "Pick a device id from here for `extend device show` or `extend session new`. Every page is read, so the list is complete (it says so if it had to stop early). \
+Columns for a Carbon: ID NAME OS ONLINE AWAKE IN USE ACCESS LAST USED DAYS LEFT; NAME says (shared) when another Carbon paired the device too, and IN USE shows your Silicon and its Team, \"yes (another Carbon's Silicon)\", or \"a carried device (stop it at the computer)\". \
+Columns for a Silicon: ID NAME OS ONLINE AWAKE IN USE; IN USE names the Silicon when it is in your Team and has your Carbon, else says \"in use\", then \"asked\" while your wake request is open, and (same device as <id>) when another Carbon's pair of the same device is yours to use too. \
+AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — when Extend can't tell (offline, an app older than 1.1, an iPhone or iPad). A Silicon sees only the devices it was given access to in its Team: pass --team <handle> for another of its Teams.",
         flags: &[
             ("--online", "only online devices"),
             (
                 "--os <os>",
                 "android, android_tv, macos, windows, linux, ios, ipados, tvos, samsung_tv, lg_tv",
             ),
-            ("--team-visible", "Carbons: other Carbons' devices"),
             (
                 "--removed",
                 "Carbons: also your removed devices, whose activity stays readable",
+            ),
+            (
+                "--team-visible",
+                "deprecated: devices are only visible to the Carbons who paired them, so it lists nothing",
             ),
         ],
         examples: &["extend device ls --online"],
@@ -122,19 +133,22 @@ pub const NODES: &[Node] = &[
         usage: "extend device show <device_id> [--json]",
         who: "Carbon or Silicon",
         purpose: "One device, and exactly what a Silicon can do on it right now given its OS and permissions, plus what's missing and why.",
-        used_with: "Read before starting a session so you know which commands will work.",
+        used_with: "Read before starting a session so you know which commands will work. It says whether the device is awake, and your open wake request. A Carbon also sees who has access, by Team, whether another Carbon paired it too, whether wake requests are on, and every open wake request. On a computer several Carbons paired, only Silicons given access by the Carbon who installed Silicon Extend on it get the terminal; the others see it under Missing, with why.",
         flags: &[],
         examples: &["extend device show 7c1e09ab"],
     },
     Node {
         path: "device pair",
-        usage: "extend device pair <pairing_code> --name <name> [--visibility team|personal] [--ttl-days <1-30>] [--access <silicon_id>]...",
+        usage: "extend device pair <pairing_code> --name <name> [--ttl-days <1-30>] [--access <silicon_id>]...",
         who: "Carbon",
-        purpose: "Pair the device showing this code into your team. The code is 6 hexadecimal characters, rotates every 5 minutes and works once.",
-        used_with: "Then follow the device's own setup with `extend device setup <device_id> --watch`.",
+        purpose: "Pair the device showing this code to your account. The code is 6 hexadecimal characters, rotates every 5 minutes and works once.",
+        used_with: "Then follow the device's own setup with `extend device setup <device_id> --watch`. A device another Carbon already paired shows a code under \"Pair with another Carbon\" in its Extend app (1.1 or later); your pair is separate, with its own name, access and lifetime. --access grants in --team's Team (default: the default team).",
         flags: &[
             ("--name <name>", "1–64 characters, required"),
-            ("--visibility", "team (default) or personal"),
+            (
+                "--visibility",
+                "deprecated and ignored: a device is only visible to the Carbons who paired it",
+            ),
             (
                 "--ttl-days <n>",
                 "days without activity before the pair ends, 1–30, default 14",
@@ -161,12 +175,25 @@ pub const NODES: &[Node] = &[
     },
     Node {
         path: "device setup",
-        usage: "extend device setup <device_id> [--watch]",
+        usage: "extend device setup <device_id> [--watch] [--retry [--step <key>]]",
         who: "Carbon (owner)",
-        purpose: "The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete.",
-        used_with: "Run after `extend device pair` or `extend device attach`.",
-        flags: &[("--watch", "refresh every 2 s until setup completes")],
-        examples: &[],
+        purpose: "The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete; --retry runs failed steps again.",
+        used_with: "Run after `extend device pair` or `extend device attach`. A failed step says what is wrong and what to do; once that is done, `--retry` runs it again at once and follows it until it finishes or fails. The device (or the computer it pairs through) must be online and run Silicon Extend 1.1 or later; an older app retries from its own screen.",
+        flags: &[
+            ("--watch", "refresh every 2 s until setup completes"),
+            (
+                "--retry",
+                "run every failed step again now, then follow them (at most once every 5 s)",
+            ),
+            (
+                "--step <key>",
+                "with --retry: only this step (its key is in --json, like wireless_debugging)",
+            ),
+        ],
+        examples: &[
+            "extend device setup 7c1e09ab --retry",
+            "extend device setup 7c1e09ab --retry --step wireless_debugging",
+        ],
     },
     Node {
         path: "device setup-code",
@@ -190,8 +217,8 @@ pub const NODES: &[Node] = &[
         path: "device visibility",
         usage: "extend device visibility <device_id> team|personal",
         who: "Carbon (owner)",
-        purpose: "Choose whether other Carbons in the team can see the device exists.",
-        used_with: "",
+        purpose: "Gone in Silicon Extend 1.1: a device is only visible to the Carbons who paired it. It exits 2 and changes nothing.",
+        used_with: "Choose who can use a device with `extend device access grant <device_id> <silicon_id>`.",
         flags: &[],
         examples: &[],
     },
@@ -208,8 +235,8 @@ pub const NODES: &[Node] = &[
         path: "device stop",
         usage: "extend device stop <device_id>",
         who: "Carbon (owner)",
-        purpose: "Stop the Silicon using the device right now.",
-        used_with: "See who is using it with `extend device show <device_id>`.",
+        purpose: "Stop the Silicon using the device right now, whichever Carbon gave it access: every Carbon who paired a device can stop it.",
+        used_with: "See who is using it with `extend device show <device_id>`. A Silicon another Carbon gave access to isn't named. On a computer it also stops the devices it carries that you paired; a carried device only another Carbon paired is stopped from the computer's Silicon Extend app (exit 6 says so).",
         flags: &[],
         examples: &[],
     },
@@ -227,16 +254,19 @@ pub const NODES: &[Node] = &[
         usage: "extend device access ls <device_id> | grant <device_id> <silicon_id>... | revoke <device_id> <silicon_id>...",
         who: "Carbon (owner)",
         purpose: "See, give and take away which Silicons can use a device. Taking access away ends that Silicon's running session at once.",
-        used_with: "`extend team silicons` lists the Silicons you can grant.",
+        used_with: "A grant is for one Team: the Silicon's, given with --team (default: the default team). Your Extend login must reach that Team; if it doesn't, sign in to Extend again and select it. Silicons from any of your Teams can use the same device. `extend team silicons --all-teams` lists the Silicons you can grant. revoke with --team takes access away in that Team only; without it, in every Team, and it lists them. After a grant it warns when Ting doesn't know Extend's notification types in that Team (`extend ting status`).",
         flags: &[],
-        examples: &["extend device access grant 7c1e09ab si:chef"],
+        examples: &[
+            "extend --team labs device access grant 7c1e09ab si:chef",
+            "extend device access revoke 7c1e09ab si:chef",
+        ],
     },
     Node {
         path: "device activity",
         usage: "extend device activity <device_id> [--silicon <id>] [--session <id>] [--since <time>] [--until <time>] [--limit <n>]",
         who: "Carbon (owner)",
-        purpose: "Every action on the device, which Silicon did it, and when. Typed text is redacted.",
-        used_with: "",
+        purpose: "Every action on the device, which Silicon did it, in which Team, and when. Typed text is redacted.",
+        used_with: "Only your own side: your Silicons' actions on your pair of the device. What other Carbons' Silicons do there is in their logs.",
         flags: &[
             ("--silicon <id>", "only this Silicon's actions"),
             ("--session <id>", "only this session's actions"),
@@ -249,10 +279,51 @@ pub const NODES: &[Node] = &[
         path: "device requests",
         usage: "extend device requests <device_id>",
         who: "Carbon (owner)",
-        purpose: "Requests Silicons sent each other for this device, with their reasons.",
-        used_with: "",
+        purpose: "Requests Silicons sent for this device, with their reasons and Teams.",
+        used_with: "It also lists requests sent to you (TO says you): a Silicon asked for the device while a Silicon you gave access to was using it, and the two aren't in the same Team with the same Carbon. FROM names the Silicon that asked. Stop your Silicon with `extend device stop <device_id>` to let it in.",
         flags: &[],
         examples: &[],
+    },
+    Node {
+        path: "device wake",
+        usage: "extend device wake <device_id> --reason \"<text>\" | extend device wake <device_id> --cancel",
+        who: "Silicon",
+        purpose: "Ask the Carbon who gave you access to wake a device that isn't awake. Extend never wakes a device itself.",
+        used_with: "`extend device ls` and `extend device show` say whether a device is awake. The device shows your name and reason where it can (a phone's lock screen, a computer's notifications), and your Carbon gets it through Ting. When the device wakes you get a Ting (or the Carbon says so), then run `extend session new <device_id>`. \
+Asking again after 5 minutes refreshes the request (sooner: exit 12); a request expires 30 minutes after the last ask. --cancel withdraws it. Exit 6 when the device is already awake, another Silicon is using it, or its Carbon turned wake requests off; 4 without access; 5 for an unknown device. The terminal and Android debugging keep working while a device isn't awake: you don't need to wake it for them.",
+        flags: &[
+            (
+                "--reason <text>",
+                "1–300 characters, shown to the Carbon exactly as written",
+            ),
+            ("--cancel", "withdraw your open request instead"),
+        ],
+        examples: &[
+            "extend --team labs device wake 0d44e1f2 --reason \"Need the TV on to check the new menu\"",
+            "extend device wake 0d44e1f2 --cancel",
+        ],
+    },
+    Node {
+        path: "device wake-requests",
+        usage: "extend device wake-requests ls <device_id> [--open] | answer <device_id> woken|declined [--wake-id <id>]... | mute <device_id> [--silicon <id> [--only-team <team>]] | unmute <device_id> [--silicon <id> [--only-team <team>]]",
+        who: "Carbon (owner)",
+        purpose: "See and answer requests from Silicons to wake your device, or turn them off.",
+        used_with: "`answer woken` says the device is awake now: it ends every open request on it, whichever Carbon's Silicons asked and in whichever Team, and each Silicon that asked gets a Ting. Use it where Extend can't tell when a device wakes (iPhone, iPad, an app older than 1.1). `answer declined` ends the requests on your pair only (or the --wake-id ones), and each Silicon gets a Ting. \
+`mute` turns wake requests off for the device, or for one Silicon (in every Team, or only --only-team), and withdraws the open ones; `unmute` turns them on again. A device sounds at most once every 15 minutes, and you get at most one wake Ting per device and Team every 15 minutes and 6 an hour; later asks wait for the hour's window.",
+        flags: &[
+            ("--open", "ls: only open requests"),
+            ("--wake-id <id>", "answer declined: only this request; repeatable"),
+            ("--silicon <id>", "mute/unmute: only this Silicon's requests"),
+            (
+                "--only-team <team>",
+                "mute/unmute with --silicon: only its grant in this Team",
+            ),
+        ],
+        examples: &[
+            "extend device wake-requests ls 0d44e1f2 --open",
+            "extend device wake-requests answer 0d44e1f2 woken",
+            "extend device wake-requests mute 0d44e1f2 --silicon si:chef",
+        ],
     },
     Node {
         path: "session",
@@ -268,7 +339,7 @@ pub const NODES: &[Node] = &[
         usage: "extend session new <device_id> [--connect]",
         who: "Silicon",
         purpose: "Start using a device. Prints the session id (3+ hexadecimal characters). If another Silicon is using it you get exit 6 and the command to ask for it.",
-        used_with: "Add --connect to connect at once.",
+        used_with: "Add --connect to connect at once. The session runs in --team's Team (the one you were given access in); later commands in it use that Team on their own. On a device that isn't awake the session still starts, with a note: the terminal and Android debugging work, and commands that need its screen fail until its Carbon wakes it (`extend device wake`).",
         flags: &[("--connect", "also connect to the new session")],
         examples: &[],
     },
@@ -303,7 +374,7 @@ pub const NODES: &[Node] = &[
         path: "session ls",
         usage: "extend session ls [--device <device_id>] [--state active|paused|ended]",
         who: "Carbon or Silicon",
-        purpose: "Silicon: your sessions. Carbon: sessions on your devices.",
+        purpose: "Silicon: your sessions in your Team. Carbon: sessions on your devices, in every Team (with a TEAM column).",
         used_with: "",
         flags: &[
             ("--device <device_id>", "only sessions on this device"),
@@ -333,14 +404,41 @@ pub const NODES: &[Node] = &[
         path: "request",
         usage: "extend request send <device_id> --reason \"<text>\" | extend request ls [--sent|--received] [--device <id>]",
         who: "Silicon",
-        purpose: "Ask the Silicon using a device for it. Delivered through Ting with your reason exactly as written (1–300 characters).",
-        used_with: "Use after `extend session new` says the device is in use.",
+        purpose: "Ask for a device another Silicon is using. Delivered through Ting with your reason exactly as written (1–300 characters).",
+        used_with: "Use after `extend session new` says the device is in use. When the Silicon using it is in your Team and was given access by your Carbon, the request goes to it, and you see which Silicon it is. Otherwise it goes to the Carbon who gave that Silicon access, who sees your id and reason and can stop the session; you only see that it is in use.",
         flags: &[
             ("--reason <text>", "send: 1–300 characters, required"),
             ("--sent / --received", "ls: only requests you sent, or received"),
             ("--device <id>", "ls: only requests for this device"),
         ],
         examples: &["extend request send 7c1e09ab --reason \"Need 2 minutes to read an OTP\""],
+    },
+    Node {
+        path: "ting",
+        usage: "extend ting status [--all-teams] | extend ting on [--all-teams]",
+        who: "Carbon or Silicon",
+        purpose: "Whether Extend's notifications reach you through Ting, per Team, and which of Extend's Ting types a Team is missing.",
+        used_with: "Ting delivers wake requests, answers to them, and requests for devices in use. It keeps notification types per Team, so a Ting manager of each Team registers Extend's four types once; `ting status` shows the exact command for any that are missing. Status is on, off (you turned Extend's Tings off in Ting) or pending (not registered yet). `ting on` registers you again in --team's Team (or every Team with --all-teams) and sends the Tings waiting for you there.",
+        flags: &[("--all-teams", "every Team your login reaches, not only --team's")],
+        examples: &["extend ting status --all-teams", "extend --team labs ting on"],
+    },
+    Node {
+        path: "ting status",
+        usage: "extend ting status [--all-teams] [--json]",
+        who: "Carbon or Silicon",
+        purpose: "Whether Extend's Tings reach you in --team's Team (or every Team), and the Ting types Ting doesn't know there, with the command a Ting manager runs to register them.",
+        used_with: "",
+        flags: &[("--all-teams", "every Team your login reaches")],
+        examples: &["extend ting status --all-teams"],
+    },
+    Node {
+        path: "ting on",
+        usage: "extend ting on [--all-teams]",
+        who: "Carbon or Silicon",
+        purpose: "Turn Extend's Tings on again: registers you with Ting in --team's Team (or every Team), with your own login.",
+        used_with: "Needs a login that reaches the Team. Run it after turning Extend's Tings off in Ting, or when `extend ting status` says pending.",
+        flags: &[("--all-teams", "every Team your login reaches")],
+        examples: &["extend --team labs ting on"],
     },
     Node {
         path: "file",
@@ -548,8 +646,8 @@ pub fn render_device_command(name: &str, connected: Option<&Connected>) -> Optio
     let c = COMMANDS.iter().find(|c| c.name == name)?;
     let caps: Vec<&str> = c.any_of.iter().map(|x| x.as_str()).collect();
     let origin = match c.origin {
-        Origin::AgentDevice => "an agent-device command, run on the session's device through Extend",
-        Origin::Extend => "an Extend command (not part of agent-device)",
+        Origin::AgentDevice => "a command of the device engine, run on the session's device through Extend",
+        Origin::Extend => "a command Extend adds around the device engine",
     };
     let placement = match name {
         "adb" => ADB_ARGUMENTS,
@@ -559,9 +657,7 @@ pub fn render_device_command(name: &str, connected: Option<&Connected>) -> Optio
         }
     };
     let more = match c.origin {
-        Origin::AgentDevice => format!(
-            "\nArgument details follow agent-device: {REPO}/tree/main/vendor/agent-device/website/docs/docs/commands.md\n"
-        ),
+        Origin::AgentDevice => format!("\nArgument details: {DOCS}/cli\n"),
         Origin::Extend => String::new(),
     };
     let note = connected

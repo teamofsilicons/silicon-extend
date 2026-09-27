@@ -19,7 +19,7 @@ test('renderProxyStartup keeps human output concise without color', () => {
     [
       '✓ Proxy listening at http://127.0.0.1:4310',
       '',
-      'Provide this to the agent-device instance connecting:',
+      'Give these to the device engine that connects:',
       '',
       'Daemon base URL: <tunnel URL>',
       'Daemon auth token: proxy-secret',
@@ -28,7 +28,7 @@ test('renderProxyStartup keeps human output concise without color', () => {
   assert.doesNotMatch(output, /upstream local daemon/);
   assert.doesNotMatch(output, /state dir/);
   assert.doesNotMatch(output, /Remote client example/);
-  assert.doesNotMatch(output, /agent-device devices --daemon-base-url/);
+  assert.doesNotMatch(output, /extend devices --daemon-base-url/);
 });
 
 test('renderProxyStartup colors status, urls, and token', () => {
@@ -39,7 +39,7 @@ test('renderProxyStartup colors status, urls, and token', () => {
     [
       `${colored('✓', 'green')} Proxy listening at ${colored('http://127.0.0.1:4310', 'cyan')}`,
       '',
-      'Provide this to the agent-device instance connecting:',
+      'Give these to the device engine that connects:',
       '',
       `Daemon base URL: ${colored('<tunnel URL>', 'cyan')}`,
       `Daemon auth token: ${colored('proxy-secret', 'yellow')}`,

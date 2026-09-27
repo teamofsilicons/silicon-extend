@@ -10,7 +10,7 @@ import time
 import tempfile
 
 root = Path('/src')
-worker = root / 'vendor/agent-device/linux/screen-record.py'
+worker = root / 'vendor/extend-engine/linux/screen-record.py'
 out = Path(tempfile.mkdtemp(prefix='recording-', dir='/tmp/out'))
 print('Artifacts:', out, flush=True)
 

@@ -10,6 +10,7 @@ import type {
 } from '@agent-device/contracts/remote';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ENGINE_PROJECT_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import { runCmdSync, runCmdDetached } from '@agent-device/host-kit/command';
 import { waitForProcessExit } from '@agent-device/host-kit/process';
 import { sleep } from '@agent-device/host-kit/retry';
@@ -634,7 +635,7 @@ function resolveProxySettings(
   if (proxyBaseUrl && !resolvedProxyBearerToken) {
     throw new AppError(
       'INVALID_ARGS',
-      'metro prepare requires proxy auth when --proxy-base-url is provided. Pass --bearer-token or set AGENT_DEVICE_METRO_BEARER_TOKEN or AGENT_DEVICE_DAEMON_AUTH_TOKEN.',
+      'metro prepare requires proxy auth when --proxy-base-url is provided. Pass --bearer-token or set EXTEND_ENGINE_METRO_BEARER_TOKEN or EXTEND_ENGINE_DAEMON_AUTH_TOKEN.',
     );
   }
   if (!proxyBaseUrl && proxySpecificBearerToken) {
@@ -685,7 +686,7 @@ function resolveMetroLogPath(
   projectRoot: string,
 ): string {
   return resolvePath(
-    input.logPath ?? path.join(projectRoot, '.agent-device', 'metro.log'),
+    input.logPath ?? path.join(projectRoot, ...ENGINE_PROJECT_DIRECTORY_SEGMENTS, 'metro.log'),
     env,
     cwd,
   );

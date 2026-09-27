@@ -14,7 +14,12 @@ let metadataPath = '';
 const USAGE =
   'Usage: write-xcuitest-cache-metadata.mjs <ios|macos|tvos|visionos> <derived> <destination>';
 
-const DEFAULT_IOS_RUNNER_APP_BUNDLE_ID = 'com.callstack.agentdevice.runner';
+// Silicon Extend names engine settings EXTEND_ENGINE_<X>; the fork's AGENT_DEVICE_<X> still works.
+function setting(name) {
+  return process.env[`EXTEND_ENGINE_${name}`] ?? process.env[`AGENT_DEVICE_${name}`];
+}
+
+const DEFAULT_IOS_RUNNER_APP_BUNDLE_ID = 'com.teamofsilicons.extend.helper';
 const RUNNER_SOURCE_IGNORED_DIR_NAMES = new Set(['.build', '.swiftpm', 'xcuserdata']);
 const SNAPSHOT_PRESENTATION_SOURCE_IGNORED_DIR_NAMES = new Set([
   '.build',
@@ -43,15 +48,15 @@ function normalizeBundleId(value) {
 
 function resolveRunnerAppBundleId() {
   return (
-    normalizeBundleId(process.env.AGENT_DEVICE_IOS_BUNDLE_ID) ||
-    normalizeBundleId(process.env.AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID) ||
+    normalizeBundleId(setting('IOS_BUNDLE_ID')) ||
+    normalizeBundleId(setting('IOS_RUNNER_APP_BUNDLE_ID')) ||
     DEFAULT_IOS_RUNNER_APP_BUNDLE_ID
   );
 }
 
 function resolveRunnerTestBundleId() {
   return (
-    normalizeBundleId(process.env.AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID) ||
+    normalizeBundleId(setting('IOS_RUNNER_TEST_BUNDLE_ID')) ||
     `${resolveRunnerAppBundleId()}.uitests`
   );
 }
@@ -59,7 +64,7 @@ function resolveRunnerTestBundleId() {
 function computeRunnerSourceFingerprint() {
   const sourceRoots = [
     {
-      path: path.join(projectRoot, 'apple', 'runner', 'AgentDeviceRunner'),
+      path: path.join(projectRoot, 'apple', 'runner', 'SiliconExtendHelper'),
       ignoredDirectoryNames: RUNNER_SOURCE_IGNORED_DIR_NAMES,
     },
     {
@@ -226,7 +231,7 @@ function resolveSigningBuildSettings() {
 }
 
 function resolveSandboxBuildArgs() {
-  const swiftFlags = isTruthy(process.env.AGENT_DEVICE_XCUITEST_INCLUDE_UNIT_TESTS)
+  const swiftFlags = isTruthy(setting('XCUITEST_INCLUDE_UNIT_TESTS'))
     ? '$(inherited) -disable-sandbox -D AGENT_DEVICE_RUNNER_UNIT_TESTS'
     : '$(inherited) -disable-sandbox';
   return [
@@ -247,7 +252,7 @@ export function writeXcuitestCacheMetadata(args = process.argv.slice(2), cwd = p
   derivedPath = nextDerivedPath;
   destination = nextDestination;
   projectRoot = cwd;
-  metadataPath = path.join(derivedPath, '.agent-device-runner-cache.json');
+  metadataPath = path.join(derivedPath, '.extend-engine-runner-cache.json');
 
   const appBundleId = resolveRunnerAppBundleId();
   const testBundleId = resolveRunnerTestBundleId();
@@ -261,8 +266,8 @@ export function writeXcuitestCacheMetadata(args = process.argv.slice(2), cwd = p
     target: resolveTarget(),
     buildDestinationFamily: resolveBuildDestinationFamily(),
     runnerBundleBuildSettings: [
-      `AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID=${appBundleId}`,
-      `AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID=${testBundleId}`,
+      `EXTEND_ENGINE_IOS_RUNNER_APP_BUNDLE_ID=${appBundleId}`,
+      `EXTEND_ENGINE_IOS_RUNNER_TEST_BUNDLE_ID=${testBundleId}`,
     ],
     runnerSigningBuildSettings: resolveSigningBuildSettings(),
     runnerPerformanceBuildSettings: [

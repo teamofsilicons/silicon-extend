@@ -2,7 +2,7 @@
 //!
 //! The Windows capture (`uia.rs`) produces a flat list of [`RawNode`]s in document order. Everything
 //! from there on is pure: refs (`@e1`, `@e2`, …), the `-i` / `-d` / `-s` projections, and the text and
-//! JSON shapes, which match agent-device's desktop snapshots so a Silicon reads a Windows screen the
+//! JSON shapes, which match the device engine's desktop snapshots so a Silicon reads a Windows screen the
 //! same way it reads a Mac or Linux one.
 
 use serde_json::{Value, json};
@@ -111,7 +111,7 @@ pub struct RawNode {
 }
 
 impl RawNode {
-    /// The agent-device style type name (`Button`, `Edit`, …), used in JSON `type`.
+    /// The device-engine style type name (`Button`, `Edit`, …), used in JSON `type`.
     pub fn type_name(&self) -> &'static str {
         type_name(self.control_type)
     }
@@ -165,7 +165,7 @@ impl RawNode {
         matches!(self.role(), "text-field" | "text-view" | "search")
     }
 
-    /// What agent-device's `displayLabel` shows for this node.
+    /// What the device engine's `displayLabel` shows for this node.
     pub fn display_label(&self) -> String {
         let label = clean(&self.name);
         let value = self.value.as_deref().map(clean).unwrap_or_default();
@@ -266,7 +266,7 @@ pub fn type_name(control_type: i32) -> &'static str {
     }
 }
 
-/// agent-device role names for UIA control types.
+/// the device engine role names for UIA control types.
 pub fn role_label(control_type: i32) -> &'static str {
     match control_type {
         ct::APPLICATION => "application",
@@ -433,7 +433,7 @@ impl Snapshot {
     /// The raw index a ref (`@e3` or `e3`) points at.
     pub fn resolve_ref(&self, reference: &str) -> Option<usize> {
         let r = reference.strip_prefix('@').unwrap_or(reference);
-        // agent-device pins refs as `@e12~s4`; the pin doesn't matter within one snapshot.
+        // the device engine pins refs as `@e12~s4`; the pin doesn't matter within one snapshot.
         let r = r.split('~').next().unwrap_or(r);
         self.nodes.iter().find(|n| n.reference == r).map(|n| n.raw_index)
     }
@@ -446,7 +446,7 @@ impl Snapshot {
             .map(|n| n.reference.as_str())
     }
 
-    /// The text agent-device prints for a snapshot.
+    /// The text the device engine prints for a snapshot.
     pub fn to_text(&self, raw: &[RawNode]) -> String {
         let mut out = String::new();
         if !self.app_name.is_empty() {
@@ -497,7 +497,7 @@ impl Snapshot {
         node_json(&raw[node.raw_index], &node.reference, index, node.depth, node.parent)
     }
 
-    /// The JSON agent-device returns for `snapshot --json`.
+    /// The JSON the device engine returns for `snapshot --json`.
     pub fn to_json(&self, raw: &[RawNode]) -> Value {
         let nodes: Vec<Value> = self
             .nodes
@@ -515,7 +515,7 @@ impl Snapshot {
     }
 }
 
-/// One node in agent-device's JSON shape.
+/// One node in the device engine's JSON shape.
 pub fn node_json(r: &RawNode, reference: &str, index: usize, depth: usize, parent: Option<usize>) -> Value {
     let mut v = json!({
         "ref": reference,

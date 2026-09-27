@@ -62,7 +62,7 @@ export class FakeDevice {
   static async enroll(os = "android", secret?: string) {
     const d = new FakeDevice();
     const r = await call("POST", "/api/v1/enrollments", {
-      body: { type: "enrollment", data: { os, os_version: "15", model: "Pixel 9", app_version: "1.0.0" } },
+      body: { type: "enrollment", data: { os, os_version: "15", model: "Pixel 9", app_version: "1.1.0" } },
       headers: secret ? { "X-Testing-Application-Secret": secret } : {},
     });
     d.enrollmentId = r.data.enrollment_id;
@@ -105,11 +105,13 @@ export class FakeDevice {
     this.socket!.send(
       JSON.stringify({
         type: "hello",
-        app_version: "1.0.0",
+        app_version: "1.1.0",
         os: "android",
         os_version: "15",
         model: "Pixel 9",
-        agent_device_version: null,
+        engine_version: null,
+        // 1.1: this app reruns a failed setup step when the service asks (contract A).
+        features: ["setup_retry"],
         capabilities: ["screen.read", "screen.capture", "input.touch", "input.text", "nav.system", "apps.launch", "apps.list", "takeover", "notifications", "links"],
         missing: setupDone ? [] : [{ capability: "adb", reason: "Wireless debugging is off. Turn it on in Developer options." }],
         setup: {

@@ -162,7 +162,13 @@ test('a Maestro suite reaches the reporter with step payloads and attempt-scoped
     'onSuiteEnd',
   ]);
 
-  const suiteArtifactsDir = path.join(root, '.agent-device', 'test-artifacts', 'suite-maestro');
+  const suiteArtifactsDir = path.join(
+    root,
+    '.silicon-extend',
+    'engine',
+    'test-artifacts',
+    'suite-maestro',
+  );
   const testArtifactsDir = path.join(suiteArtifactsDir, '01-login.yaml');
   const session = 'default:test:suite-maestro:1-01-login:attempt-1';
 

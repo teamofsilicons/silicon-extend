@@ -395,7 +395,7 @@ test('assertSafeDerivedCleanup rejects cleaning override path by default', () =>
     assertSafeDerivedCleanup('/tmp/custom', {
       AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH: '/tmp/custom',
     });
-  }, /Refusing to clean AGENT_DEVICE_IOS_RUNNER_DERIVED_PATH automatically/);
+  }, /Refusing to clean EXTEND_ENGINE_IOS_RUNNER_DERIVED_PATH automatically/);
 });
 
 test('assertSafeDerivedCleanup allows cleaning override path under project .tmp', () => {
@@ -409,10 +409,10 @@ test('assertSafeDerivedCleanup allows cleaning override path under project .tmp'
 
 test('xctestrunReferencesProjectRoot rejects stale worktree artifacts', async () => {
   const tmpDir = await makeTmpDir();
-  const xctestrunPath = path.join(tmpDir, 'AgentDeviceRunner.xctestrun');
+  const xctestrunPath = path.join(tmpDir, 'SiliconExtendHelper.xctestrun');
   fs.writeFileSync(
     xctestrunPath,
-    '<plist><dict><key>SourceFilesCommonPathPrefix</key><string>/tmp/other-worktree/agent-device/apple/runner/AgentDeviceRunner</string></dict></plist>',
+    '<plist><dict><key>SourceFilesCommonPathPrefix</key><string>/tmp/other-worktree/agent-device/apple/runner/SiliconExtendHelper</string></dict></plist>',
     'utf8',
   );
 
@@ -465,8 +465,8 @@ test('resolveRunnerDerivedPath reuses cache path for identical runner source fin
   const runnerRelativePath = path.join(
     'apple',
     'runner',
-    'AgentDeviceRunner',
-    'AgentDeviceRunnerUITests',
+    'SiliconExtendHelper',
+    'SiliconExtendHelperUITests',
     'RunnerTests.swift',
   );
   await fs.promises.mkdir(path.dirname(path.join(firstRoot, runnerRelativePath)), {
@@ -727,8 +727,8 @@ test('ensureXctestrunArtifact rebuilds after cached macOS runner repair failure'
     projectRoot,
     'apple',
     'runner',
-    'AgentDeviceRunner',
-    'AgentDeviceRunner.xcodeproj',
+    'SiliconExtendHelper',
+    'SiliconExtendHelper.xcodeproj',
   );
 
   const rebuiltXctestrunPath = path.join(derivedPath, 'rebuilt', 'rebuilt.xctestrun');

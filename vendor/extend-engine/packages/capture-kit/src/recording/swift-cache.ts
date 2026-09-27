@@ -15,7 +15,7 @@ import {
 
 const SWIFT_CACHE_VERSION = '2';
 const LOCK_RETRY_DELAY_MS = 25;
-const RECORDING_SCRIPT_SUBDIRECTORY = 'apple/runner/AgentDeviceRunner/RecordingScripts';
+const RECORDING_SCRIPT_SUBDIRECTORY = 'apple/runner/SiliconExtendHelper/RecordingScripts';
 
 /**
  * Where a recording helper script can live, in the order a checkout, a source build, and a
@@ -141,7 +141,7 @@ function getSwiftCacheRoot(): string {
   if (configured) {
     return path.resolve(configured);
   }
-  return path.join(os.tmpdir(), 'agent-device-swift-cache');
+  return path.join(os.tmpdir(), 'extend-engine-swift-cache');
 }
 
 async function ensureSwiftExecutable(params: {
@@ -216,7 +216,7 @@ async function acquireSwiftCacheLock(
         ...error.details,
         lockDir,
         timeoutMs,
-        hint: `Another agent-device process may still be compiling this Swift helper. Retry shortly; if no agent-device process is active, remove "${lockDir}" and retry.`,
+        hint: `Another device engine process may still be compiling this Swift helper. Retry shortly; if no device engine process is active, remove "${lockDir}" and retry.`,
       });
     }
     throw error;

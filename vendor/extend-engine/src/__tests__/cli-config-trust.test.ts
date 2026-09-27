@@ -14,7 +14,7 @@ import {
 test('project config rejects remote connection fields before daemon dispatch without echoing values', async () => {
   const { root, home, project } = makeTempWorkspace();
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({
       daemonBaseUrl: 'https://daemon.example.test',
       daemonAuthToken: 'token-123',
@@ -59,7 +59,7 @@ test.each([
   async (key, value) => {
     const { root, home, project } = makeTempWorkspace();
     fs.writeFileSync(
-      path.join(project, 'agent-device.json'),
+      path.join(project, 'extend-engine.json'),
       JSON.stringify({ [key]: value }),
       'utf8',
     );
@@ -95,7 +95,7 @@ test('project config rejects a custom reporter before importing repository code 
     'utf8',
   );
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ reporter: ['./project-reporter.mjs'] }),
     'utf8',
   );
@@ -125,7 +125,7 @@ test.each([
     const dispatchMarker = path.join(project, 'daemon-dispatched');
     const outputPath = path.join(project, value);
     fs.writeFileSync(
-      path.join(project, 'agent-device.json'),
+      path.join(project, 'extend-engine.json'),
       JSON.stringify({ [key]: value }),
       'utf8',
     );
@@ -153,7 +153,7 @@ test.each([
 test('project config cannot pair an endpoint with an environment token', async () => {
   const { root, home, project } = makeTempWorkspace();
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ daemonBaseUrl: 'https://example.trycloudflare.com/agent-device' }),
     'utf8',
   );
@@ -183,7 +183,7 @@ test('project-selected endpoint with an environment token makes no health or RPC
   });
   const port = await listenOnLoopback(server);
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ daemonBaseUrl: `http://127.0.0.1:${port}/agent-device` }),
     'utf8',
   );
@@ -206,9 +206,9 @@ test('project-selected endpoint with an environment token makes no health or RPC
 
 test('user and explicit config retain remote auth through the ordinary CLI adapter', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(home, '.agent-device', 'config.json'),
+    path.join(home, '.silicon-extend', 'engine', 'config.json'),
     JSON.stringify({
       daemonBaseUrl: 'https://daemon.example.test',
       daemonAuthToken: 'user-token',

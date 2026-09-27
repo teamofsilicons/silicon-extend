@@ -138,8 +138,8 @@ function buildLockPolicyConflictHint(
   const lockPlatform = req.meta?.lockPlatform;
   const sessionText = req.session ? ` --session ${shellQuoteIfNeeded(req.session)}` : '';
   const openText = lockPlatform
-    ? `Run agent-device open <app>${sessionText} --platform ${lockPlatform} first if no session is active. `
-    : `Run agent-device open <app>${sessionText} first if no session is active. `;
+    ? `Run extend open <app>${sessionText} --platform ${lockPlatform} first if no session is active. `
+    : `Run extend open <app>${sessionText} first if no session is active. `;
   if (identityConflicts.length > 0) {
     // NEVER offer --session-lock strip here: stripping a device identity keeps the request running
     // against the OTHER device, which is the failure this rejection exists to prevent.
@@ -148,13 +148,13 @@ function buildLockPolicyConflictHint(
       `Remove ${selectorList} and rerun to use the session-lock device, ` +
       `or drop --session so this command binds to the device you selected. ` +
       openText +
-      `Run agent-device session list to inspect active sessions.`
+      `Run extend session list to inspect active sessions.`
     );
   }
   return (
-    `Remove conflicting device selectors from this command, or use --session-lock strip to let agent-device ignore them. ` +
+    `Remove conflicting device selectors from this command, or use --session-lock strip to let the device engine ignore them. ` +
     openText +
-    `Run agent-device session list to inspect active sessions.`
+    `Run extend session list to inspect active sessions.`
   );
 }
 

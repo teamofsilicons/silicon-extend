@@ -95,7 +95,7 @@ async function materializeLocalSource(
     };
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-device-source-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'extend-engine-source-'));
   try {
     const downloadedPath = await downloadToTempFile(tempDir, source.url, source.headers, options);
     return {

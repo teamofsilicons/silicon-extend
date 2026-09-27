@@ -75,7 +75,7 @@ test('captureAndroidHeapSnapshot resolves pid, dumps heap, pulls artifact, and c
     if (args.slice(0, 4).join(' ') === 'shell am dumpheap com.example.app') {
       assert.match(
         args[4] ?? '',
-        /^\/data\/local\/tmp\/agent-device-com\.example\.app-\d+\.hprof$/,
+        /^\/data\/local\/tmp\/extend-engine-com\.example\.app-\d+\.hprof$/,
       );
       return { stdout: 'Dumping Java heap to ', stderr: '', exitCode: 0 };
     }

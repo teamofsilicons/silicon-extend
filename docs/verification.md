@@ -3,7 +3,9 @@
 What was run to check that Silicon Extend works as `understanding/UNDERSTANDING.md` intends, on what,
 and what has **not** been verified. Newest first: the 2026-09-27 round-2 section, the earlier
 2026-09-27 section, then the 2026-09-26 record, corrected in place where later work showed it wrong
-(marked *Corrected 2026-09-27*). Rerun the automated part with `e2e/run-all.sh`.
+(marked *Corrected 2026-09-27*). Rerun the automated part with `e2e/run-all.sh`. The device engine
+is named as it is from 1.1 (it lived in another directory when these checks ran). The 1.1.0 build
+has its own section once it is verified; until then nothing below covers 1.1.
 
 ## Where the evidence is
 
@@ -60,7 +62,7 @@ rebuild at about 03:00; every run cited below is later.
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 (macOS host) |
 | `EXTEND_TEST_ADMIN_URL=postgres://extend:extend@127.0.0.1:5440/postgres cargo test --workspace --locked` | exit 0. extend-agent 164 unit + 10 `fake_service`; extend-cli 28 unit + 16 `cli_behaviour` + 8 `device_args` + 2 `json_consumers`; extend-hosted 63 (2 ignored); extend-protocol 9; extend-service 34 unit + 8 `contracts` + 16 `core_gaps` + 7 `devices_gaps` + 4 `e2e` + 6 `obo_requests` + 17 `testenv_gaps` + 1 `real_services` (its body runs only with `EXTEND_REALIAM_STATE` set, so here it returned at once); silicon-extend-client 6 unit + 3 `contract_fixtures` + 2 doc tests; silicon-iam-client 47 + 22 + 2 + 3 doc tests. |
 | `npx -y @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash` | valid, 0 errors, 12 warnings (missing 4xx/2xx responses on `/live`, `/ready`, the WebSocket routes and some list routes, and no `license` in `info`) |
-| `pnpm exec vitest run --project unit-core <the 23 fork test files Extend touched>` in `vendor/agent-device` (the list is in `ci.yml`) | 23 files, 278 tests passed (macOS host) |
+| `pnpm exec vitest run --project unit-core <the 23 fork test files Extend touched>` in the device engine (now `vendor/extend-engine`; the list is in `ci.yml`) | 23 files, 278 tests passed (macOS host) |
 | `node --test apps/desktop/*.test.mjs` | 60/60 (the fork's `dist` was present, so the real-dist completeness case ran) |
 | `JAVA_HOME=… ./gradlew :app:testDebugUnitTest --rerun :libadb:testDebugUnitTest --rerun` in `apps/android` | 138 app + 10 libadb JVM tests, 0 failures |
 | `pnpm install --frozen-lockfile --lockfile-only` on a copy of the fork's manifests | the lockfile matches (checks the `fork` CI job's install) |
@@ -99,7 +101,7 @@ Every suite run again on the whole round-2 tree, after these fixes:
 | `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
 | `cargo test --workspace --no-fail-fast` | 480 passed, 0 failed, 2 ignored (the 478 above plus the two new tests) |
 | `cargo check -p extend-agent -p extend-hosted --target x86_64-pc-windows-msvc` | exit 0 |
-| `pnpm build`, `pnpm typecheck` and the 23 CI vitest files in `vendor/agent-device` | built; 23 files, 278 tests passed |
+| `pnpm build`, `pnpm typecheck` and the 23 CI vitest files in the device engine (now `vendor/extend-engine`) | built; 23 files, 278 tests passed |
 | `node --test apps/desktop/*.test.mjs` | 60/60 against the rebuilt dist |
 | `bash e2e/cli-e2e.sh` against `:8480` (restarted at 05:35 and 05:38 with this build) | 75/75 |
 | `web`: `pnpm test`, `pnpm build`, `pnpm test:e2e`, `pnpm test:e2e:real` | 112/112; built; 34/34; 5/5 (1 of 5 before the logout fix) |
@@ -374,11 +376,11 @@ Checked by the second verifier with the current code:
 
 - `cargo test -p extend-agent` (142 unit + 9 integration, three runs of the dispatch and driver
   tests), clippy with `-D warnings`, and `cargo check --target x86_64-pc-windows-msvc` pass.
-- The real `extend-agent exec` against a logging fake agent-device: 28 `open`/`close` cases with
+- The real `extend-agent exec` against a logging fake device engine: 28 `open`/`close` cases with
   named Mac apps, `--save-script` in every position, and the Spotlight fallback for apps outside
   `/Applications`.
-- Live against the verifier's own service (`:8498`) with a headless agent and a fake agent-device
-  whose cleanup fails: the held-computer report (setup complete, agent-device capabilities under
+- Live against the verifier's own service (`:8498`) with a headless agent and a fake device engine
+  whose cleanup fails: the held-computer report (setup complete, the engine's capabilities under
   `missing` with one reason), a new session and `terminal` while held, `snapshot` refused with exit
   10, background retries forcing only with no session in use, `kill -9` mid-session and restart
   without disturbing the session, the forced release at session end, the hold shown 0.6 s after
@@ -402,7 +404,7 @@ Checked by the second verifier with the current code:
 - Still open after the CLI rounds: `record start --quality normal`, which `cli.yaml` now documents
   for every platform, fails with `invalid_args` on Mac and Linux (a desktop-agent change, not made).
 
-### Fork (agent-device) — macOS
+### The device engine (fork) — macOS
 
 - Targeted vitest suites 43/43; the wider run 4,842 passed and 5 failed, all 5 attributed to code
   older than this work. An in-memory mutation harness showed the new tests fail against the old
@@ -413,7 +415,7 @@ Checked by the second verifier with the current code:
   cancel), hiding or quitting an app mid-recording, revoked Screen Recording, a context menu in an
   app screenshot, macOS 13–15.1, two displays.
 
-### Fork (agent-device) — Linux
+### The device engine (fork) — Linux
 
 - In the `silicon-extend-linux-e2e` container: `record-hung-e2e.py` 18/18 with no window manager and
   18/18 with openbox (the previous worker fails 6 of them), `record-e2e.py` all pass, the isolation
@@ -427,7 +429,7 @@ Checked by the second verifier with the current code:
   SHA-256 `eac81e1a…`). The second-round worker was not run through this lane.
 - An adversarial probe found two remaining leaks (a plain Xlib window with background `None` and no
   `_NET_WM_PING`, left by a cover while hung; a second recorder on an already-redirected window);
-  they are open (`vendor/agent-device/FORK.md`). A frozen Java Swing window did not leak.
+  they are open (`vendor/extend-engine/FORK.md`). A frozen Java Swing window did not leak.
 - Not run: any real Linux desktop.
 
 ### Packaging
@@ -567,7 +569,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
   present. Deep/strict signature verification and a bundled Node JavaScript execution pass.
 - The bundle is 127 MB and its zip is 43 MB. Node 22.23.3 is checksum verified against pinned
   official release hashes. The fork is rebuilt rather than reusing potentially stale output.
-- A packaged `probe` with PATH limited to `/usr/bin:/bin` finds agent-device 0.21.15 and
+- A packaged `probe` with PATH limited to `/usr/bin:/bin` finds the device engine 0.21.15 and
   reports the new signed identity's missing Accessibility and Screen Recording permissions.
   Those grants must be made through macOS before input/capture validation can proceed.
 - Notarization support is implemented but was not run: an existing notarytool Keychain
@@ -609,7 +611,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
 ## Session close recovery — 2026-09-26
 
 - Mac recording exercises exposed a retained device claim whose session had been deleted
-  after failed cleanup. The agent-device close path now preserves the session and ownership
+  after failed cleanup. The device engine's close path now preserves the session and ownership
   until teardown succeeds, allowing the same close operation to be retried.
 - The regression failed before the fix (four failures, one pass). After the fix, 29 lifecycle
   tests pass, including failed recording finish, successful retry, device claim release and
@@ -626,7 +628,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
   daemon, confirming cleanup retry releases a real retained claim. Extend now retries the typed
   `session_cleanup_incomplete` result once on session end and preserves state/artifacts if cleanup
   still fails (*Corrected 2026-09-27:* since 2026-09-27 a failed cleanup is followed by a forced release, and if that
-  fails the computer reports its agent-device capabilities as missing until a retry succeeds; see
+  fails the computer reports its device engine capabilities as missing until a retry succeeds; see
   the 2026-09-27 section). The regression failed before this driver change and passes for recovery, persistent
   cleanup failure and a same-message error with a different reason. All 111 agent unit tests and
   seven fake-service tests pass after this change.
@@ -832,7 +834,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
 ### 2026-09-26 — installed Linux package and local-service recording
 
 - Rebuilt the Linux arm64 package with the current runtime and native XComposite helper.
-  The Docker packaging wrapper now rebuilds agent-device first, preventing stale dist reuse.
+  The Docker packaging wrapper now rebuilds the device engine first, preventing stale dist reuse.
   Node 22.23.3 is pinned with official SHA-256 entries for Linux arm64/x64; cached and offline
   tarballs are checked. A deliberately corrupt archive was refused before assembly.
 - Dependency inspection found that the old `.deb` declared no libc minimum despite this build

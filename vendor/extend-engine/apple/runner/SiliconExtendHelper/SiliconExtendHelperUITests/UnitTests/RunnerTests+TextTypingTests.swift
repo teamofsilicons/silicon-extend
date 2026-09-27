@@ -11,7 +11,7 @@ extension RunnerTests {
     )
 
     let response = executeTypeCommand(
-      activeApp: XCUIApplication(bundleIdentifier: "com.example.agentdevice.missing-input"),
+      activeApp: XCUIApplication(bundleIdentifier: "com.example.extend.missing-input"),
       command: command
     )
 

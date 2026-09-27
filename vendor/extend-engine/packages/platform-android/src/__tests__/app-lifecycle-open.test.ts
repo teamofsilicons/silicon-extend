@@ -656,7 +656,7 @@ test('openAndroidApp normalizes missing package launch failures into APP_NOT_INS
         (error: unknown) => {
           assert.ok(error instanceof AppError);
           assert.equal(error.code, 'APP_NOT_INSTALLED');
-          assert.match(String(error.details?.hint ?? ''), /agent-device apps --platform android/);
+          assert.match(String(error.details?.hint ?? ''), /extend apps --platform android/);
           return true;
         },
       );

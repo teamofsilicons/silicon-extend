@@ -1,16 +1,16 @@
-//! Where the agent keeps its state, which service it talks to, and how it finds agent-device.
+//! Where the agent keeps its state, which service it talks to, and how it finds the device engine.
 //!
 //! Home is `$SILICON_HOME` when set, else the OS home. State lives in `{home}/.extend-agent/`
 //! (directory 0700, files 0600). An optional `{state}/config.json` holds overrides:
 //!
 //! ```json
 //! {"service_url": "http://127.0.0.1:8480", "credential_store": "file",
-//!  "agent_device": ["/opt/node/bin/node", "/opt/agent-device/bin/agent-device.mjs"]}
+//!  "engine": ["/opt/node/bin/node", "/opt/extend-engine/bin/extend-engine.mjs"]}
 //! ```
 //!
 //! Environment variables win over the file, and command-line flags win over both:
 //! `EXTEND_API_URL`, `EXTEND_AGENT_CREDENTIAL_STORE` (`auto`, `keyring`, `file`),
-//! `EXTEND_AGENT_DEVICE` (path to agent-device's `bin/agent-device.mjs` or an executable),
+//! `EXTEND_ENGINE` (path to the device engine's `bin/extend-engine.mjs` or an executable),
 //! `EXTEND_NODE` (the node binary), `EXTEND_DOWNLOAD_URL` (`download_url` in the file: where
 //! "Download the update" goes when Extend needs a newer app; by default the website's download
 //! page for this OS, [`default_download_url`]).
@@ -69,8 +69,11 @@ pub struct FileConfig {
     pub service_url: Option<String>,
     #[serde(default)]
     pub credential_store: Option<CredentialStoreKind>,
-    /// Full command that runs agent-device, e.g. `["node", "/path/bin/agent-device.mjs"]`.
+    /// Full command that runs the device engine, e.g. `["node", "/path/bin/extend-engine.mjs"]`.
     #[serde(default)]
+    pub engine: Option<Vec<String>>,
+    /// The same, under the key 1.0 used; `engine` wins when both are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_device: Option<Vec<String>>,
     /// Where "Download the update" goes (http or https).
     #[serde(default)]
@@ -83,9 +86,9 @@ pub struct Config {
     pub state_dir: PathBuf,
     pub service_url: Url,
     pub credential_store: CredentialStoreKind,
-    /// The command that runs agent-device, when found.
+    /// The command that runs the device engine, when found.
     pub agent_device: Option<Vec<String>>,
-    /// Why agent-device wasn't found, for the probe.
+    /// Why the device engine wasn't found, for the probe.
     pub agent_device_problem: Option<String>,
     /// Where "Download the update" goes when Extend needs a newer app.
     pub download_url: Url,
@@ -116,6 +119,7 @@ impl Config {
             .context("couldn't find a home directory; set SILICON_HOME")?;
         let state_dir = home.join(STATE_DIR_NAME);
         ensure_private_dir(&state_dir)?;
+        adopt_old_engine_state(&state_dir);
         let file = read_file_config(&state_dir.join("config.json"))?;
 
         let service_raw = overrides
@@ -134,7 +138,8 @@ impl Config {
             },
         };
 
-        let (agent_device, agent_device_problem) = match locate_agent_device(file.agent_device.as_deref()) {
+        let from_file = file.engine.as_deref().or(file.agent_device.as_deref());
+        let (agent_device, agent_device_problem) = match locate_agent_device(from_file) {
             Ok(cmd) => (Some(cmd), None),
             Err(why) => (None, Some(why)),
         };
@@ -189,9 +194,9 @@ impl Config {
     pub fn hosted_dir(&self) -> PathBuf {
         self.state_dir.join("hosted")
     }
-    /// agent-device's own state (its daemon, sessions and helper builds).
+    /// The device engine's own state (its daemon, sessions and helper builds).
     pub fn agent_device_state_dir(&self) -> PathBuf {
-        self.state_dir.join("agent-device")
+        self.state_dir.join(ENGINE_STATE_DIR_NAME)
     }
     /// Files that outlive one command inside a session (recordings, armed replay scripts).
     pub fn session_data_dir(&self) -> PathBuf {
@@ -272,18 +277,44 @@ pub fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Finds the command that runs agent-device.
+/// The device engine's state directory under the agent's state directory.
+pub const ENGINE_STATE_DIR_NAME: &str = "engine";
+/// Its name before 1.1; [`adopt_old_engine_state`] moves it once.
+const OLD_ENGINE_STATE_DIR_NAME: &str = "agent-device";
+/// Shown when no device engine is found: the Carbon's way out is reinstalling the app.
+pub const ENGINE_MISSING: &str = "Silicon Extend's device engine is missing. Reinstall Silicon Extend.";
+
+/// Moves the engine state an earlier version kept in `{state}/agent-device` (1.0's name) to `{state}/engine`,
+/// once, so an update keeps the engine's helper builds and sessions. Best effort: when it can't be
+/// moved the engine starts over in a fresh directory, which costs a helper rebuild and nothing else.
+pub fn adopt_old_engine_state(state_dir: &Path) {
+    let old = state_dir.join(OLD_ENGINE_STATE_DIR_NAME);
+    let new = state_dir.join(ENGINE_STATE_DIR_NAME);
+    if !old.is_dir() || new.symlink_metadata().is_ok() {
+        return;
+    }
+    if let Err(e) = std::fs::rename(&old, &new) {
+        tracing::warn!(from = %old.display(), to = %new.display(), "couldn't move the device engine's state: {e}");
+    }
+}
+
+/// The locator environment variables, newest first: `EXTEND_AGENT_DEVICE` is 1.0's name.
+const ENGINE_ENV_VARS: [&str; 2] = ["EXTEND_ENGINE", "EXTEND_AGENT_DEVICE"];
+
+/// Finds the command that runs the device engine.
 ///
-/// Order: `EXTEND_AGENT_DEVICE`, then `config.json`, then a copy bundled next to this executable
-/// (the macOS app's `Resources/`, or `agent-device/` beside the binary on Linux and Windows), then
-/// the source checkout this binary was built from (development).
+/// Order: `EXTEND_ENGINE` (or 1.0's `EXTEND_AGENT_DEVICE`), then `config.json` (the caller passes
+/// its `engine`, or 1.0's `agent_device`), then a copy bundled next to this executable (the macOS
+/// app's `Resources/engine/`, or `engine/` beside the binary on Linux and Windows), then the source
+/// checkout this binary was built from (development).
 pub fn locate_agent_device(from_file: Option<&[String]>) -> std::result::Result<Vec<String>, String> {
-    if let Ok(raw) = std::env::var("EXTEND_AGENT_DEVICE") {
+    for var in ENGINE_ENV_VARS {
+        let Ok(raw) = std::env::var(var) else { continue };
         let raw = raw.trim();
         if !raw.is_empty() {
             let path = PathBuf::from(raw);
             if !path.exists() {
-                return Err(format!("EXTEND_AGENT_DEVICE points at {raw}, which doesn't exist"));
+                return Err(format!("{var} points at {raw}, which doesn't exist"));
             }
             return Ok(command_for_entry(&path, None));
         }
@@ -296,29 +327,32 @@ pub fn locate_agent_device(from_file: Option<&[String]>) -> std::result::Result<
         .and_then(|p| p.parent().map(Path::to_path_buf));
     if let Some(dir) = &exe_dir {
         for root in bundle_roots(dir) {
-            let entry = root.join("agent-device").join("bin").join("agent-device.mjs");
+            let entry = bundled_engine_entry(&root);
             if entry.exists() {
                 return Ok(command_for_entry(&entry, Some(&root)));
             }
         }
     }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/agent-device/bin/agent-device.mjs");
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/extend-engine");
+    let dev = checkout.join("bin").join("extend-engine.mjs");
     if dev.exists() {
-        let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/agent-device/dist/src/internal/bin.js");
-        if !dist.exists() {
+        if !checkout.join("dist/src/internal/bin.js").exists() {
             return Err(format!(
-                "agent-device isn't built. Run `pnpm install && pnpm build` in {}",
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../vendor/agent-device")
-                    .display()
+                "The device engine isn't built. Run `pnpm install && pnpm build` in {}",
+                checkout.display()
             ));
         }
         return Ok(command_for_entry(&dev, None));
     }
-    Err("Silicon Extend couldn't find its automation helper (agent-device). Reinstall Silicon Extend.".into())
+    Err(ENGINE_MISSING.into())
 }
 
-/// Directories a packaged agent-device and node may sit in, relative to the executable's directory.
+/// Where packaging puts the engine's entry under a bundle root (`apps/desktop/packaging.sh`).
+fn bundled_engine_entry(root: &Path) -> PathBuf {
+    root.join("engine").join("bin").join("extend-engine.mjs")
+}
+
+/// Directories a packaged device engine and node may sit in, relative to the executable's directory.
 fn bundle_roots(exe_dir: &Path) -> Vec<PathBuf> {
     vec![
         exe_dir.join("../Resources"), // macOS: Silicon Extend.app/Contents/MacOS/extend-agent
@@ -473,10 +507,91 @@ mod tests {
 
     #[test]
     fn js_entries_run_through_node() {
-        let cmd = command_for_entry(Path::new("/x/bin/agent-device.mjs"), None);
+        let cmd = command_for_entry(Path::new("/x/bin/extend-engine.mjs"), None);
         assert_eq!(cmd.len(), 2);
-        assert!(cmd[1].ends_with("agent-device.mjs"));
-        let cmd = command_for_entry(Path::new("/x/agent-device"), None);
-        assert_eq!(cmd, vec!["/x/agent-device".to_string()]);
+        assert!(cmd[1].ends_with("extend-engine.mjs"));
+        let cmd = command_for_entry(Path::new("/x/extend-engine"), None);
+        assert_eq!(cmd, vec!["/x/extend-engine".to_string()]);
+    }
+
+    #[test]
+    fn the_bundled_engine_sits_under_engine() {
+        assert_eq!(
+            bundled_engine_entry(Path::new("/app/Resources")),
+            Path::new("/app/Resources/engine/bin/extend-engine.mjs")
+        );
+        assert_eq!(
+            ENGINE_MISSING,
+            "Silicon Extend's device engine is missing. Reinstall Silicon Extend."
+        );
+    }
+
+    #[test]
+    fn config_json_names_the_engine_under_either_key() {
+        let engine: FileConfig = serde_json::from_str(r#"{"engine":["node","/new/bin/extend-engine.mjs"]}"#).unwrap();
+        assert_eq!(engine.engine.unwrap()[1], "/new/bin/extend-engine.mjs");
+        let old: FileConfig = serde_json::from_str(r#"{"agent_device":["node","/old/bin/agent-device.mjs"]}"#).unwrap();
+        assert_eq!(old.agent_device.unwrap()[1], "/old/bin/agent-device.mjs");
+
+        // Config::load passes `engine` when both are set, else `agent_device`, and the locator
+        // returns what the file says (unless EXTEND_ENGINE or EXTEND_AGENT_DEVICE is set in the
+        // environment running the tests, which wins).
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join(STATE_DIR_NAME);
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("config.json"),
+            r#"{"engine":["node","/new/bin/extend-engine.mjs"],"agent_device":["node","/old/bin/agent-device.mjs"]}"#,
+        )
+        .unwrap();
+        let c = Config::load(&Overrides {
+            home: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        if ENGINE_ENV_VARS.iter().all(|v| std::env::var_os(v).is_none()) {
+            assert_eq!(
+                c.agent_device.as_deref(),
+                Some(&["node".to_string(), "/new/bin/extend-engine.mjs".to_string()][..])
+            );
+        }
+        std::fs::write(
+            state.join("config.json"),
+            r#"{"agent_device":["node","/old/bin/agent-device.mjs"]}"#,
+        )
+        .unwrap();
+        let c = Config::load(&Overrides {
+            home: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        if ENGINE_ENV_VARS.iter().all(|v| std::env::var_os(v).is_none()) {
+            assert_eq!(c.agent_device.unwrap()[1], "/old/bin/agent-device.mjs");
+        }
+    }
+
+    #[test]
+    fn old_engine_state_moves_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join(STATE_DIR_NAME);
+        std::fs::create_dir_all(state.join("agent-device/ios-runner")).unwrap();
+        std::fs::write(state.join("agent-device/daemon.json"), b"{}").unwrap();
+        let c = Config::load(&Overrides {
+            home: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(c.agent_device_state_dir(), state.join("engine"));
+        assert!(!state.join("agent-device").exists());
+        assert!(state.join("engine/ios-runner").is_dir());
+        assert_eq!(std::fs::read(state.join("engine/daemon.json")).unwrap(), b"{}");
+
+        // An old directory that shows up again later (a 1.0 app run once more) is left alone: the
+        // engine directory is the one in use.
+        std::fs::create_dir_all(state.join("agent-device")).unwrap();
+        std::fs::write(state.join("engine/marker"), b"kept").unwrap();
+        adopt_old_engine_state(&state);
+        assert!(state.join("agent-device").is_dir());
+        assert_eq!(std::fs::read(state.join("engine/marker")).unwrap(), b"kept");
     }
 }

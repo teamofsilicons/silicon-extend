@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 /** Wire-protocol constants shared by the one-shot and persistent-session response paths. */
 final class HelperProtocol {

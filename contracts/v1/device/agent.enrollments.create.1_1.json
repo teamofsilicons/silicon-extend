@@ -1,0 +1,45 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [],
+  "kind": "http",
+  "operation": "enrollments.create",
+  "request": {
+    "body": {
+      "data": {
+        "app_version": "1.1.0",
+        "engine_version": "0.21.15",
+        "model": "MacBookPro18,3",
+        "os": "macos",
+        "os_version": "15.5"
+      },
+      "type": "enrollment"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/enrollments"
+  },
+  "response": {
+    "non_null": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "required": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "status": "2xx"
+  },
+  "source": "docs/device-protocol.md §1; crates/extend-agent/src/service.rs (create_enrollment, 1.1: engine_version) with crates/extend-protocol types"
+}

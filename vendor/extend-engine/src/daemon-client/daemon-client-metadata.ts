@@ -248,15 +248,15 @@ export function resolveDaemonStartupHint(
 ): string {
   const cleanupCommand = buildDaemonMetadataCleanupCommand(paths);
   if (state.hasLock && !state.hasInfo) {
-    return `agent-device attempted to clean stale daemon metadata automatically, but ${paths.lockPath} still exists without ${paths.infoPath}. Retry with --debug; if this persists after confirming no agent-device daemon process is running, run: ${cleanupCommand}`;
+    return `The device engine attempted to clean stale daemon metadata automatically, but ${paths.lockPath} still exists without ${paths.infoPath}. Retry with --debug; if this persists after confirming no device engine daemon process is running, run: ${cleanupCommand}`;
   }
   if (state.hasLock && state.hasInfo) {
-    return `agent-device attempted to clean stale daemon metadata automatically, but ${paths.infoPath} and ${paths.lockPath} still remain. Retry with --debug; if this persists after confirming no agent-device daemon process is running, run: ${cleanupCommand}`;
+    return `The device engine attempted to clean stale daemon metadata automatically, but ${paths.infoPath} and ${paths.lockPath} still remain. Retry with --debug; if this persists after confirming no device engine daemon process is running, run: ${cleanupCommand}`;
   }
   if (state.hasInfo) {
-    return `agent-device did not observe reachable daemon metadata after retrying, and ${paths.infoPath} still remains. Stale metadata was cleaned automatically when safe; retry with --debug. If this persists after confirming no agent-device daemon process is running, run: ${cleanupCommand}`;
+    return `The device engine did not observe reachable daemon metadata after retrying, and ${paths.infoPath} still remains. Stale metadata was cleaned automatically when safe; retry with --debug. If this persists after confirming no device engine daemon process is running, run: ${cleanupCommand}`;
   }
-  return `agent-device did not observe reachable daemon metadata after retrying. Stale metadata was cleaned automatically when safe; retry with --debug and check daemon diagnostics logs. If stale metadata returns after confirming no agent-device daemon process is running, run: ${cleanupCommand}`;
+  return `The device engine did not observe reachable daemon metadata after retrying. Stale metadata was cleaned automatically when safe; retry with --debug and check daemon diagnostics logs. If stale metadata returns after confirming no device engine daemon process is running, run: ${cleanupCommand}`;
 }
 
 function buildDaemonMetadataCleanupCommand(paths: Pick<DaemonPaths, 'infoPath' | 'lockPath'>) {

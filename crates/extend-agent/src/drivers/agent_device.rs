@@ -1,14 +1,14 @@
-//! Runs Extend's fork of agent-device (`vendor/agent-device`) for Mac and Linux.
+//! Runs Silicon Extend's device engine (`vendor/extend-engine`) for Mac and Linux.
 //!
 //! Every command becomes one CLI run:
 //!
 //! ```text
-//! node …/bin/agent-device.mjs <command> <args…> --platform macos|linux --session extend-<session_id> --json
+//! node …/bin/extend-engine.mjs <command> <args…> --platform macos|linux --session extend-<session_id> --json
 //! ```
 //!
-//! with `AGENT_DEVICE_STATE_DIR` pointing at the agent's own state, so agent-device's daemon and
-//! sessions are private to Extend, and `AGENT_DEVICE_JSON_TEXT=1` (a fork addition) so one run
-//! gives both the JSON result and the text the CLI would print. When agent-device is a node script
+//! with `EXTEND_ENGINE_STATE_DIR` pointing at the agent's own state, so the device engine's daemon and
+//! sessions are private to Extend, and `EXTEND_ENGINE_JSON_TEXT=1` (a fork addition) so one run
+//! gives both the JSON result and the text the CLI would print. When the device engine is a node script
 //! (always, as packaged), node gets the command's arguments over stdin through a small loader, so
 //! typed text (`fill @e3 <password>`) never appears in the process list.
 //!
@@ -16,15 +16,15 @@
 //! the files found there are handed back for upload. Input files (replay scripts, baselines,
 //! step files) must come as attachments; a path on the Silicon's machine means nothing here.
 //!
-//! On a Mac every session runs on agent-device's native helper (Accessibility and Screen
+//! On a Mac every session runs on the device engine's native helper (Accessibility and Screen
 //! Recording; no XCTest runner): it starts on the app in front, a link opens with the system and
 //! is followed there, and an app named in `open`/`close` is found the way `open -a` finds it (its
 //! bundle's file name, in the usual app folders, then Spotlight) and handed over by path.
 //!
-//! Ending a session closes its agent-device session, which releases agent-device's claim on the
+//! Ending a session closes its device-engine session, which releases the device engine's claim on the
 //! computer. When that close fails, the session is kept on disk (`cleanup-pending.json`), agent-
 //! device's daemon is restarted and the stale claim released. If even that fails, every
-//! capability agent-device provides is reported missing with the reason (the computer stays
+//! capability the device engine provides is reported missing with the reason (the computer stays
 //! ready: the terminal works and a session can start), and the release is retried in the
 //! background, forcing while no session is live, and again, forcing, when the next session
 //! starts. The agent notes its live session on disk (`live-session`), so after a restart it
@@ -46,7 +46,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::drivers::args::{content_type_for, parse, safe_file_name, strip_agent_added, with_extension};
 
-/// agent-device flags that take a value (from its flag registry), so positionals can be told apart.
+/// the device engine flags that take a value (from its flag registry), so positionals can be told apart.
 pub const VALUE_FLAGS: &[&str] = &[
     "--activity",
     "--app",
@@ -110,7 +110,7 @@ pub struct SessionFacts {
     pub armed_script: Option<PathBuf>,
     /// `logs start` ran and `logs stop` hasn't.
     pub logs_running: bool,
-    /// agent-device ran for this session, so it may hold an agent-device session to close.
+    /// the device engine ran for this session, so it may hold a device-engine session to close.
     pub touched: bool,
 }
 
@@ -240,7 +240,7 @@ fn positional_indices(args: &[String]) -> Vec<usize> {
     out
 }
 
-/// agent-device's rule for whether `--save-script` consumes the next token.
+/// the device engine's rule for whether `--save-script` consumes the next token.
 fn looks_like_path(t: &str) -> bool {
     let t = t.trim();
     !t.is_empty()
@@ -274,8 +274,8 @@ fn take_save_script(argv: &mut Vec<String>) -> Option<Option<String>> {
     None
 }
 
-/// agent-device's name for a recording quality Extend's CLI offers (`cli.yaml`: `normal` or
-/// `high`). agent-device calls the default `medium`, and takes that spelling too.
+/// the device engine's name for a recording quality Extend's CLI offers (`cli.yaml`: `normal` or
+/// `high`). device-engine calls the default `medium`, and takes that spelling too.
 #[allow(clippy::result_large_err)] // The error is the command's answer, returned as-is.
 pub fn recording_quality(requested: &str) -> Result<&'static str, Output> {
     match requested.trim().to_ascii_lowercase().as_str() {
@@ -288,7 +288,7 @@ pub fn recording_quality(requested: &str) -> Result<&'static str, Output> {
 }
 
 /// Puts the platform, session and `--json` flags the agent adds in front of a `--`, if the
-/// command has one: after it agent-device reads every token as text (`type -- --json`), so flags
+/// command has one: after it the device engine reads every token as text (`type -- --json`), so flags
 /// appended there would be typed instead of obeyed.
 pub fn with_agent_flags(argv: &[String], flags: &[String]) -> Vec<String> {
     let mut full = Vec::with_capacity(argv.len() + flags.len());
@@ -504,7 +504,7 @@ pub fn plan(command: &str, args: &[String], ctx: &PlanContext<'_>) -> Result<Pla
     })
 }
 
-/// agent-device's error codes, as Extend reports them.
+/// the device engine's error codes, as Extend reports them.
 pub fn map_error_code(code: &str) -> String {
     match code {
         "INVALID_ARGS" => "invalid_args".into(),
@@ -516,7 +516,7 @@ pub fn map_error_code(code: &str) -> String {
     }
 }
 
-/// Reads agent-device's `--json` document (`{"success":…,"data"|"error":…,"text"?}`) into an Output.
+/// Reads the device engine's `--json` document (`{"success":…,"data"|"error":…,"text"?}`) into an Output.
 pub fn parse_result(stdout: &str, stderr: &str, exit_ok: bool) -> Output {
     let doc = find_json(stdout);
     let Some(doc) = doc else {
@@ -534,9 +534,9 @@ pub fn parse_result(stdout: &str, stderr: &str, exit_ok: bool) -> Output {
             .rev()
             .collect();
         let message = if exit_ok {
-            "agent-device finished without a result".to_string()
+            "The device engine finished without a result".to_string()
         } else {
-            format!("agent-device failed without a result: {tail}")
+            format!("The device engine failed without a result: {tail}")
         };
         return Output::fail("command_failed", message);
     };
@@ -563,11 +563,11 @@ pub fn parse_result(stdout: &str, stderr: &str, exit_ok: bool) -> Output {
     let message = err
         .get("message")
         .and_then(|m| m.as_str())
-        .unwrap_or("agent-device reported an error")
+        .unwrap_or("The device engine reported an error")
         .to_owned();
     let hint = err.get("hint").and_then(|h| h.as_str()).map(str::to_owned);
     let mut details = serde_json::Map::new();
-    details.insert("agent_device_code".into(), raw_code.into());
+    details.insert("engine_code".into(), raw_code.into());
     if let Some(h) = &hint {
         details.insert("hint".into(), h.clone().into());
     }
@@ -591,7 +591,7 @@ pub fn parse_result(stdout: &str, stderr: &str, exit_ok: bool) -> Output {
     }
 }
 
-/// Drops what only makes sense on this computer from the text a Silicon reads: agent-device's
+/// Drops what only makes sense on this computer from the text a Silicon reads: the device engine's
 /// `Session state:` line, and the work directory in file paths (files arrive as Briefcase links).
 pub fn tidy_text(out: &mut Output, workdir: &Path) {
     let Some(text) = out.text.take() else { return };
@@ -604,7 +604,7 @@ pub fn tidy_text(out: &mut Output, workdir: &Path) {
     out.text = Some(cleaned.join("\n"));
 }
 
-/// `key: value` lines for a result agent-device prints no text for (`appstate`).
+/// `key: value` lines for a result the device engine prints no text for (`appstate`).
 fn summarize(data: &serde_json::Value) -> Option<String> {
     let obj = data.as_object()?;
     let lines: Vec<String> = obj
@@ -619,7 +619,7 @@ fn summarize(data: &serde_json::Value) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// The JSON document in agent-device's stdout (it may be preceded by progress lines).
+/// The JSON document in the device engine's stdout (it may be preceded by progress lines).
 fn find_json(stdout: &str) -> Option<serde_json::Value> {
     let trimmed = stdout.trim();
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -638,7 +638,7 @@ fn find_json(stdout: &str) -> Option<serde_json::Value> {
     None
 }
 
-/// A file path agent-device reported in its result (`path`, `outputPath`, …) that exists.
+/// A file path the device engine reported in its result (`path`, `outputPath`, …) that exists.
 pub fn reported_path(data: &serde_json::Value) -> Option<PathBuf> {
     for key in [
         "outPath",
@@ -661,14 +661,14 @@ pub fn reported_path(data: &serde_json::Value) -> Option<PathBuf> {
 
 /// What a platform probe gets to work with.
 pub struct ProbeInput<'a> {
-    /// Why agent-device can't run here, when it can't.
+    /// Why the device engine can't run here, when it can't.
     pub problem: Option<&'a str>,
-    /// The commands agent-device says this platform supports (`capabilities --json`), when known.
+    /// The commands the device engine says this platform supports (`capabilities --json`), when known.
     pub commands: Option<&'a [String]>,
 }
 
 impl ProbeInput<'_> {
-    /// True when agent-device supports `name` here (or when that isn't known).
+    /// True when the device engine supports `name` here (or when that isn't known).
     pub fn supports(&self, name: &str) -> bool {
         self.commands.is_none_or(|c| c.iter().any(|x| x == name))
     }
@@ -677,7 +677,7 @@ impl ProbeInput<'_> {
 /// What the platform can do right now; supplied per OS.
 pub type Prober = std::sync::Arc<dyn Fn(&ProbeInput<'_>) -> Probe + Send + Sync>;
 
-/// File in a session's directory saying its agent-device session still has to be closed.
+/// File in a session's directory saying its device-engine session still has to be closed.
 const CLEANUP_PENDING: &str = "cleanup-pending.json";
 
 /// Background retries of a failed cleanup per run of the app, before waiting for the next
@@ -687,7 +687,7 @@ const BACKGROUND_ATTEMPTS: u32 = 12;
 /// Waits between background retries, as multiples of the first (15 s): 15 s, 30 s, 1, 2, then 5 min.
 const RETRY_STEPS: [u32; 5] = [1, 2, 4, 8, 20];
 
-/// A session whose agent-device session couldn't be closed yet.
+/// A session whose device-engine session couldn't be closed yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Unreleased {
     session_id: String,
@@ -695,7 +695,7 @@ struct Unreleased {
     attempts: u32,
     /// What the last attempt said.
     error: String,
-    /// Restarting agent-device's daemon was tried too, and the computer still isn't released.
+    /// Restarting the device engine's daemon was tried too, and the computer still isn't released.
     forced: bool,
     /// Failed attempts since this run of the app started.
     #[serde(skip)]
@@ -715,7 +715,7 @@ struct Cleanups {
 /// agent restarted mid-session knows the session the service announces again is already set up.
 const LIVE: &str = "live-session";
 
-/// Reads the sessions that were live when an earlier run of the agent stopped. What agent-device
+/// Reads the sessions that were live when an earlier run of the agent stopped. What the device engine
 /// did for them isn't known, so each counts as having used it.
 fn load_live(data_dir: &Path) -> HashMap<String, SessionFacts> {
     let mut out = HashMap::new();
@@ -744,7 +744,7 @@ fn load_live(data_dir: &Path) -> HashMap<String, SessionFacts> {
     out
 }
 
-/// Moves what only agent-device provides out of `probe.capabilities` into `probe.missing`, with
+/// Moves what only the device engine provides out of `probe.capabilities` into `probe.missing`, with
 /// `reason`. Extend's own capabilities (the terminal, takeover) stay.
 fn withhold_agent_device_capabilities(probe: &mut Probe, reason: &str) {
     use extend_protocol::Capability;
@@ -785,7 +785,7 @@ fn load_pending(data_dir: &Path) -> BTreeMap<String, Unreleased> {
     out
 }
 
-/// The agent-device driver. Cheap to share: the state lives behind one `Arc`, which the
+/// The device-engine driver. Cheap to share: the state lives behind one `Arc`, which the
 /// background cleanup retry also holds.
 pub struct AgentDeviceDriver {
     inner: Arc<AgentDevice>,
@@ -804,7 +804,7 @@ pub struct AgentDevice {
     lifecycle: tokio::sync::Mutex<()>,
     /// This is the long-running agent: it knows which session is live (the service runs one at a
     /// time here), so it may force a release when none is, and it retries failed cleanup in the
-    /// background. One-off `exec` and `probe` runs share its agent-device daemon and do neither.
+    /// background. One-off `exec` and `probe` runs share its device-engine daemon and do neither.
     long_running: bool,
     first_retry: Duration,
     /// Where Mac apps are looked up by name, with how deep to look in each.
@@ -872,6 +872,7 @@ impl AgentDeviceDriver {
     }
 
     #[cfg(test)]
+    #[cfg_attr(windows, allow(dead_code))]
     fn configured(mut self, f: impl FnOnce(&mut AgentDevice)) -> Self {
         f(Arc::get_mut(&mut self.inner).expect("not shared yet"));
         self
@@ -905,8 +906,8 @@ impl AgentDevice {
         f(map.entry(session_id.to_owned()).or_default());
     }
 
-    /// agent-device's version (`--version`), read once.
-    pub async fn agent_device_version(&self) -> Option<String> {
+    /// the device engine's version (`--version`), read once.
+    pub async fn engine_version(&self) -> Option<String> {
         self.version
             .get_or_init(|| async {
                 let cmd = self.command.as_ref()?;
@@ -927,7 +928,7 @@ impl AgentDevice {
             .clone()
     }
 
-    /// The commands agent-device supports on this platform (`capabilities --json`), read once.
+    /// The commands the device engine supports on this platform (`capabilities --json`), read once.
     pub async fn platform_commands(&self) -> Option<Vec<String>> {
         self.commands
             .get_or_init(|| async {
@@ -958,11 +959,11 @@ impl AgentDevice {
             "unsupported_on_device",
             self.problem
                 .clone()
-                .unwrap_or_else(|| "agent-device isn't available on this computer".into()),
+                .unwrap_or_else(|| "The device engine isn't available on this computer".into()),
         )
     }
 
-    /// Runs agent-device once with the session and platform set.
+    /// Runs the device engine once with the session and platform set.
     async fn invoke(
         &self,
         session_id: &str,
@@ -988,7 +989,7 @@ impl AgentDevice {
         process_output(result, cmd, timeout)
     }
 
-    /// Runs an agent-device command about the computer rather than one session
+    /// Runs a device-engine command about the computer rather than one session
     /// (`daemon stop`, `device release`).
     async fn invoke_plain(&self, argv: &[&str], timeout: Duration) -> Output {
         let Some(cmd) = &self.command else {
@@ -1068,12 +1069,12 @@ impl AgentDevice {
         }
     }
 
-    /// How a Mac app named in `open`/`close` is handed to agent-device, which matches only a
+    /// How a Mac app named in `open`/`close` is handed to the device engine, which matches only a
     /// bundle's display name in three folders: "Visual Studio Code" (whose bundle calls itself
     /// "Code") or an app in a subfolder would fail there. `Found` is the bundle's path, found by
     /// file name the way `open -a` finds it; a bare `Name.app` otherwise becomes `Name`, which
-    /// agent-device would take for a bundle id. `None` leaves the target alone (a link, a path,
-    /// agent-device's own `settings` alias).
+    /// the device engine would take for a bundle id. `None` leaves the target alone (a link, a path,
+    /// the device engine's own `settings` alias).
     async fn resolve_macos_app(&self, target: &str) -> Option<AppTarget> {
         let t = target.trim();
         if t.is_empty()
@@ -1092,7 +1093,7 @@ impl AgentDevice {
         Some(AppTarget::Name(strip_app_suffix(t).map_or(t, str::trim).to_owned()))
     }
 
-    /// Hands the app a planned Mac `open`/`close` names to agent-device by path, where one is
+    /// Hands the app a planned Mac `open`/`close` names to the device engine by path, where one is
     /// found. `argv` is the planned run (command first). Returns the app's index when it stays a
     /// name, for a Spotlight retry.
     async fn resolve_named_app(&self, command: &str, argv: &mut [String]) -> Option<usize> {
@@ -1169,7 +1170,7 @@ impl AgentDevice {
         self.first_retry * step
     }
 
-    /// Records that `session_id`'s agent-device session still needs closing, on disk too so a
+    /// Records that `session_id`'s device-engine session still needs closing, on disk too so a
     /// restart retries it. `failed` counts an attempt; `forced` notes a failed forced release.
     fn note_pending(&self, session_id: &str, error: String, failed: bool, forced: bool) {
         let record = {
@@ -1221,7 +1222,7 @@ impl AgentDevice {
         let _ = tokio::fs::remove_dir_all(self.session_dir(session_id)).await;
     }
 
-    /// Closes the session's agent-device session. A session agent-device doesn't have (it was
+    /// Closes the session's device-engine session. A session the device engine doesn't have (it was
     /// never opened, the Silicon closed it, or the daemon was replaced) counts as closed.
     async fn close_session(&self, session_id: &str, timeout: Duration) -> Result<(), String> {
         let _ = tokio::fs::create_dir_all(&self.state_dir).await;
@@ -1246,13 +1247,13 @@ impl AgentDevice {
         Err(failure_text(&out))
     }
 
-    /// Stops agent-device's daemon (ending every session it holds) and releases the claim it
+    /// Stops the device engine's daemon (ending every session it holds) and releases the claim it
     /// leaves on this computer.
     async fn force_release(&self) -> Result<(), String> {
         let stop = self.invoke_plain(&["daemon", "stop"], Duration::from_secs(45)).await;
         if !stop.ok {
             return Err(format!(
-                "stopping agent-device's background process failed: {}",
+                "stopping the device engine's background process failed: {}",
                 failure_text(&stop)
             ));
         }
@@ -1264,7 +1265,7 @@ impl AgentDevice {
             .await;
         if !release.ok {
             return Err(format!(
-                "releasing agent-device's claim on this computer failed: {}",
+                "releasing the device engine's claim on this computer failed: {}",
                 failure_text(&release)
             ));
         }
@@ -1281,7 +1282,7 @@ impl AgentDevice {
             .collect();
         if !held.is_empty() {
             return Err(format!(
-                "agent-device still holds its claim on this computer ({})",
+                "the device engine still holds its claim on this computer ({})",
                 held.join("; ")
             ));
         }
@@ -1302,18 +1303,18 @@ impl AgentDevice {
         if !force {
             tracing::warn!(
                 session_id,
-                "agent-device still has the ended session open: {error}; retrying later"
+                "the device engine still has the ended session open: {error}; retrying later"
             );
             self.note_pending(session_id, error, true, false);
             return false;
         }
         tracing::warn!(
             session_id,
-            "closing the ended session failed ({error}); restarting agent-device to release this computer"
+            "closing the ended session failed ({error}); restarting the device engine to release this computer"
         );
         match self.force_release().await {
             Ok(()) => {
-                tracing::info!(session_id, "agent-device restarted and this computer released");
+                tracing::info!(session_id, "the device engine restarted and this computer released");
                 let mut ended: Vec<String> = self.cleanups.lock().unwrap().pending.keys().cloned().collect();
                 ended.push(session_id.to_owned());
                 for id in ended {
@@ -1392,7 +1393,7 @@ impl AgentDevice {
             };
             tokio::time::sleep_until(next.into()).await;
             let _lifecycle = self.lifecycle.lock().await;
-            // With no session in use, restarting agent-device's daemon ends nothing anyone needs.
+            // With no session in use, restarting the device engine's daemon ends nothing anyone needs.
             let force = self.long_running && self.live_sessions().is_empty();
             self.retry_pending(force).await;
         }
@@ -1400,7 +1401,7 @@ impl AgentDevice {
 
     /// Why apps and the screen can't be used here, while an ended session still holds this
     /// computer after a forced release failed. It goes out as the reason for each capability
-    /// agent-device provides, not as a setup step: the computer stays ready, so the terminal still
+    /// the device engine provides, not as a setup step: the computer stays ready, so the terminal still
     /// works and the next session can start (which retries the release first).
     fn hold_reason(&self) -> Option<String> {
         let c = self.cleanups.lock().unwrap();
@@ -1413,7 +1414,7 @@ impl AgentDevice {
             many => format!("Sessions {}", many.join(", ")),
         };
         Some(format!(
-            "{sessions} ended, but agent-device couldn't release this {word}: {}. Until it does, apps and the screen can't be used here; the terminal still works. Extend keeps retrying on its own, restarting agent-device while no session is using this {word} and again when the next session starts. If this is still here after a few minutes, restarting this {word} clears it.",
+            "{sessions} ended, but the device engine couldn't release this {word}: {}. Until it does, apps and the screen can't be used here; the terminal still works. Extend keeps retrying on its own, restarting the device engine while no session is using this {word} and again when the next session starts. If this is still here after a few minutes, restarting this {word} clears it.",
             last.error
         ))
     }
@@ -1424,7 +1425,7 @@ impl AgentDevice {
 enum AppTarget {
     /// The bundle's path.
     Found(String),
-    /// Not in the usual folders: the name, for agent-device's own lookup (then Spotlight).
+    /// Not in the usual folders: the name, for the device engine's own lookup (then Spotlight).
     Name(String),
 }
 
@@ -1432,11 +1433,11 @@ fn closed_or_gone(out: &Output) -> bool {
     out.ok || out.error.as_ref().is_some_and(|e| e.code == "session_not_found")
 }
 
-/// What a failed agent-device run said, for logs and the Carbon.
+/// What a failed device-engine run said, for logs and the Carbon.
 fn failure_text(out: &Output) -> String {
     match &out.error {
         Some(e) => format!("{} ({})", e.message.trim().trim_end_matches('.'), e.code),
-        None => "agent-device gave no reason".into(),
+        None => "the device engine gave no reason".into(),
     }
 }
 
@@ -1446,14 +1447,14 @@ fn process_output(result: Result<ProcessOutput, ProcessError>, cmd: &[String], t
         Err(ProcessError::Timeout) => Output::fail(
             "command_timeout",
             format!(
-                "agent-device didn't answer within {} ms and was stopped.",
+                "The device engine didn't answer within {} ms and was stopped.",
                 timeout.as_millis()
             ),
         ),
         Err(ProcessError::Cancelled) => Output::fail("cancelled", "Extend cancelled this command."),
         Err(ProcessError::Spawn(e)) => Output::fail(
             "unsupported_on_device",
-            format!("couldn't start agent-device ({}): {e}", cmd.join(" ")),
+            format!("couldn't start the device engine ({}): {e}", cmd.join(" ")),
         ),
     }
 }
@@ -1585,14 +1586,14 @@ impl Driver for AgentDeviceDriver {
     async fn probe(&self) -> Probe {
         let (version, commands) = if self.available() {
             let _ = tokio::fs::create_dir_all(&self.state_dir).await;
-            (self.agent_device_version().await, self.platform_commands().await)
+            (self.engine_version().await, self.platform_commands().await)
         } else {
             (None, None)
         };
         let problem = (!self.available()).then(|| {
             self.problem
                 .clone()
-                .unwrap_or_else(|| "agent-device isn't available".into())
+                .unwrap_or_else(|| "the device engine isn't available".into())
         });
         let prober = self.prober.clone();
         // Platform checks run helper programs; keep them off the async threads.
@@ -1607,7 +1608,7 @@ impl Driver for AgentDeviceDriver {
             Ok(p) => p,
             Err(e) => return fallback_probe(self.platform, &format!("the device check crashed: {e}")),
         };
-        probe.agent_device_version = version;
+        probe.engine_version = version;
         if let Some(reason) = self.hold_reason() {
             withhold_agent_device_capabilities(&mut probe, &reason);
         }
@@ -1692,7 +1693,7 @@ impl Driver for AgentDeviceDriver {
         let _lifecycle = self.lifecycle.lock().await;
         let known = self.sessions.lock().unwrap().get(session_id).cloned();
         if !self.available() || known.as_ref().is_some_and(|f| !f.touched) {
-            // agent-device never ran for this session (only `terminal`, say): nothing to close.
+            // the device engine never ran for this session (only `terminal`, say): nothing to close.
             self.forget_session(session_id).await;
             return;
         }
@@ -1767,7 +1768,7 @@ impl AgentDeviceDriver {
         let mut out = self
             .invoke(inv.session_id, &plan.argv, inv.workdir, inv.timeout, &inv.cancel)
             .await;
-        // An app agent-device couldn't find by name may still be somewhere Spotlight knows (another
+        // An app the device engine couldn't find by name may still be somewhere Spotlight knows (another
         // volume, a deeper folder).
         if let Some(i) = by_name
             && self.spotlight
@@ -1859,8 +1860,11 @@ fn fallback_probe(platform: &str, why: &str) -> Probe {
             })
             .collect(),
         setup: Setup::complete(),
-        agent_device_version: None,
+        engine_version: None,
         online: true,
+        awake: None,
+        sleep_state: None,
+        hardware_id: None,
     }
 }
 
@@ -1896,11 +1900,11 @@ pub enum ProcessError {
     Cancelled,
 }
 
-/// Loads agent-device's node entry (`argv[1]`) with the arguments read as JSON from stdin, so
+/// Loads the device engine's node entry (`argv[1]`) with the arguments read as JSON from stdin, so
 /// they never appear in the process list. The CLI reads `process.argv` as usual.
 const ARGS_FROM_STDIN: &str = "import{pathToFileURL}from'node:url';let s='';process.stdin.setEncoding('utf8');for await(const c of process.stdin)s+=c;process.argv.push(...JSON.parse(s));await import(pathToFileURL(process.argv[1]).href);";
 
-/// `[node, entry.mjs]`: agent-device run as a script, which can take its arguments over stdin.
+/// `[node, entry.mjs]`: device-engine run as a script, which can take its arguments over stdin.
 fn node_script(cmd: &[String]) -> Option<&str> {
     match cmd {
         [_, entry] if [".mjs", ".js", ".cjs"].iter().any(|ext| entry.ends_with(ext)) => Some(entry),
@@ -1908,8 +1912,8 @@ fn node_script(cmd: &[String]) -> Option<&str> {
     }
 }
 
-/// Runs `cmd + args` with agent-device's environment, killing it (and its children) on timeout or
-/// cancel. agent-device's daemon detaches itself, so it survives and keeps the session warm.
+/// Runs `cmd + args` with the device engine's environment, killing it (and its children) on timeout or
+/// cancel. the device engine's daemon detaches itself, so it survives and keeps the session warm.
 /// For a node script, `args` go over stdin instead of the command line (see [`ARGS_FROM_STDIN`]).
 pub async fn run_process(
     cmd: &[String],
@@ -1930,9 +1934,10 @@ pub async fn run_process(
             c.args(&cmd[1..]).args(args).stdin(Stdio::null());
         }
     }
-    c.env("AGENT_DEVICE_STATE_DIR", state_dir)
-        .env("AGENT_DEVICE_NO_UPDATE_NOTIFIER", "1")
-        .env("AGENT_DEVICE_JSON_TEXT", "1")
+    // The engine reads each EXTEND_ENGINE_<X> as its own setting (its entry points map them).
+    c.env("EXTEND_ENGINE_STATE_DIR", state_dir)
+        .env("EXTEND_ENGINE_NO_UPDATE_NOTIFIER", "1")
+        .env("EXTEND_ENGINE_JSON_TEXT", "1")
         .env("NO_COLOR", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1941,7 +1946,7 @@ pub async fn run_process(
         c.current_dir(dir);
     }
     if let Some(helper) = bundled_macos_helper() {
-        c.env("AGENT_DEVICE_MACOS_HELPER_BIN", helper);
+        c.env("EXTEND_ENGINE_MACOS_HELPER_BIN", helper);
     }
     #[cfg(unix)]
     c.process_group(0);
@@ -1996,20 +2001,26 @@ pub async fn run_process(
     })
 }
 
-/// A signed copy of agent-device's macOS helper shipped inside the app, so Accessibility and
+/// A signed copy of the device engine's macOS helper shipped inside the app, so Accessibility and
 /// Screen Recording stay granted across updates.
 fn bundled_macos_helper() -> Option<PathBuf> {
     if !cfg!(target_os = "macos") {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
-    let p = exe.parent()?.join("agent-device-macos-helper");
-    p.is_file().then_some(p)
+    // "Silicon Extend Helper" from 1.1 (the name System Settings shows); 1.0's name as a fallback.
+    ["Silicon Extend Helper", "agent-device-macos-helper"]
+        .iter()
+        .map(|n| exe.parent().map(|d| d.join(n)))
+        .find_map(|p| p.filter(|p| p.is_file()))
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::result_large_err)]
+    // Most of these run the engine through a shell script, so a Windows test build compiles
+    // helpers only Unix tests use.
+    #![cfg_attr(windows, allow(unused_imports, dead_code))]
     use super::*;
     use extend_protocol::Capability;
     use extend_protocol::model::{MissingCapability, Setup, SetupState};
@@ -2067,7 +2078,7 @@ mod tests {
     #[test]
     fn agent_flags_go_before_a_separator() {
         let flags = s(&["--platform", "linux", "--session", "extend-a3f", "--json"]);
-        // After `--` agent-device types every token, so its flags must come first.
+        // After `--` the device engine types every token, so its flags must come first.
         assert_eq!(
             with_agent_flags(&s(&["type", "--", "--state-dir=~/notes"]), &flags),
             s(&[
@@ -2179,7 +2190,7 @@ mod tests {
         );
         let p = e.plan("record", &["stop"]).unwrap();
         assert_eq!(p.after, After::RecordingStopped);
-        // `cli.yaml` offers normal and high; agent-device calls normal "medium".
+        // `cli.yaml` offers normal and high; device-engine calls normal "medium".
         for (given, sent) in [
             (&["start", "--quality", "normal"][..], &["--quality", "medium"][..]),
             (&["start", "--quality=normal"][..], &["--quality=medium"][..]),
@@ -2267,7 +2278,7 @@ mod tests {
         let p = e.plan("close", &["--save-script", "/tmp/x.ad"]).unwrap();
         assert_eq!(p.argv, s(&["close", "--save-script=/w/cmd/x.ad"]));
         assert_eq!(p.expect[0].kind, FileKind::ReplayScript);
-        // `--save-script Notes` doesn't consume "Notes" (not a path), exactly like agent-device.
+        // `--save-script Notes` doesn't consume "Notes" (not a path), exactly like the device engine.
         let p = e.plan("close", &["--save-script", "Notes"]).unwrap();
         assert_eq!(p.argv, s(&["close", "Notes", "--save-script=/w/cmd/session.ad"]));
         let mut armed = Env::new();
@@ -2356,7 +2367,7 @@ mod tests {
         let e = out.error.unwrap();
         assert_eq!(e.code, "invalid_args");
         assert_eq!(e.message, "bad ref");
-        assert_eq!(e.details["agent_device_code"], "INVALID_ARGS");
+        assert_eq!(e.details["engine_code"], "INVALID_ARGS");
         assert_eq!(e.details["hint"], "Run snapshot");
         assert_eq!(e.details["agent_device"]["x"], 1);
         assert_eq!(out.text.as_deref(), Some("bad ref\nHint: Run snapshot"));
@@ -2378,7 +2389,7 @@ mod tests {
         let response = serde_json::json!({ "success": true, "data": { "recording": "stopped", "outPath": source } });
         std::fs::write(state.join("response.json"), response.to_string()).unwrap();
         let script = dir.path().join("fake-ad");
-        std::fs::write(&script, "#!/bin/sh\ncat \"$AGENT_DEVICE_STATE_DIR/response.json\"\n").unwrap();
+        std::fs::write(&script, "#!/bin/sh\ncat \"$EXTEND_ENGINE_STATE_DIR/response.json\"\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let driver = AgentDeviceDriver::new(
             Some(vec![script.display().to_string()]),
@@ -2419,7 +2430,7 @@ mod tests {
         }
     }
 
-    /// A stand-in agent-device for session lifecycle: every call is logged to `calls` (first two
+    /// A stand-in the device engine for session lifecycle: every call is logged to `calls` (first two
     /// arguments) and `argv` (all of them); `close` answers as the `close` file says (ok, gone,
     /// incomplete-once, fail); `daemon stop` fails while `daemon-stop-fails` exists and otherwise
     /// ends every session (close then says gone). The platform check finds the screen, apps and
@@ -2431,7 +2442,7 @@ mod tests {
         std::fs::create_dir_all(&state).unwrap();
         let script = dir.join("fake-ad");
         std::fs::write(&script, r#"#!/bin/sh
-S="$AGENT_DEVICE_STATE_DIR"
+S="$EXTEND_ENGINE_STATE_DIR"
 echo "$1 $2" >> "$S/calls"
 echo "$*" >> "$S/argv"
 fail() { echo "{\"success\":false,\"error\":{\"code\":\"$1\",\"message\":\"$2\",\"details\":{\"reason\":\"$3\"}}}"; exit 1; }
@@ -2474,8 +2485,11 @@ esac
                     reason: "ffmpeg isn't installed".into(),
                 }],
                 setup: Setup::complete(),
-                agent_device_version: None,
+                engine_version: None,
                 online: true,
+                awake: None,
+                sleep_state: None,
+                hardware_id: None,
             }),
         );
         (driver, state)
@@ -2595,7 +2609,7 @@ esac
         );
     }
 
-    /// What an unreleased computer reports: agent-device's capabilities missing with the reason,
+    /// What an unreleased computer reports: the device engine's capabilities missing with the reason,
     /// the rest (terminal, takeover) and setup untouched, so the service keeps it ready.
     fn assert_held(probe: &Probe, session: &str) {
         assert_eq!(
@@ -2712,7 +2726,7 @@ esac
         std::fs::write(state.join("daemon-stop-fails"), "").unwrap();
         driver.session_ended("a3f").await;
         assert!(!driver.cleanups.lock().unwrap().pending.is_empty());
-        // The close still fails, but agent-device's daemon can be stopped now.
+        // The close still fails, but the device engine's daemon can be stopped now.
         std::fs::remove_file(state.join("daemon-stop-fails")).unwrap();
         assert!(until_released(&driver).await, "{:?}", calls(&state));
         assert_eq!(
@@ -2830,7 +2844,7 @@ esac
         std::fs::write(state.join("daemon-stop-fails"), "").unwrap();
         driver.session_ended("a3f").await;
         assert!(driver.cleanups.lock().unwrap().pending.contains_key("a3f"));
-        // agent-device recovers on its own; the background retry closes the session (no force).
+        // the device engine recovers on its own; the background retry closes the session (no force).
         std::fs::write(state.join("close"), "ok").unwrap();
         for _ in 0..100 {
             if driver.cleanups.lock().unwrap().pending.is_empty() {
@@ -3083,7 +3097,7 @@ esac
         );
     }
 
-    /// Typed text reaches agent-device's CLI but not its command line (`ps` shows argv).
+    /// Typed text reaches the device engine's CLI but not its command line (`ps` shows argv).
     #[cfg(unix)]
     #[tokio::test]
     async fn typed_text_stays_out_of_the_process_list() {
@@ -3092,7 +3106,7 @@ esac
             return;
         };
         let dir = tempfile::tempdir().unwrap();
-        let entry = dir.path().join("agent-device.mjs");
+        let entry = dir.path().join("extend-engine.mjs");
         std::fs::write(
             &entry,
             r#"import { execFileSync } from 'node:child_process';
@@ -3142,7 +3156,7 @@ console.log(JSON.stringify({ success: true, data: { argv: process.argv.slice(2),
             ])
         );
         let ps = out.output["ps"].as_str().unwrap();
-        assert!(ps.contains("agent-device.mjs"), "{ps}");
+        assert!(ps.contains("extend-engine.mjs"), "{ps}");
         assert!(!ps.contains("hunter2"), "the typed text is in the process list: {ps}");
     }
 
@@ -3155,7 +3169,7 @@ console.log(JSON.stringify({ success: true, data: { argv: process.argv.slice(2),
         let script = dir.path().join("fake-ad");
         std::fs::write(
             &script,
-            "#!/bin/sh\necho \"$@\" > \"$AGENT_DEVICE_STATE_DIR/argv\"\nif [ \"$1\" = screenshot ]; then printf png > \"$2\"; fi\n\
+            "#!/bin/sh\necho \"$@\" > \"$EXTEND_ENGINE_STATE_DIR/argv\"\nif [ \"$1\" = screenshot ]; then printf png > \"$2\"; fi\n\
              echo '{\"success\":true,\"data\":{\"path\":\"'\"$2\"'\"},\"text\":\"done\"}'\n",
         )
         .unwrap();

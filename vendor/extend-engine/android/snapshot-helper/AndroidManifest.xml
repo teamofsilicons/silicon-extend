@@ -1,17 +1,17 @@
 <manifest
     xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.callstack.agentdevice.snapshothelper">
+    package="com.teamofsilicons.extend.snapshothelper">
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36" />
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:debuggable="false"
-        android:label="Agent Device Snapshot Helper"
+        android:label="Silicon Extend Snapshot Helper"
         android:theme="@android:style/Theme.NoDisplay" />
 
     <instrumentation
         android:name=".SnapshotInstrumentation"
-        android:targetPackage="com.callstack.agentdevice.snapshothelper"
-        android:label="Agent Device Snapshot Helper"
+        android:targetPackage="com.teamofsilicons.extend.snapshothelper"
+        android:label="Silicon Extend Snapshot Helper"
         android:functionalTest="true" />
 </manifest>

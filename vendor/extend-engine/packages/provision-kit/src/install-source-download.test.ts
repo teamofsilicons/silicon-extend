@@ -78,7 +78,7 @@ test('download sends a default user-agent that a caller header replaces', async 
     });
     const defaultHeaders = requestMock.mock.calls[0]![0].headers;
     const customHeaders = requestMock.mock.calls[1]![0].headers;
-    assert.equal(defaultHeaders['user-agent'], 'agent-device');
+    assert.equal(defaultHeaders['user-agent'], 'silicon-extend-engine');
     assert.equal(customHeaders['User-Agent'], 'caller-agent');
     assert.equal(customHeaders['user-agent'], undefined);
   } finally {

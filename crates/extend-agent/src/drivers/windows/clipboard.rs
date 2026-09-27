@@ -39,7 +39,7 @@ pub fn read() -> Result<String, String> {
                     Ok(text)
                 }
             }
-            // No text on the clipboard reads as empty, like agent-device.
+            // No text on the clipboard reads as empty, like the device engine.
             _ => Ok(String::new()),
         }
     };

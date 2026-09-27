@@ -641,7 +641,7 @@ function androidPackageDumpsysAdbResult(args: string[]): AndroidAdbResult | unde
 function androidSnapshotHelperProbeAdbResult(key: string): AndroidAdbResult | undefined {
   if (
     key ===
-    'shell cmd package list packages --show-versioncode com.callstack.agentdevice.snapshothelper'
+    'shell cmd package list packages --show-versioncode com.teamofsilicons.extend.snapshothelper'
   ) {
     return { stdout: '', stderr: '', exitCode: 1 };
   }

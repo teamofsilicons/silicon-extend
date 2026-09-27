@@ -10,7 +10,7 @@ test('preserves timeout classification when execFile reports no string error cod
   const repoRoot = await mkdtempForTest('agent-device-ios-benchmark-timeout-');
   fs.mkdirSync(path.join(repoRoot, 'bin'), { recursive: true });
   fs.writeFileSync(
-    path.join(repoRoot, 'bin/agent-device.mjs'),
+    path.join(repoRoot, 'bin/extend-engine.mjs'),
     'setTimeout(() => undefined, 1000);\n',
   );
 

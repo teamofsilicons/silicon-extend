@@ -1,7 +1,7 @@
 package com.teamofsilicons.extend.driver
 
 /**
- * agent-device selector expressions (`packages/selectors/src/internal/parse.ts` and `match.ts`):
+ * The device engine's selector expressions (`packages/selectors/src/internal/parse.ts` and `match.ts`):
  * `role="button" label="Continue"`, `id=com.example:id/login`, `text='Sign in' || label=Login`.
  * Terms in one segment must all match; `||` separates fallbacks tried in order. Text comparison
  * trims, lowercases and collapses whitespace.
@@ -209,7 +209,7 @@ object Selectors {
 
     private fun textEquals(value: String?, query: String): Boolean = normalizeText(value) == normalizeText(query)
 
-    /** agent-device's `extractNodeText`: the first non-blank of label, value, identifier. */
+    /** The device engine's `extractNodeText`: the first non-blank of label, value, identifier. */
     fun nodeText(node: UiNode): String =
         listOf(node.label, node.value, node.identifier).map { it?.trim().orEmpty() }.firstOrNull { it.isNotEmpty() } ?: ""
 

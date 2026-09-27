@@ -53,7 +53,7 @@ export const WORKFLOW_FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     usageLabel: '--maestro',
     usageDescription:
       'Replay: treat input as a supported Maestro YAML subset; unsupported syntax fails loudly. ' +
-      'See agent-device help maestro for commands and boundaries',
+      'See extend help maestro for commands and boundaries',
     projectConfig: true,
     recorded: false,
   },

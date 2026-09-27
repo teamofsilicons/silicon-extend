@@ -78,14 +78,25 @@ class DebuggingAfterRestartTest {
         assertEquals("needs_carbon", report.setup.state)
     }
 
-    @Test fun reconnectingIsInProgressWithTheLastError() {
+    @Test fun reconnectingIsInProgressThenFailedWithAPlainError() {
+        val trying = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = null, open = null)!!
+        assertEquals("in_progress", trying.step.status)
+        assertNull(trying.step.error)
         val step = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = "Could not find this device's debugging port.", open = null)!!
-        assertEquals("in_progress", step.step.status)
-        assertEquals("Last try: Could not find this device's debugging port.", step.step.error)
+        assertEquals("failed", step.step.status)
+        // What is wrong and what to do; the technical reason stays in the log and on the card.
+        assertEquals(
+            "Extend couldn't reconnect to wireless debugging on this phone. Check that it is on Wi-Fi, then tap Retry, or pair Android debugging again in the Extend app.",
+            step.step.error,
+        )
+        assertFalse(step.step.error!!.contains("port"))
         assertFalse(step.required)
         val report = SetupReport(required + step, emptyList(), emptyList(), Status.RECONNECTING)
-        assertEquals("complete", report.setup.state)
+        assertEquals("an optional step never holds setup back", "complete", report.setup.state)
         assertFalse("reconnecting needs nothing from the Carbon", report.optionalNeedsCarbon)
+        assertEquals(listOf("wireless_debugging"), report.failed.map { it.key })
+        val retrying = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = "x", open = null, retrying = true)!!
+        assertEquals("a retry shows as in progress", "in_progress", retrying.step.status)
         val tv = SetupReport.restartStep(Status.OFF, tv = true, lastError = null, open = null)!!
         assertEquals("network_debugging", tv.step.key)
         assertTrue(tv.step.help!!.startsWith("This TV restarted"))

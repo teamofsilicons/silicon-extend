@@ -9,7 +9,8 @@ import { type ShellWord, shellFragment, shellQuote } from '@agent-device/kernel/
 import { isPlayableVideo } from '@agent-device/capture-kit/recording-video';
 import { loadAndroidMechanics } from './platform-runtime-android-mechanics.ts';
 
-const ANDROID_MANIFEST_NAME = 'agent-device-recording-active.json';
+// On the device's shared storage, where a Carbon browsing its files sees it, so it names Silicon Extend.
+const ANDROID_MANIFEST_NAME = 'silicon-extend-recording-active.json';
 const ADB_TIMEOUT_MS = 5_000;
 const BIT_RATE = { medium: 8_000_000, high: 20_000_000 } as const;
 

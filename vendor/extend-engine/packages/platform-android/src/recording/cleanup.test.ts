@@ -25,13 +25,13 @@ test('attempts every fenced native chunk before retaining cleanup evidence', asy
     [
       {
         index: 1,
-        remotePath: '/sdcard/agent-device-recording-1.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-1.mp4',
         remotePid: '41',
         remoteStartTime: '7',
       },
       {
         index: 2,
-        remotePath: '/sdcard/agent-device-recording-2.mp4',
+        remotePath: '/sdcard/silicon-extend-recording-2.mp4',
         remotePid: '42',
         remoteStartTime: '8',
       },
@@ -43,7 +43,7 @@ test('attempts every fenced native chunk before retaining cleanup evidence', asy
     cleanupVerifiedAndroidEvidence(
       transport,
       evidence,
-      '/sdcard/agent-device-recording-active.json',
+      '/sdcard/silicon-extend-recording-active.json',
     ),
   ).resolves.toMatchObject({ status: 'cleanup-pending' });
   expect(attempts).toContain('stop:42');

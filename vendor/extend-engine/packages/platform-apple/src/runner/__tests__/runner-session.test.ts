@@ -462,7 +462,7 @@ test('runner session startup kills legacy ownerless xcodebuild before launching 
   assert.deepEqual(pkillCalls[1]?.[1]?.slice(0, 2), ['-KILL', '-f']);
   assert.match(
     String(pkillCalls[0]?.[1]?.[2] ?? ''),
-    /xcodebuild\.\*test-without-building\.\*AgentDeviceRunner\\\.env\\\.session-runner-session-startup-stale-sim-\[0-9\]/,
+    /xcodebuild\.\*test-without-building\.\*SiliconExtendHelper\\\.env\\\.session-runner-session-startup-stale-sim-\[0-9\]/,
   );
   const staleCleanupCallOrder = mockRunAppleToolCommand.mock.invocationCallOrder[0];
   const runnerLaunchCallOrder = mockRunCmdBackground.mock.invocationCallOrder[0];
@@ -498,7 +498,7 @@ test('runner session startup rejects live foreign runner lease', async () => {
         thrown = error;
         throw error;
       }
-    }, /already owned by another agent-device daemon/);
+    }, /already owned by another device engine daemon/);
 
     assert.equal(
       (thrown as { details?: Record<string, unknown> }).details?.ownerStateDir,
@@ -510,7 +510,7 @@ test('runner session startup rejects live foreign runner lease', async () => {
     );
     assert.match(
       String((thrown as { details?: Record<string, unknown> }).details?.hint),
-      /^If it is stuck, stop the owning agent-device daemon for AGENT_DEVICE_STATE_DIR='\/tmp\/agent-device-owner' and retry/,
+      /^If it is stuck, stop the owning device engine daemon for EXTEND_ENGINE_STATE_DIR='\/tmp\/agent-device-owner' and retry/,
     );
     assert.doesNotMatch(
       String((thrown as { details?: Record<string, unknown> }).details?.hint),
@@ -518,11 +518,11 @@ test('runner session startup rejects live foreign runner lease', async () => {
     );
     assert.match(
       String((thrown as { details?: Record<string, unknown> }).details?.hint),
-      /PID \d+ with AGENT_DEVICE_STATE_DIR=\/tmp\/agent-device-owner/,
+      /PID \d+ with EXTEND_ENGINE_STATE_DIR=\/tmp\/agent-device-owner/,
     );
     assert.doesNotMatch(
       String((thrown as { details?: Record<string, unknown> }).details?.hint),
-      /AGENT_DEVICE_STATE_DIR=\/tmp\/agent-device-owner\./,
+      /EXTEND_ENGINE_STATE_DIR=\/tmp\/agent-device-owner\./,
     );
     assert.doesNotMatch(
       String((thrown as { details?: Record<string, unknown> }).details?.hint),
@@ -582,16 +582,16 @@ test('runner session busy error includes logical lease context after admission',
     assert.match(String(thrown.details?.hint), /five-minute inactivity lease expires/);
     assert.match(
       String(thrown.details?.hint),
-      /^If it is stuck, stop the owning agent-device daemon for AGENT_DEVICE_STATE_DIR='\/tmp\/agent-device-owner' and retry/,
+      /^If it is stuck, stop the owning device engine daemon for EXTEND_ENGINE_STATE_DIR='\/tmp\/agent-device-owner' and retry/,
     );
     assert.doesNotMatch(String(thrown.details?.hint), /pnpm|clean:daemon/);
     assert.match(
       String(thrown.details?.hint),
-      /Runner owner: PID \d+ with AGENT_DEVICE_STATE_DIR=\/tmp\/agent-device-owner/,
+      /Runner owner: PID \d+ with EXTEND_ENGINE_STATE_DIR=\/tmp\/agent-device-owner/,
     );
     assert.doesNotMatch(
       String(thrown.details?.hint),
-      /AGENT_DEVICE_STATE_DIR=\/tmp\/agent-device-owner\./,
+      /EXTEND_ENGINE_STATE_DIR=\/tmp\/agent-device-owner\./,
     );
     assert.equal(mockRunCmdBackground.mock.calls.length, 0);
   } finally {
@@ -663,8 +663,8 @@ test('runner session startup reclaims live foreign runner lease from same state 
     assert.equal(session.deviceId, device.id);
     assert.equal(mockRunCmdBackground.mock.calls.length, 1);
     assert.deepEqual(mockCleanupTempFile.mock.calls, [
-      [`/tmp/AgentDeviceRunner.env.session-${device.id}-owner-foreign-same-state-8123.xctestrun`],
-      [`/tmp/AgentDeviceRunner.env.session-${device.id}-owner-foreign-same-state-8123.json`],
+      [`/tmp/SiliconExtendHelper.env.session-${device.id}-owner-foreign-same-state-8123.xctestrun`],
+      [`/tmp/SiliconExtendHelper.env.session-${device.id}-owner-foreign-same-state-8123.json`],
     ]);
     const pkillCalls = mockRunAppleToolCommand.mock.calls.filter(isXcodebuildPkillCall);
     assert.ok(pkillCalls.length >= 2);
@@ -730,7 +730,7 @@ test('runner session startup reclaims dead foreign runner lease before launching
   assert.ok(pkillCalls.length >= 2);
   assert.match(
     String(pkillCalls[0]?.[1]?.[2] ?? ''),
-    /xcodebuild\.\*test-without-building\.\*AgentDeviceRunner\\\.env\\\.session-runner-session-dead-lease-sim-owner-dead-foreign-/,
+    /xcodebuild\.\*test-without-building\.\*SiliconExtendHelper\\\.env\\\.session-runner-session-dead-lease-sim-owner-dead-foreign-/,
   );
 });
 
@@ -841,7 +841,7 @@ test('stale-lease cleanup without a recorded start time trusts only runner-shape
   writeStaleLeaseWithRunner(device.id, { runnerPid: 55_555, runnerStartTime: null });
   mockReadProcessCommand.mockImplementation((pid: number) =>
     pid === 55_555
-      ? 'xcodebuild test-without-building -xctestrun /tmp/AgentDeviceRunner.env.session-x.xctestrun'
+      ? 'xcodebuild test-without-building -xctestrun /tmp/SiliconExtendHelper.env.session-x.xctestrun'
       : null,
   );
   const runner = makeRecordingCleanupAdapter();
@@ -930,7 +930,7 @@ test('runner session startup fails closed when the owner state dir cannot be sta
   try {
     await assert.rejects(
       () => ensureRunnerSession(device, {}),
-      /already owned by another agent-device daemon/,
+      /already owned by another device engine daemon/,
     );
     assert.equal(mockRunCmdBackground.mock.calls.length, 0);
   } finally {
@@ -954,7 +954,7 @@ test('runner session startup still rejects a live foreign lease whose owner stat
   try {
     await assert.rejects(
       () => ensureRunnerSession(device, {}),
-      /already owned by another agent-device daemon/,
+      /already owned by another device engine daemon/,
     );
     assert.equal(mockRunCmdBackground.mock.calls.length, 0);
   } finally {
@@ -1029,7 +1029,7 @@ test('runner session restarts alive runner when expected xctestrun artifact chan
 test('runner session reuses external xctestrun artifact without cache-derived comparison', async () => {
   const device = { ...IOS_SIMULATOR, id: 'runner-session-external-artifact-sim' };
   mockEnsureXctestrunArtifact.mockResolvedValueOnce({
-    xctestrunPath: '/tmp/aws/AgentDeviceRunner.xctestrun',
+    xctestrunPath: '/tmp/aws/SiliconExtendHelper.xctestrun',
     derived: '/tmp/aws-derived',
     cache: 'external',
     artifact: 'valid',
@@ -1076,7 +1076,7 @@ test('runner session stop kills only owned stale xcodebuild runner processes wit
   assert.deepEqual(pkillCalls[1]?.[1]?.slice(0, 2), ['-KILL', '-f']);
   assert.match(
     String(pkillCalls[0]?.[1]?.[2] ?? ''),
-    /xcodebuild\.\*test-without-building\.\*AgentDeviceRunner\\\.env\\\.session-11C70358-8331-4872-A0CA-F15B6859B6FC-owner-\d+-/,
+    /xcodebuild\.\*test-without-building\.\*SiliconExtendHelper\\\.env\\\.session-11C70358-8331-4872-A0CA-F15B6859B6FC-owner-\d+-/,
   );
   assert.deepEqual(pkillCalls[0]?.[2], {
     allowFailure: true,

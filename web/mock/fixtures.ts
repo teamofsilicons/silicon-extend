@@ -20,11 +20,17 @@ export const SLT_CHEF = "oac_si_chef";
 
 export const TEAM = "acme";
 export const OTHER_TEAM = "labs";
+/** A Team c:saket's Extend login doesn't reach, where he still has a grant: "Sign in to Extend for studio". */
+export const FAR_TEAM = "studio";
 
 export const DEVICE_PIXEL = "7c1e09ab";
 export const DEVICE_MAC = "2e7f00d1";
 export const DEVICE_TV = "0d44e1f2";
 export const DEVICE_IPHONE = "51ab93c0";
+/** Paired by c:saket and c:alice; c:saket's si:scout is using it, and c:alice's si:sous asked Saket for it. */
+export const DEVICE_FAMILY_TV = "5a1e7f00";
+/** Saket's pair of a Mac c:alice installed Extend on; her si:pilot is using it. */
+export const DEVICE_STUDIO_MAC = "7d3e2f10";
 
 /** A live pairing code seeded at start (and after every reset), shown by an "Android" app. */
 export const SEEDED_CODE = "4F9C2A";

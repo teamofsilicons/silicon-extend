@@ -99,8 +99,8 @@ sealed interface Cmd {
 }
 
 /**
- * Parses agent-device CLI tokens (`command` + `args`, as `extend` forwards them) into a [Cmd].
- * Grammar follows `understanding/cli.yaml` `device_commands` and agent-device's docs. Flags that
+ * Parses the device engine's CLI tokens (`command` + `args`, as `extend` forwards them) into a [Cmd].
+ * Grammar follows `understanding/cli.yaml` `device_commands` and the device engine's docs. Flags that
  * only change how the CLI prints (`--json`) or that Extend handles elsewhere (`--ttl`,
  * `--permanent`) are accepted and ignored.
  */
@@ -353,7 +353,7 @@ object CommandParser {
         val raw = a.flag("--raw")
         val diff = a.flag("--diff") || diffAlias
         if (a.flag("--actions")) {
-            throw CommandFailure.unsupported("--actions names iOS custom accessibility actions; agent-device rejects it on Android and so does this app.")
+            throw CommandFailure.unsupported("--actions names iOS custom accessibility actions, which Android doesn't have. Run snapshot without it.")
         }
         a.flag("-c"); a.flag("--compact")
         a.noUnknownFlags()
@@ -408,7 +408,7 @@ object CommandParser {
         if (pred !in PREDICATES) throw CommandFailure.invalid("Unknown predicate \"$pred\"; predicates are ${PREDICATES.joinToString(", ")}")
         val rest = a.positionals.drop(1)
         if (rest.isEmpty()) throw CommandFailure.invalid("is $pred needs a selector")
-        if (rest[0].startsWith("@")) throw CommandFailure.invalid("is takes a selector expression, not a ref like ${rest[0]} (as in agent-device); e.g. is $pred 'label=\"Continue\"'")
+        if (rest[0].startsWith("@")) throw CommandFailure.invalid("is takes a selector expression, not a ref like ${rest[0]}; e.g. extend is $pred 'label=\"Continue\"'")
         val split = Selectors.splitFromArgs(rest, preferTrailingValue = pred == "text")
             ?: throw CommandFailure.invalid("\"${rest.joinToString(" ")}\" isn't a selector; e.g. 'role=button label=\"Continue\"' or 'id=com.example:id/login'")
         val (chain, remaining) = split

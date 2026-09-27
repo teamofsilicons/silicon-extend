@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { CHECKSUMS, DOWNLOADS, RELEASES_URL, releaseAsset, type Platform } from "../config";
+import { CHECKSUMS, DOWNLOADS, RELEASE_VERSION, RELEASES_URL, releaseAsset, type Platform } from "../config";
 import { Link } from "../lib/router";
 
 /** The files for one platform from the latest release; configured in src/config.ts. */
@@ -21,7 +21,9 @@ export default function Download(props: { platform: string }) {
       >
         {(d) => (
           <>
-            <p class="eyebrow">Download</p>
+            <p class="eyebrow" data-testid="download-version">
+              Download · version {RELEASE_VERSION}
+            </p>
             <h1 class="page-title">{d().app}.</h1>
             <p class="lead">{d().note}</p>
             <Show

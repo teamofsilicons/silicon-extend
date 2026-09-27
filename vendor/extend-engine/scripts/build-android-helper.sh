@@ -1,22 +1,23 @@
 #!/bin/sh
 set -eu
 
-HELPER="${AGENT_DEVICE_ANDROID_HELPER:-}"
+# Silicon Extend names engine settings EXTEND_ENGINE_<X>; the fork's AGENT_DEVICE_<X> still works.
+HELPER="${EXTEND_ENGINE_ANDROID_HELPER:-${AGENT_DEVICE_ANDROID_HELPER:-}}"
 if [ -z "$HELPER" ]; then
   HELPER="${1:-}"
   [ "$#" -ge 1 ] && shift
 fi
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-  echo "Usage: AGENT_DEVICE_ANDROID_HELPER=<snapshot|ime> $0 <version> <output-dir> [build-tools-version]" >&2
+  echo "Usage: EXTEND_ENGINE_ANDROID_HELPER=<snapshot|ime> $0 <version> <output-dir> [build-tools-version]" >&2
   echo "   or: $0 <snapshot|ime> <version> <output-dir> [build-tools-version]" >&2
-  echo "The version also comes from AGENT_DEVICE_ANDROID_BUILD_TOOLS." >&2
+  echo "The version also comes from EXTEND_ENGINE_ANDROID_BUILD_TOOLS." >&2
   exit 1
 fi
 
 VERSION="$1"
 OUTPUT_DIR="$2"
-BUILD_TOOLS_VERSION="${3:-${AGENT_DEVICE_ANDROID_BUILD_TOOLS:-}}"
+BUILD_TOOLS_VERSION="${3:-${EXTEND_ENGINE_ANDROID_BUILD_TOOLS:-${AGENT_DEVICE_ANDROID_BUILD_TOOLS:-}}}"
 PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 MIN_SDK=23
 TARGET_SDK=36
@@ -28,13 +29,17 @@ KEYSTORE="$PROJECT_DIR/android/snapshot-helper/debug.keystore"
 case "$HELPER" in
   snapshot)
     HELPER_DIR="$PROJECT_DIR/android/snapshot-helper"
-    PACKAGE_NAME="com.callstack.agentdevice.snapshothelper"
-    RUN_TEST_CLASS="com.callstack.agentdevice.snapshothelper.SnapshotHelperTestSuite"
+    PACKAGE_NAME="com.teamofsilicons.extend.snapshothelper"
+    # The suite's class name follows its Java package, read from where the source sits.
+    RUN_TEST_CLASS="$(
+      cd "$HELPER_DIR/src/test/java" &&
+        find . -name SnapshotHelperTestSuite.java | sed -e 's|^\./||' -e 's|\.java$||' -e 's|/|.|g' | head -n 1
+    )"
     RESOURCE_DIR=""
     ;;
   ime)
     HELPER_DIR="$PROJECT_DIR/android/ime-helper"
-    PACKAGE_NAME="com.callstack.agentdevice.imehelper"
+    PACKAGE_NAME="com.teamofsilicons.extend.imehelper"
     RUN_TEST_CLASS=""
     RESOURCE_DIR="$PROJECT_DIR/android/ime-helper/res"
     ;;
@@ -44,7 +49,7 @@ case "$HELPER" in
     ;;
 esac
 
-APK_BASENAME="agent-device-android-$HELPER-helper-$VERSION.apk"
+APK_BASENAME="extend-engine-android-$HELPER-helper-$VERSION.apk"
 
 SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
@@ -62,7 +67,7 @@ fi
 # not only packaging. CI names the version it installed; only a local build may take the newest.
 if [ -z "$BUILD_TOOLS_VERSION" ]; then
   if [ "${CI:-}" = "true" ]; then
-    echo "AGENT_DEVICE_ANDROID_BUILD_TOOLS must name a build-tools version under $SDK_ROOT/build-tools" >&2
+    echo "EXTEND_ENGINE_ANDROID_BUILD_TOOLS must name a build-tools version under $SDK_ROOT/build-tools" >&2
     exit 1
   fi
   NEWEST_BUILD_TOOLS_DIR="$(

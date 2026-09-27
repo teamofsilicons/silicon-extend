@@ -73,6 +73,7 @@ async fn start() -> Env {
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     };
     let state = extend_service::build(cfg).await.unwrap();
     let pool = state.pool.clone();
@@ -124,7 +125,7 @@ impl Device {
                 os_version: Some("1".into()),
                 model: Some("Fake".into()),
                 app_version: "1.0.0".into(),
-                agent_device_version: None,
+                engine_version: None,
             })
             .await
             .unwrap();
@@ -178,10 +179,11 @@ impl Device {
             os,
             os_version: Some("15".into()),
             model: Some("Fake".into()),
-            agent_device_version: None,
+            engine_version: None,
             capabilities: caps,
             missing: vec![],
             setup: Setup::complete(),
+            features: vec![],
         });
         self.send(&hello).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -314,7 +316,7 @@ async fn pairing_sessions_commands_and_files() {
             .hint
             .as_ref()
             .unwrap()
-            .contains(&format!("extend request send {id}"))
+            .contains(&format!("extend --team acme request send {id}"))
     );
     let r = s.send_request(&id, "Need it for an OTP, 2 minutes").await.unwrap();
     assert_eq!(r.to, "si:chef");
@@ -496,7 +498,8 @@ async fn pairing_rules_and_device_management() {
     let mut d = Device::pair(&env, "c:bob", DeviceOs::Macos, &[], None).await;
     let id = d.id.clone();
 
-    // Team-visible: alice sees the basics, can't manage it; personal hides it.
+    // 1.1: a device belongs to the Carbon who paired it, and nobody else sees it, whatever the
+    // Team. The 1.0 website's "Team devices" list is empty, and visibility changes nothing.
     let team = a
         .devices(DeviceQuery {
             scope: Some("team".into()),
@@ -504,19 +507,21 @@ async fn pairing_rules_and_device_management() {
         })
         .await
         .unwrap();
-    assert_eq!(team.items.len(), 1);
-    assert!(team.items[0].in_use.is_none() && team.items[0].pair_ttl_days.is_none());
-    assert_eq!(code_of(a.stop_device(&id).await), ErrorCode::NotOwner);
-    b.update_device(
-        &id,
-        None,
-        &DevicePatch {
-            visibility: Some(Visibility::Personal),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    assert!(team.items.is_empty());
+    assert_eq!(code_of(a.stop_device(&id).await), ErrorCode::DeviceNotFound);
+    assert_eq!(code_of(a.device(&id).await), ErrorCode::DeviceNotFound);
+    let still = b
+        .update_device(
+            &id,
+            None,
+            &DevicePatch {
+                visibility: Some(Visibility::Team),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(still.visibility, Visibility::Personal);
     assert!(
         a.devices(DeviceQuery {
             scope: Some("team".into()),
@@ -741,7 +746,7 @@ async fn test_environments_are_isolated() {
             os_version: None,
             model: None,
             app_version: "1.0.0".into(),
-            agent_device_version: None,
+            engine_version: None,
         })
         .await
         .unwrap();

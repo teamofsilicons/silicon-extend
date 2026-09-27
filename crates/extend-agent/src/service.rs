@@ -104,6 +104,20 @@ impl ServiceClient {
         read_envelope(resp).await
     }
 
+    /// "Pair with another Carbon": a new pairing code for this device, started with the credential
+    /// of any of its live pairs, so the pair it makes joins this device (and its test environment,
+    /// if any). A 1.0 service answers 404.
+    pub async fn pair_enrollment(&self, credential: &str) -> ServiceResult<EnrollmentCreated> {
+        let resp = self
+            .request(reqwest::Method::POST, "api/v1/device/enrollments")
+            .header("Authorization", device_auth(credential))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(ServiceError::network)?;
+        read_envelope(resp).await
+    }
+
     pub async fn get_enrollment(&self, id: Uuid, secret: &str) -> ServiceResult<EnrollmentState> {
         let resp = self
             .request(reqwest::Method::GET, &format!("api/v1/enrollments/{id}"))
@@ -134,7 +148,8 @@ impl ServiceClient {
         read_envelope(resp).await
     }
 
-    /// Revoke pair. The caller confirms with the Carbon first.
+    /// Revoke pair: ends the pair `credential` belongs to (one Carbon's), no other. The caller
+    /// confirms with the Carbon first.
     pub async fn revoke_pair(&self, credential: &str) -> ServiceResult<()> {
         let resp = self
             .request(reqwest::Method::DELETE, "api/v1/device")

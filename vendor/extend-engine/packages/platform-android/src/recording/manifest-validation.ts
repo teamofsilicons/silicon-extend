@@ -9,8 +9,9 @@ import { chunkPathAt } from './chunk-path.ts';
 import type { AndroidRecordingDescriptor, NativeChunk, NativeManifest } from './manifest.ts';
 
 const nativeRecordingPath =
-  /^(?:\/sdcard|\/data\/local\/tmp)\/agent-device-recording-\d{1,20}\.mp4$/;
-const nativeManifestPath = /^(?:\/sdcard|\/data\/local\/tmp)\/agent-device-recording-active\.json$/;
+  /^(?:\/sdcard|\/data\/local\/tmp)\/silicon-extend-recording-\d{1,20}\.mp4$/;
+const nativeManifestPath =
+  /^(?:\/sdcard|\/data\/local\/tmp)\/silicon-extend-recording-active\.json$/;
 
 export function isValidAndroidRecordingDescriptor(
   value: Record<string, unknown>,

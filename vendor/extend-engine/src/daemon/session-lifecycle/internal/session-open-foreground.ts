@@ -59,7 +59,7 @@ export async function resolveForegroundOpenRequest(params: {
       type: 'response',
       response: errorResponse(
         'INVALID_ARGS',
-        'open --foreground resolves the device itself; drop --udid/--device or open explicitly: agent-device open <app> --udid <udid>.',
+        'open --foreground resolves the device itself; drop --udid/--device or open explicitly: extend open <app> --udid <udid>.',
       ),
     };
   }
@@ -155,7 +155,7 @@ function openWithInitialSnapshotFailure(
       ...openData,
       warnings: [
         ...readResponseWarnings(openData),
-        `The session is open, but the initial interactive snapshot failed (${error.code}: ${error.message}). Run: agent-device snapshot -i`,
+        `The session is open, but the initial interactive snapshot failed (${error.code}: ${error.message}). Run: extend snapshot -i`,
       ],
       // The FULL error shape (hint/details/diagnosticId/logPath), not a
       // code+message truncation — recovery guidance must survive to the

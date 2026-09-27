@@ -19,9 +19,9 @@ const manifest: AndroidSnapshotHelperManifest = {
   version: '0.13.3',
   apkUrl: null,
   sha256: 'a'.repeat(64),
-  packageName: 'com.callstack.agentdevice.snapshothelper',
+  packageName: 'com.teamofsilicons.extend.snapshothelper',
   versionCode: 13003,
-  instrumentationRunner: 'com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation',
+  instrumentationRunner: 'com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation',
   minSdk: 23,
   targetSdk: 36,
   outputFormat: 'uiautomator-xml',
@@ -109,6 +109,61 @@ test('a current-only helper check refuses a missing helper without installing it
     },
   );
   assert.equal(installs, 0);
+});
+
+test('installing the renamed helper removes the fork-named one from the device', async () => {
+  const apkPath = await writeHelperApk('snapshot-helper-legacy-removal-');
+  const calls: string[] = [];
+  const adbProvider: AndroidAdbProvider = {
+    exec: async (args) => {
+      calls.push(args.join(' '));
+      if (args.includes('--show-versioncode')) {
+        return { exitCode: 1, stdout: '', stderr: 'not found' };
+      }
+      if (args.includes('uninstall')) return { exitCode: 0, stdout: 'Success', stderr: '' };
+      throw new Error(`unexpected adb call: ${args.join(' ')}`);
+    },
+    install: async () => {
+      calls.push('install');
+      return { exitCode: 0, stdout: 'Success', stderr: '' };
+    },
+  };
+
+  const decision = await ensureAndroidSnapshotHelper({
+    adb: adbProvider.exec,
+    adbProvider,
+    artifact: { apkPath, manifest: { ...manifest, sha256: sha256Text('helper-apk') } },
+    deviceKey: 'android:emulator-5580',
+  });
+
+  assert.equal(decision.installed, true);
+  const installAt = calls.indexOf('install');
+  const uninstallAt = calls.findIndex((call) =>
+    call.endsWith('pm uninstall com.callstack.agentdevice.snapshothelper'),
+  );
+  assert.ok(installAt >= 0 && uninstallAt > installAt, calls.join('\n'));
+});
+
+test('a failed removal of the fork-named helper does not fail the install', async () => {
+  const apkPath = await writeHelperApk('snapshot-helper-legacy-removal-fails-');
+  const adbProvider: AndroidAdbProvider = {
+    exec: async (args) => {
+      if (args.includes('--show-versioncode')) {
+        return { exitCode: 1, stdout: '', stderr: 'not found' };
+      }
+      if (args.includes('uninstall')) throw new Error('device went away');
+      throw new Error(`unexpected adb call: ${args.join(' ')}`);
+    },
+    install: async () => ({ exitCode: 0, stdout: 'Success', stderr: '' }),
+  };
+
+  const decision = await ensureAndroidSnapshotHelper({
+    adb: adbProvider.exec,
+    adbProvider,
+    artifact: { apkPath, manifest: { ...manifest, sha256: sha256Text('helper-apk') } },
+    deviceKey: 'android:emulator-5582',
+  });
+  assert.equal(decision.installed, true);
 });
 
 function adbInstallTimeout(): AppError {

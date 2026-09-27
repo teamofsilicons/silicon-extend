@@ -81,9 +81,9 @@ function appleHostUnsupportedError(hostOs: HostOperatingSystem): AppError {
     retriable: false,
     hint:
       `This host runs ${HOST_OS_LABELS[hostOs]}, so it cannot boot iOS Simulators or run macOS sessions. ` +
-      'Drive Android here instead with the same command shape: agent-device devices --platform android to list ' +
-      'targets, then agent-device open <app.apk> --platform android. To use an iOS Simulator from this machine, ' +
-      'run agent-device on a macOS host and pass --daemon-base-url <that daemon URL>.',
+      'Drive Android here instead with the same command shape: extend devices --platform android to list ' +
+      'targets, then extend open <app.apk> --platform android. To use an iOS Simulator from this machine, ' +
+      'run the device engine on a macOS host and pass --daemon-base-url <that daemon URL>.',
   });
 }
 

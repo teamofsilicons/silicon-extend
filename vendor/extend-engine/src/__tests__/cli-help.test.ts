@@ -16,20 +16,14 @@ test('help longpress prints command help and skips daemon dispatch', async () =>
   const result = await runCliCapture(['help', 'longpress']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(
-    result.stdout,
-    /Usage:\n {2}agent-device longpress <x y\|@ref\|selector> \[durationMs\]/,
-  );
+  assert.match(result.stdout, /Usage:\n {2}extend longpress <x y\|@ref\|selector> \[durationMs\]/);
 });
 
 test('help long-press resolves to longpress help and skips daemon dispatch', async () => {
   const result = await runCliCapture(['help', 'long-press']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(
-    result.stdout,
-    /Usage:\n {2}agent-device longpress <x y\|@ref\|selector> \[durationMs\]/,
-  );
+  assert.match(result.stdout, /Usage:\n {2}extend longpress <x y\|@ref\|selector> \[durationMs\]/);
   assert.doesNotMatch(result.stdout, /agent-device long-press/);
 });
 
@@ -37,7 +31,7 @@ test('appstate --help prints command help and skips daemon dispatch', async () =
   const result = await runCliCapture(['appstate', '--help']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(result.stdout, /Usage:\n {2}agent-device appstate/);
+  assert.match(result.stdout, /Usage:\n {2}extend appstate/);
   assert.doesNotMatch(result.stdout, /Global flags:/);
   assert.doesNotMatch(result.stdout, /Global Flags:/);
 });
@@ -55,25 +49,25 @@ test('connect help documents cloud auth environment origins', async () => {
   const result = await runCliCapture(['help', 'connect']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(result.stdout, /AGENT_DEVICE_CLOUD_BASE_URL/);
+  assert.match(result.stdout, /EXTEND_ENGINE_CLOUD_BASE_URL/);
   assert.match(result.stdout, /bridge\/control-plane API origin/);
-  assert.match(result.stdout, /AGENT_DEVICE_DAEMON_AUTH_TOKEN/);
+  assert.match(result.stdout, /EXTEND_ENGINE_DAEMON_AUTH_TOKEN/);
 });
 
 test('help react-devtools prints agent workflow topic and skips daemon dispatch', async () => {
   const result = await runCliCapture(['help', 'react-devtools']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(result.stdout, /^agent-device \S+ — react-devtools/);
+  assert.match(result.stdout, /^Silicon Extend device engine \S+ — react-devtools/);
   assert.match(result.stdout, /React Native performance\/profiling/);
-  assert.match(result.stdout, /agent-device react-devtools status/);
+  assert.match(result.stdout, /extend react-devtools status/);
 });
 
 test('help workflow prints the compact workflow card with a version header and skips daemon dispatch', async () => {
   const result = await runCliCapture(['help', 'workflow']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(result.stdout, /^agent-device \S+ — workflow/);
+  assert.match(result.stdout, /^Silicon Extend device engine \S+ — workflow/);
   assert.ok(
     Buffer.byteLength(result.stdout, 'utf8') < 9100,
     `help workflow should stay close to the compact-card size target, was ${Buffer.byteLength(result.stdout, 'utf8')} bytes`,
@@ -134,7 +128,7 @@ test('help workflow documents open/close/relaunch runner guarantees as lifecycle
   assert.equal(result.calls.length, 0);
   assert.match(result.stdout, /Lifecycle facts \(trust these instead of probing\)/);
   assert.match(result.stdout, /idempotent-foreground/);
-  assert.match(result.stdout, /already owned by another agent-device daemon/);
+  assert.match(result.stdout, /already owned by another device engine daemon/);
   assert.match(result.stdout, /Env vars: help physical-device/);
 });
 
@@ -165,15 +159,15 @@ test('help physical-device documents the runner/daemon lifecycle detail moved ou
     /keeps a healthy iOS simulator XCTest runner warm by default so the next open on that simulator \(same udid in the same simulator set\) skips the runner build/,
   );
   assert.match(result.stdout, /the session held a device lease/);
-  assert.match(result.stdout, /AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS/);
+  assert.match(result.stdout, /EXTEND_ENGINE_IOS_RUNNER_IDLE_STOP_MS/);
   assert.match(
     result.stdout,
     /self-exits after an idle window \(default 5 minutes, matching the runner idle-stop default\)/,
   );
-  assert.match(result.stdout, /AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS/);
+  assert.match(result.stdout, /EXTEND_ENGINE_DAEMON_IDLE_TIMEOUT_MS/);
   assert.match(
     result.stdout,
-    /a stale iOS runner lease — its owner process dead, or its AGENT_DEVICE_STATE_DIR deleted — is reclaimed automatically/i,
+    /a stale iOS runner lease — its owner process dead, or its EXTEND_ENGINE_STATE_DIR deleted — is reclaimed automatically/i,
   );
   assert.match(
     result.stdout,
@@ -202,8 +196,8 @@ test('help gestures prints the multi-touch topic and skips daemon dispatch', asy
   const result = await runCliCapture(['help', 'gestures']);
   assert.equal(result.code, 0);
   assert.equal(result.calls.length, 0);
-  assert.match(result.stdout, /^agent-device \S+ — gestures/);
-  assert.match(result.stdout, /agent-device gesture transform 200 420 80 -40 2 35 700/);
+  assert.match(result.stdout, /^Silicon Extend device engine \S+ — gestures/);
+  assert.match(result.stdout, /extend gesture transform 200 420 80 -40 2 35 700/);
 });
 
 test('help unknown command prints error plus root decision card and skips daemon dispatch', async () => {
@@ -211,7 +205,7 @@ test('help unknown command prints error plus root decision card and skips daemon
   assert.equal(result.code, 1);
   assert.equal(result.calls.length, 0);
   assert.match(result.stderr, /Error \(INVALID_ARGS\): Unknown command: not-a-command/);
-  assert.match(result.stdout, /All \d+ commands: agent-device help commands/);
+  assert.match(result.stdout, /All \d+ commands: extend help commands/);
   assert.match(result.stdout, /When starting a task with a known app/);
   assert.doesNotMatch(result.stdout, /Global Flags:/);
 });
@@ -221,7 +215,7 @@ test('unknown command --help prints error plus root decision card and skips daem
   assert.equal(result.code, 1);
   assert.equal(result.calls.length, 0);
   assert.match(result.stderr, /Error \(INVALID_ARGS\): Unknown command: not-a-command/);
-  assert.match(result.stdout, /All \d+ commands: agent-device help commands/);
+  assert.match(result.stdout, /All \d+ commands: extend help commands/);
 });
 
 test('runtime command is rejected before daemon dispatch', async () => {

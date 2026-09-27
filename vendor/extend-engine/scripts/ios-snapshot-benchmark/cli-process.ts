@@ -82,7 +82,7 @@ export async function runCliAsync(
 }
 
 function buildArgv(context: CliContext, args: string[]): string[] {
-  return ['bin/agent-device.mjs', ...args, ...baseFlags(context), '--json'];
+  return ['bin/extend-engine.mjs', ...args, ...baseFlags(context), '--json'];
 }
 
 function buildResult(options: {

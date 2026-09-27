@@ -3,7 +3,7 @@
 AT-SPI2 accessibility tree dumper.
 
 Traverses the AT-SPI2 accessibility tree and outputs JSON to stdout.
-Used by agent-device's Linux platform support as a subprocess.
+Used as a subprocess by Silicon Extend's device engine on Linux.
 
 Requires: python3-gi, gir1.2-atspi-2.0
 """

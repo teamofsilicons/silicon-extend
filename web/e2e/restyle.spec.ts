@@ -58,7 +58,7 @@ test.describe("restyle tour", () => {
     await expect(page.locator(".welcome-art canvas")).toHaveAttribute("data-ready", "true");
 
     await signInWithSlt(page);
-    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(4);
+    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(7);
     await expect(page.locator(`[data-device-id="${DEVICE_PIXEL}"] .pixel-dot.in-use`)).toHaveCount(1);
     await expect(page.locator('[data-device-id="0d44e1f2"] .pixel-dot.offline')).toHaveCount(1);
     // The tally is a quiet stat, not a second poster beside the pairing code.
@@ -67,9 +67,15 @@ test.describe("restyle tour", () => {
     expect(tally.weight).toBe("400");
     await capture(page, "02-devices");
 
-    await page.getByTestId("tab-team").click();
-    await expect(page.getByTestId("team-device-list").getByTestId("device-row")).toHaveCount(1);
-    await capture(page, "03-team-devices");
+    // 1.1: a device another Carbon paired too, with that Carbon's Silicon's request to Saket.
+    await page.goto("/devices/5a1e7f00");
+    await expect(page.getByTestId("shared-note")).toBeVisible();
+    await capture(page, "03-shared-device", { full: true });
+    // A locked Mac a Silicon asks Saket to wake.
+    await page.goto("/devices/2e7f00d1");
+    await expect(page.getByTestId("wake-banner")).toBeVisible();
+    await capture(page, "03a-wake-banner", { full: true });
+    await page.goto("/devices");
     await page.getByTestId("tab-removed").click();
     await expect(page.getByTestId("removed-device-list").getByTestId("device-row")).toHaveCount(2);
     await capture(page, "03b-removed-devices");
@@ -166,7 +172,7 @@ test.describe("restyle tour", () => {
 
     // The Remove dialog, with its count in agreement.
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-access")).toHaveText("2 Silicons lose access.");
+    await expect(page.getByTestId("remove-access")).toHaveText("4 Silicons lose access.");
     await capture(page, "09b-remove-dialog");
     await page.keyboard.press("Escape");
 
@@ -248,7 +254,7 @@ test.describe("restyle tour", () => {
     await page.emulateMedia({ colorScheme: "dark" });
     await signInWithSlt(page);
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(20, 22, 21)");
-    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(4);
+    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(7);
     // Focus and selection use dark tokens, not light values that vanish on the dark surface.
     await page.getByTestId("device-filter").focus();
     expect(await page.locator(".list-search").evaluate((el) => getComputedStyle(el).outlineColor)).toBe("rgb(143, 163, 255)");

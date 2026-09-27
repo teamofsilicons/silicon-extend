@@ -118,7 +118,7 @@ describe('openCliOutput', () => {
 
   test('renders the initialSnapshotError warning without a tree when the composed capture failed', async () => {
     const warning =
-      'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: agent-device snapshot -i';
+      'The session is open, but the initial interactive snapshot failed (COMMAND_FAILED: capture failed). Run: extend snapshot -i';
     const output = await openCliOutput({
       session: 'default',
       warnings: [warning],
@@ -190,7 +190,7 @@ describe('artifactsCliOutput', () => {
     expect(output.text).toBe(
       [
         'AWS Device Farm artifacts are not ready yet.',
-        'Retry: agent-device artifacts arn:aws:devicefarm:us-west-2:123:session/project/session/00000 --provider aws-device-farm --json',
+        'Retry: extend artifacts arn:aws:devicefarm:us-west-2:123:session/project/session/00000 --provider aws-device-farm --json',
       ].join('\n'),
     );
   });
@@ -233,9 +233,9 @@ describe('doctorCliOutput', () => {
         summary: 'No blockers found.',
         checks: [
           {
-            id: 'agent-device',
+            id: 'engine',
             status: 'pass',
-            summary: 'agent-device 0.17.9 using /tmp/agent-device',
+            summary: 'Silicon Extend device engine 0.17.9 using /tmp/agent-device',
           },
           {
             id: 'device',
@@ -254,7 +254,7 @@ describe('doctorCliOutput', () => {
     expect(output.text).toBe(
       [
         'Doctor: pass',
-        '✓ agent-device: agent-device 0.17.9 using /tmp/agent-device',
+        '✓ engine: Silicon Extend device engine 0.17.9 using /tmp/agent-device',
         '✓ device: Selected Pixel (android)',
         '- session: No active session named default. Doctor will use the selected device.',
       ].join('\n'),
@@ -270,7 +270,7 @@ describe('doctorCliOutput', () => {
             id: 'device',
             status: 'fail',
             summary: 'No devices found.',
-            command: 'agent-device devices',
+            command: 'extend devices',
           },
           {
             id: 'android-reverse',
@@ -286,7 +286,7 @@ describe('doctorCliOutput', () => {
       [
         'Doctor: fail',
         '⨯ device: No devices found.',
-        '  run: agent-device devices',
+        '  run: extend devices',
         '! android-reverse: Android adb reverse is missing for Metro port 8081.',
         '  run: adb -s emulator-5554 reverse tcp:8081 tcp:8081',
       ].join('\n'),

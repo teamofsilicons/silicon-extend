@@ -17,9 +17,9 @@ import { assertAllowedKeys } from '../input-readers.ts';
  * every surface and stops there; only a terminal caller can be told to run a help command, so the
  * recovery step is attached here rather than in the shared contract (#2062).
  */
-const CLI_BATCH_STEP_SHAPE_HINT = `${BATCH_STEP_SHAPE_HINT} Run agent-device help batch for the commands batch accepts and for runnable step examples.`;
+const CLI_BATCH_STEP_SHAPE_HINT = `${BATCH_STEP_SHAPE_HINT} Run extend help batch for the commands batch accepts and for runnable step examples.`;
 
-const CLI_BATCH_AVAILABLE_COMMANDS_HINT = `${BATCH_AVAILABLE_COMMANDS_HINT} Run agent-device help batch for the commands batch accepts and for runnable step examples.`;
+const CLI_BATCH_AVAILABLE_COMMANDS_HINT = `${BATCH_AVAILABLE_COMMANDS_HINT} Run extend help batch for the commands batch accepts and for runnable step examples.`;
 
 export function readCliBatchStepsJson(raw: string): BatchStep[] {
   let parsed: unknown;

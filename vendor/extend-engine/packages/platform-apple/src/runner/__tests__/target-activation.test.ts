@@ -13,11 +13,11 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const swiftModelsPath = path.resolve(
   here,
-  '../../../../../apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+Models.swift',
+  '../../../../../apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+Models.swift',
 );
 const swiftStatePinPath = path.resolve(
   here,
-  '../../../../../apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/UnitTests/RunnerTests+ApplicationStateRawValueTests.swift',
+  '../../../../../apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/UnitTests/RunnerTests+ApplicationStateRawValueTests.swift',
 );
 
 /**

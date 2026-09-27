@@ -323,7 +323,7 @@ function sessionCreateTimeoutError(
       runId: lease.runId,
       timeoutMs,
       ...(prepared.providerSessionId ? { providerSessionId: prepared.providerSessionId } : {}),
-      hint: `${provider} may still finish creating the session after agent-device stopped waiting, and that session would keep billing until the provider reaps it. Before retrying, check ${provider} for a running session created for lease ${lease.leaseId} (run ${lease.runId}) and stop it.`,
+      hint: `${provider} may still finish creating the session after the device engine stopped waiting, and that session would keep billing until the provider reaps it. Before retrying, check ${provider} for a running session created for lease ${lease.leaseId} (run ${lease.runId}) and stop it.`,
     },
     timeout,
   );

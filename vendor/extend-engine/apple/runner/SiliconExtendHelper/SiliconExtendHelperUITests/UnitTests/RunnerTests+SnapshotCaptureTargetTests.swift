@@ -89,7 +89,7 @@ extension RunnerTests {
     let box = ResultBox()
     let finished = expectation(description: "off-main write returned")
 
-    DispatchQueue(label: "agent-device.runner.tests.main-owned-snapshot-state").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.main-owned-snapshot-state").async {
       self.applyMainOwnedSnapshotState("unit_test") {
         box.ranOnMainThread = Thread.isMainThread
       }

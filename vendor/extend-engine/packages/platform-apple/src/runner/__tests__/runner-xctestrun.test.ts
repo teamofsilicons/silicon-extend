@@ -137,14 +137,14 @@ test('findXctestrun prefers simulator xctestrun over newer macos candidate', () 
       root,
       'Build',
       'Products',
-      'AgentDeviceRunner_AgentDeviceRunner_iphonesimulator26.2-arm64-x86_64.xctestrun',
+      'SiliconExtendHelper_SiliconExtendHelper_iphonesimulator26.2-arm64-x86_64.xctestrun',
     );
     const macosPath = path.join(
       root,
       'macos',
       'Build',
       'Products',
-      'AgentDeviceRunner.env.session-123.xctestrun',
+      'SiliconExtendHelper.env.session-123.xctestrun',
     );
     fs.mkdirSync(path.dirname(simulatorPath), { recursive: true });
     fs.mkdirSync(path.dirname(macosPath), { recursive: true });
@@ -167,13 +167,13 @@ test('findXctestrun prefers base xctestrun over newer env xctestrun for matching
       root,
       'Build',
       'Products',
-      'AgentDeviceRunner_AgentDeviceRunner_iphoneos26.2-arm64.xctestrun',
+      'SiliconExtendHelper_SiliconExtendHelper_iphoneos26.2-arm64.xctestrun',
     );
     const envPath = path.join(
       root,
       'Build',
       'Products',
-      'AgentDeviceRunner.env.session-456.xctestrun',
+      'SiliconExtendHelper.env.session-456.xctestrun',
     );
     fs.mkdirSync(path.dirname(basePath), { recursive: true });
     fs.writeFileSync(basePath, 'base');
@@ -190,11 +190,11 @@ test('findXctestrun prefers base xctestrun over newer env xctestrun for matching
 
 test('scoreXctestrunCandidate penalizes macos and env xctestrun files for simulator runs', () => {
   const simulatorScore = scoreXctestrunCandidate(
-    '/tmp/derived/Build/Products/AgentDeviceRunner_AgentDeviceRunner_iphonesimulator26.2-arm64.xctestrun',
+    '/tmp/derived/Build/Products/SiliconExtendHelper_SiliconExtendHelper_iphonesimulator26.2-arm64.xctestrun',
     iosSimulator,
   );
   const macosEnvScore = scoreXctestrunCandidate(
-    '/tmp/derived/macos/Build/Products/AgentDeviceRunner.env.session-123.xctestrun',
+    '/tmp/derived/macos/Build/Products/SiliconExtendHelper.env.session-123.xctestrun',
     iosSimulator,
   );
 
@@ -208,20 +208,20 @@ test('setup metadata script matches expected iOS simulator cache metadata', asyn
     const projectRoot = path.join(root, 'project');
     const derivedRoot = path.join(root, 'derived');
     fs.mkdirSync(derivedRoot, { recursive: true });
-    fs.mkdirSync(path.join(projectRoot, 'apple', 'runner', 'AgentDeviceRunner'), {
+    fs.mkdirSync(path.join(projectRoot, 'apple', 'runner', 'SiliconExtendHelper'), {
       recursive: true,
     });
     fs.writeFileSync(path.join(projectRoot, 'package.json'), '{"version":"0.19.0"}\n');
     fs.writeFileSync(
-      path.join(projectRoot, 'apple', 'runner', 'AgentDeviceRunner', 'Runner.swift'),
+      path.join(projectRoot, 'apple', 'runner', 'SiliconExtendHelper', 'Runner.swift'),
       'final class Runner {}\n',
     );
     const runnerUnitTest = path.join(
       projectRoot,
       'apple',
       'runner',
-      'AgentDeviceRunner',
-      'AgentDeviceRunnerUITests',
+      'SiliconExtendHelper',
+      'SiliconExtendHelperUITests',
       'UnitTests',
       'Invariant.swift',
     );
@@ -245,7 +245,7 @@ test('setup metadata script matches expected iOS simulator cache metadata', asyn
     );
 
     const actual = JSON.parse(
-      fs.readFileSync(path.join(derivedRoot, '.agent-device-runner-cache.json'), 'utf8'),
+      fs.readFileSync(path.join(derivedRoot, '.extend-engine-runner-cache.json'), 'utf8'),
     );
     const { artifacts: _actualArtifacts, ...actualComparable } = actual;
     const { artifacts: _expectedArtifacts, ...expectedComparable } =
@@ -298,19 +298,19 @@ test('runner cache key ignores package version but honors toolchain and SDK chan
 
 test('prepareXctestrunWithEnv avoids XCTest screen recordings for nested and legacy targets', async () => {
   await withTempDir('runner-xctestrun-policy-', async (root) => {
-    const xctestrunPath = path.join(root, 'AgentDeviceRunner.xctestrun');
+    const xctestrunPath = path.join(root, 'SiliconExtendHelper.xctestrun');
     fs.writeFileSync(
       xctestrunPath,
       JSON.stringify({
-        AgentDeviceRunnerUITests: {
-          TestBundlePath: '__TESTHOST__/PlugIns/AgentDeviceRunnerUITests.xctest',
+        SiliconExtendHelperUITests: {
+          TestBundlePath: '__TESTHOST__/PlugIns/SiliconExtendHelperUITests.xctest',
           PreferredScreenCaptureFormat: 'screenRecording',
         },
         TestConfigurations: [
           {
             TestTargets: [
               {
-                TestBundlePath: '__TESTHOST__/PlugIns/AgentDeviceRunnerUITests.xctest',
+                TestBundlePath: '__TESTHOST__/PlugIns/SiliconExtendHelperUITests.xctest',
                 PreferredScreenCaptureFormat: 'screenRecording',
                 SystemAttachmentLifetime: 'deleteOnSuccess',
                 UserAttachmentLifetime: 'deleteOnSuccess',
@@ -326,19 +326,19 @@ test('prepareXctestrunWithEnv avoids XCTest screen recordings for nested and leg
 
     assert.equal(target?.EnvironmentVariables?.AGENT_DEVICE_RUNNER_PORT, '12345');
     assertCapturePolicy(target);
-    assertCapturePolicy(parsed.AgentDeviceRunnerUITests);
+    assertCapturePolicy(parsed.SiliconExtendHelperUITests);
   });
 });
 
 test('prepareXctestrunWithEnv writes env overlays into configured env dir', async () => {
   await withTempDir('runner-xctestrun-env-dir-', async (root) => {
-    const xctestrunPath = path.join(root, 'readonly-artifacts', 'AgentDeviceRunner.xctestrun');
+    const xctestrunPath = path.join(root, 'readonly-artifacts', 'SiliconExtendHelper.xctestrun');
     const envDir = path.join(root, 'writable-env');
     fs.mkdirSync(path.dirname(xctestrunPath), { recursive: true });
     fs.writeFileSync(
       xctestrunPath,
       JSON.stringify({
-        TestConfigurations: [{ TestTargets: [{ TestBundlePath: 'AgentDeviceRunnerUITests' }] }],
+        TestConfigurations: [{ TestTargets: [{ TestBundlePath: 'SiliconExtendHelperUITests' }] }],
       }),
     );
 
@@ -351,7 +351,7 @@ test('prepareXctestrunWithEnv writes env overlays into configured env dir', asyn
     assert.equal(path.dirname(prepared.jsonPath), envDir);
     assert.equal(
       path.basename(prepared.xctestrunPath),
-      'AgentDeviceRunner.env.aws_session.xctestrun',
+      'SiliconExtendHelper.env.aws_session.xctestrun',
     );
     assert.equal(fs.existsSync(prepared.xctestrunPath), true);
     assert.equal(fs.existsSync(prepared.jsonPath), true);
@@ -360,9 +360,9 @@ test('prepareXctestrunWithEnv writes env overlays into configured env dir', asyn
 
 test('prepareXctestrunWithEnv leaves unrelated targets without capture policy', async () => {
   await withTempDir('runner-xctestrun-policy-', async (root) => {
-    const xctestrunPath = path.join(root, 'AgentDeviceRunner.xctestrun');
+    const xctestrunPath = path.join(root, 'SiliconExtendHelper.xctestrun');
     const original = {
-      ContainerInfo: { SchemeName: 'AgentDeviceRunner' },
+      ContainerInfo: { SchemeName: 'SiliconExtendHelper' },
       TestConfigurations: [{ TestTargets: [{}] }],
     };
     fs.writeFileSync(xctestrunPath, JSON.stringify(original));
@@ -378,7 +378,7 @@ test('prepareXctestrunWithEnv leaves unrelated targets without capture policy', 
 
 test('ensureXctestrunArtifact uses configured external xctestrun artifact', async () => {
   await withTempDir('runner-xctestrun-external-', async (root) => {
-    const xctestrunPath = path.join(root, 'aws', 'AgentDeviceRunner.xctestrun');
+    const xctestrunPath = path.join(root, 'aws', 'SiliconExtendHelper.xctestrun');
     const derivedPath = path.join(root, 'derived');
     fs.mkdirSync(path.dirname(xctestrunPath), { recursive: true });
     fs.writeFileSync(xctestrunPath, '{}');
@@ -400,7 +400,7 @@ test('ensureXctestrunArtifact uses configured external xctestrun artifact', asyn
 
 test('ensureXctestrunArtifact defaults external derived data to writable temp path', async () => {
   await withTempDir('runner-xctestrun-external-temp-', async (root) => {
-    const xctestrunPath = path.join(root, 'aws', 'AgentDeviceRunner.xctestrun');
+    const xctestrunPath = path.join(root, 'aws', 'SiliconExtendHelper.xctestrun');
     fs.mkdirSync(path.dirname(xctestrunPath), { recursive: true });
     fs.writeFileSync(xctestrunPath, '{}');
 
@@ -417,7 +417,7 @@ test('ensureXctestrunArtifact defaults external derived data to writable temp pa
 test('markRunnerXctestrunArtifactBadForRun preserves configured external artifacts', async () => {
   await withTempDir('runner-xctestrun-external-bad-', async (root) => {
     const derivedPath = path.join(root, 'derived');
-    const xctestrunPath = path.join(root, 'aws', 'AgentDeviceRunner.xctestrun');
+    const xctestrunPath = path.join(root, 'aws', 'SiliconExtendHelper.xctestrun');
     fs.mkdirSync(derivedPath, { recursive: true });
     fs.mkdirSync(path.dirname(xctestrunPath), { recursive: true });
     fs.writeFileSync(path.join(derivedPath, 'keep.txt'), 'derived');

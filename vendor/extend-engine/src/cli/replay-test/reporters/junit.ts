@@ -54,7 +54,7 @@ function buildReplayJunitXml(suite: ReplaySuiteResult): string {
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<testsuites>`,
-    `  <testsuite name="agent-device replay suite" tests="${suite.total}" failures="${suite.failed}" skipped="${suite.skipped}" time="${formatJUnitSeconds(suite.durationMs)}">`,
+    `  <testsuite name="Silicon Extend replay suite" tests="${suite.total}" failures="${suite.failed}" skipped="${suite.skipped}" time="${formatJUnitSeconds(suite.durationMs)}">`,
   ];
 
   for (const test of suite.tests) {

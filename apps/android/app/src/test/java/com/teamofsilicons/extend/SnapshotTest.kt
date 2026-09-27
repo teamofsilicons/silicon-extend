@@ -190,7 +190,7 @@ class SnapshotTest {
     }
 
     @Test
-    fun rolesFollowAgentDevice() {
+    fun rolesFollowTheDeviceEngine() {
         assertEquals("button", Roles.formatRole("android.widget.Button"))
         assertEquals("button", Roles.formatRole("android.widget.ImageButton"))
         assertEquals("text", Roles.formatRole("android.widget.TextView"))

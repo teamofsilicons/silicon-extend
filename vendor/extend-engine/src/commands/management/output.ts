@@ -255,7 +255,7 @@ function formatDaemonArtifactLine(artifact: DaemonArtifactsResult['artifacts'][n
 
 function formatCloudArtifactsRetryCommand(result: CloudArtifactsResult): string | undefined {
   if (!result.providerSessionId) return undefined;
-  return `agent-device artifacts ${result.providerSessionId} --provider ${result.provider} --json`;
+  return `extend artifacts ${result.providerSessionId} --provider ${result.provider} --json`;
 }
 
 function readDoctorChecks(value: unknown): Array<Record<string, unknown>> {

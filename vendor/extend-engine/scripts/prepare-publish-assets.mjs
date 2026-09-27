@@ -31,7 +31,7 @@ export function preparePublishAssets(options = {}) {
     if (helper.releaseTag) helperArguments.push(`v${version}`);
     helperArguments.push(outputDirectory);
     run('sh', [packageAndroidHelperScript, ...helperArguments], root, {
-      AGENT_DEVICE_ANDROID_HELPER: helper.name,
+      EXTEND_ENGINE_ANDROID_HELPER: helper.name,
     });
   }
 
@@ -61,7 +61,7 @@ function assertPreparedAssets(root, version) {
     for (const suffix of ['.apk', '.manifest.json', '.apk.sha256']) {
       const filePath = path.join(
         directory,
-        `agent-device-android-${helper.name}-helper-${version}${suffix}`,
+        `extend-engine-android-${helper.name}-helper-${version}${suffix}`,
       );
       if (!isNonEmptyFile(filePath)) {
         throw new Error(`Publish asset was not prepared: ${filePath}`);

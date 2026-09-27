@@ -18,7 +18,7 @@ test('Provider-backed integration Android record stop retries the pull until in-
     'agent-device-provider-scenario-android-finalize-',
     async (tmpDir) => {
       const outputPath = path.join(tmpDir, 'finalize-race.mp4');
-      const remotePath = '/sdcard/agent-device-recording-523456789.mp4';
+      const remotePath = '/sdcard/silicon-extend-recording-523456789.mp4';
       const manifest = buildAndroidRecordingManifest({
         outPath: outputPath,
         remotePath,

@@ -10,6 +10,13 @@ import type { DeviceOs } from "./lib/types";
 
 const PRODUCTION_API = "https://backend.extend.teamofsilicons.com";
 
+/**
+ * The Silicon Extend release this website belongs to, and the first app version that can add a
+ * pair for another Carbon ("Pair with another Carbon") and report whether a device is awake.
+ */
+export const RELEASE_VERSION = "1.1.0";
+export const MULTI_CARBON_APP_VERSION = "1.1";
+
 /** Extend API base URL without a trailing slash; "" means same origin. */
 export function apiBaseUrl(): string {
   const raw =
@@ -38,8 +45,10 @@ export type Platform =
   | "windows"
   | "linux";
 
-/** Assets of the latest GitHub release, by stable name. release.yml builds versioned artifacts; the release
- * procedure copies them to these names and writes SHA256SUMS when it creates the GitHub release. */
+/** Assets of the latest GitHub release, by stable name. release.yml builds versioned artifacts
+ * (Silicon-Extend-1.1.0-macos-arm64.zip, silicon-extend_1.1.0_amd64.deb, …); the release procedure
+ * copies them to these names and writes SHA256SUMS when it creates the GitHub release. The names stay
+ * the same from release to release: `releases/latest/download/<name>` only works with a stable name. */
 export const RELEASES_URL = "https://github.com/teamofsilicons/silicon-extend/releases/latest";
 export const releaseAsset = (name: string) => `${RELEASES_URL}/download/${name}`;
 export const CHECKSUMS = releaseAsset("SHA256SUMS");
@@ -203,7 +212,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo:
       "Open any app, see and use any window and the menu bar, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.",
     goodToKnow:
-      "A Mac can't be used while it is locked or asleep. The Silicon uses the real mouse and keyboard. A paired Mac is also what iPhones, iPads and Apple TVs pair through.",
+      "While the Mac is locked or asleep a Silicon can still use the terminal; for the screen it asks you to wake it, and Extend never wakes it on its own. The Silicon uses the real mouse and keyboard. A paired Mac is also what iPhones, iPads and Apple TVs pair through.",
   },
   {
     id: "windows",
@@ -222,7 +231,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo:
       "Open any app, see and use any window, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.",
     goodToKnow:
-      "A Windows computer can't be used while it is locked. Admin prompts always need you.",
+      "While it is locked a Silicon can still use the terminal; for the screen it asks you to unlock it. Admin prompts always need you.",
   },
   {
     id: "linux",
@@ -243,7 +252,7 @@ export const DEVICE_KINDS: DeviceKind[] = [
     canDo:
       "Open any app, see and use any window, click, type, scroll, take screenshots and recordings, and use the terminal.",
     goodToKnow:
-      "A Linux computer can't be used while it is locked. A computer without a screen, like a server, only gets the terminal.",
+      "While it is locked a Silicon can still use the terminal; for the screen it asks you to unlock it. A computer without a screen, like a server, only gets the terminal.",
   },
   {
     id: "iphone",

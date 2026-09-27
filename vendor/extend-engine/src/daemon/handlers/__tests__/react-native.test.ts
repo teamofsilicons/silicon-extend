@@ -389,7 +389,7 @@ test('react-native dismiss-overlay reports unverified dismiss when RedBox contro
     verified: false,
     verificationRequired: true,
     verificationWarning: expect.stringContaining('React Native overlay is still detected'),
-    nextCommand: 'agent-device screenshot --overlay-refs',
+    nextCommand: 'extend screenshot --overlay-refs',
     message: 'React Native overlay dismiss action sent, but verification still detects an overlay',
   });
 });
@@ -748,7 +748,7 @@ test('react-native dismiss-overlay reports unverified dismiss when post-dismiss 
     verified: false,
     verificationRequired: true,
     verificationWarning: expect.stringContaining('accessibility tree is unreadable'),
-    nextCommand: 'agent-device screenshot',
+    nextCommand: 'extend screenshot',
   });
 });
 
@@ -798,7 +798,7 @@ test('react-native dismiss-overlay reports still-visible overlays with recovery 
     verified: false,
     verificationRequired: true,
     verificationWarning: expect.stringContaining('screenshot --overlay-refs'),
-    nextCommand: 'agent-device screenshot --overlay-refs',
+    nextCommand: 'extend screenshot --overlay-refs',
   });
 });
 

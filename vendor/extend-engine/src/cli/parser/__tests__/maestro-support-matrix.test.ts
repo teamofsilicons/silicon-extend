@@ -12,7 +12,7 @@ import {
 test('Maestro flag routes to the versioned compatibility help topic', () => {
   const flag = getFlagDefinitions().find((definition) => definition.key === 'replayMaestro');
   expect(flag?.usageDescription).toContain('supported Maestro YAML subset');
-  expect(flag?.usageDescription).toContain('agent-device help maestro');
+  expect(flag?.usageDescription).toContain('extend help maestro');
 });
 
 test('Maestro help covers the supported subset and operational boundaries', async () => {
@@ -25,7 +25,9 @@ test('Maestro help covers the supported subset and operational boundaries', asyn
     expect(help).toContain(statement);
   }
   expect(help).toContain(MAESTRO_COMPATIBILITY_ADR_URL);
-  expect(help).toContain(MAESTRO_COMPATIBILITY_ISSUE_URL);
+  // Silicon Extend routes compatibility requests to `extend report`, not upstream's tracker.
+  expect(help).toContain('Focused compatibility request: extend report');
+  expect(help).not.toContain(MAESTRO_COMPATIBILITY_ISSUE_URL);
   expect(help).not.toContain('issues/558');
 });
 

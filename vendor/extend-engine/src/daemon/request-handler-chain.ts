@@ -322,6 +322,8 @@ function expectHandlerResponse(
   throw new AppError(
     'UNKNOWN',
     `Daemon handler routing mismatch: ${handlerFamily} handler matched command "${command}" but returned no response.`,
-    { hint: 'This is a daemon-internal routing bug in agent-device — please report it.' },
+    {
+      hint: 'This is a daemon-internal routing bug in the device engine. Report it to Silicon Extend.',
+    },
   );
 }

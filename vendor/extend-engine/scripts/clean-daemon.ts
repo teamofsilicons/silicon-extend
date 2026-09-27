@@ -14,7 +14,9 @@ type DaemonInfo = {
   processStartTime?: string;
 };
 
-const paths = resolveDaemonPaths(process.env.AGENT_DEVICE_STATE_DIR);
+const paths = resolveDaemonPaths(
+  process.env.EXTEND_ENGINE_STATE_DIR ?? process.env.AGENT_DEVICE_STATE_DIR,
+);
 const info = readDaemonInfo(paths.infoPath);
 const daemonPid = readPositivePid(info?.pid);
 
@@ -54,11 +56,11 @@ function removeIfPresent(filePath: string): void {
   }
 }
 
-// Removes worktree-scoped state dirs under ~/.agent-device/dev/ that no live daemon
+// Removes worktree-scoped state dirs under ~/.silicon-extend/engine/dev/ that no live daemon
 // owns and that have been idle past the retention threshold. Never touches the
-// global ~/.agent-device root contents.
+// global ~/.silicon-extend/engine root contents.
 function pruneStaleDevStateDirs(): void {
-  const devRoot = path.join(os.homedir(), '.agent-device', 'dev');
+  const devRoot = path.join(os.homedir(), '.silicon-extend', 'engine', 'dev');
   const cutoffMs = Date.now() - PRUNE_DEV_MAX_AGE_MS;
   for (const dirPath of listDevStateDirs(devRoot)) {
     if (hasLiveDaemon(dirPath) || newestMtimeMs(dirPath) > cutoffMs) continue;

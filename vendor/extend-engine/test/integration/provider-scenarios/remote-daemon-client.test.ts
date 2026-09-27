@@ -554,7 +554,7 @@ async function assertRecordingArtifactRoundTrip(
   assert.equal(recordStartRpc?.params?.positionals?.[0], 'start');
   assert.match(
     String(recordStartRpc?.params?.positionals?.[1] ?? ''),
-    /^\/tmp\/agent-device-recording-/,
+    /^\/tmp\/silicon-extend-recording-/,
   );
   assert.equal(recordStartRpc?.params?.meta?.clientArtifactPaths?.outPath, paths.recordingPath);
 
@@ -681,7 +681,7 @@ test('remote web recording defaults client and daemon artifact paths to WebM', a
   );
 
   assert.equal(prepared.positionals[0], 'start');
-  assert.match(String(prepared.positionals[1] ?? ''), /^\/tmp\/agent-device-recording-.*\.webm$/);
+  assert.match(String(prepared.positionals[1] ?? ''), /^\/tmp\/silicon-extend-recording-.*\.webm$/);
   assert.match(
     prepared.clientArtifactPaths?.outPath ?? '',
     /^\/tmp\/project\/recording-\d+\.webm$/,
@@ -701,7 +701,7 @@ test('remote web recording appends WebM extension to extensionless client paths'
   );
 
   assert.equal(prepared.positionals[0], 'start');
-  assert.match(String(prepared.positionals[1] ?? ''), /^\/tmp\/agent-device-recording-.*\.webm$/);
+  assert.match(String(prepared.positionals[1] ?? ''), /^\/tmp\/silicon-extend-recording-.*\.webm$/);
   assert.equal(prepared.clientArtifactPaths?.outPath, '/tmp/project/recording.webm');
 });
 

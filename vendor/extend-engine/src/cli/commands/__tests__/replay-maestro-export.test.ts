@@ -177,7 +177,7 @@ press text="Retry" --hold-ms 1500
         line: 2,
         action: 'longpress label="Last message" 800',
         message:
-          'label= selectors export as Maestro text; Maestro text matching is broader than agent-device label-only matching',
+          'label= selectors export as Maestro text; Maestro text matching is broader than label-only matching in the device engine',
       },
       {
         line: 2,

@@ -1,10 +1,15 @@
 //! What the agent is doing right now. The tray, the window, headless output and
 //! `extend-agent status` all read this one value.
+//!
+//! `{state}/status.json` (what `extend-agent status` reads) is written from [`AgentStatus::for_file`]:
+//! it never holds wake requests, their reasons, or which Silicon holds a carried device. On a
+//! computer several Carbons paired, a Silicon's terminal can read that file, and those belong to
+//! other sides; the tray and the window keep them in memory only.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use extend_protocol::model::{MissingCapability, Setup, SetupState};
+use extend_protocol::model::{MissingCapability, Setup, SetupState, SleepState};
 use extend_protocol::{Capability, DeviceOs};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -20,7 +25,7 @@ pub enum Phase {
     Online,
     /// Paired, trying to reach Extend.
     Reconnecting,
-    /// Another copy of the app took over this computer's connection.
+    /// Another copy of the app (or a copy of a credential) took over every pair's connection.
     Superseded,
     /// Extend needs a newer app.
     UpgradeRequired,
@@ -34,16 +39,51 @@ pub struct PairingInfo {
     pub expires_at: String,
 }
 
+/// How one pair's connection is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PairPhase {
+    #[default]
+    Connecting,
+    Online,
+    Reconnecting,
+    /// Another connection took over this pair: the app waits for Reconnect.
+    Superseded,
+    UpgradeRequired,
+}
+
+/// One Carbon's pair of this computer. Each has its own device id, name and credential.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct DeviceInfo {
+pub struct PairInfo {
     pub device_id: String,
+    /// The name this Carbon gave the computer.
     #[serde(default)]
     pub name: Option<String>,
     /// The Carbon it's paired to, e.g. `c:alice`.
     #[serde(default)]
     pub owner: Option<String>,
+    /// The Team selected when the pair was made.
     #[serde(default)]
     pub team: Option<String>,
+    #[serde(default)]
+    pub phase: PairPhase,
+    /// Made by the app's first enrollment (the Carbon who installed Silicon Extend here).
+    #[serde(default)]
+    pub first_pair: Option<bool>,
+    /// Silicons given access through this pair don't get the terminal: several Carbons paired
+    /// this computer, and this pair isn't the first one.
+    #[serde(default)]
+    pub terminal_withheld: bool,
+}
+
+/// "Pair with another Carbon" while its code is up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AddingPair {
+    #[serde(default)]
+    pub pairing: Option<PairingInfo>,
+    /// Why there is no code (the service refused, or can't be reached).
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +91,29 @@ pub struct InUseInfo {
     pub silicon_id: String,
     pub session_id: String,
     pub since: String,
+    /// The pair the session runs through (whose Carbon gave the Silicon access).
+    #[serde(default)]
+    pub pair: Option<String>,
+    /// That pair's Carbon, for "through c:alice".
+    #[serde(default)]
+    pub carbon: Option<String>,
+    /// The session's side tag, for redacting other sides' wake requests. Never written to disk.
+    #[serde(skip)]
+    pub side: Option<String>,
+}
+
+/// A Silicon's request to wake this computer, as the window shows it. In memory only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WakeInfo {
+    pub wake_id: String,
+    /// The pair it was made through, and that pair's Carbon.
+    pub pair: String,
+    pub carbon: Option<String>,
+    /// Absent when it's redacted: another side's request while a session runs, or one the service
+    /// sent without them.
+    pub silicon_id: Option<String>,
+    pub reason: Option<String>,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +146,17 @@ pub struct AttachedInfo {
     /// Why this computer can't carry it, when it can't.
     #[serde(default)]
     pub error: Option<String>,
+    /// Whether it is awake (None: it can't be told).
+    #[serde(default)]
+    pub awake: Option<bool>,
+    #[serde(default)]
+    pub sleep_state: Option<SleepState>,
+    /// The pair of this computer it is carried for (whose Carbon added it).
+    #[serde(default)]
+    pub host: Option<String>,
+    /// A Silicon asked its Carbon to wake it. In memory only.
+    #[serde(skip)]
+    pub wake_requested: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -93,10 +167,22 @@ pub struct AgentStatus {
     pub phase: Phase,
     #[serde(default)]
     pub pairing: Option<PairingInfo>,
+    /// Every Carbon's pair of this computer, oldest first.
     #[serde(default)]
-    pub device: Option<DeviceInfo>,
+    pub pairs: Vec<PairInfo>,
+    /// "Pair with another Carbon", while it runs.
+    #[serde(default)]
+    pub adding_pair: Option<AddingPair>,
     #[serde(default)]
     pub environment: Option<EnvironmentInfo>,
+    /// Whether this computer is awake, and why not.
+    #[serde(default)]
+    pub awake: Option<bool>,
+    #[serde(default)]
+    pub sleep_state: Option<SleepState>,
+    /// Open requests to wake this computer. In memory only.
+    #[serde(skip)]
+    pub wake_requests: Vec<WakeInfo>,
     #[serde(default)]
     pub in_use: Option<InUseInfo>,
     #[serde(default)]
@@ -122,6 +208,34 @@ impl AgentStatus {
         self.setup.as_ref().is_some_and(|s| s.state != SetupState::Complete)
     }
 
+    /// What `status.json` holds: everything but wake requests (skipped by serde) and which Silicon
+    /// holds a carried device.
+    pub fn for_file(&self) -> AgentStatus {
+        let mut s = self.clone();
+        for a in &mut s.attached {
+            a.in_use = None;
+            a.takeover = None;
+        }
+        s
+    }
+
+    /// The Carbons this computer is paired to, oldest pair first ("c:alice and c:bob").
+    pub fn owners(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for p in &self.pairs {
+            if let Some(o) = &p.owner
+                && !out.contains(o)
+            {
+                out.push(o.clone());
+            }
+        }
+        out
+    }
+
+    pub fn pair(&self, device_id: &str) -> Option<&PairInfo> {
+        self.pairs.iter().find(|p| p.device_id == device_id)
+    }
+
     /// One line for the menu and headless output.
     pub fn headline(&self) -> String {
         let word = crate::sysinfo::computer_word();
@@ -132,15 +246,15 @@ impl AgentStatus {
                 Some(p) => format!("Pairing code: {}", p.code),
                 None => "Getting a pairing code…".into(),
             },
-            Phase::Superseded => format!("Another copy of Silicon Extend is connected for this {word}"),
+            Phase::Superseded => format!("Another connection took over this {word}'s pairs"),
             Phase::UpgradeRequired => "Update Silicon Extend to keep using it".into(),
             Phase::Online | Phase::Reconnecting => {
                 if let Some(u) = &self.in_use {
                     format!("{} is using this {word}", u.silicon_id)
                 } else if self.phase == Phase::Reconnecting {
                     "Reconnecting to Extend…".into()
-                } else if let Some(owner) = self.device.as_ref().and_then(|d| d.owner.as_deref()) {
-                    format!("Paired to {owner}")
+                } else if !self.owners().is_empty() {
+                    format!("Paired to {}", and_list(&self.owners()))
                 } else {
                     "Paired".into()
                 }
@@ -182,6 +296,15 @@ impl StatusHandle {
     }
 }
 
+/// "a", "a and b", "a, b and c".
+pub fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
 pub fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
@@ -192,7 +315,7 @@ pub fn now_rfc3339() -> String {
 pub async fn persist(handle: StatusHandle, path: PathBuf) {
     let mut rx = handle.subscribe();
     loop {
-        let snapshot = rx.borrow_and_update().clone();
+        let snapshot = rx.borrow_and_update().for_file();
         if let Ok(bytes) = serde_json::to_vec_pretty(&snapshot)
             && let Err(e) = crate::config::write_private_file(&path, &bytes)
         {
@@ -249,19 +372,38 @@ pub fn render_text(s: &AgentStatus) -> String {
             p.code, p.expires_at
         ));
     }
-    if let Some(d) = &s.device {
-        let name = d.name.as_deref().unwrap_or("(unnamed)");
-        out.push(format!("Device: {name} ({})", d.device_id));
-        if let Some(o) = &d.owner {
+    for p in &s.pairs {
+        let name = p.name.as_deref().unwrap_or("(unnamed)");
+        let state = match p.phase {
+            PairPhase::Online => String::new(),
+            PairPhase::Connecting | PairPhase::Reconnecting => ", reconnecting".into(),
+            PairPhase::Superseded => ", taken over by another connection".into(),
+            PairPhase::UpgradeRequired => ", needs an update".into(),
+        };
+        out.push(format!(
+            "Paired to {}{}: {name} ({}){state}",
+            p.owner.as_deref().unwrap_or("a Carbon"),
+            p.team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default(),
+            p.device_id
+        ));
+        if p.terminal_withheld {
             out.push(format!(
-                "Paired to: {o}{}",
-                d.team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default()
+                "  Silicons {} gives access to use the screen, keyboard and apps, not the terminal.",
+                p.owner.as_deref().unwrap_or("this Carbon")
             ));
         }
     }
+    if let Some(a) = s.awake {
+        out.push(match (a, s.sleep_state) {
+            (true, _) => "Awake: yes".into(),
+            (false, Some(st)) => format!("Awake: no ({})", st.label()),
+            (false, None) => "Awake: no".into(),
+        });
+    }
     if let Some(u) = &s.in_use {
+        let through = u.carbon.as_deref().map(|c| format!(" through {c}")).unwrap_or_default();
         out.push(format!(
-            "In use by {} in session {} since {}",
+            "In use by {}{through} in session {} since {}",
             u.silicon_id, u.session_id, u.since
         ));
     }
@@ -293,10 +435,14 @@ pub fn render_text(s: &AgentStatus) -> String {
             format!("can't be used: {e}")
         } else if let Some(u) = &a.in_use {
             format!("{} is using it", u.silicon_id)
-        } else if a.online {
-            "online".into()
-        } else {
+        } else if !a.online {
             "offline".into()
+        } else {
+            match (a.awake, a.sleep_state) {
+                (Some(false), Some(st)) => format!("online, not awake ({})", st.label()),
+                (Some(false), None) => "online, not awake".into(),
+                _ => "online".into(),
+            }
         };
         out.push(format!(
             "Carrying {} ({}, {}): {state}",
@@ -332,19 +478,90 @@ mod tests {
         });
         assert_eq!(s.headline(), "Pairing code: 4F9C2A");
         s.phase = Phase::Online;
-        s.device = Some(DeviceInfo {
+        s.pairs = vec![PairInfo {
             device_id: "7c1e09ab".into(),
             owner: Some("c:alice".into()),
             ..Default::default()
-        });
+        }];
         assert_eq!(s.headline(), "Paired to c:alice");
+        s.pairs.push(PairInfo {
+            device_id: "0d44e1f2".into(),
+            owner: Some("c:bob".into()),
+            terminal_withheld: true,
+            ..Default::default()
+        });
+        assert_eq!(s.headline(), "Paired to c:alice and c:bob");
+        assert!(
+            render_text(&s)
+                .contains("Silicons c:bob gives access to use the screen, keyboard and apps, not the terminal.")
+        );
         s.in_use = Some(InUseInfo {
             silicon_id: "si:chef".into(),
             session_id: "a3f".into(),
             since: "t".into(),
+            pair: Some("7c1e09ab".into()),
+            carbon: Some("c:alice".into()),
+            side: Some("9f2c".into()),
         });
         assert!(s.headline().starts_with("si:chef is using this "));
-        assert!(render_text(&s).contains("In use by si:chef in session a3f"));
+        assert!(render_text(&s).contains("In use by si:chef through c:alice in session a3f"));
+        assert_eq!(and_list(&["a".into(), "b".into(), "c".into()]), "a, b and c");
+    }
+
+    #[test]
+    fn the_status_file_holds_no_wake_requests_or_carried_holders() {
+        let holder = InUseInfo {
+            silicon_id: "si:scout".into(),
+            session_id: "b40".into(),
+            since: "t".into(),
+            pair: None,
+            carbon: None,
+            side: Some("side-tag".into()),
+        };
+        let s = AgentStatus {
+            phase: Phase::Online,
+            wake_requests: vec![WakeInfo {
+                wake_id: "w".into(),
+                pair: "7c1e09ab".into(),
+                carbon: Some("c:alice".into()),
+                silicon_id: Some("si:chef".into()),
+                reason: Some("Check the order screen".into()),
+                expires_at: "t".into(),
+            }],
+            attached: vec![AttachedInfo {
+                device_id: "3f2a1b0c".into(),
+                name: "Alice's iPhone".into(),
+                os: DeviceOs::Ios,
+                online: true,
+                in_use: Some(InUseInfo {
+                    silicon_id: "si:sous".into(),
+                    ..holder.clone()
+                }),
+                takeover: None,
+                setup: None,
+                error: None,
+                awake: None,
+                sleep_state: None,
+                host: Some("7c1e09ab".into()),
+                wake_requested: true,
+            }],
+            in_use: Some(holder),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s.for_file()).unwrap();
+        for secret in [
+            "Check the order screen",
+            "si:chef",
+            "si:sous",
+            "wake_request",
+            "side-tag",
+        ] {
+            assert!(!json.contains(secret), "status.json says {secret:?}: {json}");
+        }
+        // The computer's own holder stays: `extend-agent status` shows who is using it.
+        assert!(json.contains("\"in_use\":{\"silicon_id\":\"si:scout\""), "{json}");
+        // The window still has everything.
+        assert_eq!(s.wake_requests.len(), 1);
     }
 
     #[test]

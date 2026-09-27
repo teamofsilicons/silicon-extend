@@ -14,7 +14,7 @@ import { readVersion } from '@agent-device/host-kit/version';
 // advertised `open --metro-host/--metro-port` for four releases before `open` accepted them).
 // The example set cannot be enumerated from a hand-written list without drifting from the text that
 // actually ships, so it is read back out of the rendered help itself: every line that starts with
-// `agent-device ` is either a runnable example or a synopsis shape, and shapes are exactly the ones
+// `extend ` is either a runnable example or a synopsis shape, and shapes are exactly the ones
 // carrying placeholder syntax in an unquoted token (`<value>`, `[optional]`, `a|b`). Runnable ones
 // go through the production parser plus the command's CLI reader.
 //
@@ -46,10 +46,10 @@ function helpSurfaces(): Array<{ name: string; lines: string[] }> {
     const text = buildCommandUsageText(topic);
     assert.ok(text, `Expected help text for topic ${topic}`);
     const lines = text.split('\n');
-    // `withVersionHeader` swaps the authored `agent-device help <topic>` first line for a version
+    // `withVersionHeader` swaps the authored `extend help <topic>` first line for a version
     // banner. Drop it by construction (asserted, so a format change cannot silently swallow a real
     // example line here instead).
-    assert.equal(lines[0], `agent-device ${readVersion()} — ${topic}`);
+    assert.equal(lines[0], `Silicon Extend device engine ${readVersion()} — ${topic}`);
     surfaces.push({ name: topic, lines: lines.slice(1) });
   }
   for (const command of listCliCommandNames()) {
@@ -65,7 +65,7 @@ function collectHelpExamples(): HelpExample[] {
   for (const surface of helpSurfaces()) {
     for (const rawLine of surface.lines) {
       const line = rawLine.trim();
-      if (!line.startsWith('agent-device ')) continue;
+      if (!line.startsWith('extend ')) continue;
       const tokens = tokenize(line).slice(1);
       // Whole-token quoting is the only shape modelled; a quote inside a bare token (`--k='a b'`)
       // would split wrong, so fail loudly rather than parse garbage.

@@ -169,7 +169,7 @@ function buildSimpleperfStartCommand(appPid: string, remotePath: string): string
 
 function buildBackgroundShellCommand(argv: string[], label: string): string {
   const command = argv.map(shellQuote).join(' ');
-  const stderrPath = `${ANDROID_NATIVE_REMOTE_DIR}/agent-device-${label}-${Date.now()}.err`;
+  const stderrPath = `${ANDROID_NATIVE_REMOTE_DIR}/extend-engine-${label}-${Date.now()}.err`;
   return [
     `err=${shellQuote(stderrPath)}`,
     `(${command}) >/dev/null 2>"$err" & pid=$!`,

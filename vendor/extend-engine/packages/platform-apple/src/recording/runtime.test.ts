@@ -295,7 +295,7 @@ test('uses the closed Apple runner and finalizer for a CoreDevice recording', as
   assert.deepEqual(calls, [
     'start',
     'stop',
-    'retrieve:tmp/agent-device-recording-123.mp4:/tmp/capture.mp4',
+    'retrieve:tmp/silicon-extend-recording-123.mp4:/tmp/capture.mp4',
     'finalize:iOS recording',
   ]);
 });

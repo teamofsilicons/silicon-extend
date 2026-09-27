@@ -131,7 +131,7 @@ export function sessionChecks(
           : undefined,
       command:
         sameDeviceSessions.length > 0
-          ? `agent-device close --session ${sameDeviceSessions[0]} --platform ${publicPlatformString(session.device)}`
+          ? `extend close --session ${sameDeviceSessions[0]} --platform ${publicPlatformString(session.device)}`
           : undefined,
       evidence: {
         session: sessionName,

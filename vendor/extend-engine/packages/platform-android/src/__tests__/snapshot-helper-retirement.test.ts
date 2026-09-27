@@ -18,7 +18,7 @@ import {
   isAndroidHelperRuntimeProbe,
 } from './snapshot-helper-session.fixtures.ts';
 
-const PACKAGE_NAME = 'com.callstack.agentdevice.snapshothelper';
+const PACKAGE_NAME = 'com.teamofsilicons.extend.snapshothelper';
 const DEVICE_KEY = 'android:emulator-5554';
 // The device is asked for the helper process and told to echo a marker when there is none, so a
 // release can only come from a shell that ran the command.

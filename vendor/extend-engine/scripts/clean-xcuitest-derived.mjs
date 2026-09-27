@@ -3,9 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const DERIVED_ROOT = path.join(os.homedir(), '.agent-device', 'apple-runner', 'derived');
+const DERIVED_ROOT = path.join(
+  os.homedir(),
+  '.silicon-extend',
+  'engine',
+  'apple-runner',
+  'derived',
+);
 const ROOT_TRANSIENT_ENTRY_NAMES = new Set([
-  '.agent-device-runner-cache.json',
+  '.extend-engine-runner-cache.json',
   'Build',
   'BuildCache.noindex',
   'Index.noindex',

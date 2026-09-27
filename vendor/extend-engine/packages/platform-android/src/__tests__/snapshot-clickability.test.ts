@@ -73,7 +73,7 @@ test('snapshotAndroid captures the hierarchy once and retains clickability off-w
     if (args.includes('--show-versioncode')) {
       return {
         exitCode: 0,
-        stdout: 'package:com.callstack.agentdevice.snapshothelper versionCode=13004',
+        stdout: 'package:com.teamofsilicons.extend.snapshothelper versionCode=13004',
         stderr: '',
       };
     }

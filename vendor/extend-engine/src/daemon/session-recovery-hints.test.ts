@@ -28,7 +28,7 @@ function scopedRef(overrides: Partial<SessionState> = {}): SessionRef {
 test('device-in-use recovery names the address --session accepts, not the public name', () => {
   const hint = buildSessionRecoveryHint(scopedRef(), 'device-in-use');
 
-  expect(hint).toContain(`agent-device close --session ${SCOPED_ADDRESS}`);
+  expect(hint).toContain(`extend close --session ${SCOPED_ADDRESS}`);
   expect(hint).toContain(`rerun the command with --session ${SCOPED_ADDRESS}`);
   expect(hint).not.toMatch(/--session default\b/);
 });
@@ -36,7 +36,7 @@ test('device-in-use recovery names the address --session accepts, not the public
 test('selector-conflict recovery uses the same address', () => {
   const hint = buildSessionRecoveryHint(scopedRef(), 'selector-conflict');
 
-  expect(hint).toContain(`agent-device close --session ${SCOPED_ADDRESS}`);
+  expect(hint).toContain(`extend close --session ${SCOPED_ADDRESS}`);
   expect(hint).not.toMatch(/--session default\b/);
 });
 
@@ -49,8 +49,8 @@ test('a recording session recovery uses the address for both close and record st
 
   const hint = buildSessionRecoveryHint(ref, 'device-in-use');
 
-  expect(hint).toContain(`agent-device record stop --session ${SCOPED_ADDRESS}`);
-  expect(hint).toContain(`agent-device close --session ${SCOPED_ADDRESS}`);
+  expect(hint).toContain(`extend record stop --session ${SCOPED_ADDRESS}`);
+  expect(hint).toContain(`extend close --session ${SCOPED_ADDRESS}`);
 });
 
 test('an explicitly named session addresses itself unchanged', () => {
@@ -62,7 +62,7 @@ test('an explicitly named session addresses itself unchanged', () => {
     'device-in-use',
   );
 
-  expect(hint).toContain('agent-device close --session checkout');
+  expect(hint).toContain('extend close --session checkout');
 });
 
 // #2580: an implicit workspace session is addressed by platform, so the other platform needs a

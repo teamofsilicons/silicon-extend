@@ -75,7 +75,7 @@ class SelectorTest {
     }
 
     @Test
-    fun matchesLikeAgentDevice() {
+    fun matchesLikeTheDeviceEngine() {
         // label = text or content description; case, whitespace-insensitive equality.
         assertEquals(listOf(button, offscreen), matches("label=\"  continue \""))
         assertEquals(listOf(icon), matches("label=\"Navigate up\""))
@@ -83,7 +83,7 @@ class SelectorTest {
         assertEquals(button, matches("text=Continue").first())
         assertEquals(listOf(button), matches("text=Continue visible"))
         assertEquals(listOf(offscreen), matches("text=Continue hidden"))
-        // role: the Android class or agent-device's display role.
+        // role: the Android class or the device engine's display role.
         assertEquals(listOf(button, icon), matches("role=button"))
         assertEquals(listOf(email), matches("role=text-field"))
         assertEquals(listOf(email), matches("role=edittext"))

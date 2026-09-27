@@ -1196,7 +1196,7 @@ function assertAndroidInteractionContract(world: AndroidSettingsWorld): void {
         call[0] === 'shell' &&
         call[1] === 'am' &&
         call[2] === 'instrument' &&
-        call.includes('com.callstack.agentdevice.snapshothelper/.SnapshotInstrumentation'),
+        call.includes('com.teamofsilicons.extend.snapshothelper/.SnapshotInstrumentation'),
     ),
     JSON.stringify(adbCalls),
   );

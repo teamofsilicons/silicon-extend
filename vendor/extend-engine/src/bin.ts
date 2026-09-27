@@ -1,3 +1,5 @@
+// First, so EXTEND_ENGINE_* settings are in place before anything reads the environment.
+import './extend-env.ts';
 import { runEntry } from './cli/entry.ts';
 
 declare const __AGENT_DEVICE_VERSION__: string;

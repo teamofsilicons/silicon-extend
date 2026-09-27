@@ -125,7 +125,7 @@ export async function resolveRemoteAuth(options: {
   if (!options.allowInteractiveLogin) {
     if (options.flags.noLogin) {
       throw new AppError('UNAUTHORIZED', 'Remote daemon authentication is required.', {
-        hint: 'Run agent-device auth login, unset --no-login, or set AGENT_DEVICE_DAEMON_AUTH_TOKEN.',
+        hint: 'Run extend auth login, unset --no-login, or set EXTEND_ENGINE_DAEMON_AUTH_TOKEN.',
       });
     }
     throw buildNonInteractiveLoginError(options.command, env);
@@ -179,7 +179,7 @@ export async function resolveCloudAccessForConnect(options: {
   }
   if (options.flags.noLogin) {
     throw new AppError('UNAUTHORIZED', 'Cloud connection profile authentication is required.', {
-      hint: 'Run agent-device auth login, unset --no-login, or set AGENT_DEVICE_DAEMON_AUTH_TOKEN.',
+      hint: 'Run extend auth login, unset --no-login, or set EXTEND_ENGINE_DAEMON_AUTH_TOKEN.',
     });
   }
   const login = await loginWithDeviceAuth({
@@ -187,7 +187,7 @@ export async function resolveCloudAccessForConnect(options: {
     flags: options.flags,
     env,
     io: options.io,
-    commandLabel: 'agent-device connect',
+    commandLabel: 'extend connect',
   });
   return {
     accessToken: login.accessToken,
@@ -209,7 +209,7 @@ export async function loginWithDeviceAuth(options: {
   const env = options.env ?? options.io?.env ?? process.env;
   const authMode = detectAuthMode(env, options.io);
   if (authMode === 'non-interactive') {
-    throw buildNonInteractiveLoginError(options.commandLabel ?? 'agent-device connect', env);
+    throw buildNonInteractiveLoginError(options.commandLabel ?? 'extend connect', env);
   }
   const cloudBaseUrl = resolveCloudBaseUrl(env);
   const start = await postJson<DeviceAuthStartResponse>({
@@ -391,13 +391,13 @@ async function refreshAgentToken(options: {
   }
   if (response.status === 'revoked' || response.error === 'revoked') {
     throw new AppError('UNAUTHORIZED', 'Stored cloud CLI session was revoked.', {
-      hint: 'Run agent-device auth login again, or set AGENT_DEVICE_DAEMON_AUTH_TOKEN.',
+      hint: 'Run extend auth login again, or set EXTEND_ENGINE_DAEMON_AUTH_TOKEN.',
       status: response.status,
       error: response.error,
     });
   }
   throw new AppError('UNAUTHORIZED', 'Failed to refresh CLI session.', {
-    hint: 'Run agent-device auth login again, or set AGENT_DEVICE_DAEMON_AUTH_TOKEN.',
+    hint: 'Run extend auth login again, or set EXTEND_ENGINE_DAEMON_AUTH_TOKEN.',
     status: response.status,
     error: response.error,
   });
@@ -536,7 +536,7 @@ function buildNonInteractiveLoginError(command: string, env: EnvMap): AppError {
     {
       hint:
         `Create a service/API token: ${new URL(API_KEYS_PATH, cloudBaseUrl).toString()} ` +
-        'Then set AGENT_DEVICE_DAEMON_AUTH_TOKEN=adc_live_...',
+        'Then set EXTEND_ENGINE_DAEMON_AUTH_TOKEN=adc_live_...',
     },
   );
 }
@@ -548,7 +548,7 @@ function resolveCloudBaseUrl(env: EnvMap, fallback?: string): string {
   } catch (error) {
     throw new AppError(
       'INVALID_ARGS',
-      'Invalid AGENT_DEVICE_CLOUD_BASE_URL.',
+      'Invalid EXTEND_ENGINE_CLOUD_BASE_URL.',
       { cloudBaseUrl: raw },
       error instanceof Error ? error : undefined,
     );

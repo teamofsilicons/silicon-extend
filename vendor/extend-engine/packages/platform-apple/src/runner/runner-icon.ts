@@ -154,7 +154,7 @@ function findCompanionSourceApp(
     sourceApps.find(
       (sourceAppPath) =>
         path.dirname(sourceAppPath) === runnerParent &&
-        path.basename(sourceAppPath) === 'AgentDeviceRunner.app',
+        path.basename(sourceAppPath) === 'SiliconExtendHelper.app',
     ) ??
     sourceApps.find(
       (sourceAppPath) =>

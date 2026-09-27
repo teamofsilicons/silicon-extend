@@ -1,4 +1,4 @@
-import { buildPrimaryEnvVarName, parseSourceValue } from '@agent-device/kernel/source-value';
+import { buildEnvVarNames, parseSourceValue } from '@agent-device/kernel/source-value';
 import { listCliCommandNames } from '@agent-device/command-registry/catalog';
 import {
   getCliCommandSchema,
@@ -81,7 +81,7 @@ function buildOptionSpecs(): OptionSpec[] {
       flagDefinitions,
       configurable: !CONFIG_EXCLUDED_FLAG_KEYS.has(key),
       env: {
-        names: ENV_EXCLUDED_FLAG_KEYS.has(key) ? [] : [buildPrimaryEnvVarName(key)],
+        names: ENV_EXCLUDED_FLAG_KEYS.has(key) ? [] : buildEnvVarNames(key),
       },
       supportsCommand(command: string | null): boolean {
         const supported = supportedCommandsByKey.get(key);

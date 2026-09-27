@@ -356,7 +356,9 @@ async function prepareLimrunIosAsset(
     };
   }
 
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agent-device-limrun-ios-app-'));
+  const tempDir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'extend-engine-limrun-ios-app-'),
+  );
   const zipPath = path.join(tempDir, `${path.basename(artifactPath)}.zip`);
   try {
     await dependencies.host.archiveDirectory({

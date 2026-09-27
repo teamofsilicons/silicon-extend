@@ -89,7 +89,7 @@ async function exportProcessedVideo(params: {
 function temporarySiblingVideoPath(videoPath: string): string {
   const parsed = path.parse(videoPath);
   const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return path.join(parsed.dir, `.${parsed.name}.agent-device-${suffix}${parsed.ext || '.mp4'}`);
+  return path.join(parsed.dir, `.${parsed.name}.extend-engine-${suffix}${parsed.ext || '.mp4'}`);
 }
 
 export async function overlayRecordingTouches(params: {

@@ -1,22 +1,27 @@
-// Checks for runtime-entry.mjs, Extend's entry in front of the packaged agent-device CLI, run
-// against a stand-in for agent-device that logs every call and keeps a fake daemon.json.
-// runtime-update-e2e.mjs runs the same cases against the real agent-device daemon.
+// Checks for runtime-entry.mjs, Extend's entry in front of the packaged device engine CLI, run
+// against a stand-in for the engine that logs every call and keeps a fake daemon.json.
+// runtime-update-e2e.mjs runs the same cases against the real engine daemon.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { stripTypeScriptTypes } from 'node:module';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// The engine's EXTEND_ENGINE_* settings shim, which the entry imports first; each stand-in runtime
+// gets the real one, as JavaScript, where the build puts it.
+const EXTEND_ENV = stripTypeScriptTypes(readFileSync(path.resolve(here, '../../vendor/extend-engine/src/extend-env.ts'), 'utf8'));
 const VERSION = '0.21.15+extend.1111111111111111111111111111111111111111111111111111111111111111';
 const RECORD = 'extend-runtime-root.json';
 // How extend-agent runs a node entry: arguments over stdin (crates/extend-agent/src/drivers/agent_device.rs).
 const ARGS_FROM_STDIN = "import{pathToFileURL}from'node:url';let s='';process.stdin.setEncoding('utf8');for await(const c of process.stdin)s+=c;process.argv.push(...JSON.parse(s));await import(pathToFileURL(process.argv[1]).href);";
 
-// Logs each call, and keeps a daemon.json that says which location "started" it. Like agent-device,
-// it replaces a daemon of another version unless that daemon's release is newer.
+// Logs each call, and keeps a daemon.json that says which location "started" it. Like the engine,
+// it replaces a daemon of another version unless that daemon's release is newer. Like the engine,
+// it reads its settings under their fork-internal AGENT_DEVICE_* names, which the shim fills in.
 const FAKE_CLI = String.raw`
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -25,15 +30,16 @@ import { fileURLToPath } from 'node:url';
 const root = realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const args = process.argv.slice(2);
-// Like agent-device, flags end at '--'; what follows is text.
+// Like the engine, flags end at '--'; what follows is text.
 const flags = args.includes('--') ? args.slice(0, args.indexOf('--')) : args;
 const at = flags.indexOf('--state-dir');
-const given = at === -1 ? process.env.AGENT_DEVICE_STATE_DIR : flags[at + 1];
-// Like agent-device, ~ is the home directory (else "~/x" would be created under the working directory).
+// Like the engine, no state directory means its home (packages/kernel/src/extend-names.ts).
+const given = at === -1 ? (process.env.AGENT_DEVICE_STATE_DIR || path.join(os.homedir(), '.silicon-extend', 'engine')) : flags[at + 1];
+// Like the engine, ~ is the home directory (else "~/x" would be created under the working directory).
 const dir = given.startsWith('~/') ? path.join(os.homedir(), given.slice(2)) : given;
 mkdirSync(dir, { recursive: true });
 // And the runner settings this call would start a daemon with.
-const runner = { idleStopMs: process.env.AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS ?? null, detach: process.env.AGENT_DEVICE_IOS_RUNNER_DETACH ?? null };
+const runner = { idleStopMs: process.env.AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS ?? null, detach: process.env.AGENT_DEVICE_IOS_RUNNER_DETACH ?? null, noUpdateNotifier: process.env.AGENT_DEVICE_NO_UPDATE_NOTIFIER ?? null };
 appendFileSync(path.join(dir, 'calls.log'), JSON.stringify({ root, args, runner }) + '\n');
 const infoPath = path.join(dir, 'daemon.json');
 const release = (v) => v.split('+')[0].split('.').map(Number);
@@ -64,17 +70,23 @@ function install(t, { version = VERSION } = {}) {
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   const root = path.join(scratch, 'A');
   mkdirSync(path.join(root, 'bin'), { recursive: true });
-  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'agent-device', version }));
-  cpSync(path.join(here, 'runtime-entry.mjs'), path.join(root, 'bin/agent-device.mjs'));
-  writeFileSync(path.join(root, 'bin/agent-device-cli.mjs'), FAKE_CLI);
+  mkdirSync(path.join(root, 'dist/src/internal'), { recursive: true });
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'silicon-extend-engine', type: 'module', version }));
+  cpSync(path.join(here, 'runtime-entry.mjs'), path.join(root, 'bin/extend-engine.mjs'));
+  writeFileSync(path.join(root, 'bin/extend-engine-cli.mjs'), FAKE_CLI);
+  writeFileSync(path.join(root, 'dist/src/internal/extend-env.js'), EXTEND_ENV);
   const state = path.join(scratch, 'state');
   return { scratch, root, state };
 }
 
+// The environment without any engine setting, under either name.
+function cleanEnv() {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENT_DEVICE_') && !key.startsWith('EXTEND_ENGINE_')));
+}
+
 function run(root, args, { state, env = {}, viaStdin = false } = {}) {
-  const base = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENT_DEVICE_')));
-  const fullEnv = { ...base, AGENT_DEVICE_STATE_DIR: state, ...env };
-  const entry = path.join(root, 'bin/agent-device.mjs');
+  const fullEnv = { ...cleanEnv(), EXTEND_ENGINE_STATE_DIR: state, ...env };
+  const entry = path.join(root, 'bin/extend-engine.mjs');
   return viaStdin
     ? spawnSync(process.execPath, ['--input-type=module', '-e', ARGS_FROM_STDIN, '--', entry], { env: fullEnv, input: JSON.stringify(args), encoding: 'utf8' })
     : spawnSync(process.execPath, [entry, ...args], { env: fullEnv, encoding: 'utf8' });
@@ -130,10 +142,10 @@ test('a moved install replaces the daemon its old location started', (t) => {
   const real = realpathSync(moved);
   assert.equal(ok(result).daemonFrom, real, 'the command must run on a daemon started from the new location');
   assert.deepEqual(stops(state).map((call) => call.args), [['daemon', 'stop', '--state-dir', path.resolve(state), '--json']]);
-  assert.equal(stops(state)[0].root, real, "the stop runs the new location's own agent-device");
+  assert.equal(stops(state)[0].root, real, "the stop runs the new location's own engine");
   assert.equal(recorded(state), real);
   assert.equal(result.stderr, '');
-  assert.deepEqual(Object.keys(JSON.parse(result.stdout)), ['success', 'data'], "stdout carries only agent-device's reply");
+  assert.deepEqual(Object.keys(JSON.parse(result.stdout)), ['success', 'data'], "stdout carries only the engine's reply");
 });
 
 test('an identical copy elsewhere replaces the daemon, even while the original remains', (t) => {
@@ -160,9 +172,9 @@ test('a symlinked path to the same install is the same location', (t) => {
 });
 
 function runAsync(root, args, state) {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENT_DEVICE_'))), AGENT_DEVICE_STATE_DIR: state };
+  const env = { ...cleanEnv(), EXTEND_ENGINE_STATE_DIR: state };
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(root, 'bin/agent-device.mjs'), ...args], { env });
+    const child = spawn(process.execPath, [path.join(root, 'bin/extend-engine.mjs'), ...args], { env });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -203,7 +215,7 @@ test('a daemon of this version with no record of its location is replaced', (t) 
   assert.equal(stops(state).length, 1);
 });
 
-test('a newer daemon is left to agent-device, and its record is kept', (t) => {
+test('a newer daemon is left to the engine, and its record is kept', (t) => {
   const { root, state } = install(t);
   writeDaemon(state, { version: '0.22.0+extend.2222', startedFrom: '/Applications/newer' });
   writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/newer' }));
@@ -216,9 +228,9 @@ test("an older copy's claim never makes the newer location stop its own daemon",
   const { scratch, root, state } = install(t);
   const newer = path.join(scratch, 'Newer');
   cpSync(root, newer, { recursive: true });
-  writeFileSync(path.join(newer, 'package.json'), JSON.stringify({ name: 'agent-device', version: '0.22.0+extend.2222' }));
+  writeFileSync(path.join(newer, 'package.json'), JSON.stringify({ name: 'silicon-extend-engine', type: 'module', version: '0.22.0+extend.2222' }));
   assert.equal(ok(run(newer, ['session', 'list', '--json'], { state })).daemonFrom, realpathSync(newer));
-  // The older copy runs once (agent-device keeps the newer daemon), then the newer one again.
+  // The older copy runs once (the engine keeps the newer daemon), then the newer one again.
   assert.equal(ok(run(root, ['session', 'list', '--json'], { state })).daemonVersion, '0.22.0+extend.2222');
   assert.equal(ok(run(newer, ['session', 'list', '--json'], { state })).daemonFrom, realpathSync(newer));
   assert.deepEqual(stops(state), [], 'nobody stopped the newer daemon');
@@ -231,14 +243,14 @@ test('a first command after an update that is killed still leaves the record', (
   writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/older' }));
   writeFileSync(path.join(state, 'die-after-start'), '');
   const killed = run(root, ['session', 'list', '--json'], { state });
-  assert.equal(killed.signal, 'SIGKILL', 'the command was killed after agent-device replaced the daemon');
+  assert.equal(killed.signal, 'SIGKILL', 'the command was killed after the engine replaced the daemon');
   assert.equal(recorded(state), realpathSync(root));
   rmSync(path.join(state, 'die-after-start'));
   assert.equal(ok(run(root, ['snapshot', '--json'], { state })).daemonFrom, realpathSync(root));
   assert.deepEqual(stops(state), [], 'the next command keeps the daemon this location started');
 });
 
-test('an older release is replaced by agent-device and recorded once it is', (t) => {
+test('an older release is replaced by the engine and recorded once it is', (t) => {
   const { root, state } = install(t);
   writeDaemon(state, { version: '0.20.0', startedFrom: '/Applications/older' });
   writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/older' }));
@@ -249,7 +261,7 @@ test('an older release is replaced by agent-device and recorded once it is', (t)
   assert.deepEqual(stops(state), [], 'the next command reuses the daemon it started');
 });
 
-test('an update of the same release (a new build) is recorded before agent-device replaces it', (t) => {
+test('an update of the same release (a new build) is recorded before the engine replaces it', (t) => {
   const { root, state } = install(t);
   writeDaemon(state, { version: '0.21.15+extend.0000', startedFrom: '/Applications/old-build' });
   writeFileSync(path.join(state, RECORD), JSON.stringify({ root: '/Applications/old-build' }));
@@ -267,7 +279,7 @@ test('a failed stop is reported with what to do, and the command still runs', (t
   const result = run(moved, ['session', 'list', '--json'], { state });
   assert.equal(result.status, 0);
   assert.deepEqual(Object.keys(JSON.parse(result.stdout)), ['success', 'data']);
-  assert.match(result.stderr, /agent-device's daemon \(pid 4242\) was started from .*\/A, not from .*\/moved, and stopping it failed: The daemon didn't stop\./);
+  assert.match(result.stderr, /the device engine's daemon \(pid 4242\) was started from .*\/A, not from .*\/moved, and stopping it failed: The daemon didn't stop\./);
   assert.match(result.stderr, /Cannot find module/);
   assert.match(result.stderr, /daemon stop --state-dir ".*state"/);
   assert.equal(recorded(state), realpathSync(scratch) + '/A', 'the record is kept, so the next command tries again');
@@ -281,7 +293,8 @@ for (const [label, args, env] of [
   ['help', ['help', 'open'], {}],
   ['a --help run', ['session', 'list', '--help'], {}],
   ['daemon stop', ['daemon', 'stop', '--json'], {}],
-  ['a remote daemon (environment)', ['session', 'list', '--json'], { AGENT_DEVICE_DAEMON_BASE_URL: 'https://daemon.example' }],
+  ['a remote daemon (environment)', ['session', 'list', '--json'], { EXTEND_ENGINE_DAEMON_BASE_URL: 'https://daemon.example' }],
+  ['a remote daemon (1.0 environment name)', ['session', 'list', '--json'], { AGENT_DEVICE_DAEMON_BASE_URL: 'https://daemon.example' }],
   ['a remote daemon (flag)', ['session', 'list', '--daemon-base-url=https://daemon.example', '--json'], {}],
 ]) {
   test(`${label} leaves the daemon alone`, (t) => {
@@ -295,7 +308,7 @@ for (const [label, args, env] of [
 }
 
 for (const spelling of ['separate', 'joined']) {
-  test(`--state-dir (${spelling}) wins over AGENT_DEVICE_STATE_DIR, and ~ is the home directory`, (t) => {
+  test(`--state-dir (${spelling}) wins over EXTEND_ENGINE_STATE_DIR, and ~ is the home directory`, (t) => {
     const { scratch, root, state } = install(t);
     const home = path.join(scratch, 'home');
     const flagged = path.join(home, 'flagged');
@@ -308,6 +321,17 @@ for (const spelling of ['separate', 'joined']) {
     assert.equal(existsSync(path.join(state, RECORD)), false, 'the environment directory is not the one in use');
   });
 }
+
+test('with no state directory set, the record goes to ~/.silicon-extend/engine, where the engine keeps its daemon', (t) => {
+  const { scratch, root, state } = install(t);
+  const home = path.join(scratch, 'home');
+  mkdirSync(home);
+  const result = run(root, ['session', 'list', '--json'], { state, env: { HOME: home, EXTEND_ENGINE_STATE_DIR: '' } });
+  assert.equal(result.status, 0, result.stderr);
+  const engineHome = path.join(home, '.silicon-extend', 'engine');
+  assert.equal(recorded(engineHome), realpathSync(root));
+  assert.equal(existsSync(path.join(home, '.agent-device')), false, "1.0's folder isn't made");
+});
 
 for (const [label, args] of [
   ['joined', ['type', '--', '--state-dir=~/notes']],
@@ -340,24 +364,44 @@ for (const [label, args] of [
   });
 }
 
-test('agent-device gets the runner defaults, and a value already in the environment wins', (t) => {
+test('the engine gets the runner defaults and no update check, and a value already in the environment wins', (t) => {
   const { root, state } = install(t);
   ok(run(root, ['snapshot', '--json'], { state }));
   ok(run(root, ['snapshot', '--json'], { state, viaStdin: true }));
   ok(run(root, ['snapshot', '--json'], {
     state,
-    env: { AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS: '0', AGENT_DEVICE_IOS_RUNNER_DETACH: '1' },
+    env: { EXTEND_ENGINE_IOS_RUNNER_IDLE_STOP_MS: '0', EXTEND_ENGINE_IOS_RUNNER_DETACH: '1' },
+  }));
+  // 1.0's names still count as set, and the new name wins over the old one.
+  ok(run(root, ['snapshot', '--json'], {
+    state,
+    env: { AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS: '5', AGENT_DEVICE_IOS_RUNNER_DETACH: '1', EXTEND_ENGINE_IOS_RUNNER_DETACH: '0' },
   }));
   assert.deepEqual(calls(state).map((call) => call.runner), [
-    { idleStopMs: '30000', detach: '0' },
-    { idleStopMs: '30000', detach: '0' },
-    { idleStopMs: '0', detach: '1' },
+    { idleStopMs: '30000', detach: '0', noUpdateNotifier: '1' },
+    { idleStopMs: '30000', detach: '0', noUpdateNotifier: '1' },
+    { idleStopMs: '0', detach: '1', noUpdateNotifier: '1' },
+    { idleStopMs: '5', detach: '0', noUpdateNotifier: '1' },
   ]);
 });
 
-test('a runtime whose manifest has no version is handed to agent-device unchecked', (t) => {
+test('EXTEND_ENGINE_STATE_DIR wins over AGENT_DEVICE_STATE_DIR, which still works on its own', (t) => {
+  const { scratch, root, state } = install(t);
+  const old = path.join(scratch, 'old-state');
+  ok(run(root, ['snapshot', '--json'], { state, env: { AGENT_DEVICE_STATE_DIR: old } }));
+  assert.equal(calls(state).length, 1);
+  assert.equal(recorded(state), realpathSync(root));
+  assert.equal(existsSync(old), false);
+  const fullEnv = { ...cleanEnv(), AGENT_DEVICE_STATE_DIR: old };
+  const result = spawnSync(process.execPath, [path.join(root, 'bin/extend-engine.mjs'), 'snapshot', '--json'], { env: fullEnv, encoding: 'utf8' });
+  ok(result);
+  assert.equal(calls(old).length, 1);
+  assert.equal(recorded(old), realpathSync(root));
+});
+
+test('a runtime whose manifest has no version is handed to the engine unchecked', (t) => {
   const { root, state } = install(t);
-  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'agent-device' }));
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'silicon-extend-engine', type: 'module' }));
   writeDaemon(state, { version: VERSION });
   run(root, ['session', 'list', '--json'], { state });
   assert.deepEqual(stops(state), []);

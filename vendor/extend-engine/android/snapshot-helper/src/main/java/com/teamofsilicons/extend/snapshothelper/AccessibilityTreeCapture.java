@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.UiAutomation;
@@ -70,7 +70,7 @@ final class AccessibilityTreeCapture {
     // UiAutomation connection across captures, and its per-connection accessibility node cache is
     // not always invalidated by such a swap. Drop the cache before each traversal.
     //
-    // Declared residue (agent-device #1832): the reset mechanism differs by API level — the public
+    // Declared residue (upstream #1832): the reset mechanism differs by API level — the public
     // clearCache() on 34+, a setServiceInfo() re-apply below — and the two are not known to be
     // equivalent. This is an acquisition-freshness difference the payload does not disclose.
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

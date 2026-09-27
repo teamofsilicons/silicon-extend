@@ -36,7 +36,7 @@ export const runnerOwnership = Object.freeze({
 
 export const coreDeviceRunnerStart = Object.freeze({
   ...runnerOwnership,
-  remotePath: 'tmp/agent-device-recording-123.mp4',
+  remotePath: 'tmp/silicon-extend-recording-123.mp4',
 });
 
 export const processIdentity = Object.freeze({

@@ -56,23 +56,24 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium && pnpm test:e2e
-  # The agent-device fork and the desktop packaging that stamps and wraps it.
+  # The device engine (vendor/extend-engine) and the desktop packaging that stamps and wraps it.
   fork:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: pnpm/action-setup@v4
-        with: {version: 11.17.0} # vendor/agent-device/package.json packageManager
+        with: {version: 11.17.0} # vendor/extend-engine/package.json packageManager
       - uses: actions/setup-node@v4
-        with: {node-version: 24, cache: pnpm, cache-dependency-path: vendor/agent-device/pnpm-lock.yaml}
+        with: {node-version: 24, cache: pnpm, cache-dependency-path: vendor/extend-engine/pnpm-lock.yaml}
       - run: pnpm install --frozen-lockfile
-        working-directory: vendor/agent-device
-      # Every fork test file an Extend change touched (vendor/agent-device/FORK.md). The fork's full
-      # suite has failures that predate Extend, so it is not run here.
-      - name: Fork tests Extend changed
-        working-directory: vendor/agent-device
+        working-directory: vendor/extend-engine
+      # Every engine test file an Extend change touched (vendor/extend-engine/FORK.md). The engine's
+      # full suite has failures that predate Extend, so it is not run here.
+      - name: Engine tests Extend changed
+        working-directory: vendor/extend-engine
         run: >-
           pnpm exec vitest run --project unit-core
+          src/extend-env.test.ts
           packages/contracts/src/session-surface.test.ts
           packages/platform-apple/src/__tests__/interactor-macos-surface.test.ts
           packages/platform-apple/src/__tests__/interactor-runner-provider.test.ts
@@ -98,7 +99,7 @@ jobs:
           src/platform-runtime-screen-recording-process-host.test.ts
       # Built so the packaging tests also check the real dist (they skip that case without one).
       - run: pnpm build
-        working-directory: vendor/agent-device
+        working-directory: vendor/extend-engine
       - name: Desktop runtime entry, runtime stamp and packaging checks
         run: node --test apps/desktop/*.test.mjs
   android:

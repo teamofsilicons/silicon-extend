@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import type { AndroidImeHelperArtifact } from '@agent-device/platform-android/mechanics';
 
-const IME_HELPER_PACKAGE = 'com.callstack.agentdevice.imehelper';
+const IME_HELPER_PACKAGE = 'com.teamofsilicons.extend.imehelper';
 const IME_HELPER_FIXTURE_APK_PATH = fileURLToPath(
   new URL('./fixtures/android-helper-apk.fixture', import.meta.url),
 );

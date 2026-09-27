@@ -1,4 +1,4 @@
-# Agent Device Domain Language
+# Device Engine Domain Language
 
 Canonical vocabulary for the automation domain. Use these names in code, tests, issues, and
 architecture notes; implementation decisions and procedures belong in ADRs and task guidance.
@@ -314,7 +314,7 @@ device.
 _Avoid_: Simlock client, lease provider
 
 **Cloud WebDriver runtime**:
-A provider runtime mapping a cloud-owned Appium or WebDriver session into agent-device inventory,
+A provider runtime mapping a cloud-owned Appium or WebDriver session into the engine's inventory,
 leases, runtime behavior, artifacts, and release.
 
 **Cloud artifact**:

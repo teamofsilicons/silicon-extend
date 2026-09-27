@@ -170,7 +170,10 @@ function suffixPrefixOverlap(suffix: string, current: string, prefix: Uint32Arra
 function remoteOnlyTail(tail: string): string {
   return tail
     .split('\n')
-    .filter((line) => !line.startsWith('[agent-device][mark]'))
+    .filter(
+      (line) =>
+        !line.startsWith('[extend-engine][mark]') && !line.startsWith('[agent-device][mark]'),
+    )
     .join('\n');
 }
 

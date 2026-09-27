@@ -64,7 +64,7 @@ export type SessionScriptWriteOptions = {
  * transaction being COMPLETE — so every write carrying it IS a complete,
  * committed transaction.
  */
-export const HEAL_COMPLETE_SENTINEL = '# agent-device:heal-complete';
+export const HEAL_COMPLETE_SENTINEL = '# extend:heal-complete';
 
 /**
  * ADR 0012 decision 6, R7 + commit semantics (C2): a repair-armed session is a

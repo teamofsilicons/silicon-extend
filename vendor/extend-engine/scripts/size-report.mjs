@@ -179,7 +179,7 @@ function measureStartupBenchmark(root, benchmark, runs) {
 }
 
 function runStartupCommand(root, args) {
-  execFileSync(process.execPath, ['bin/agent-device.mjs', ...args], {
+  execFileSync(process.execPath, ['bin/extend-engine.mjs', ...args], {
     cwd: root,
     stdio: 'ignore',
     timeout: 5_000,

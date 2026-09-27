@@ -15,4 +15,8 @@ if (!distPath) {
   process.exit(1);
 }
 
+// EXTEND_ENGINE_* settings first (src/extend-env.ts); internal/bin.js imports it too.
+const extendEnv = join(here, '..', 'dist', 'src', 'internal', 'extend-env.js');
+if (existsSync(extendEnv)) await import(pathToFileURL(extendEnv).href);
+
 await import(pathToFileURL(distPath).href);

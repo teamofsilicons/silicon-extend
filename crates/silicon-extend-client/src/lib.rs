@@ -161,7 +161,23 @@ pub struct Client {
     isi: Option<String>,
 }
 
-async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
+/// A successful answer's envelope: the HTTP status, the envelope `type` and its `data`.
+struct Answer {
+    status: u16,
+    kind: Option<String>,
+    data: serde_json::Value,
+}
+
+impl Answer {
+    fn into<T: DeserializeOwned>(self) -> Result<T> {
+        serde_json::from_value(self.data).map_err(|e| Error::Decode {
+            status: self.status,
+            detail: e.to_string(),
+        })
+    }
+}
+
+async fn decode_envelope(resp: reqwest::Response) -> Result<Answer> {
     let status = resp.status();
     let bytes = resp.bytes().await.map_err(|e| Error::Decode {
         status: status.as_u16(),
@@ -182,11 +198,15 @@ async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
             error: Box::new(error),
         });
     }
-    let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
-    serde_json::from_value(data).map_err(|e| Error::Decode {
+    Ok(Answer {
         status: status.as_u16(),
-        detail: e.to_string(),
+        kind: v.get("type").and_then(|t| t.as_str()).map(str::to_owned),
+        data: v.get("data").cloned().unwrap_or(serde_json::Value::Null),
     })
+}
+
+async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
+    decode_envelope(resp).await?.into()
 }
 
 async fn expect_empty(resp: reqwest::Response) -> Result<()> {
@@ -332,6 +352,18 @@ impl Client {
         decode(self.send(r).await?).await
     }
 
+    /// "Pair with another Carbon" (`POST /api/v1/device/enrollments`, 1.1): an app that is already
+    /// paired starts an enrollment with the credential of any of its live pairs, so another Carbon
+    /// can pair the same device. The answer is shaped like [`Client::enroll`]'s; follow it with
+    /// [`Client::enrollment`] and the enrollment socket as for a first pairing.
+    pub async fn pair_enrollment(&self, credential: &str) -> Result<EnrollmentCreated> {
+        let r = self
+            .req(Method::POST, "/api/v1/device/enrollments")
+            .header("authorization", format!("Extend-Device {credential}"))
+            .json(&env("enrollment", serde_json::json!({})));
+        decode(self.send(r).await?).await
+    }
+
     pub async fn device_self(&self, credential: &str) -> Result<DeviceSelf> {
         let r = self
             .req(Method::GET, "/api/v1/device")
@@ -408,7 +440,10 @@ impl Client {
 /// Filters for listing devices.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceQuery {
-    /// `mine`, `team` (Carbons) or `accessible` (Silicons). Default depends on the member.
+    /// `mine` (Carbons: every device they paired, whatever the Team) or `accessible` (Silicons:
+    /// the devices they were given access to in their Team). Default depends on the member. `team`
+    /// is deprecated: from 1.1 a device is only visible to the Carbons who paired it, so it always
+    /// lists nothing.
     pub scope: Option<String>,
     pub online: Option<bool>,
     pub os: Option<String>,
@@ -456,7 +491,23 @@ fn qs(pairs: &[(&str, Option<String>)]) -> String {
     }
 }
 
+/// What [`Authed::stop`] stopped.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum StopOutcome {
+    /// The session ran through the caller's own pair of the device (envelope type `session`, the
+    /// 1.0 answer).
+    Session(Box<Session>),
+    /// The Silicon using the device was given access by another Carbon who paired it, so it isn't
+    /// named (envelope type `device_stopped`).
+    Other(DeviceStopped),
+}
+
 /// Calls made as a signed-in member.
+///
+/// The Team (`X-Org-ID`) is the Silicon's Team for everything a Silicon does. A Carbon's calls on
+/// their own devices work in every Team, so the Team may be left out; it is still the Team a
+/// [`Authed::grant`] gives access in.
 #[derive(Debug, Clone, Copy)]
 pub struct Authed<'a> {
     c: &'a Client,
@@ -556,6 +607,9 @@ impl Authed<'_> {
         expect_empty(self.c.send(r).await?).await
     }
 
+    /// Stops the Silicon using a device, answering the stopped session. A 1.1 service answers
+    /// `device_stopped` instead when that Silicon was given access by another Carbon who paired the
+    /// device; this call then fails to decode after the stop succeeded. [`Authed::stop`] reads both.
     pub async fn stop_device(&self, id: &str) -> Result<Session> {
         self.post(
             &format!("/api/v1/devices/{id}/stop"),
@@ -564,6 +618,22 @@ impl Authed<'_> {
             false,
         )
         .await
+    }
+
+    /// Stops the Silicon using a device (`POST /api/v1/devices/{device_id}/stop`), through any
+    /// Carbon's pair of it: every Carbon who paired a device may stop it. On a computer it also
+    /// stops devices it carries that the caller paired. When only a carried device the caller
+    /// didn't pair is busy, it fails with `conflict` (stop it at the computer).
+    pub async fn stop(&self, id: &str) -> Result<StopOutcome> {
+        let r = self
+            .req(Method::POST, &format!("/api/v1/devices/{id}/stop"))
+            .json(&env("stop", serde_json::json!({})));
+        let a = decode_envelope(self.c.send(r).await?).await?;
+        if a.kind.as_deref() == Some("device_stopped") {
+            Ok(StopOutcome::Other(a.into()?))
+        } else {
+            Ok(StopOutcome::Session(Box::new(a.into()?)))
+        }
     }
 
     /// Silicons in the team, for choosing who gets access.
@@ -575,8 +645,35 @@ impl Authed<'_> {
         Ok(self.get::<Items>("/api/v1/team/silicons").await?.items)
     }
 
+    /// The Silicons of every Team the Carbon's Extend login reaches, each tagged with its Team
+    /// (`GET /api/v1/team/silicons?team=any`, 1.1), and how each Team's directory read went: a
+    /// Team that couldn't be read is in `teams` with its error, and the others still answer.
+    pub async fn team_silicons_all(&self) -> Result<TeamSilicons> {
+        self.get("/api/v1/team/silicons?team=any").await
+    }
+
     pub async fn setup(&self, id: &str) -> Result<Setup> {
         self.get(&format!("/api/v1/devices/{id}/setup")).await
+    }
+
+    /// Runs a device's failed setup step again now (`POST /api/v1/devices/{device_id}/setup/retry`,
+    /// 1.1), or every failed step when `step` is `None`. Answers the keys of the steps the device
+    /// was asked to rerun; the device then reports progress as usual ([`Authed::setup`]). Fails
+    /// with `conflict` when nothing (or not that step) has failed, `device_offline` when the device
+    /// or its computer isn't connected, `upgrade_required` when its app is older than 1.1, and
+    /// `rate_limited` within 5 seconds of the last retry.
+    pub async fn retry_setup(&self, id: &str, step: Option<&str>) -> Result<RetryResult> {
+        let input = match step {
+            Some(k) => SetupRetryInput::step(k),
+            None => SetupRetryInput::all(),
+        };
+        self.post(
+            &format!("/api/v1/devices/{id}/setup/retry"),
+            "setup_retry",
+            input,
+            false,
+        )
+        .await
     }
 
     pub async fn setup_code(&self, id: &str, code: &str) -> Result<Setup> {
@@ -597,6 +694,8 @@ impl Authed<'_> {
         Ok(self.get::<Items>(&format!("/api/v1/devices/{id}/access")).await?.items)
     }
 
+    /// Gives a Silicon access to the Carbon's device, in this [`Authed`]'s Team (the Silicon's
+    /// Team). The Carbon's login must reach that Team (`not_a_team_member` otherwise).
     pub async fn grant(&self, id: &str, silicon_id: &str) -> Result<AccessGrant> {
         decode(
             self.c
@@ -606,6 +705,8 @@ impl Authed<'_> {
         .await
     }
 
+    /// Takes a Silicon's access to the device away, in every Team it was given in, and ends its
+    /// running session there.
     pub async fn revoke(&self, id: &str, silicon_id: &str) -> Result<()> {
         expect_empty(
             self.c
@@ -613,6 +714,16 @@ impl Authed<'_> {
                 .await?,
         )
         .await
+    }
+
+    /// Takes a Silicon's access to the device away in one Team only (1.1). It works on ownership
+    /// alone, even for a Team the Carbon's login no longer reaches.
+    pub async fn revoke_in_team(&self, id: &str, silicon_id: &str, team: &str) -> Result<()> {
+        let path = format!(
+            "/api/v1/devices/{id}/access/{silicon_id}{}",
+            qs(&[("team", Some(team.to_owned()))])
+        );
+        expect_empty(self.c.send(self.req(Method::DELETE, &path)).await?).await
     }
 
     pub async fn activity(&self, id: &str, q: ActivityQuery) -> Result<Page<ActivityEntry>> {
@@ -638,6 +749,10 @@ impl Authed<'_> {
         .await
     }
 
+    /// Asks for a device another Silicon is using, with a reason of 1–300 characters. When that
+    /// Silicon is in the caller's Team and was given access by the same Carbon, the request goes to
+    /// it (`to` names it). Otherwise it goes to the Carbon who gave that Silicon access: `to_hidden`
+    /// is set and `to` reads [`protocol::REQUEST_TO_HIDDEN`].
     pub async fn send_request(&self, device_id: &str, reason: &str) -> Result<RequestInfo> {
         self.post(
             &format!("/api/v1/devices/{device_id}/requests"),
@@ -646,6 +761,122 @@ impl Authed<'_> {
                 reason: reason.to_owned(),
             },
             true,
+        )
+        .await
+    }
+
+    // ── Waking a device (1.1) ──
+
+    /// Asks the Carbon who gave this Silicon access to wake a device that isn't awake
+    /// (`POST /api/v1/devices/{device_id}/wake-requests`), with a reason of 1–300 characters. The
+    /// device shows it where it can, and the Carbon gets it through Ting. Asking again after 5
+    /// minutes refreshes the open request (`asks` goes up); sooner fails with `rate_limited`. Fails
+    /// with `conflict` when the device is already awake or its Carbon turned wake requests off, and
+    /// `device_in_use` when another Silicon is using it.
+    pub async fn wake(&self, device_id: &str, reason: &str) -> Result<WakeRequest> {
+        self.post(
+            &format!("/api/v1/devices/{device_id}/wake-requests"),
+            "wake_request",
+            WakeCreate::new(reason),
+            true,
+        )
+        .await
+    }
+
+    /// Withdraws the Silicon's own open wake request.
+    pub async fn cancel_wake(&self, device_id: &str, wake_id: Uuid) -> Result<()> {
+        expect_empty(
+            self.c
+                .send(self.req(
+                    Method::DELETE,
+                    &format!("/api/v1/devices/{device_id}/wake-requests/{wake_id}"),
+                ))
+                .await?,
+        )
+        .await
+    }
+
+    /// Wake requests on a device: the Carbon who paired it sees every Team's, a Silicon its own.
+    /// `q.state` is `open` or `all` (the default); `limit` and `cursor` page.
+    pub async fn wake_requests(&self, device_id: &str, q: ListQuery) -> Result<Page<WakeRequest>> {
+        self.get(&format!(
+            "/api/v1/devices/{device_id}/wake-requests{}",
+            qs(&[
+                ("state", q.state),
+                ("limit", q.limit.map(|l| l.to_string())),
+                ("cursor", q.cursor)
+            ])
+        ))
+        .await
+    }
+
+    /// The Carbon answers wake requests on their device. `woken` ("It's awake") is about the
+    /// device: it ends every open request on it, whichever Carbon's and whichever Team's. `declined`
+    /// ends the requests on the Carbon's own pair (or the listed ones).
+    pub async fn answer_wake(&self, device_id: &str, answer: &WakeAnswer) -> Result<WakeAnswered> {
+        let r = self
+            .req(
+                Method::POST,
+                &format!("/api/v1/devices/{device_id}/wake-requests/answer"),
+            )
+            .header("Idempotency-Key", Uuid::new_v4().to_string())
+            .json(&env("wake_answer", answer));
+        let resp = self.c.send(r).await?;
+        if resp.status() == StatusCode::NO_CONTENT {
+            return Ok(WakeAnswered::new(answer.answer, vec![]));
+        }
+        decode(resp).await
+    }
+
+    /// Turns wake requests off (or on again) for the Carbon's pair of a device, or for one Silicon
+    /// on it, in every Team or only `settings.team`. Turning them off withdraws the open ones.
+    pub async fn set_wake_settings(&self, device_id: &str, settings: &WakeSettings) -> Result<WakeSettingsView> {
+        decode(
+            self.c
+                .send(
+                    self.req(Method::PUT, &format!("/api/v1/devices/{device_id}/wake-settings"))
+                        .json(&env("wake_settings", settings)),
+                )
+                .await?,
+        )
+        .await
+    }
+
+    // ── Ting (1.1) ──
+
+    /// Whether Extend's Tings reach the caller in `team`, and which of Extend's Ting types Ting
+    /// doesn't know there (`GET /api/v1/ting-registration?team=`).
+    pub async fn ting_registration(&self, team: &str) -> Result<TingRegistration> {
+        self.get(&format!(
+            "/api/v1/ting-registration{}",
+            qs(&[("team", Some(team.to_owned()))])
+        ))
+        .await
+    }
+
+    /// [`Authed::ting_registration`] for every Team a Carbon's login reaches, plus the Teams of their
+    /// grants (`?team=any`).
+    pub async fn ting_registrations(&self) -> Result<Vec<TingRegistration>> {
+        #[derive(serde::Deserialize)]
+        struct Items {
+            items: Vec<TingRegistration>,
+        }
+        Ok(self.get::<Items>("/api/v1/ting-registration?team=any").await?.items)
+    }
+
+    /// "Turn on": registers the caller with Ting in `team` again, with their own login for it, and
+    /// sends the Tings waiting for them there (`PUT /api/v1/ting-registration?team=`).
+    pub async fn ting_turn_on(&self, team: &str) -> Result<TingRegistration> {
+        decode(
+            self.c
+                .send(
+                    self.req(
+                        Method::PUT,
+                        &format!("/api/v1/ting-registration{}", qs(&[("team", Some(team.to_owned()))])),
+                    )
+                    .json(&env("ting_registration", serde_json::json!({}))),
+                )
+                .await?,
         )
         .await
     }

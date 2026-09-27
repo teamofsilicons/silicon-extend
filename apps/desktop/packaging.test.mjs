@@ -17,14 +17,14 @@ function scratch(t) {
   return dir;
 }
 
-// A small agent-device tree: sources the build reads, what it doesn't read, and a built dist.
+// A small device engine tree: sources the build reads, what it doesn't read, and a built dist.
 function fork(t) {
-  const root = path.join(scratch(t), 'agent-device');
+  const root = path.join(scratch(t), 'extend-engine');
   const write = (file, text) => {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     writeFileSync(path.join(root, file), text);
   };
-  write('package.json', '{"name":"agent-device","version":"0.21.15"}');
+  write('package.json', '{"name":"silicon-extend-engine","version":"0.21.15"}');
   write('tsdown.config.ts', 'export default {};');
   write('tsconfig.lib.json', '{}');
   write('src/bin.ts', 'export const a = 1;');
@@ -116,16 +116,16 @@ function fakeNode(t, body) {
 
 test('a stamp killed by a signal stops the build saying so', (t) => {
   const node = fakeNode(t, 'kill -9 $$');
-  const result = inBash(`stamp_runtime "${node}" /staged/agent-device; echo "packaged anyway: $STAMPED"`);
+  const result = inBash(`stamp_runtime "${node}" /staged/engine; echo "packaged anyway: $STAMPED"`);
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stdout, /packaged anyway/);
-  assert.match(result.stderr, /Stamping the agent-device runtime in \/staged\/agent-device with its build identity failed: it was killed by signal 9 \(SIGKILL\)/);
+  assert.match(result.stderr, /Stamping the device engine runtime in \/staged\/engine with its build identity failed: it was killed by signal 9 \(SIGKILL\)/);
   assert.match(result.stderr, /nothing was packaged\. Fix the cause and package again\./);
 });
 
 test('a stamp that fails stops the build, pointing at its own reason', (t) => {
   const node = fakeNode(t, "echo \"Can't stamp: dist/src/internal/png-worker.js is missing\" >&2; exit 1");
-  const result = inBash(`stamp_runtime "${node}" /staged/agent-device`);
+  const result = inBash(`stamp_runtime "${node}" /staged/engine`);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /png-worker\.js is missing/);
   assert.match(result.stderr, /it exited with status 1; its reason is above/);
@@ -156,7 +156,7 @@ test('both packaging scripts stamp through the checked step and never read the d
     assert.doesNotMatch(text, /^STAMPED="\$\(/m, `${script} stamps without an error path`);
   }
   const linux = readFileSync(path.join(here, 'linux/build-package.sh'), 'utf8');
-  assert.match(linux, /require_fresh_dist "\$AD"/);
+  assert.match(linux, /require_fresh_dist "\$ENGINE"/);
   assert.doesNotMatch(linux, /-newer/);
   // The X11 recorder loads these through ctypes, so dpkg-shlibdeps can't find them.
   assert.match(linux, /^Recommends: .*\blibxcomposite1, libxdamage1, libxfixes3\b/m);

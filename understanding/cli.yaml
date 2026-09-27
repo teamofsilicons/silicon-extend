@@ -1,5 +1,8 @@
 # Contract file. Agents: propose changes to a Carbon and get approval before editing.
 # Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Wire contract: api.yaml. Formats: TECHNICAL.md.
+# 1.1.0 draft (2026-09-27), for the Carbon's approval: devices belong to the Carbons who paired them (across Teams), several
+# Carbons per device, waking a device, Ting status per Team, setup retry, and the Carbon's decisions of 2026-09-27. No exit
+# code or error code is new; the 1.1 wording of some errors is below.
 #
 # How to read this file
 #   usage:   the exact grammar. <required>, [optional], ... repeats, a|b one of.
@@ -23,7 +26,7 @@ grammar:
   - Commands are a tree, noun then verb (`extend device ls`, `extend session end a3f`). Every node answers `--help`/`-h`
     with what it is for, how it is usually used with other commands, its arguments and flags, and the child commands
     under it.
-  - Every agent-device command Extend exposes is also a top-level `extend` command (`extend snapshot`, `extend click @e2`)
+  - Every device engine command Extend exposes is also a top-level `extend` command (`extend snapshot`, `extend click @e2`)
     and runs inside the selected session.
   - Flags may come before or after positionals. `--` ends flag parsing; everything after it is positional. For a device
     command the `--` is also sent to the device, so the device's own parser reads the rest as positional too
@@ -36,19 +39,21 @@ grammar:
   - Each Extend command takes only the flags listed for it (plus the global flags). An unknown flag, a value given to a
     flag that takes none, a missing value, or an extra argument is refused with exit 2, naming the command's valid flags
     (and the closest one, for a typo). A token starting with `-` where a value goes is read as a flag; put such a value
-    after `--`. Device commands pass their arguments to the device (agent-device's parser decides), apart from Extend's
-    own --ttl, --keep and --out.
+    after `--`. Device commands pass their arguments to the device (the device engine's parser decides), apart from
+    Extend's own --ttl, --keep and --out.
   - The value of an Extend command's flag is taken as written, even when it looks like a global flag
     (`extend request send 7c1e09ab --reason -h` sends the reason "-h").
   - Destructive commands need `--yes`. Without it they print what would happen and exit 2.
   - Errors say exactly what failed, why, and the command to run next. Never "something went wrong". Every usage error
     (exit 2) has a hint.
+  - Every command Extend suggests to a Silicon (in a message, a hint or a Ting) names its Team, as in
+    `extend --team <team> ...`, because a Silicon may hold access to the same device in several Teams.
 
 global_flags:
   - {flag: '--json', gives: 'One JSON document, the convention every Team CLI follows. On success: the data itself on stdout, with no wrapper (`extend iam --json` prints {"app_id": "extend", ...}). On failure: {"error": {code, message, hint, request_id, docs_url, details, exit_code}} on stderr, and nothing on stdout. The `output = json` setting makes it the default.'}
   - {flag: '--test <test_id>', takes: 'Honeycomb environment_id (UUID), added with `extend config test add`, or with its app secret in EXTEND_TEST_SECRET', gives: 'Runs the command in that test environment. The last line on stderr is always `[test environment: <name> (<test_id>) as <member or "not signed in">]`, including when the command fails; when it failed before anything ran (an unknown id, a bad secret, a refused command line) the line ends "; nothing ran" and the name is "unknown" if this CLI has never seen the environment.'}
   - {flag: '--session <session_id>', takes: '^[0-9a-f]{3,}$', gives: 'Uses this session instead of the connected one. Precedence: --session, then EXTEND_SESSION, then the connected session.'}
-  - {flag: '--team <handle>', takes: IAM team handle, gives: 'Overrides the default team for this command (sent as X-Org-ID).'}
+  - {flag: '--team <handle>', takes: IAM team handle, gives: 'Overrides the default team for this command (sent as X-Org-ID). For a Silicon it is the Team it acts in: its access, sessions, files, requests and wake requests belong to it. For a Carbon (1.1) it chooses only the Team a grant goes into, and which Team `access revoke` and `ting` act on: `device ls`, `device show`, `session ls`, `file ls`, activity and requests show every Team''s, each tagged with its Team.'}
   - {flag: '--timeout <ms>', takes: '1000–300000, default 30000; anything else is refused before sending (exit 2)', gives: 'Command deadline for session commands.'}
   - {flag: '-h, --help', gives: 'Help for this node of the tree. While a session is connected, lists only the commands that work on its device, and a device command''s own help says "Not available on <device> (<os>) in session <id>: it needs <capability>, which the device doesn''t have (<when>). <capability>: <reason>" when it can''t run there. The list comes from the session as Extend last described it: read at `session connect`, and refreshed by `extend session status` and by every device command (read alongside the command, so it costs no time). It is forgotten when a result or `session status` says the session ended.'}
   - {flag: '-V, --version', gives: 'The same as `extend version`.'}
@@ -92,21 +97,21 @@ errors:
   not_signed_in: [3, 'No saved login. Run `extend login <slt>`.']
   token_expired: [3, 'Refresh failed; the IAM session ended. Get a new SLT and run `extend login <slt>`.']
   slt_invalid: [3, 'IAM rejected the short-lived token: expired, used, or for another application.']
-  not_a_team_member: [4, 'The signed-in member is not an active member of the team.']
-  carbon_only: [4, 'Only Carbons can do this (pairing and managing devices).']
+  not_a_team_member: [4, 'The signed-in member is not an active member of the team, or (1.1) the Carbon''s Extend login doesn''t reach it. The hint says which Team to sign in for: "Sign in to Extend again and select labs (approve Extend for labs in Silicon IAM), then retry."']
+  carbon_only: [4, 'Only Carbons can do this (pairing and managing devices, retrying setup, answering wake requests).']
   silicon_only: [4, 'Only Silicons can do this (sessions and requests).']
   not_owner: [4, 'Only the Carbon who paired the device can do this.']
-  no_access: [4, 'This Silicon has no access to the device. The owner can grant it with `extend device access grant`.']
+  no_access: [4, 'This Silicon has no access to the device in this Team. The owner can grant it with `extend device access grant`. 1.1: also when the Carbon who gave the access is no longer an active member of the Silicon''s Team ("c:alice, who gave you access to Living room TV, is no longer an active member of labs, so her access grants in labs ended.").']
   access_removed: [4, 'Access was removed during the session; the session has ended.']
   not_session_owner: [4, 'The session belongs to another Silicon.']
-  device_not_found: [5, 'No device with that id is visible to you in this team and environment.']
+  device_not_found: [5, 'No device with that id is visible to you in this team and environment. For a Silicon the hint says to pass --team <that team> when a Carbon gave access in another of its Teams.']
   session_not_found: [5, 'No session with that id.']
   file_not_found: [5, 'The file does not exist or already self-destructed.']
   pairing_code_invalid: [5, 'The code is wrong, expired or already used. Codes rotate every 5 minutes; use the one on screen now.']
-  unknown_command: [2, 'Not an Extend command. If agent-device has it, the message says why Extend leaves it out and what to use instead.']
+  unknown_command: [2, 'Not an Extend command. If the device engine has it, the message says why Extend leaves it out and what to use instead.']
   invalid_input: [2, 'An argument is out of range or malformed; the message names it and the accepted form.']
   confirmation_required: [2, 'Destructive; re-run with --yes.']
-  device_in_use: [6, 'Another Silicon is using the device. The message names it and since when; the hint is the `extend request send` command.']
+  device_in_use: [6, 'Another Silicon is using the device; the hint is the `extend --team <team> request send` command. The message names it and since when only when it is on your side (your Team, given access by the same Carbon); otherwise (1.1) it names no one: "Device 7c1e09ab (Living room TV) is in use. Only one Silicon can use a device at a time."']
   device_not_in_use: [6, 'Nothing is running on the device.']
   device_not_ready: [6, 'The device has not finished setup; the message lists the steps left.']
   session_ended: [6, 'The session has ended; details.end_reason says why.']
@@ -117,22 +122,22 @@ errors:
   test_only: [11, 'This action is only possible in a test environment. Add --test <test_id>.']
   testing_secret_invalid: [11, 'The test secret is invalid, revoked, or its environment is not active. Nothing ran in production.']
   testing_environment_not_ready: [11, 'Honeycomb has not confirmed every service is ready.']
-  device_offline: [7, 'The device is not connected to Extend; the message gives when it was last seen and the usual causes for its OS.']
+  device_offline: [7, 'The device is not connected to Extend; the message gives when it was last seen and the usual causes for its OS. When it was not awake when last seen, the wake hint follows (1.1): "Its Carbon can wake it: extend --team <team> device wake <id> --reason \"...\"".']
   session_paused: [8, 'A takeover is in progress; the Carbon has the device. See `extend takeover status`.']
   command_timeout: [9, 'The device did not answer before the deadline. The command may still have run.']
-  unsupported_on_device: [10, 'The device lacks the capability; the message names it and why (OS, or a permission not granted).']
-  rate_limited: [12, 'Too many attempts; the message says when to retry.']
+  unsupported_on_device: [10, 'The device lacks the capability; the message names it and why (OS, a permission not granted, or on a computer several Carbons paired the terminal of a pair other than the installer''s). When the device isn''t awake, the wake hint follows (1.1).']
+  rate_limited: [12, 'Too many attempts; the message says when to retry (1.1: asking to wake the same device again within 5 minutes; retrying setup within 5 seconds).']
   api_version_unsupported: [13, 'No API version in common. Update with `honeycomb install ''extend''`.']
   api_version_sunset: [13, 'This API version was retired. Update the CLI.']
   service_unavailable: [14, 'Extend or a service it depends on is down; the message names which.']
-  command_failed: [1, 'The device ran the command and it failed; the message is the device''s own error.']
+  command_failed: [1, 'The device ran the command and it failed; the message is the device''s own error, with the wake hint when the device isn''t awake (1.1).']
   unauthorized: [3, 'The credential was refused: a missing, malformed or revoked token, device credential or enrollment secret.']
   request_not_found: [5, 'No request with that id is visible to you.']
   enrollment_not_found: [5, 'The pairing attempt is gone: it expired, was used, or belongs to another environment. Open the app again for a new code.']
-  conflict: [6, 'The request clashes with the current state (for example an Idempotency-Key reused with a different body). The message says which.']
+  conflict: [6, 'The request clashes with the current state; the message says which. For example an Idempotency-Key reused with a different body, and in 1.1: you already paired this device; a device carried by a computer is in use and only the Carbon who paired it (or the computer''s own Stop) can stop it; the device is already awake; its Carbon turned wake requests off; nothing to retry in setup; no wake request is open.']
   not_self_destructing: [6, 'The file is already permanent, so there is nothing to cancel.']
   api_version_mismatch: [13, 'The API version in the header differs from the one in the path. Update the CLI or client.']
-  upgrade_required: [13, 'This Extend app is older than the oldest the service supports. Download the latest from extend.teamofsilicons.com.']
+  upgrade_required: [13, 'This Extend app is older than the oldest the service supports, or (1.1) older than what the action needs ("<name> runs Silicon Extend <version>, which can''t retry from here. Update it to 1.1, or tap Retry on the device."). Download the latest from extend.teamofsilicons.com.']
   payload_too_large: [2, 'The upload or request body is over the limit the message names.']
   internal: [14, 'Extend failed unexpectedly. Retry; if it keeps happening, run `extend report`.']
 commands:
@@ -160,8 +165,8 @@ commands:
 
   - usage: extend logout
     who: both
-    summary: Sign out and delete the saved tokens. A Silicon signing out ends its running sessions.
-    gives: {text: 'Signed out si:chef. Ended session a3f.'}
+    summary: 'Sign out and delete the saved tokens. A Silicon signing out ends its running sessions. A Carbon signing out (1.1) ends the running sessions of the Silicons that Carbon gave access to, on that Carbon''s devices, in every Team; Silicons other Carbons gave access to keep theirs, and devices and grants stay.'
+    gives: {text: 'Silicon: "Signed out si:chef. Ended session a3f." Carbon: "Signed out c:alice. Ended the sessions of the Silicons you gave access to: si:chef (a3f on Living room TV)." or "…No Silicon you gave access to was using a device."'}
     api: POST /api/v1/auth/logout
 
   - usage: extend iam [--json]
@@ -178,11 +183,19 @@ commands:
     gives: {text: 'acme (default), labs', json: '{teams: [..], default: "acme"}'}
     api: GET /api/v1/auth/me
 
-  - usage: extend team silicons
+  - usage: extend team silicons [--all-teams]
     who: both
-    summary: The Silicons in the team, to pick who gets access to a device.
-    gives: {text: 'si:chef  Chef', json: '{items: [{id, display_name}]}'}
-    api: GET /api/v1/team/silicons
+    summary: 'The Silicons in the team, to pick who gets access to a device. --all-teams (Carbons, 1.1): the Silicons of every Team your Extend login reaches, and the Teams that couldn''t be read, with why.'
+    gives:
+      text: |
+        si:chef  Chef
+        (with --all-teams)
+        TEAM   ID        NAME
+        acme   si:chef   Chef
+        labs   si:scout  Scout
+        Couldn't read globex: <why>. Don't see a Team? Sign in to Extend and select it.
+      json: '{items: [{id, display_name, team}], teams: [{team, ok, error}]}'
+    api: GET /api/v1/team/silicons (?team=any with --all-teams)
 
   - usage: extend config home <dir> [--use-existing]
     who: both
@@ -221,15 +234,26 @@ commands:
     api: GET /api/v1/testing-environment
 
   # ───────────────────────────── Devices (Carbon manages, Silicon lists) ─────────────────────────────
-  - usage: extend device ls [--online] [--os <os>] [--team-visible] [--removed] [--json]
+  - usage: extend device ls [--online] [--os <os>] [--removed] [--json]
     who: both
-    summary: 'Silicon: every device you have access to. Carbon: every device you paired (--team-visible: other Carbons'' team-visible devices; --removed: also your removed devices, whose activity stays readable).'
-    behaviour: 'Reads every page (100 devices each, following next_cursor) so the list is complete; --online is sent to Extend, which filters before paging. After 100 pages, or if Extend returns a cursor it already returned, it stops and says the list is incomplete (json: next_cursor is where it stopped; null when complete). --removed with --team-visible is refused.'
+    summary: 'Silicon: every device you have access to in your --team Team. Carbon: every device you paired, whichever Team is selected (1.1); --removed also lists your removed devices, whose activity stays readable.'
+    behaviour: 'Reads every page (100 devices each, following next_cursor) so the list is complete; --online is sent to Extend, which filters before paging. After 100 pages, or if Extend returns a cursor it already returned, it stops and says the list is incomplete (json: next_cursor is where it stopped; null when complete). --team-visible is deprecated (1.1): it prints nothing but the note "Devices are only ever visible to the Carbons who paired them.", and the CLI never sends scope=team.'
     gives:
       text: |
-        ID        NAME             OS          ONLINE  IN USE BY          DAYS LEFT
-        7c1e09ab  Saket's Pixel    android     yes     si:chef (a3f, 4m)  14
-        0d44e1f2  Living room TV   android_tv  no      —                  9
+        Carbon:
+        ID        NAME             OS          ONLINE  AWAKE                     IN USE                        ACCESS  LAST USED  DAYS LEFT
+        7c1e09ab  Saket's Pixel    android     yes     yes                       si:chef (acme)                2       4m ago     14
+        0d44e1f2  Living room TV   android_tv  yes     no (standby)              yes (another Carbon's Silicon) 1      2d ago     9   shared
+        2e7f00d1  Studio Mac       macos       yes     yes                       a carried device (stop it at the computer)  3  1h ago  12
+        51ab93c0  Saket's iPhone   ios         no      — (offline; last seen asleep)  —                      1       5d ago     2
+        Silicon:
+        ID        NAME             OS          ONLINE  AWAKE          IN USE
+        7c1e09ab  Saket's Pixel    android     yes     yes            si:sous
+        0d44e1f2  Living room TV   android_tv  yes     no (standby)   in use, asked
+        3a2b0c1d  Family TV        android_tv  yes     no (standby)   in use (same device as 0d44e1f2)
+        AWAKE is yes, no (screen off | locked | asleep | standby | another account), "— (offline; last seen asleep)", or "—" when Extend can't tell.
+        IN USE names a Silicon only on your own side (Carbon: through your pair; Silicon: your Team and the same Carbon).
+        "shared": another Carbon also paired it. ", asked": you have an open wake request on it.
         (with --removed, ONLINE says "removed" for a removed device and a REMOVED column gives when and why)
       json: '{items: [Device], next_cursor: null | "<cursor where it stopped>"}'
     api: GET /api/v1/devices (include_removed=true with --removed)
@@ -238,22 +262,32 @@ commands:
     who: both
     summary: One device, and what a Silicon can do on it given its OS and the permissions it has. For a removed device (its Carbon only), when and why it was removed.
     gives:
-      text: 'Name, OS, owner, online, who is using it, days left, then "You can:" with each capability and its commands, then "Missing:" with each unavailable capability and why.'
+      text: |
+        Name, OS, owner, online, who is using it, days left, then "You can:" with each capability and its commands, then
+        "Missing:" with each unavailable capability and why. 1.1 adds:
+        - "Awake: yes", "Awake: no (screen off since 10:02)" (the time for owners only), or "Awake: — (offline; last seen asleep)";
+        - "Waking: Extend can't tell when this iPhone wakes" when it can't (iPhone, iPad, apps older than 1.1);
+        - owners: "Also paired by another Carbon" when so; access grouped by Team; "Wake requests: on|off"; each open
+          wake request (Silicon, Team, reason, expiry, whether the device showed it, the Ting's delivery); on a computer
+          several Carbons paired, the shared-computer note (only the installer's Silicons get the terminal there);
+        - a carried device refused as a duplicate, or waiting to be recognised: its setup step;
+        - Silicons: their own open wake request, and "Same device as 3a2b0c1d" when another Carbon's pair of it is theirs too.
       json: '{...Device, capabilities: [..], missing: [{capability, reason}], commands: [..]}'
     api: GET /api/v1/devices/{device_id}
 
-  - usage: extend device pair <pairing_code> --name <name> [--visibility team|personal] [--ttl-days <1-30>] [--access <silicon_id>]...
+  - usage: extend device pair <pairing_code> --name <name> [--ttl-days <1-30>] [--access <silicon_id>]...
     who: carbon
-    summary: Pair the device showing this code into your default team (or --team) and the current environment.
+    summary: 'Pair the device showing this code to your account, in the current environment. The code may come from a new device, or from "Pair with another Carbon" on a device another Carbon already paired: you get your own pair of it (your own id, name, access and lifetime).'
     takes:
       pairing_code: '6 hexadecimal characters, any case (4F9C2A = 4f9c2a). Rotates every 5 minutes; works once.'
       --name: 1–64 characters
-      --visibility: 'team (default): other Carbons in the team see it exists. personal: only you.'
+      --visibility: 'Deprecated (1.1) and ignored, with a note: a device is only visible to the Carbons who paired it.'
       --ttl-days: 'Days without activity before the pair ends. 1–30, default 14.'
-      --access: 'Silicons to give access now; repeatable. Can be skipped and done later.'
+      --access: 'Silicons to give access now, in your default team (or --team); repeatable. Can be skipped and done later.'
     gives:
-      text: 'Paired 7c1e09ab "Saket''s Pixel". Setup: 2 of 4 steps left on the device. Watch with: extend device setup 7c1e09ab'
+      text: 'Paired 7c1e09ab "Saket''s Pixel". Setup: 2 of 4 steps left on the device. Watch with: extend device setup 7c1e09ab. When another Carbon also paired it: "This device is also paired by another Carbon; your pair is separate (own name, access and lifetime)." and, for a computer, the shared-computer note.'
       json: '{Device}'
+    errors: 'conflict (exit 6): you already paired this device, named by your own id for it.'
     api: POST /api/v1/pairings
 
   - usage: extend device attach <host_device_id> --os ios|ipados|tvos|samsung_tv|lg_tv --name <name>
@@ -262,11 +296,20 @@ commands:
     gives: {text: 'Created 51ab93c0 "Saket''s iPhone" through 2e7f00d1 (MacBook). Next: plug the iPhone into the Mac and tap Trust. Follow with: extend device setup 51ab93c0'}
     api: POST /api/v1/devices/{device_id}/attachments
 
-  - usage: extend device setup <device_id> [--watch]
+  - usage: extend device setup <device_id> [--watch] [--retry [--step <key>]]
     who: carbon
-    summary: The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete.
-    gives: {text: 'One line per step: ✓ done, … in progress, ! needs you (with where to find it on the device).', json: '{Setup}'}
-    api: GET /api/v1/devices/{device_id}/setup
+    summary: The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete. --retry (1.1) runs failed steps again now.
+    takes:
+      --retry: 'Ask the device to run its failed steps again (every failed step, or only --step). Then follows like --watch until those steps finish or fail again.'
+      --step: 'With --retry: the key of one failed step (shown in the listing and in --json).'
+    gives:
+      text: |
+        One line per step: ✓ done, … in progress, ! needs you (with where to find it on the device), ✗ failed (with its
+        plain-language error and "Retry: extend device setup 7c1e09ab --retry --step <key>").
+        With --retry: "Retrying Turn on wireless debugging on Saket's Pixel." then progress lines until done or failed.
+      json: '{Setup}; with --retry {retrying: [keys], setup: Setup} once they finish or fail'
+    errors: 'invalid_input (exit 2): no step with that key, listing the steps. conflict (exit 6): "Nothing to retry: no setup step has failed." device_offline (exit 7): "<name> is offline. Setup carries on when it reconnects." upgrade_required (exit 13): the device''s app can''t retry from here; tap Retry on the device. rate_limited (exit 12).'
+    api: GET /api/v1/devices/{device_id}/setup, POST /api/v1/devices/{device_id}/setup/retry
 
   - usage: extend device setup-code <device_id> <code>
     who: carbon
@@ -279,7 +322,7 @@ commands:
 
   - usage: extend device visibility <device_id> team|personal
     who: carbon (owner)
-    api: PATCH /api/v1/devices/{device_id}
+    summary: 'Deprecated (1.1): exits 2 with "Visibility is gone in Extend 1.1: a device is only visible to the Carbons who paired it." Nothing is sent.'
 
   - usage: extend device ttl <device_id> <days>
     who: carbon (owner)
@@ -289,42 +332,83 @@ commands:
 
   - usage: extend device stop <device_id>
     who: carbon (owner)
-    summary: Stop the Silicon using the device right now.
-    gives: {text: 'Stopped si:chef (session a3f) on Saket''s Pixel.'}
+    summary: 'Stop the Silicon using the device right now. 1.1: any Carbon who paired the device can stop it, whichever Carbon gave that Silicon access; on a computer it also stops the devices it carries that you paired.'
+    gives: {text: '"Stopped si:chef (session a3f) on Saket''s Pixel." or, when another Carbon gave it access, "Stopped the Silicon using Living room TV (another Carbon gave it access)."'}
+    errors: 'device_not_in_use (exit 6). conflict (exit 6): "A device carried by Studio Mac is in use. It can be stopped by the Carbon who paired it, or from Studio Mac''s Extend app."'
     api: POST /api/v1/devices/{device_id}/stop
 
   - usage: extend device rm <device_id> --yes
     who: carbon (owner)
-    summary: Remove the device. Ends any session and every Silicon's access, and unpairs it. Devices paired through it are removed too.
+    summary: Remove the device from your account. Ends any session through your pair and every grant you gave on it, and unpairs your pair. Devices paired through it are removed too. Other Carbons' pairs of the same device are untouched (1.1).
     gives: {text: 'Without --yes: what would be removed, then exit 2. With --yes: "Removed 7c1e09ab."'}
     api: DELETE /api/v1/devices/{device_id}
 
   - usage: extend device access ls <device_id>
     who: carbon (owner)
-    gives: {text: 'SILICON  GRANTED BY  GRANTED  LAST USED', json: '{items: [AccessGrant]}'}
+    summary: Every grant on your pair, in every Team (1.1). Grants in a Team your Extend login doesn't reach are marked "sign in to Extend for <team>".
+    gives: {text: 'TEAM  SILICON  GRANTED  LAST USED  WAKE REQUESTS', json: '{items: [AccessGrant]}'}
     api: GET /api/v1/devices/{device_id}/access
 
-  - usage: extend device access grant <device_id> <silicon_id>...
+  - usage: extend device access grant <device_id> <silicon_id>... [--team <team>]
     who: carbon (owner)
-    summary: Give one or more Silicons access. They must be in the same team.
-    api: PUT /api/v1/devices/{device_id}/access/{silicon_id}
+    summary: 'Give one or more Silicons access, in --team (or your default team). 1.1: the Team can be any Team you are a member of whose Extend login you hold; each Silicon must be in it. A Silicon may hold one grant per Team.'
+    gives: {text: 'Gave si:scout access to Living room TV in labs. When Extend''s Ting types are missing in that Team: "Tings to you in labs won''t arrive until a labs Ting manager runs: ting --org labs types register …" (each missing type''s command).'}
+    errors: 'not_a_team_member (exit 4): your Extend login doesn''t reach that Team; the hint says to sign in and select it. invalid_input (exit 2): the Silicon isn''t in that Team.'
+    api: PUT /api/v1/devices/{device_id}/access/{silicon_id}, GET /api/v1/ting-registration
 
-  - usage: extend device access revoke <device_id> <silicon_id>...
+  - usage: extend device access revoke <device_id> <silicon_id>... [--team <team>]
     who: carbon (owner)
-    summary: Take access away. A running session by that Silicon ends at once.
-    api: DELETE /api/v1/devices/{device_id}/access/{silicon_id}
+    summary: 'Take access away. With an explicit --team, only the grant in that Team; without it, every Team''s grant (the output lists them). A running session by that Silicon through your pair in those Teams ends at once. Works even for a Team your login no longer reaches.'
+    api: DELETE /api/v1/devices/{device_id}/access/{silicon_id} (?team= with --team)
 
   - usage: extend device activity <device_id> [--silicon <id>] [--session <id>] [--since <time>] [--until <time>] [--limit <n>]
     who: carbon (owner)
     summary: Every action on the device, which Silicon did it, and when. Typed text is redacted.
     takes: {--since/--until: 'RFC 3339, or relative like 2h, 3d'}
-    gives: {text: 'TIME  SILICON  SESSION  ACTION  OUTCOME  FILES', json: '{items: [ActivityEntry], next_cursor}'}
+    gives: {text: 'TIME  TEAM  SILICON  SESSION  ACTION  OUTCOME  FILES. Another Carbon''s actions appear only as "another Carbon paired this device" and "stopped by another Carbon who paired this device".', json: '{items: [ActivityEntry], next_cursor}'}
     api: GET /api/v1/devices/{device_id}/activity
 
   - usage: extend device requests <device_id>
     who: carbon (owner)
-    summary: Requests Silicons sent each other for this device, with their reasons.
+    summary: 'Requests for this device, with their reasons: the ones your Silicons sent, and (1.1) the ones sent to you because a Silicon you gave access to was using it ("to you", naming the Silicon that asked).'
+    gives: {text: 'TIME  TEAM  FROM  TO  REASON  DELIVERY'}
     api: GET /api/v1/devices/{device_id}/requests
+
+  - usage: extend device wake <device_id> --reason "<text>" | extend device wake <device_id> --cancel
+    who: silicon
+    summary: 'Ask the Carbon who gave you access to wake a device that isn''t awake (1.1). Where it can, the device shows a notification with your name and reason; the Carbon gets it through Ting. When the device is turned on or unlocked you get a Ting that it is awake, with the command to start. Extend never wakes a device itself. --cancel withdraws your open request.'
+    takes: {--reason: '1–300 characters, kept exactly as written; required unless --cancel'}
+    behaviour: 'Asking again after 5 minutes refreshes the request (sooner is refused, exit 12). A request expires 30 minutes after the last ask. The CLI refreshes your login first, so the Tings back to you can go out.'
+    gives:
+      text: |
+        Asked c:alice to wake Living room TV (0d44e1f2); the request expires at 10:32. Its Carbon was told through Ting.
+        Refresh: "Asked again (ask 2); the request now expires at 10:37."
+        Can't tell: "Extend can't tell when Saket's iPhone wakes; its Carbon will say so."
+        Delivery: "Its Carbon was told through Ting" / "Its Carbon will be told through Ting shortly" / "Ting doesn't know
+        Extend's wake notifications in labs yet; a labs Ting manager runs: ting --org labs types register …"
+        Carried device: "Studio Mac, which it pairs through, must be awake too."
+      json: '{WakeRequest}'
+    exit: '0 asked; 2 usage; 4 no access; 5 not found; 6 in use by another Silicon, already awake, or its Carbon turned wake requests off; 12 asked less than 5 minutes ago'
+    api: POST /api/v1/devices/{device_id}/wake-requests, DELETE /api/v1/devices/{device_id}/wake-requests/{wake_id}
+
+  - usage: extend device wake-requests ls <device_id> [--open] | answer <device_id> woken|declined [--wake-id <id>]... | mute <device_id> [--silicon <id> [--only-team <team>]] | unmute <device_id> [--silicon <id> [--only-team <team>]]
+    who: 'ls: both; answer, mute, unmute: carbon (owner)'
+    summary: 'Wake requests on a device (1.1). ls: yours (Silicon), or every Team''s on your pair (Carbon). answer woken ("It''s awake") ends every open request on the device, whichever Carbon''s or Team''s, and each asking Silicon is told in its own Team; answer declined ends the ones on your pair (or the --wake-id ones). mute turns wake requests off for your pair of the device, or for one Silicon (in every Team, or --only-team); unmute turns them on again.'
+    gives: {text: 'TIME  TEAM  SILICON  REASON  STATE  SHOWN  TING', json: 'ls: {items: [WakeRequest], next_cursor}; answer: {answer, ended}; mute/unmute: {device_id, muted, silicons_muted}'}
+    api: GET /api/v1/devices/{device_id}/wake-requests, POST /api/v1/devices/{device_id}/wake-requests/answer, PUT /api/v1/devices/{device_id}/wake-settings
+
+  - usage: extend ting status [--all-teams] | extend ting on [--all-teams]
+    who: both
+    summary: 'Whether Extend''s Tings reach you in your --team Team (or every Team with --all-teams), and which of Extend''s Ting types Ting lacks there (1.1). on: "Turn on" registers you with Ting again there, and sends what was waiting.'
+    gives:
+      text: |
+        TEAM  STATUS   MISSING TYPES
+        acme  on       —
+        labs  pending  extend.device.wake_requested (Sign in to Extend for labs)
+        Then, for each missing type, the command a Ting manager of that Team runs:
+        ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'
+      json: '{items: [TingRegistration]}'
+    api: GET /api/v1/ting-registration, PUT /api/v1/ting-registration
 
   # ───────────────────────────── Sessions (Silicon) ─────────────────────────────
   - usage: extend session new <device_id> [--connect]
@@ -334,6 +418,7 @@ commands:
       text: |
         a3f
         (stderr) Started session a3f on Saket's Pixel (android). Next: extend session connect a3f. Ends after 5 minutes without a command.
+        (stderr, 1.1, when the device isn't awake) Living room TV isn't awake (standby); commands that need its screen will fail until its Carbon turns it on. Ask: extend --team labs device wake 0d44e1f2 --reason "..."
       json: '{Session}'
     errors: [device_in_use, device_offline, device_not_ready, no_access]
     api: POST /api/v1/sessions
@@ -356,7 +441,7 @@ commands:
 
   - usage: extend session ls [--device <device_id>] [--state active|paused|ended]
     who: both
-    summary: 'Silicon: its sessions. Carbon: sessions on its devices.'
+    summary: 'Silicon: its sessions in its --team Team. Carbon: sessions through its devices, in every Team, with a TEAM column (1.1).'
     api: GET /api/v1/sessions
 
   - usage: extend session end [<session_id>]
@@ -375,9 +460,9 @@ commands:
   # ───────────────────────────── Requests (Silicon) ─────────────────────────────
   - usage: extend request send <device_id> --reason "<text>"
     who: silicon
-    summary: Ask the Silicon using a device for it. Delivered through Ting with the reason exactly as written.
+    summary: 'Ask for a device another Silicon is using, delivered through Ting with the reason exactly as written. When that Silicon is in your Team and was given access by the same Carbon, it goes to that Silicon. Otherwise (1.1) it goes to the Carbon who gave that Silicon access, who sees your id and reason and can stop the session; you never see which Carbon or Silicon.'
     takes: {--reason: '1–300 characters not counting the spaces and line breaks around it (at most 1,000 with them), sent exactly as written; required'}
-    gives: {text: 'Sent to si:chef (using Saket''s Pixel since 09:58).', json: '{Request}'}
+    gives: {text: '"Sent to si:sous (using 7c1e09ab in session a3f). Delivery: delivered." or "Sent to the Carbon who gave access to the Silicon using it; it''s in use by a Silicon you can''t see. Delivery: <delivered | pending, retried | …>." When Ting lacks the type in that Team, the delivery line gives the register command.', json: '{Request}'}
     errors: [device_not_in_use, no_access]
     api: POST /api/v1/devices/{device_id}/requests
 
@@ -388,7 +473,7 @@ commands:
   # ───────────────────────────── Files ─────────────────────────────
   - usage: extend file ls [--session <id>] [--device <id>] [--kind screenshot|recording|log|replay_script|diff]
     who: both
-    summary: Files made in your sessions (Silicon) or on your devices (Carbon), with Briefcase links and self-destruct times.
+    summary: 'Files made in your sessions (Silicon, in your --team Team) or on your devices (Carbon, in every Team, with a TEAM column), with Briefcase links and self-destruct times. A Carbon opens a file with a login for the Team it was made in.'
     api: GET /api/v1/files
 
   - usage: extend file show <file_id>
@@ -436,7 +521,7 @@ commands:
     api: GET /api/v1/testing-environment
 
 # ───────────────────────────── Device commands (need a session) ─────────────────────────────
-# These are agent-device commands, run through Extend on the session's device. Arguments and output are agent-device's;
+# These are the device engine's commands, run through Extend on the session's device. Arguments and output are the engine's;
 # `command` + `args` (the tokens after the name) is what the client sends in POST /api/v1/sessions/{session_id}/commands. Each needs the listed capability
 # (TECHNICAL.md §5). Flags every one of them accepts: --session, --timeout, --json.
 # Commands that make files also accept --ttl <1m–30d> (default 1d), --keep (permanent), and --out <path> (also save locally).
@@ -549,7 +634,7 @@ device_commands:
     summary: Run saved steps again. The script is read locally or from Briefcase and sent with the request.
   - usage: extend test <path|glob> [--retries <0-3>]
     capability: replay
-    summary: Run several .ad scripts in order. (agent-device's `test`, not the --test flag.)
+    summary: Run several .ad scripts in order. (The device engine's `test`, not the --test flag.)
   - usage: extend batch --steps '<json>' | --steps-file <path>
     capability: replay
     summary: Several commands in one request; stops at the first error.
@@ -557,10 +642,10 @@ device_commands:
     capability: replay
     summary: Close the app and save the steps of this session as an .ad script, locally and in Briefcase.
 
-  # Extend additions (not in agent-device)
+  # Extend additions (not in the device engine)
   - usage: extend terminal run <command> [--cwd <dir>] [--env KEY=VALUE]...
     capability: terminal
-    summary: Run a shell command on the computer as the signed-in user. Prints stdout and stderr; exits with the command's exit code (non-zero → 1, with details.exit_code).
+    summary: 'Run a shell command on the computer as the signed-in user. Prints stdout and stderr; exits with the command''s exit code (non-zero → 1, with details.exit_code). It works while the computer is asleep or locked (1.1: awake is never a gate). Every process it starts ends with the session. On a computer several Carbons paired, only Silicons given access by the Carbon who installed Silicon Extend on it have the terminal; others get unsupported_on_device (exit 10) saying so.'
     gives: {json: '{stdout, stderr, exit_code, duration_ms}'}
   - usage: extend [<extend flags>] adb [<extend flags>] [--] <args>...
     capability: adb
@@ -581,7 +666,7 @@ device_commands:
     capability: display
 
 not_exposed:
-  summary: 'agent-device commands for app developers, and ones Extend replaces. Sending one gives unknown_command naming the replacement.'
+  summary: 'Device engine commands for app developers, and ones Extend replaces. Sending one gives unknown_command naming the replacement.'
   replaced: {devices: extend device ls, connect: extend session connect, disconnect: extend session disconnect, 'session list': extend session ls, help: extend --help}
   left_out: [boot, shutdown, web, viewport, react-native, react-devtools, metro, cdp, perf, trace, 'network dump', 'debug symbols',
     'audio probe', push, trigger-app-event, install-from-source, settings, fold, orientation, action-button, 'prepare ios-runner', mcp, doctor]
@@ -601,7 +686,17 @@ examples:
   device_busy: |
     extend session new 7c1e09ab
     # exit 6: Device 7c1e09ab (Saket's Pixel) is being used by si:chef in session a3f since 09:58.
+    #   (a Silicon on another side: "Device 7c1e09ab (Saket's Pixel) is in use. Only one Silicon can use a device at a time.")
     extend request send 7c1e09ab --reason "Need 2 minutes to check an OTP for the vendor portal"
+  device_asleep: |
+    extend --team labs session new 0d44e1f2
+    # stderr: Living room TV isn't awake (standby); commands that need its screen will fail until its Carbon turns it on.
+    extend --team labs device wake 0d44e1f2 --reason "I need the TV on to check the order screen"
+    # a Ting arrives when it is awake, with: extend --team labs session new 0d44e1f2
+  carbon_answers: |
+    extend device wake-requests ls 0d44e1f2 --open
+    extend device wake-requests answer 0d44e1f2 woken       # "It's awake": ends every request on the device
+    extend device setup 51ab93c0 --retry --step developer_mode
   carbon_pairs_a_phone: |
     extend login "$SLT"
     extend device pair 4f9c2a --name "Saket's Pixel" --access si:chef

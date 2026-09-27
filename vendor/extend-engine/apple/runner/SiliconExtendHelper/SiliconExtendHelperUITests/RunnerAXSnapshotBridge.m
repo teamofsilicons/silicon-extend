@@ -48,7 +48,7 @@ static dispatch_queue_t RunnerAXCustomActionReadQueue(void)
   static dispatch_queue_t queue;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    queue = dispatch_queue_create("com.callstack.agentdevice.runner.ax-custom-actions",
+    queue = dispatch_queue_create("com.teamofsilicons.extend.helper.ax-custom-actions",
                                   DISPATCH_QUEUE_SERIAL);
   });
   return queue;
@@ -325,7 +325,7 @@ typedef id (*RunnerAXSnapshotMsgSend)(id, SEL, id, id, id, NSError **);
   SEL requestSelector = NSSelectorFromString(@"requestSnapshotForElement:attributes:parameters:error:");
   if (![axClient respondsToSelector:requestSelector]) {
     if (NULL != error) {
-      *error = [NSError errorWithDomain:@"agent-device.runner"
+      *error = [NSError errorWithDomain:@"silicon-extend.helper"
                                    code:1
                                userInfo:@{
                                  NSLocalizedDescriptionKey:

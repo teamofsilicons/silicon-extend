@@ -20,7 +20,7 @@ export const BROWSERSTACK_CAPABILITY_OVERRIDES = {
   },
   portReverse: {
     support: 'unsupported',
-    note: 'Use BrowserStack Local for network tunneling; agent-device port reverse is not available.',
+    note: "Use BrowserStack Local for network tunneling; the device engine's port reverse is not available.",
   },
   artifacts: {
     support: 'supported',

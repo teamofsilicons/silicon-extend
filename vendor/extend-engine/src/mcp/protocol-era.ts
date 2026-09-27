@@ -62,7 +62,7 @@ const CLIENT_CAPABILITIES_META_KEY = 'io.modelcontextprotocol/clientCapabilities
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 const SERVER_INFO_META_KEY = 'io.modelcontextprotocol/serverInfo';
 
-const MCP_SERVER_NAME = 'agent-device';
+const MCP_SERVER_NAME = 'silicon-extend-engine';
 
 /**
  * Freshness hint for the results that depend only on the installed binary.

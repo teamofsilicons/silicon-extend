@@ -2,8 +2,15 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const APPLE_RUNNER_SOURCE_ROOT = path.join('apple', 'runner', 'AgentDeviceRunner');
-const PACKAGED_APPLE_RUNNER_SOURCE_ROOT = path.join('dist', 'apple', 'runner', 'AgentDeviceRunner');
+// The iPhone/iPad helper's Xcode project (Silicon Extend's name for the fork's AgentDeviceRunner).
+const APPLE_RUNNER_PROJECT_NAME = 'SiliconExtendHelper';
+const APPLE_RUNNER_SOURCE_ROOT = path.join('apple', 'runner', APPLE_RUNNER_PROJECT_NAME);
+const PACKAGED_APPLE_RUNNER_SOURCE_ROOT = path.join(
+  'dist',
+  'apple',
+  'runner',
+  APPLE_RUNNER_PROJECT_NAME,
+);
 const APPLE_SNAPSHOT_PRESENTATION_SOURCE_ROOT = path.join('apple', 'snapshot-presentation');
 const PACKAGED_APPLE_SNAPSHOT_PRESENTATION_SOURCE_ROOT = path.join(
   'dist',
@@ -20,7 +27,10 @@ export function resolveAppleRunnerSourceRoot(projectRoot: string): string {
 }
 
 export function resolveAppleRunnerProjectPath(projectRoot: string): string {
-  return path.join(resolveAppleRunnerSourceRoot(projectRoot), 'AgentDeviceRunner.xcodeproj');
+  return path.join(
+    resolveAppleRunnerSourceRoot(projectRoot),
+    `${APPLE_RUNNER_PROJECT_NAME}.xcodeproj`,
+  );
 }
 
 export function resolveAppleSnapshotPresentationSourceRoot(projectRoot: string): string {

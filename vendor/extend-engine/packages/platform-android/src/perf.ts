@@ -229,7 +229,7 @@ async function resolveAndroidAppPid(adb: AndroidAdbExecutor, packageName: string
 
 function buildAndroidRemoteHeapPath(packageName: string): string {
   const safePackage = packageName.replaceAll(/[^a-zA-Z0-9._-]/g, '_');
-  return `${ANDROID_REMOTE_HEAP_DIR}/agent-device-${safePackage}-${Date.now()}.hprof`;
+  return `${ANDROID_REMOTE_HEAP_DIR}/extend-engine-${safePackage}-${Date.now()}.hprof`;
 }
 
 function resolveAndroidHeapDumpHint(stdout: string, stderr: string): string {

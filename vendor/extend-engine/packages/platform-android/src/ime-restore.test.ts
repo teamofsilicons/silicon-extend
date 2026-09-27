@@ -19,7 +19,7 @@ const DEVICE: DeviceInfo = {
   kind: 'emulator',
   booted: true,
 };
-const HELPER_SERVICE = 'com.callstack.agentdevice.imehelper/.TestInputMethodService';
+const HELPER_SERVICE = 'com.teamofsilicons.extend.imehelper/.TestInputMethodService';
 const STATE_DIR = '/state';
 
 function stuckDeviceState(): FakeImeDeviceState {
@@ -55,6 +55,22 @@ test('close-time restore puts the previous IME back and clears record and marker
   expect(state.settings.get('default_input_method')).toBe('com.samsung/.Keyboard');
   expect(state.settings.has('agent_device_ime_helper_previous_ime')).toBe(false);
   expect([...(host.markerStore.get(STATE_DIR) ?? [])]).toEqual([]);
+});
+
+test('restore also undoes the fork-named keyboard an Extend 1.0 engine left active', async () => {
+  const host = bindAndroidAdbHostStub();
+  await host.imeRecoveryMarkers.write(STATE_DIR, DEVICE.id);
+  setAndroidTestImeActiveForTests(DEVICE, true);
+  const state = stuckDeviceState();
+  state.settings.set(
+    'default_input_method',
+    'com.callstack.agentdevice.imehelper/.TestInputMethodService',
+  );
+
+  const result = await restoreWith(state);
+
+  expect(result).toMatchObject({ restored: true, reason: 'ok' });
+  expect(state.settings.get('default_input_method')).toBe('com.samsung/.Keyboard');
 });
 
 test('a failed restore keeps the record and the marker for a later retry', async () => {

@@ -105,7 +105,7 @@ export function renderProxyStartup(
   return [
     `${checkmark} Proxy listening at ${proxyBaseUrl}`,
     '',
-    'Provide this to the agent-device instance connecting:',
+    'Give these to the device engine that connects:',
     '',
     `Daemon base URL: ${daemonBaseUrl}`,
     `Daemon auth token: ${token}`,

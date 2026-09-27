@@ -14,6 +14,7 @@ import {
 import { parseInstallSourceConfig } from '@agent-device/provision-kit/install-source-config';
 import { RETIRED_SCREENSHOT_MAX_SIZE } from '@agent-device/contracts/capture';
 import { type EnvMap } from '@agent-device/kernel/source-value';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 
 export function resolveConfigBackedFlagDefaults(options: {
   command: string | null;
@@ -35,7 +36,7 @@ type ConfigPath = { path: string; required: boolean; source: ConfigFileSource };
 
 // Project config is repository-controlled, so a flag stays operator-only unless its
 // own declaration sets `projectConfig: true`. This set derives from those declarations;
-// admitting a new key to ./agent-device.json edits the declaration, not this file.
+// admitting a new key to ./extend-engine.json edits the declaration, not this file.
 const PROJECT_CONFIG_FLAG_KEYS = projectConfigFlagKeys();
 
 function resolveConfigPaths(
@@ -43,7 +44,8 @@ function resolveConfigPaths(
   explicitCliConfigPath: string | undefined,
   env: EnvMap,
 ): ConfigPath[] {
-  const explicitConfig = explicitCliConfigPath ?? env.AGENT_DEVICE_CONFIG;
+  const explicitConfig =
+    explicitCliConfigPath ?? (env.EXTEND_ENGINE_CONFIG?.trim() || env.AGENT_DEVICE_CONFIG);
   if (explicitConfig) {
     return [
       { path: resolveInputPath(explicitConfig, cwd, env), required: true, source: 'explicit' },
@@ -51,12 +53,21 @@ function resolveConfigPaths(
   }
   return [
     { path: resolveUserConfigPath(env), required: false, source: 'user' },
-    { path: path.resolve(cwd, 'agent-device.json'), required: false, source: 'project' },
+    { path: path.resolve(cwd, PROJECT_CONFIG_FILE_NAME), required: false, source: 'project' },
   ];
 }
 
+// Silicon Extend's names for the engine's config files. The fork's upstream names
+// (~/.agent-device/config.json, ./agent-device.json) are not read: they belong to a standalone
+// upstream install, whose settings must not leak into the engine Extend runs.
+const PROJECT_CONFIG_FILE_NAME = 'extend-engine.json';
+
 function resolveUserConfigPath(env: EnvMap): string {
-  return path.join(expandUserHomePath('~', { env }), '.agent-device', 'config.json');
+  return path.join(
+    expandUserHomePath('~', { env }),
+    ...ENGINE_HOME_DIRECTORY_SEGMENTS,
+    'config.json',
+  );
 }
 
 function resolveInputPath(inputPath: string, cwd: string, env: EnvMap): string {
@@ -135,7 +146,7 @@ function parseConfigObject(
     if (origin.source === 'project' && !PROJECT_CONFIG_FLAG_KEYS.has(key)) {
       throw new AppError(
         'INVALID_ARGS',
-        `Config key "${rawKey}" is not allowed in ${origin.label}. Move it to ~/.agent-device/config.json, pass it with --config or AGENT_DEVICE_CONFIG, or provide it through CLI flags/environment variables.`,
+        `Config key "${rawKey}" is not allowed in ${origin.label}. Move it to ~/.silicon-extend/engine/config.json, pass it with --config or EXTEND_ENGINE_CONFIG, or provide it through CLI flags/environment variables.`,
       );
     }
     if (key === 'installSource') {
@@ -152,22 +163,23 @@ function parseConfigObject(
   return flags;
 }
 
-// Commands that honored AGENT_DEVICE_SCREENSHOT_MAX_SIZE in released versions.
+// Commands that honored EXTEND_ENGINE_SCREENSHOT_MAX_SIZE (AGENT_DEVICE_SCREENSHOT_MAX_SIZE) in released versions.
 // A stale env var must fail closed for them (sizing must not silently vanish)
 // while every other command keeps working.
 const RETIRED_MAX_SIZE_ENV_COMMANDS = new Set(['screenshot', 'record']);
 
 function readEnvFlagDefaults(env: EnvMap, command: string | null): Partial<CliFlags> {
-  const retiredEnvValue = env[RETIRED_SCREENSHOT_MAX_SIZE.envVar];
-  if (
-    command !== null &&
-    RETIRED_MAX_SIZE_ENV_COMMANDS.has(command) &&
-    typeof retiredEnvValue === 'string' &&
-    retiredEnvValue.trim().length > 0
-  ) {
+  const retiredEnvVar = [
+    RETIRED_SCREENSHOT_MAX_SIZE.envVar,
+    RETIRED_SCREENSHOT_MAX_SIZE.legacyEnvVar,
+  ].find((name) => {
+    const value = env[name];
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+  if (command !== null && RETIRED_MAX_SIZE_ENV_COMMANDS.has(command) && retiredEnvVar) {
     throw new AppError(
       'INVALID_ARGS',
-      `${RETIRED_SCREENSHOT_MAX_SIZE.envVar} was removed. ${RETIRED_SCREENSHOT_MAX_SIZE.migration[command === 'record' ? 'record' : 'screenshot']}`,
+      `${retiredEnvVar} was removed. ${RETIRED_SCREENSHOT_MAX_SIZE.migration[command === 'record' ? 'record' : 'screenshot']}`,
     );
   }
   const flags: Partial<CliFlags> = {};

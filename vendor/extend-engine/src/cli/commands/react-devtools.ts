@@ -78,7 +78,7 @@ function maybePrintRemoteIosWaitHint(
   process.stderr.write(
     [
       'Hint: Remote iOS React DevTools connects during JavaScript startup.',
-      'If the app was already open before `agent-device react-devtools start`, relaunch it with `agent-device open <bundle-id> --platform ios --relaunch`, then retry `agent-device react-devtools wait --connected`.',
+      'If the app was already open before `extend react-devtools start`, relaunch it with `extend open <bundle-id> --platform ios --relaunch`, then retry `extend react-devtools wait --connected`.',
       '',
     ].join('\n'),
   );

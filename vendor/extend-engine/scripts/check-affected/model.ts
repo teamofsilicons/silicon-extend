@@ -484,7 +484,7 @@ const BUILD_OWNERSHIP: ReadonlyArray<{
     check: 'xctest-selection',
     rule: 'own:xctest-selection',
     detail: 'runner test methods must stay selected in CI and stripped from the npm source bundle',
-    owns: (file) => file.startsWith('apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/'),
+    owns: (file) => file.startsWith('apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/'),
   },
   // The packager rewrites every runner Swift file on its way into the npm package, and nothing in
   // this repo reads the result — the first consumer is a user's `xcodebuild`. Both the source and

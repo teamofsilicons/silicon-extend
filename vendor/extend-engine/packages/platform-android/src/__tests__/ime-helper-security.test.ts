@@ -11,7 +11,7 @@ import { findProjectRoot } from '@agent-device/host-kit/version';
 
 const SERVICE_SRC = path.join(
   findProjectRoot(),
-  'android/ime-helper/src/main/java/com/callstack/agentdevice/imehelper/TestInputMethodService.java',
+  'android/ime-helper/src/main/java/com/teamofsilicons/extend/imehelper/TestInputMethodService.java',
 );
 
 function readService(): string {

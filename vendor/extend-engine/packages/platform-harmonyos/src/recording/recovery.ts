@@ -72,7 +72,7 @@ export function cleanupRecoveredHarmonyRecording(
 }
 
 function isCanonicalHarmonyRecordingFileName(value: string): boolean {
-  return /^agent-device-recording-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.mp4$/i.test(
+  return /^silicon-extend-recording-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.mp4$/i.test(
     value,
   );
 }

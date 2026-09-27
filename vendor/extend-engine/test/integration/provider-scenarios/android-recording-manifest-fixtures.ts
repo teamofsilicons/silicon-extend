@@ -69,7 +69,7 @@ export function buildAndroidRecordingManifest(options: {
 export function manifestPath(manifest: AndroidRecordingManifestFixture): string {
   const remotePath = manifest.chunks.at(-1)?.remotePath ?? manifest.pendingRemotePath;
   if (!remotePath) throw new Error('Android recording fixture needs a native remote path');
-  return `${path.posix.dirname(remotePath)}/agent-device-recording-active.json`;
+  return `${path.posix.dirname(remotePath)}/silicon-extend-recording-active.json`;
 }
 
 export function parseManifestWrite(

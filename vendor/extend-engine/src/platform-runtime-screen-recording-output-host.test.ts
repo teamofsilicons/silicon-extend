@@ -5,7 +5,7 @@ import { mkdtempForTestSync } from './__tests__/test-utils/tmp-dir.ts';
 import { createScreenRecordingOutputHost } from './platform-runtime-screen-recording-output-host.ts';
 
 test('prepares the closed recording output path after semantic validation', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-output-');
+  const root = mkdtempForTestSync('silicon-extend-recording-output-');
   const outputPath = path.join(root, 'nested', 'capture.mp4');
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, 'stale');
@@ -17,7 +17,7 @@ test('prepares the closed recording output path after semantic validation', asyn
 });
 
 test('copies a recording file and leaves the source alone', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-copy-');
+  const root = mkdtempForTestSync('silicon-extend-recording-copy-');
   const from = path.join(root, 'capture.native.mp4');
   const to = path.join(root, 'nested', 'capture.collected.mp4');
   fs.writeFileSync(from, 'recorded');
@@ -29,7 +29,7 @@ test('copies a recording file and leaves the source alone', async () => {
 });
 
 test('copies over whatever already sits at the destination', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-copy-');
+  const root = mkdtempForTestSync('silicon-extend-recording-copy-');
   const from = path.join(root, 'capture.collected.mp4');
   const to = path.join(root, 'capture.mp4');
   fs.writeFileSync(from, 'recorded');
@@ -41,7 +41,7 @@ test('copies over whatever already sits at the destination', async () => {
 });
 
 test('copying a recording that is not there fails rather than passing quietly', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-copy-');
+  const root = mkdtempForTestSync('silicon-extend-recording-copy-');
   await expect(
     createScreenRecordingOutputHost().copy({
       from: path.join(root, 'capture.native.mp4'),
@@ -51,7 +51,7 @@ test('copying a recording that is not there fails rather than passing quietly', 
 });
 
 test('removes a recording file and says so, including one that was already gone', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-remove-');
+  const root = mkdtempForTestSync('silicon-extend-recording-remove-');
   const filePath = path.join(root, 'capture.native.mp4');
   fs.writeFileSync(filePath, 'recorded');
 
@@ -61,7 +61,7 @@ test('removes a recording file and says so, including one that was already gone'
 });
 
 test('says a recording file it could not remove is still there instead of throwing', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-remove-');
+  const root = mkdtempForTestSync('silicon-extend-recording-remove-');
   // A path the host cannot unlink is the case the answer exists for: the caller is told the file may
   // still be there instead of being promised it is gone.
   const filePath = path.join(root, 'capture.native.mp4');

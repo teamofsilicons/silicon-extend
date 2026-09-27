@@ -11,7 +11,7 @@ import type { ReplayTestAttemptOutcome } from '@agent-device/replay-test';
  * (`scripts/__tests__/eager-closure-budgets.test.ts`) — not worth it for a value that changes
  * only if this line does.
  */
-export const DEFAULT_TEST_ARTIFACTS_ROOT = '.agent-device/test-artifacts';
+export const DEFAULT_TEST_ARTIFACTS_ROOT = '.silicon-extend/engine/test-artifacts';
 
 export function resolveReplayTestArtifactsDir(params: {
   artifactsDir?: string;

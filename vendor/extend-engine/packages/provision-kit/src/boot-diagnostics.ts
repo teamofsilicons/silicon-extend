@@ -129,7 +129,7 @@ export function bootFailureHint(reason: BootFailureReason): string {
     case 'IOS_RUNNER_CONNECT_TIMEOUT':
       return 'Retry runner startup, inspect xcodebuild logs, and verify simulator responsiveness before command execution.';
     case 'IOS_RUNNER_OWNED_BY_OTHER_DAEMON':
-      return 'Close the owning agent-device session or stop its daemon with retained-runner cleanup before retrying.';
+      return 'Close the owning device engine session or stop its daemon with retained-runner cleanup before retrying.';
     case 'IOS_RUNNER_DEVICE_NOT_PROVISIONED':
       return 'The XCTest runner cannot be installed on this device: its provisioning profile does not cover it. Register the device with the signing team (Xcode > Settings > Accounts, or add its UDID to the provisioning profile) and retry. Retrying without that will keep failing.';
     case 'ANDROID_BOOT_TIMEOUT':

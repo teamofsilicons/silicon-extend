@@ -159,7 +159,7 @@ test('screenshot runtime supplies default output path when none is requested', a
   });
 
   expect(response.ok).toBe(true);
-  expect(capturedPath(runtime)).toContain('agent-device-screenshot-');
+  expect(capturedPath(runtime)).toContain('extend-engine-screenshot-');
   expect(path.basename(capturedPath(runtime) ?? '')).toBe('screenshot.png');
   if (response.ok) {
     expect(response.data?.path).toBe(capturedPath(runtime));

@@ -5,7 +5,7 @@ import { readHostBinaryFile } from '@agent-device/host-kit/host-file';
 import { runHarmonyHdc, runHarmonyShell } from './hdc.ts';
 
 export async function screenshotHarmony(device: DeviceInfo, outPath: string): Promise<void> {
-  const remotePath = `/data/local/tmp/agent-device-screen-${randomUUID()}.jpeg`;
+  const remotePath = `/data/local/tmp/extend-engine-screen-${randomUUID()}.jpeg`;
   try {
     await runHarmonyShell(device, ['snapshot_display', '-f', remotePath], {
       timeoutMs: 15_000,

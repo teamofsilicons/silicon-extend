@@ -64,19 +64,19 @@ extension RunnerTests {
     XCTAssertTrue(field.waitForExistence(timeout: appExistenceTimeout))
     let frame = field.frame
     mainOwned.app = app
-    mainOwned.bundleId = "com.callstack.agentdevice.runner"
+    mainOwned.bundleId = "com.teamofsilicons.extend.helper"
     mainOwned.processIdentifier = try XCTUnwrap(Self.processIdentifier(of: app))
     clearSnapshotXCTestChannelPenalty(reason: "fresh-runner")
     let failures = currentXCTestFailureCount()
     let tap = try runnerCommandFixture(
-      #"{"appBundleId":"com.callstack.agentdevice.runner","command":"tap","commandId":"tap-healthy-probe","x":\#(frame.midX),"y":\#(frame.midY),"synthesized":true}"#
+      #"{"appBundleId":"com.teamofsilicons.extend.helper","command":"tap","commandId":"tap-healthy-probe","x":\#(frame.midX),"y":\#(frame.midY),"synthesized":true}"#
     )
     let tapped = try execute(command: tap)
     XCTAssertTrue(tapped.ok, String(describing: tapped.error))
     XCTAssertNotNil(textEntryTapWitness)
     XCTAssertFalse(isSnapshotXCTestChannelPenalized(bundleId: mainOwned.bundleId))
     try XCTSkipIf(isKeyboardVisible(app: app), "software keyboard is up; hidden-keyboard witness cannot be exercised")
-    let type = try runnerCommandFixture(#"{"appBundleId":"com.callstack.agentdevice.runner","command":"type","commandId":"type-healthy-probe","text":"probe-witness","textEntryMode":"append"}"#)
+    let type = try runnerCommandFixture(#"{"appBundleId":"com.teamofsilicons.extend.helper","command":"type","commandId":"type-healthy-probe","text":"probe-witness","textEntryMode":"append"}"#)
     let typed = try execute(command: type)
     XCTAssertTrue(typed.ok, String(describing: typed.error))
     XCTAssertEqual(typed.data?.textEntryRoute, "xctest-element")
@@ -139,31 +139,31 @@ extension RunnerTests {
       invalidateCachedTarget(reason: "unit_test_cleanup")
       app.terminate()
     }
-    let target = app.staticTexts["Agent Device Runner"]
+    let target = app.staticTexts["Silicon Extend"]
     XCTAssertTrue(target.waitForExistence(timeout: appExistenceTimeout))
     let frame = target.frame
     mainOwned.app = app
-    mainOwned.bundleId = "com.callstack.agentdevice.runner"
+    mainOwned.bundleId = "com.teamofsilicons.extend.helper"
     mainOwned.processIdentifier = try XCTUnwrap(Self.processIdentifier(of: app))
     clearSnapshotXCTestChannelPenalty(reason: "fresh-runner")
     let failures = currentXCTestFailureCount()
     textInputProbeIssueForTesting = XCTIssue(type: .assertionFailure, compactDescription: "Injected optional text input query failure")
     let command = try runnerCommandFixture(
-      #"{"appBundleId":"com.callstack.agentdevice.runner","command":"tap","commandId":"tap-probe-unavailable","x":\#(frame.midX),"y":\#(frame.midY),"synthesized":true}"#
+      #"{"appBundleId":"com.teamofsilicons.extend.helper","command":"tap","commandId":"tap-probe-unavailable","x":\#(frame.midX),"y":\#(frame.midY),"synthesized":true}"#
     )
     let response = try execute(command: command)
     XCTAssertTrue(response.ok, String(describing: response.error))
     XCTAssertFalse(didRecordXCTestFailure(since: failures))
     XCTAssertFalse(isSnapshotXCTestChannelPenalized(bundleId: mainOwned.bundleId))
     XCTAssertNil(textEntryTapWitness)
-    let type = try runnerCommandFixture(#"{"appBundleId":"com.callstack.agentdevice.runner","command":"type","commandId":"type-after-unavailable-probe","text":"must-not-type","textEntryMode":"append"}"#)
+    let type = try runnerCommandFixture(#"{"appBundleId":"com.teamofsilicons.extend.helper","command":"type","commandId":"type-after-unavailable-probe","text":"must-not-type","textEntryMode":"append"}"#)
     let typed = try execute(command: type)
     XCTAssertFalse(typed.ok)
     XCTAssertEqual(typed.error?.code, "TEXT_INPUT_NOT_FOCUSED")
     let field = app.textFields["agent-device-hardware-keyboard-input"]
     let fieldFrame = field.frame
     let nextTap = try runnerCommandFixture(
-      #"{"appBundleId":"com.callstack.agentdevice.runner","command":"tap","commandId":"tap-after-probe-recovery","x":\#(fieldFrame.midX),"y":\#(fieldFrame.midY),"synthesized":true}"#
+      #"{"appBundleId":"com.teamofsilicons.extend.helper","command":"tap","commandId":"tap-after-probe-recovery","x":\#(fieldFrame.midX),"y":\#(fieldFrame.midY),"synthesized":true}"#
     )
     XCTAssertTrue(try execute(command: nextTap).ok)
     XCTAssertNotNil(textEntryTapWitness)

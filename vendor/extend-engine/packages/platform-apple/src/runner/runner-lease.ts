@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import {
   emitDiagnostic,
   publishFileSync,
@@ -200,7 +201,7 @@ export async function prepareRunnerLeaseForStartup(
       'COMMAND_FAILED',
       logicalLeaseContext
         ? `iOS runner for ${deviceId} is busy after device lease admission`
-        : `iOS runner for ${deviceId} is already owned by another agent-device daemon`,
+        : `iOS runner for ${deviceId} is already owned by another device engine daemon`,
       {
         reason: 'IOS_RUNNER_OWNED_BY_OTHER_DAEMON',
         deviceId,
@@ -291,15 +292,15 @@ function buildBusyRunnerLeaseHint(
 
 function buildRunnerOwnerHint(lease: RunnerLease): string {
   const owner = `Runner owner: PID ${lease.ownerPid}`;
-  if (lease.ownerStateDir) return `${owner} with AGENT_DEVICE_STATE_DIR=${lease.ownerStateDir}`;
+  if (lease.ownerStateDir) return `${owner} with EXTEND_ENGINE_STATE_DIR=${lease.ownerStateDir}`;
   return `${owner}.`;
 }
 
 function buildBusyRunnerLeaseCleanupHint(lease: RunnerLease): string {
   if (lease.ownerStateDir) {
-    return `If it is stuck, stop the owning agent-device daemon for ${formatEnvAssignment('AGENT_DEVICE_STATE_DIR', lease.ownerStateDir)} and retry.`;
+    return `If it is stuck, stop the owning device engine daemon for ${formatEnvAssignment('EXTEND_ENGINE_STATE_DIR', lease.ownerStateDir)} and retry.`;
   }
-  return 'If it is stuck, stop the owning agent-device daemon and retry.';
+  return 'If it is stuck, stop the owning device engine daemon and retry.';
 }
 
 function formatEnvAssignment(name: string, value: string): string {
@@ -425,7 +426,7 @@ function resolveRunnerLeasePath(deviceId: string): string {
 function resolveRunnerLeaseRoot(): string {
   const override = process.env.AGENT_DEVICE_IOS_RUNNER_LEASE_DIR?.trim();
   if (override) return path.resolve(override);
-  return path.join(os.homedir(), '.agent-device', 'apple-runner', 'leases');
+  return path.join(os.homedir(), ...ENGINE_HOME_DIRECTORY_SEGMENTS, 'apple-runner', 'leases');
 }
 
 function listRunnerLeasesForOwner(owner: {
@@ -611,7 +612,7 @@ export function verifyLeaseRunnerPidIdentity(lease: RunnerLease, pid: number): b
 }
 
 function isRunnerXcodebuildCommand(command: string | null): boolean {
-  return !!command && command.includes('xcodebuild') && command.includes('AgentDeviceRunner');
+  return !!command && command.includes('xcodebuild') && command.includes('SiliconExtendHelper');
 }
 
 function buildRunnerOwnerToken(pid: number, startTime: string | null): string {

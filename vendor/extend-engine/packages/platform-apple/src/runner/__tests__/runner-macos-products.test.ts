@@ -62,7 +62,7 @@ function createProduct(): {
   embeddedItemPaths: string[];
 } {
   const root = mkdtempForTestSync('agent-device-runner-products-');
-  const productPath = path.join(root, 'AgentDeviceRunnerUITests-Runner.app');
+  const productPath = path.join(root, 'SiliconExtendHelperUITests-Runner.app');
   fs.mkdirSync(productPath);
   const frameworksRoot = path.join(productPath, 'Contents', 'Frameworks');
   const embeddedItemPaths = [

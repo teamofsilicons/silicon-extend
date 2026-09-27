@@ -6,7 +6,7 @@ import { AppError } from '@agent-device/kernel/errors';
  * regular file sits at the final path — so the recovery is shared (ADR 0010 §3).
  */
 export const NOT_REGULAR_FILE_HINT =
-  'agent-device only reads and writes regular files at this path. Remove the symbolic link or special file there and retry.';
+  'The device engine only reads and writes regular files at this path. Remove the symbolic link or special file there and retry.';
 const CONCURRENT_REPLACEMENT_HINT =
   'Another process replaced the file at this path while it was being opened. Stop the concurrent writer, then retry.';
 

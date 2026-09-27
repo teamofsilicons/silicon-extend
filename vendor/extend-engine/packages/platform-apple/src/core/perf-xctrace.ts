@@ -208,7 +208,7 @@ export async function writeAppleXctracePerfReport(params: {
   template?: string;
   appBundleId?: string;
 }): Promise<AppleXctraceCpuProfileReport> {
-  const tempDir = await makeHostTemporaryDirectory('agent-device-xctrace-report-');
+  const tempDir = await makeHostTemporaryDirectory('extend-engine-xctrace-report-');
   const tocPath = path.join(tempDir, 'trace-toc.xml');
   const timeProfilePath = path.join(tempDir, 'time-profile.xml');
   try {

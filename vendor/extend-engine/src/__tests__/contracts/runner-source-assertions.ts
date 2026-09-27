@@ -8,8 +8,8 @@ const RUNNER_SOURCES_DIR = path.join(
   PROJECT_ROOT,
   'apple',
   'runner',
-  'AgentDeviceRunner',
-  'AgentDeviceRunnerUITests',
+  'SiliconExtendHelper',
+  'SiliconExtendHelperUITests',
 );
 
 export function assertRunnerSourceIncludes(via: string, context: string): void {

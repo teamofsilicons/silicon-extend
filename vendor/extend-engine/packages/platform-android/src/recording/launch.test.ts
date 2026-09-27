@@ -132,7 +132,7 @@ test('cleans a failed candidate before authorizing fallback and aborts if that c
     expect.stringContaining('start:/sdcard/'),
     expect.stringContaining('remove:/sdcard/'),
   ]);
-  expect(live).toEqual(new Set(['/data/local/tmp/agent-device-recording-active.json']));
+  expect(live).toEqual(new Set(['/data/local/tmp/silicon-extend-recording-active.json']));
   await started.pendingHandle.transfer().forceCleanup();
 
   const noFallback = await start({
@@ -184,7 +184,7 @@ test('rolls back a child when initial active evidence publication fails', async 
   );
   expect(calls).toEqual([
     'signal:42',
-    expect.stringMatching(/^remove:\/sdcard\/agent-device-recording-\d+\.mp4$/),
+    expect.stringMatching(/^remove:\/sdcard\/silicon-extend-recording-\d+\.mp4$/),
   ]);
 });
 

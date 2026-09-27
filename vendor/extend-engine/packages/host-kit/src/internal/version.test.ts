@@ -80,12 +80,12 @@ test('findProjectRoot walks the ancestor chain once per process', () => {
   assert.equal(existsSpy.mock.calls.length, walkCalls);
 });
 
-test('the resolver walks past a workspace-package manifest to the agent-device root', () => {
+test('the resolver walks past a workspace-package manifest to the engine root', () => {
   const root = mkdtempForTestSync('agent-device-project-root-');
   try {
     fs.writeFileSync(
       path.join(root, 'package.json'),
-      JSON.stringify({ name: 'agent-device', version: '9.9.9' }),
+      JSON.stringify({ name: 'silicon-extend-engine', version: '9.9.9' }),
     );
     const moduleDir = path.join(root, 'packages', 'capture-kit', 'src');
     fs.mkdirSync(moduleDir, { recursive: true });
@@ -102,7 +102,7 @@ test('the resolver walks past a workspace-package manifest to the agent-device r
   }
 });
 
-test('the resolver falls back to the nearest manifest when none names agent-device', () => {
+test('the resolver falls back to the nearest manifest when none names the engine', () => {
   const root = mkdtempForTestSync('agent-device-project-root-fallback-');
   try {
     fs.writeFileSync(
@@ -119,13 +119,13 @@ test('the resolver falls back to the nearest manifest when none names agent-devi
   }
 });
 
-test('from this source tree, the project root is the agent-device manifest, not this package', () => {
+test('from this source tree, the project root is the engine manifest, not this package', () => {
   const resolved = findProjectRoot();
   const manifest = JSON.parse(fs.readFileSync(path.join(resolved, 'package.json'), 'utf8')) as {
     name?: string;
     version?: string;
   };
-  assert.equal(manifest.name, 'agent-device');
+  assert.equal(manifest.name, 'silicon-extend-engine');
   assert.equal(readVersion(), manifest.version);
 });
 

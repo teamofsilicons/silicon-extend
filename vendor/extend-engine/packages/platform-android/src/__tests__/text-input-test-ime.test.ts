@@ -1,7 +1,7 @@
 import { afterEach, test, vi } from 'vitest';
 import assert from 'node:assert/strict';
 
-const PACKAGE = 'com.callstack.agentdevice.imehelper';
+const PACKAGE = 'com.teamofsilicons.extend.imehelper';
 
 // Inject a fixture artifact so the tests never read android/ime-helper/dist from disk (which a
 // fresh checkout that hasn't packaged the helper won't have — CI's Coverage job included).
@@ -17,7 +17,7 @@ vi.mock('../ime-helper.ts', async (importOriginal) => {
       sha256: 'a'.repeat(64),
       packageName: PACKAGE,
       versionCode: 1,
-      serviceComponent: 'com.callstack.agentdevice.imehelper/.TestInputMethodService',
+      serviceComponent: 'com.teamofsilicons.extend.imehelper/.TestInputMethodService',
       broadcastProtocol: 'android-ime-helper-v1' as const,
     },
   });
@@ -74,7 +74,7 @@ test('typeAndroid routes non-ASCII text through the test IME broadcast channel w
   assert.ok(broadcastCalls.every((args) => args[3] === '-p' && args[4] === PACKAGE));
   assert.ok(
     broadcastCalls.some((args) =>
-      args.includes('com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64'),
+      args.includes('com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64'),
     ),
   );
   const textIndex = broadcastCalls[0]?.indexOf('text') ?? -1;
@@ -100,9 +100,9 @@ test('fillAndroid clears then commits non-ASCII text through the test IME and ve
       calls.push(args);
       if (args[0] === 'shell' && args[1] === 'am' && args[2] === 'broadcast') {
         const action = args[args.indexOf('-a') + 1];
-        if (action === 'com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT') {
+        if (action === 'com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT') {
           currentText = '';
-        } else if (action === 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64') {
+        } else if (action === 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64') {
           const textIndex = args.indexOf('text');
           const payload = textIndex >= 0 ? args[textIndex + 1] : undefined;
           currentText += Buffer.from(payload ?? '', 'base64').toString('utf8');
@@ -179,9 +179,9 @@ test('fillAndroid batches ASCII text when the device is already on the helper IM
       calls.push(args);
       if (args[1] === 'am' && args[2] === 'broadcast') {
         const action = args[args.indexOf('-a') + 1];
-        if (action === 'com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT') {
+        if (action === 'com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT') {
           currentText = '';
-        } else if (action === 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64') {
+        } else if (action === 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64') {
           const textIndex = args.indexOf('text');
           currentText += Buffer.from(args[textIndex + 1] ?? '', 'base64').toString('utf8');
         }
@@ -232,9 +232,9 @@ test('fillAndroid re-focuses the target when the first helper attempt fails veri
       calls.push(args);
       if (args[1] === 'am' && args[2] === 'broadcast') {
         const action = args[args.indexOf('-a') + 1];
-        if (action === 'com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT') {
+        if (action === 'com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT') {
           currentText = '';
-        } else if (action === 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64') {
+        } else if (action === 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64') {
           commits += 1;
           currentText += decodeBroadcastText(args);
         }
@@ -263,7 +263,7 @@ test('fillAndroid re-focuses the target when the first helper attempt fails veri
     'the retry attempt must re-focus the target before its clear-and-commit round',
   );
   assert.equal(
-    calls.filter((args) => args.includes('com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT'))
+    calls.filter((args) => args.includes('com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT'))
       .length,
     2,
     'each helper attempt clears before it commits',
@@ -312,9 +312,9 @@ test('fillAndroid broadcasts Unicode text when the helper IME is active with an 
       calls.push(args);
       if (args[1] === 'am' && args[2] === 'broadcast') {
         const action = args[args.indexOf('-a') + 1];
-        if (action === 'com.callstack.agentdevice.imehelper.ACTION_CLEAR_TEXT') {
+        if (action === 'com.teamofsilicons.extend.imehelper.ACTION_CLEAR_TEXT') {
           currentText = '';
-        } else if (action === 'com.callstack.agentdevice.imehelper.ACTION_INPUT_TEXT_B64') {
+        } else if (action === 'com.teamofsilicons.extend.imehelper.ACTION_INPUT_TEXT_B64') {
           currentText += decodeBroadcastText(args);
         }
         return { exitCode: 0, stdout: '', stderr: '' };

@@ -44,8 +44,8 @@ export async function snapshotHarmony(
   analysis: { rawNodeCount: number; maxDepth: number };
 }> {
   const token = randomUUID();
-  const remotePath = `/data/local/tmp/agent-device-layout-${token}.json`;
-  const localDirectory = await makeHostTemporaryDirectory('agent-device-harmony-layout-');
+  const remotePath = `/data/local/tmp/extend-engine-layout-${token}.json`;
+  const localDirectory = await makeHostTemporaryDirectory('extend-engine-harmony-layout-');
   const localPath = path.join(localDirectory, 'layout.json');
   try {
     await runHarmonyShell(device, ['uitest', 'dumpLayout', '-p', remotePath], {

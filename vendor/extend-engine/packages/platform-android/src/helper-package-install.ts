@@ -12,7 +12,7 @@ import {
 } from './adb-executor.ts';
 import type { AndroidAdbPackageInstallOptions } from './adb-transfer.ts';
 import { attachAndroidHelperInstallTimeoutHint } from './adb-failure.ts';
-import { requireAndroidAdbHost } from './adb-host.ts';
+import { emitAndroidAdbDiagnostic, requireAndroidAdbHost } from './adb-host.ts';
 import type {
   AndroidHelperInstallDecision,
   InstalledAndroidHelperState,
@@ -23,6 +23,43 @@ import type {
 export type { AndroidHelperInstallDecision, InstalledAndroidHelperState };
 
 const ANDROID_HELPER_IDENTITY_TIMEOUT_MS = 10_000;
+
+// Silicon Extend renamed the engine's Android helpers from the fork's `com.callstack.agentdevice.*`
+// packages to `com.teamofsilicons.extend.*`. Once a renamed helper is installed, the old one is
+// removed from the device (best effort), so the Carbon doesn't find a second test keyboard or
+// helper app in Settings. A failure is only a diagnostic: the old helper is inert once unused.
+const HELPER_PACKAGE_PREFIX = 'com.teamofsilicons.extend.';
+const LEGACY_HELPER_PACKAGE_PREFIX = 'com.callstack.agentdevice.';
+
+export function legacyAndroidHelperPackageName(packageName: string): string | undefined {
+  return packageName.startsWith(HELPER_PACKAGE_PREFIX)
+    ? `${LEGACY_HELPER_PACKAGE_PREFIX}${packageName.slice(HELPER_PACKAGE_PREFIX.length)}`
+    : undefined;
+}
+
+export async function removeLegacyAndroidHelperPackage(
+  adb: AndroidAdbExecutor,
+  packageName: string,
+): Promise<void> {
+  const legacyPackageName = legacyAndroidHelperPackageName(packageName);
+  if (!legacyPackageName) return;
+  const data: Record<string, unknown> = { packageName: legacyPackageName };
+  try {
+    const result = await runAdbShell(adb, ['pm', 'uninstall', legacyPackageName], {
+      allowFailure: true,
+      timeoutMs: ANDROID_HELPER_IDENTITY_TIMEOUT_MS,
+    });
+    // `pm uninstall` answers "Success", or a failure when the old helper isn't there.
+    data.removed = result.exitCode === 0 && /\bSuccess\b/.test(result.stdout);
+  } catch (error) {
+    data.error = normalizeError(error).message;
+  }
+  try {
+    emitAndroidAdbDiagnostic({ level: 'debug', phase: 'android_legacy_helper_removal', data });
+  } catch {
+    // Diagnostics are best effort too.
+  }
+}
 
 /**
  * The one install seam every Android helper APK crosses, so an install timeout carries the
@@ -107,6 +144,7 @@ async function ensureAndroidHelperPackageInstalled(options: {
     });
   }
   cache.add(cacheKey);
+  await removeLegacyAndroidHelperPackage(adb, packageName);
   return {
     packageName,
     versionCode,
@@ -245,7 +283,7 @@ async function readInstalledAndroidPackageSha256(
   }
 
   const files = requireAndroidAdbHost().files;
-  const tempDirectory = await files.makeTempDirectory('agent-device-helper-');
+  const tempDirectory = await files.makeTempDirectory('extend-engine-helper-');
   const localPath = path.join(tempDirectory, 'base.apk');
   try {
     const pull = await pullAndroidAdbFile(remotePath, localPath, {

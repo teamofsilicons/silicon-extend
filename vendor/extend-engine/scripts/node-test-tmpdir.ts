@@ -66,7 +66,7 @@ const childEnv = {
 // real per-user temp root vitest's globalSetup uses — the two lanes share
 // one cache instead of each discarding and recompiling their own.
 if (!childEnv.AGENT_DEVICE_SWIFT_CACHE_DIR?.trim()) {
-  childEnv.AGENT_DEVICE_SWIFT_CACHE_DIR = path.join(os.tmpdir(), 'agent-device-swift-cache');
+  childEnv.AGENT_DEVICE_SWIFT_CACHE_DIR = path.join(os.tmpdir(), 'extend-engine-swift-cache');
 }
 
 // This wrapper is itself a node:test file's own subprocess whenever

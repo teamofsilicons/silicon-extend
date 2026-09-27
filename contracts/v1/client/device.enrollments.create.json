@@ -1,0 +1,42 @@
+{
+  "api_version": 1,
+  "call": "Client::pair_enrollment",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "device.enrollments.create",
+  "request": {
+    "body": {
+      "data": {},
+      "type": "enrollment"
+    },
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/device/enrollments"
+  },
+  "response": {
+    "non_null": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "required": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "status": "2xx",
+    "type": "enrollment"
+  }
+}

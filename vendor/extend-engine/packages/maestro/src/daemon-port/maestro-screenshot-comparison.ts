@@ -40,7 +40,7 @@ export async function withMaestroScreenshotWorkspace<T>(
   purpose: 'animation' | 'tap',
   run: (tempRoot: string) => Promise<T>,
 ): Promise<T> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), `agent-device-maestro-${purpose}-`));
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), `extend-engine-maestro-${purpose}-`));
   try {
     return await run(tempRoot);
   } finally {

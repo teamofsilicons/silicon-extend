@@ -74,6 +74,7 @@ async fn start() -> Env {
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     };
     let state = extend_service::build(cfg).await.unwrap();
     tokio::spawn(extend_service::serve_on(listener, state));
@@ -110,7 +111,7 @@ fn enrollment(os: DeviceOs) -> EnrollmentCreate {
         os_version: Some("1".into()),
         model: Some("Fake".into()),
         app_version: "1.0.0".into(),
-        agent_device_version: None,
+        engine_version: None,
     }
 }
 
@@ -185,10 +186,11 @@ impl FakeDevice {
             os,
             os_version: Some("15".into()),
             model: Some("Fake".into()),
-            agent_device_version: None,
+            engine_version: None,
             capabilities: os.full_capabilities().to_vec(),
             missing: vec![],
             setup: Setup::complete(),
+            features: vec![],
         }))
         .await;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -856,6 +858,9 @@ async fn hosted_device_end_to_end() {
         capabilities: DeviceOs::Tvos.full_capabilities().to_vec(),
         missing: vec![],
         setup: Setup::complete(),
+        awake: None,
+        sleep_state: None,
+        hardware_key: None,
     }))
     .await;
     tokio::time::sleep(Duration::from_millis(200)).await;

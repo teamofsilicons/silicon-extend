@@ -393,7 +393,7 @@ function isAndroidInputTextUnsupported(error: unknown): boolean {
 function unsupportedAndroidShellTextError(text: string, cause?: unknown): AppError {
   return new AppError(
     'COMMAND_FAILED',
-    'Android text input requires provider-native text injection or the bundled test IME helper for non-ASCII/control characters; the adb-shell fallback supports ASCII text only. On emulators the test IME activates automatically; on real devices pass `open --test-ime` to enable it (see `agent-device doctor` for the current IME state).',
+    'Android text input requires provider-native text injection or the bundled test IME helper for non-ASCII/control characters; the adb-shell fallback supports ASCII text only. On emulators the test IME activates automatically; on real devices pass `open --test-ime` to enable it (see `extend doctor` for the current IME state).',
     {
       backend: 'adb-shell',
       textLength: Array.from(text).length,

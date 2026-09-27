@@ -8,19 +8,20 @@ import { fileURLToPath } from 'node:url';
 import { REQUIRED_ENTRIES, STAMPED_VERSION, stampRuntime } from './stamp-runtime.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const vendored = path.resolve(here, '../../vendor/agent-device');
+const vendored = path.resolve(here, '../../vendor/extend-engine');
 
 function fixture(t) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'extend-runtime-stamp-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const staged = path.join(root, 'first');
   for (const dir of ['bin', 'dist/src/internal']) mkdirSync(path.join(staged, dir), { recursive: true });
-  writeFileSync(path.join(staged, 'package.json'), JSON.stringify({ name: 'agent-device', version: '0.21.15' }));
-  writeFileSync(path.join(staged, 'bin/agent-device.mjs'), "await import('../dist/src/internal/bin.js');");
+  writeFileSync(path.join(staged, 'package.json'), JSON.stringify({ name: 'silicon-extend-engine', version: '0.21.15' }));
+  writeFileSync(path.join(staged, 'bin/extend-engine.mjs'), "await import('../dist/src/internal/bin.js');");
   writeFileSync(path.join(staged, 'dist/src/internal/bin.js'), 'const help = () => import(`../help.js`); export { help };');
   writeFileSync(path.join(staged, 'dist/src/internal/daemon.js'), 'import{run}from"../main.js";import"../side.js";run();');
-  // Loaded by computed paths (new Worker(path), spawn(node, [path])), so only REQUIRED_ENTRIES covers them.
-  for (const entry of ['png-worker', 'companion-tunnel', 'run-script-http-child', 'update-check-entry']) {
+  // Loaded by computed paths (new Worker(path), spawn(node, [path])), so only REQUIRED_ENTRIES covers
+  // them; and the EXTEND_ENGINE_* settings shim, which Extend's entry imports.
+  for (const entry of ['png-worker', 'companion-tunnel', 'run-script-http-child', 'update-check-entry', 'extend-env']) {
     writeFileSync(path.join(staged, `dist/src/internal/${entry}.js`), `export const entry = '${entry}';`);
   }
   writeFileSync(path.join(staged, 'dist/src/main.js'), "export const run = () => 'old';");
@@ -72,7 +73,7 @@ test('a missing dist directory is rejected without stamping the manifest', (t) =
   const { staged } = fixture(t);
   rmSync(path.join(staged, 'dist'), { recursive: true });
   assert.throws(() => stampRuntime(staged), /dist\/src\/internal\/bin\.js, dist\/src\/internal\/daemon\.js, .* are missing or empty.*pnpm build/);
-  assert.deepEqual(manifest(staged), { name: 'agent-device', version: '0.21.15' });
+  assert.deepEqual(manifest(staged), { name: 'silicon-extend-engine', version: '0.21.15' });
 });
 
 for (const entry of REQUIRED_ENTRIES) {
@@ -80,7 +81,7 @@ for (const entry of REQUIRED_ENTRIES) {
     const { staged } = fixture(t);
     rmSync(path.join(staged, entry));
     assert.throws(() => stampRuntime(staged), (error) => error.message.includes(`${entry} is missing or empty`));
-    assert.deepEqual(manifest(staged), { name: 'agent-device', version: '0.21.15' });
+    assert.deepEqual(manifest(staged), { name: 'silicon-extend-engine', version: '0.21.15' });
   });
 }
 
@@ -105,16 +106,16 @@ for (const [chunk, importer] of [
   });
 }
 
-test("a staged runtime behind Extend's entry stamps, and is rejected without agent-device's own entry", (t) => {
+test("a staged runtime behind Extend's entry stamps, and is rejected without the engine's own entry", (t) => {
   const { staged } = fixture(t);
   const bin = path.join(staged, 'bin');
-  writeFileSync(path.join(bin, 'agent-device-cli.mjs'), readFileSync(path.join(bin, 'agent-device.mjs')));
-  cpSync(path.join(here, 'runtime-entry.mjs'), path.join(bin, 'agent-device.mjs'));
+  writeFileSync(path.join(bin, 'extend-engine-cli.mjs'), readFileSync(path.join(bin, 'extend-engine.mjs')));
+  cpSync(path.join(here, 'runtime-entry.mjs'), path.join(bin, 'extend-engine.mjs'));
   assert.match(stampRuntime(staged), STAMPED_VERSION);
-  rmSync(path.join(bin, 'agent-device-cli.mjs'));
+  rmSync(path.join(bin, 'extend-engine-cli.mjs'));
   const stamped = manifest(staged).version;
   assert.throws(() => stampRuntime(staged), (error) =>
-    error.message.includes('bin/agent-device.mjs imports ./agent-device-cli.mjs') && error.message.includes('build is incomplete'));
+    error.message.includes('bin/extend-engine.mjs imports ./extend-engine-cli.mjs') && error.message.includes('build is incomplete'));
   assert.equal(manifest(staged).version, stamped, 'a rejected runtime keeps its previous manifest');
 });
 
@@ -143,7 +144,7 @@ test('the CLI fails loudly, leaving the manifest alone, when the runtime is inco
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
   assert.match(result.stderr, /daemon\.js is missing or empty.*pnpm build/);
-  assert.deepEqual(manifest(staged), { name: 'agent-device', version: '0.21.15' });
+  assert.deepEqual(manifest(staged), { name: 'silicon-extend-engine', version: '0.21.15' });
 });
 
 test('the CLI without arguments prints usage and fails', () => {
@@ -159,7 +160,7 @@ test('every internal entry the fork builds is required, since each is loaded by 
   assert.deepEqual(entries.filter((entry) => !REQUIRED_ENTRIES.includes(entry)), []);
 });
 
-test('the built fork passes the completeness check', { skip: !existsSync(path.join(vendored, 'dist/src/internal/daemon.js')) && 'vendor/agent-device is not built' }, (t) => {
+test('the built fork passes the completeness check', { skip: !existsSync(path.join(vendored, 'dist/src/internal/daemon.js')) && 'vendor/extend-engine is not built' }, (t) => {
   const staged = mkdtempSync(path.join(os.tmpdir(), 'extend-runtime-real-'));
   t.after(() => rmSync(staged, { recursive: true, force: true }));
   for (const name of ['bin', 'dist', 'package.json']) cpSync(path.join(vendored, name), path.join(staged, name), { recursive: true });

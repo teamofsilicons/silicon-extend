@@ -250,7 +250,7 @@ func runAudioProbe(durationMs: Int, bucketMs: Int, outPath: String) throws -> Au
   let writer = AudioProbeStatusWriter(outPath: outPath, durationMs: durationMs, bucketMs: bucketMs)
   let output = AudioProbeStreamOutput(writer: writer)
   let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
-  let queue = DispatchQueue(label: "com.callstack.agent-device.audio-probe")
+  let queue = DispatchQueue(label: "com.teamofsilicons.extend.audio-probe")
   try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: queue)
 
   let startSemaphore = DispatchSemaphore(value: 0)

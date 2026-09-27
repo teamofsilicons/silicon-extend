@@ -25,7 +25,7 @@ describe('the liveness check', () => {
     // empty test plan, or a `-skip-testing:` entry that swallowed the suite all exit 0.
     const failure = livenessFailure({ result: 'Passed', totalTestCount: 0 }, 153);
     expect(failure).toContain('executed no tests');
-    expect(failure).toContain('AGENT_DEVICE_XCUITEST_INCLUDE_UNIT_TESTS');
+    expect(failure).toContain('EXTEND_ENGINE_XCUITEST_INCLUDE_UNIT_TESTS');
     expect(failure).toContain('-skip-testing');
   });
 

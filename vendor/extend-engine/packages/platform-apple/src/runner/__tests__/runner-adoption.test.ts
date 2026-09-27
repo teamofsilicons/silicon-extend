@@ -313,7 +313,7 @@ test('adoption accepts a legacy lease whose live pid is runner-shaped', async ()
   writeStaleLease({ runnerStartTime: null });
   mockIsProcessAlive.mockReturnValue(true);
   mockReadProcessCommand.mockReturnValue(
-    'xcodebuild test-without-building -xctestrun /tmp/AgentDeviceRunner.env.session-x.xctestrun',
+    'xcodebuild test-without-building -xctestrun /tmp/SiliconExtendHelper.env.session-x.xctestrun',
   );
   mockSendRunnerCommandOnce.mockResolvedValue(new Response(JSON.stringify({ ok: true })));
 

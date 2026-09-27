@@ -81,7 +81,7 @@ object Scripts {
     }
 
     /**
-     * `batch --steps` JSON: an array of `{"command": "click", "args": ["@e2"]}`. agent-device's
+     * `batch --steps` JSON: an array of `{"command": "click", "args": ["@e2"]}`. The device engine's
      * legacy `positionals`/`flags` form is accepted too; its structured `input` form isn't.
      */
     fun parseBatch(json: String): List<Step> {
@@ -98,7 +98,7 @@ object Scripts {
                 ?: throw CommandFailure.invalid("batch step ${i + 1} has no \"command\"")
             if ("input" in obj) {
                 throw CommandFailure.invalid(
-                    "batch step ${i + 1} uses agent-device's structured \"input\"; the Android app takes CLI tokens: {\"command\":\"$command\",\"args\":[…]}",
+                    "batch step ${i + 1} uses the structured \"input\" form; Silicon Extend's Android app takes the command's words: {\"command\":\"$command\",\"args\":[…]}",
                 )
             }
             val tokens = (obj["args"] ?: obj["positionals"]) as? JsonArray ?: JsonArray(emptyList())

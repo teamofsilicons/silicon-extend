@@ -291,7 +291,7 @@ test('refuses a platform-less request when the workspace holds several implicit 
       assert.deepEqual(error.details?.sessions, [`cwd:${scopeId}:ios`, `cwd:${scopeId}:android`]);
       assert.deepEqual(error.details?.platforms, ['ios', 'android']);
       const hint = String(error.details?.hint);
-      assert.match(hint, /agent-device session list/);
+      assert.match(hint, /extend session list/);
       assert.match(hint, /--platform ios or --platform android/);
       assert.match(hint, /--session <address>/);
       return true;

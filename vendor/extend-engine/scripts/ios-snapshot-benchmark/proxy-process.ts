@@ -9,7 +9,7 @@ export async function startProxy(repoRoot: string, stateDir: string): Promise<Pr
   const child = spawn(
     process.execPath,
     [
-      'bin/agent-device.mjs',
+      'bin/extend-engine.mjs',
       'proxy',
       '--state-dir',
       stateDir,

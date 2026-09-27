@@ -5,18 +5,19 @@ export const SCREENSHOT_SCALE_LIMITS = { min: 0.01, max: 1 } as const;
 /**
  * `--max-size` shipped in released CLIs, `.ad` scripts, Node options
  * (`maxSize`), request flags (`screenshotMaxSize`), and the derived
- * `AGENT_DEVICE_SCREENSHOT_MAX_SIZE` env var. Every surface that used to honor
+ * `EXTEND_ENGINE_SCREENSHOT_MAX_SIZE` env var (the fork's `AGENT_DEVICE_SCREENSHOT_MAX_SIZE`). Every surface that used to honor
  * it must refuse with this migration guidance — sizing must never disappear
  * silently.
  */
 export const RETIRED_SCREENSHOT_MAX_SIZE = {
   flagKey: 'screenshotMaxSize',
   cliToken: '--max-size',
-  envVar: 'AGENT_DEVICE_SCREENSHOT_MAX_SIZE',
+  envVar: 'EXTEND_ENGINE_SCREENSHOT_MAX_SIZE',
+  legacyEnvVar: 'AGENT_DEVICE_SCREENSHOT_MAX_SIZE',
   publicOptionKey: 'maxSize',
   migration: {
     screenshot:
-      'screenshot --max-size was removed; use --scale <0.01-1> (or AGENT_DEVICE_SCREENSHOT_SCALE) to downscale proportionally',
+      'screenshot --max-size was removed; use --scale <0.01-1> (or EXTEND_ENGINE_SCREENSHOT_SCALE) to downscale proportionally',
     record: 'record --max-size was removed; recordings capture at native resolution',
   },
 } as const;
@@ -154,7 +155,7 @@ export const SCREENSHOT_SPECIFIC_FLAG_DEFINITIONS: readonly ScreenshotSpecificFl
     max: SCREENSHOT_SCALE_LIMITS.max,
     usageLabel: '--scale <0.01-1>',
     usageDescription:
-      'Screenshot: resize both dimensions by this factor (or use AGENT_DEVICE_SCREENSHOT_SCALE)',
+      'Screenshot: resize both dimensions by this factor (or use EXTEND_ENGINE_SCREENSHOT_SCALE)',
     projectConfig: true,
     recorded: true,
   },

@@ -250,7 +250,7 @@ async fn briefcase_and_ting_through_real_obo() {
 
     // Ting: the recipient registers Extend with its own proof, then a request reaches its inbox.
     let ting = TingNotifier::new(fx.s("/ting/url"), iam.clone());
-    ting.register_recipient(&chef, None)
+    ting.register_recipient(&chef, false, None)
         .await
         .expect("subscriptions.register as si:chef");
     let request_id = Uuid::now_v7();
@@ -265,6 +265,10 @@ async fn briefcase_and_ting_through_real_obo() {
             to: "si:chef",
             session_id: None,
             reason: &reason,
+            routed_to: Some(extend_protocol::model::RequestRoute::Holder),
+            team: Some("acme"),
+            link: None,
+            from_hidden: false,
         },
         None,
     )

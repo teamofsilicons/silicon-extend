@@ -124,7 +124,7 @@ function expectedManagedAgentBrowserInstall(stateDir: string) {
     runtimeHomeDir:
       process.platform === 'win32'
         ? path.join(installDir, 'home')
-        : path.join(os.tmpdir(), 'agent-device-web', sha1Short(installDir)),
+        : path.join(os.tmpdir(), 'extend-engine-web', sha1Short(installDir)),
     socketDir: path.join(os.tmpdir(), 'adw', sha1Short(installDir)),
   };
 }

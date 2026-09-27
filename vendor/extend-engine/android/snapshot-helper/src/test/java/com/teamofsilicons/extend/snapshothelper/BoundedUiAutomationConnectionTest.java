@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import { snapshotSourceError } from './errors.ts';
 import type { SnapshotSourceDeadline } from './deadline.ts';
 import {
@@ -50,7 +51,8 @@ export async function ensureSnapshotBridgeBinary(
   );
   const toolchain = await readSnapshotSourceToolchain(input.host, input.runtime, deadline);
   const cacheRoot =
-    input.cacheRoot ?? path.join(input.host.homeDirectory(), '.agent-device', 'snapshot-source');
+    input.cacheRoot ??
+    path.join(input.host.homeDirectory(), ...ENGINE_HOME_DIRECTORY_SEGMENTS, 'snapshot-source');
   const entry = await ensureNativeBuildCacheEntry({
     host: input.host,
     deadline,

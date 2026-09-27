@@ -1,4 +1,4 @@
-package com.callstack.agentdevice.snapshothelper;
+package com.teamofsilicons.extend.snapshothelper;
 
 final class AccessibilityCaptureStabilizer {
   private static final long RETRY_INTERVAL_MS = 50;

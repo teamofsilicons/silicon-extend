@@ -101,7 +101,7 @@ static RunnerSynthesizedTextEntryResult *RunnerSynthesizeTextWithMode(
 
     if (replace) {
       id selectionRecord = ((RunnerTextMsgSendInit)objc_msgSend)(
-        [bridge.core.recordClass alloc], bridge.initRecordSelector, @"agent-device-fill-select-all"
+        [bridge.core.recordClass alloc], bridge.initRecordSelector, @"silicon-extend-fill-select-all"
       );
       id selectionPath =
         ((RunnerTextMsgSendInitPath)objc_msgSend)([bridge.core.pathClass alloc], bridge.initPathSelector);
@@ -137,7 +137,7 @@ static RunnerSynthesizedTextEntryResult *RunnerSynthesizeTextWithMode(
     id record = ((RunnerTextMsgSendInit)objc_msgSend)(
       [bridge.core.recordClass alloc],
       bridge.initRecordSelector,
-      replace ? @"agent-device-fill-text" : @"agent-device-type"
+      replace ? @"silicon-extend-fill-text" : @"silicon-extend-type"
     );
     id path = ((RunnerTextMsgSendInitPath)objc_msgSend)([bridge.core.pathClass alloc], bridge.initPathSelector);
     if (record == nil || path == nil) {

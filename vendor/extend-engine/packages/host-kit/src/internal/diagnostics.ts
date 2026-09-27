@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 import { redactDiagnosticData } from '@agent-device/kernel/redaction';
 import type { DiagnosticsRecordRef } from '@agent-device/kernel/errors';
 
@@ -156,7 +157,7 @@ export function emitDiagnostic(event: DiagnosticEventInput): void {
       appendDiagnosticLine(scope, scope.traceLogPath, fileLine);
     }
     if (scope.debug && !scope.logPath && !scope.traceLogPath) {
-      process.stderr.write(`[agent-device][diag] ${fileLine}`);
+      process.stderr.write(`[extend-engine][diag] ${fileLine}`);
     }
   } catch {
     // Best-effort diagnostics should not break request flow.
@@ -235,7 +236,13 @@ export function flushDiagnosticsToSessionFile(
 
     const sessionDir = sanitizePathPart(scope.session ?? 'default');
     const dayDir = new Date().toISOString().slice(0, 10);
-    const baseDir = path.join(os.homedir(), '.agent-device', 'logs', sessionDir, dayDir);
+    const baseDir = path.join(
+      os.homedir(),
+      ...ENGINE_HOME_DIRECTORY_SEGMENTS,
+      'logs',
+      sessionDir,
+      dayDir,
+    );
     fs.mkdirSync(baseDir, { recursive: true });
     const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
     const filePath = path.join(baseDir, `${timestamp}-${scope.diagnosticId}.ndjson`);

@@ -4,13 +4,16 @@
 //! Tokio runtime in the background and the two talk through [`AgentHandle`]: status comes in as a
 //! watch, taps go out as [`UiAction`]s.
 //!
-//! * Menu: the headline ("Pairing code: 4F9C2A", "Paired to c:alice", "si:chef is using this
-//!   Mac"), the test environment, **Stop** / **Done** (for this computer and for each device it
-//!   carries), Show Silicon Extend…, Start at login, Revoke pair…, Quit.
+//! * Menu: the headline ("Pairing code: 4F9C2A", "Paired to c:alice and c:bob", "si:chef is
+//!   using this Mac"), each Carbon's pair, the test environment, **Stop** / **Done** (for this
+//!   computer and for each device it carries), Reconnect for a pair another connection took over,
+//!   Show Silicon Extend…, Start at login, Pair with another Carbon…, Revoke pair…, Quit.
 //! * Window: the big pairing code and how to use it, the setup steps with buttons that open the
-//!   right settings page, the device and its Carbon, the test-environment banner, devices this
-//!   computer carries, start at login with a switch to turn it off, "Download the update" when
-//!   Extend needs a newer app, and Revoke pair with a confirmation.
+//!   right settings page, the Carbons it is paired to (each with Revoke pair, confirmed, and
+//!   Reconnect when taken over), "Pair with another Carbon" (after the shared-computer warning)
+//!   and its code, Silicons' requests to wake it, the test-environment banner, devices this
+//!   computer carries (and whether they are awake), start at login with a switch to turn it off,
+//!   and "Download the update" when Extend needs a newer app.
 //! * Banner: a small always-on-top strip, "si:chef is using this Mac  [Stop]", shown for as long
 //!   as a Silicon is using the computer or a device it carries (one row each), and "… needs you:
 //!   <reason>  [Done]" during a takeover. It never takes focus by itself, so it doesn't get in the
@@ -290,6 +293,15 @@ fn page_state(s: &AgentStatus, extras: &PageExtras) -> String {
         .unwrap_or_default()
         .into();
     v["download_error"] = extras.download_error.clone().into();
+    // In memory only (never in status.json): the wake requests and which carried device a
+    // Silicon asked to wake.
+    v["wake_requests"] = serde_json::to_value(&s.wake_requests).unwrap_or_default();
+    if let Some(list) = v["attached"].as_array_mut() {
+        for (a, info) in list.iter_mut().zip(&s.attached) {
+            a["wake_requested"] = info.wake_requested.into();
+        }
+    }
+    v["share_warning"] = share_warning(&os_user()).into();
     let os_label = if cfg!(target_os = "macos") {
         "Mac"
     } else if cfg!(windows) {
@@ -332,11 +344,10 @@ impl Ui {
             let _ = menu.append(item);
         };
         add(&MenuItem::with_id("headline", s.headline(), false, None));
-        if let Some(d) = &s.device
-            && let Some(name) = &d.name
-            && s.phase != Phase::Enrolling
-        {
-            add(&MenuItem::with_id("name", format!("This {word}: {name}"), false, None));
+        if s.phase != Phase::Enrolling {
+            for line in pair_menu(s, word) {
+                add(&MenuItem::with_id(line.id, line.label, line.enabled, None));
+            }
         }
         if let Some(env) = &s.environment {
             add(&MenuItem::with_id(
@@ -373,10 +384,15 @@ impl Ui {
             self.autostart.on,
             None,
         ));
-        if s.phase == Phase::Superseded {
-            add(&MenuItem::with_id("reconnect", "Connect this copy instead", true, None));
+        if paired(s) && s.phase == Phase::Online && s.adding_pair.is_none() {
+            add(&MenuItem::with_id(
+                "pair_another",
+                "Pair with another Carbon…",
+                true,
+                None,
+            ));
         }
-        if s.device.is_some() && s.phase != Phase::Enrolling {
+        if !s.pairs.is_empty() && s.phase != Phase::Enrolling {
             add(&MenuItem::with_id("revoke", "Revoke pair…", true, None));
         }
         add(&PredefinedMenuItem::separator());
@@ -639,6 +655,9 @@ impl Ui {
             match action {
                 "stop" => self.send(UiAction::Stop { target: Some(device) }),
                 "done" => self.send(UiAction::TakeoverDone { target: Some(device) }),
+                "reconnect" => self.send(UiAction::Reconnect {
+                    device_id: Some(device),
+                }),
                 _ => {}
             }
             return;
@@ -652,13 +671,20 @@ impl Ui {
                 self.show_banner(target);
             }
             "revoke" => {
-                // The confirmation lives in the window.
+                // The confirmation lives in the window (one pair), or the list of Carbons does.
                 self.show_main(target);
                 if let Some((_, v)) = &self.main {
-                    let _ = v.evaluate_script("document.getElementById('confirm').classList.remove('hidden')");
+                    let _ = v.evaluate_script("window.__askRevoke && window.__askRevoke()");
                 }
             }
-            "reconnect" => self.send(UiAction::Reconnect),
+            "pair_another" => {
+                // The shared-computer warning lives in the window.
+                self.show_main(target);
+                if let Some((_, v)) = &self.main {
+                    let _ = v.evaluate_script("window.__askPairAnother && window.__askPairAnother()");
+                }
+            }
+            "reconnect" => self.send(UiAction::Reconnect { device_id: None }),
             "autostart" => {
                 let on = !crate::autostart::is_installed();
                 self.set_autostart(on);
@@ -692,8 +718,14 @@ impl Ui {
             "banner_restore" if banner => self.set_banner_minimized(false),
             "stop" => self.send(UiAction::Stop { target: device() }),
             "takeover_done" => self.send(UiAction::TakeoverDone { target: device() }),
-            "revoke" if !banner => self.send(UiAction::RevokePair),
-            "reconnect" => self.send(UiAction::Reconnect),
+            "revoke" if !banner => {
+                if let Some(device_id) = device() {
+                    self.send(UiAction::RevokePair { device_id });
+                }
+            }
+            "reconnect" => self.send(UiAction::Reconnect { device_id: device() }),
+            "pair_another" if !banner => self.send(UiAction::PairAnother),
+            "cancel_pair_another" if !banner => self.send(UiAction::CancelPairAnother),
             "reprobe" => self.send(UiAction::Reprobe),
             "set_autostart" if !banner => {
                 if let Some(on) = msg.get("on").and_then(|v| v.as_bool()) {
@@ -714,7 +746,7 @@ impl Ui {
     fn quit(&mut self, control_flow: &mut ControlFlow) {
         self.handle.shutdown.cancel();
         // Gone from the screen at once; then the agent gets the time it gives its cleanups
-        // (closing the agent-device sessions still open: an iPhone keeps showing "Automation
+        // (closing the device engine sessions still open: an iPhone keeps showing "Automation
         // Running" until its session is closed), and its runtime a moment to wind down.
         self.tray = None;
         for (window, _) in self.main.iter().chain(self.banner.iter()) {
@@ -742,9 +774,61 @@ fn open_settings(step: &str) {
     let _ = step;
 }
 
-/// Paired, and past pairing: the computer has a device and a Carbon.
+/// Paired, and past pairing: the computer has at least one Carbon's pair.
 fn paired(s: &AgentStatus) -> bool {
-    s.device.is_some() && !matches!(s.phase, Phase::Enrolling | Phase::Starting | Phase::NotRunning)
+    !s.pairs.is_empty() && !matches!(s.phase, Phase::Enrolling | Phase::Starting | Phase::NotRunning)
+}
+
+/// The account a Silicon's terminal runs as here.
+fn os_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "this computer's account".into())
+}
+
+/// What the Carbon reads before a second Carbon pairs this computer. The terminal runs as the
+/// computer's own account; only the Silicons of the Carbon who installed Silicon Extend get it
+/// (Carbon decision, 2026-09-27), but everyone's Silicons use the screen, keyboard and apps.
+fn share_warning(user: &str) -> String {
+    format!(
+        "Silicons the Carbon who installed Silicon Extend here gives access to use its terminal as {user}, so they can reach what {user} can, including this app's other pairs. Silicons any Carbon gives access to use the screen, the keyboard and the apps, and can see what others leave open. Share a computer only with Carbons you trust."
+    )
+}
+
+/// The menu's lines for the Carbons this computer is paired to: one each once there are several
+/// (with Reconnect for a pair another connection took over).
+fn pair_menu(s: &AgentStatus, word: &str) -> Vec<MenuLine> {
+    let mut out = Vec::new();
+    let many = s.pairs.len() > 1;
+    for p in &s.pairs {
+        let owner = p.owner.as_deref().unwrap_or("a Carbon");
+        if many || p.name.is_some() {
+            let label = match (&p.name, many) {
+                (Some(name), true) => format!("{owner}: {name}"),
+                (Some(name), false) => format!("This {word}: {name}"),
+                (None, _) => owner.to_owned(),
+            };
+            out.push(MenuLine {
+                id: format!("pair:{}", p.device_id),
+                label,
+                enabled: false,
+            });
+        }
+        if p.phase == crate::status::PairPhase::Superseded {
+            out.push(MenuLine {
+                id: format!("reconnect:{}", p.device_id),
+                label: if many {
+                    format!("Reconnect {owner}'s pair")
+                } else {
+                    "Connect this copy again".into()
+                },
+                enabled: true,
+            });
+        }
+    }
+    out
 }
 
 /// A line of the tray menu.
@@ -863,6 +947,9 @@ mod tests {
             silicon_id: "si:chef".into(),
             session_id: "a3f".into(),
             since: String::new(),
+            pair: None,
+            carbon: None,
+            side: None,
         });
         assert_eq!(icon_state(&s), IconState::InUse);
     }
@@ -931,6 +1018,10 @@ mod tests {
             takeover: None,
             setup: None,
             error: None,
+            awake: None,
+            sleep_state: None,
+            host: None,
+            wake_requested: false,
         }
     }
 
@@ -949,6 +1040,9 @@ mod tests {
             silicon_id: "si:chef".into(),
             session_id: "b40".into(),
             since: String::new(),
+            pair: None,
+            carbon: None,
+            side: None,
         });
         s.attached = vec![phone.clone(), tv.clone()];
         let menu = attached_menu(&s);
@@ -989,6 +1083,9 @@ mod tests {
             silicon_id: "si:chef".into(),
             session_id: "b40".into(),
             since: String::new(),
+            pair: None,
+            carbon: None,
+            side: None,
         });
         let phone_only = AgentStatus {
             attached: vec![phone.clone()],
@@ -1042,6 +1139,9 @@ mod tests {
                 silicon_id: "si:alpha".into(),
                 session_id: session.into(),
                 since: String::new(),
+                pair: None,
+                carbon: None,
+                side: None,
             }),
             ..Default::default()
         }
@@ -1106,6 +1206,75 @@ mod tests {
     fn messages_end_in_one_full_stop() {
         assert_eq!(sentence("Move it to Applications."), "Move it to Applications.");
         assert_eq!(sentence("permission denied"), "permission denied.");
+    }
+
+    #[test]
+    fn each_carbon_gets_a_menu_line_and_a_taken_over_pair_a_reconnect() {
+        use crate::status::{PairInfo, PairPhase};
+        let one = AgentStatus {
+            phase: Phase::Online,
+            pairs: vec![PairInfo {
+                device_id: "7c1e09ab".into(),
+                name: Some("Studio Mac".into()),
+                owner: Some("c:alice".into()),
+                phase: PairPhase::Online,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let lines = pair_menu(&one, "Mac");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].label, "This Mac: Studio Mac");
+        let mut two = one.clone();
+        two.pairs.push(PairInfo {
+            device_id: "0d44e1f2".into(),
+            name: Some("Family Mac".into()),
+            owner: Some("c:bob".into()),
+            phase: PairPhase::Superseded,
+            ..Default::default()
+        });
+        let lines = pair_menu(&two, "Mac");
+        let labels: Vec<&str> = lines.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["c:alice: Studio Mac", "c:bob: Family Mac", "Reconnect c:bob's pair"]
+        );
+        assert_eq!(lines[2].id, "reconnect:0d44e1f2");
+        assert!(lines[2].enabled && !lines[0].enabled);
+        let (action, device) = lines[2].id.split_once(':').unwrap();
+        assert_eq!(action, "reconnect");
+        assert!(device.parse::<DeviceId>().is_ok());
+    }
+
+    #[test]
+    fn the_shared_computer_warning_names_the_account_and_no_carbon() {
+        let w = share_warning("alice");
+        assert!(w.contains("use its terminal as alice"), "{w}");
+        assert!(w.contains("including this app's other pairs"), "{w}");
+        assert!(w.ends_with("Share a computer only with Carbons you trust."), "{w}");
+        // The page shows it before any code, and has a Revoke pair per Carbon.
+        assert!(PAGE.contains("data-action=\"pair_another\""));
+        assert!(PAGE.contains("id=\"share-body\""));
+        assert!(PAGE.contains("data-action=\"ask_revoke\" data-target="));
+    }
+
+    #[test]
+    fn wake_requests_reach_the_page_but_not_the_status_file() {
+        let s = AgentStatus {
+            phase: Phase::Online,
+            wake_requests: vec![crate::status::WakeInfo {
+                wake_id: "w".into(),
+                pair: "7c1e09ab".into(),
+                carbon: Some("c:alice".into()),
+                silicon_id: Some("si:chef".into()),
+                reason: Some("Check the order screen".into()),
+                expires_at: "2026-09-27T10:32:00Z".into(),
+            }],
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::from_str(&page_state(&s, &PageExtras::default())).unwrap();
+        assert_eq!(v["wake_requests"][0]["reason"], "Check the order screen");
+        assert!(!serde_json::to_string(&s.for_file()).unwrap().contains("order screen"));
     }
 
     #[test]

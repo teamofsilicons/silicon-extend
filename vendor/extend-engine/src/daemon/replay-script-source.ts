@@ -2,7 +2,7 @@ import { AppError } from '@agent-device/kernel/errors';
 import type { ReplayScriptSourceBundle } from '@agent-device/contracts/replay';
 
 export const REPLAY_SCRIPT_SOURCE_REQUIRED_MESSAGE =
-  'This replay request carries no script sources. Replay scripts are read by the client and sent with the request; upgrade the agent-device client that issued it to a version that sends script sources.';
+  'This replay request carries no script sources. Replay scripts are read by the client and sent with the request; update the device engine client that sent it to a version that sends script sources.';
 
 export function readReplayScriptSourceFile(
   bundle: ReplayScriptSourceBundle,

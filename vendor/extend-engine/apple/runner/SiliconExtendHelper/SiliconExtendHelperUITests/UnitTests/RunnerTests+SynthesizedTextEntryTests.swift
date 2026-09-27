@@ -42,7 +42,7 @@ extension RunnerTests {
     let textField = app.textFields["agent-device-hardware-keyboard-input"]
     XCTAssertTrue(textField.waitForExistence(timeout: appExistenceTimeout))
     mainOwned.app = app
-    mainOwned.bundleId = "com.callstack.agentdevice.runner"
+    mainOwned.bundleId = "com.teamofsilicons.extend.helper"
     mainOwned.processIdentifier = try XCTUnwrap(Self.processIdentifier(of: app))
     let focusCommand = try runnerCommandFixture(
       #"{"command":"tap","commandId":"tap-replacement-field","selectorKey":"id","selectorValue":"agent-device-hardware-keyboard-input"}"#

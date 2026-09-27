@@ -234,8 +234,8 @@ extension RunnerTests {
   private static func loadAXRecoveryFixture() throws -> AXRecoveryFixture {
     let fixtureURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent() // UnitTests
-      .deletingLastPathComponent() // AgentDeviceRunnerUITests
-      .deletingLastPathComponent() // AgentDeviceRunner
+      .deletingLastPathComponent() // SiliconExtendHelperUITests
+      .deletingLastPathComponent() // SiliconExtendHelper
       .deletingLastPathComponent() // runner
       .deletingLastPathComponent() // apple
       .deletingLastPathComponent() // repo root

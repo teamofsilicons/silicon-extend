@@ -173,7 +173,7 @@ export const TARGET_FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     type: 'string',
     usageLabel: '--bearer-token <token>',
     usageDescription:
-      'metro prepare: host bridge bearer token (or AGENT_DEVICE_METRO_BEARER_TOKEN; falls back to AGENT_DEVICE_DAEMON_AUTH_TOKEN)',
+      'metro prepare: host bridge bearer token (or EXTEND_ENGINE_METRO_BEARER_TOKEN; falls back to EXTEND_ENGINE_DAEMON_AUTH_TOKEN)',
     projectConfig: false,
     recorded: false,
   },

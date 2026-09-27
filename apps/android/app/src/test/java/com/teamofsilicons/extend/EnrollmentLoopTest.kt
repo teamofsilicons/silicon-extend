@@ -116,6 +116,21 @@ class EnrollmentLoopTest {
         assertFalse(ui.error!!.contains("Can't reach"))
     }
 
+    @Test fun aFinalRefusalEndsTheLoopInsteadOfAskingAgain() = runTest {
+        // "Pair with another Carbon" against a 1.0 service: 404 on POST /device/enrollments.
+        val service = Service(this)
+        service.createFailure = { ApiException(404, "not_found", "No such endpoint") }
+        val wake = Channel<Unit>(Channel.CONFLATED)
+        val loop = EnrollmentLoop(
+            port = service, netWake = wake, ui = { }, serviceUrl = { "http://10.0.2.2:8480" },
+            pace = Backoff(random = Ceiling), clock = { BASE + testScheduler.currentTime }, zone = ZoneOffset.UTC, log = { _, _ -> },
+            giveUp = { e -> e is ApiException && e.status == 404 },
+        )
+        val thrown = runCatching { loop.run() }.exceptionOrNull()
+        assertTrue(thrown is ApiException && thrown.status == 404)
+        assertEquals(1, service.creates.size)
+    }
+
     @Test fun theBackOffResetsOnlyOnceAnEnrollmentSocketHasOpened() = runTest {
         val service = Service(this)
         service.socket = { n ->

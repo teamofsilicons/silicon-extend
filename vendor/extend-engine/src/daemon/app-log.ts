@@ -28,7 +28,7 @@ export function getAppLogPathMetadata(outPath: string): {
 
 export function appendAppLogMarker(outPath: string, marker: string): void {
   ensureAppLogPath(outPath);
-  const line = `[agent-device][mark][${new Date().toISOString()}] ${marker.trim() || 'marker'}\n`;
+  const line = `[extend-engine][mark][${new Date().toISOString()}] ${marker.trim() || 'marker'}\n`;
   const descriptor = openVerifiedFileForAppend(outPath);
   try {
     fs.writeFileSync(descriptor, line, 'utf8');

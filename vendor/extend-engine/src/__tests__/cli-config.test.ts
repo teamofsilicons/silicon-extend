@@ -12,14 +12,14 @@ import { makeTempWorkspace } from './cli-config-fixtures.ts';
 
 test('CLI merges config defaults with precedence user < project < env < CLI', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(home, '.agent-device', 'config.json'),
+    path.join(home, '.silicon-extend', 'engine', 'config.json'),
     JSON.stringify({ platform: 'ios', session: 'home-session', snapshotDepth: 2 }),
     'utf8',
   );
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ session: 'project-session', snapshotDepth: 4 }),
     'utf8',
   );
@@ -68,7 +68,7 @@ test('screenshot scale supports env defaults with CLI precedence', async () => {
 
 test('retired screenshot max-size env var fails closed for sizing commands only', async () => {
   const { root, home, project } = makeTempWorkspace();
-  const env = { HOME: home, AGENT_DEVICE_SCREENSHOT_MAX_SIZE: '900' };
+  const env = { HOME: home, EXTEND_ENGINE_SCREENSHOT_MAX_SIZE: '900' };
 
   const screenshot = await runCliCapture(['screenshot', 'env.png'], {
     cwd: project,
@@ -76,7 +76,7 @@ test('retired screenshot max-size env var fails closed for sizing commands only'
     defaultResponse: { ok: true, data: { path: 'env.png' } },
   });
   assert.equal(screenshot.code, 1);
-  assert.match(screenshot.stderr, /AGENT_DEVICE_SCREENSHOT_MAX_SIZE was removed/);
+  assert.match(screenshot.stderr, /EXTEND_ENGINE_SCREENSHOT_MAX_SIZE was removed/);
   assert.match(screenshot.stderr, /use --scale/);
   assert.equal(screenshot.calls.length, 0);
 
@@ -86,7 +86,7 @@ test('retired screenshot max-size env var fails closed for sizing commands only'
     defaultResponse: { ok: true, data: {} },
   });
   assert.equal(record.code, 1);
-  assert.match(record.stderr, /AGENT_DEVICE_SCREENSHOT_MAX_SIZE was removed/);
+  assert.match(record.stderr, /EXTEND_ENGINE_SCREENSHOT_MAX_SIZE was removed/);
 
   const unaffected = await runCliCapture(['devices', '--json'], {
     cwd: project,
@@ -95,13 +95,22 @@ test('retired screenshot max-size env var fails closed for sizing commands only'
   });
   assert.equal(unaffected.code, null);
 
+  // The fork's name for the variable fails closed the same way, and the message names it.
+  const legacy = await runCliCapture(['screenshot', 'env.png'], {
+    cwd: project,
+    env: { HOME: home, AGENT_DEVICE_SCREENSHOT_MAX_SIZE: '900' },
+    defaultResponse: { ok: true, data: { path: 'env.png' } },
+  });
+  assert.equal(legacy.code, 1);
+  assert.match(legacy.stderr, /AGENT_DEVICE_SCREENSHOT_MAX_SIZE was removed/);
+
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('retired screenshotMaxSize config key is refused with migration guidance', async () => {
   const { root, home, project } = makeTempWorkspace();
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ screenshotMaxSize: 900 }),
   );
 
@@ -120,9 +129,9 @@ test('retired screenshotMaxSize config key is refused with migration guidance', 
 
 test('config can set appsFilter through canonical enum values', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ appsFilter: 'user-installed' }),
     'utf8',
   );
@@ -141,9 +150,9 @@ test('config can set appsFilter through canonical enum values', async () => {
 
 test('user config can provide install-from-source GitHub Actions artifact source', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(home, '.agent-device', 'config.json'),
+    path.join(home, '.silicon-extend', 'engine', 'config.json'),
     JSON.stringify({
       platform: 'android',
       installSource: {
@@ -181,9 +190,9 @@ test('user config can provide install-from-source GitHub Actions artifact source
 
 test('command-specific config defaults are ignored for commands that do not support them', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ snapshotDepth: 4, platform: 'ios' }),
     'utf8',
   );
@@ -203,14 +212,14 @@ test('command-specific config defaults are ignored for commands that do not supp
 
 test('explicit --config path overrides default config discovery', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(home, '.agent-device', 'config.json'),
+    path.join(home, '.silicon-extend', 'engine', 'config.json'),
     JSON.stringify({ session: 'home-session' }),
     'utf8',
   );
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ session: 'project-session' }),
     'utf8',
   );
@@ -234,9 +243,9 @@ test('explicit --config path overrides default config discovery', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('AGENT_DEVICE_CONFIG loads an explicit config path', async () => {
+test('EXTEND_ENGINE_CONFIG loads an explicit config path', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   const explicitConfig = path.join(home, 'env-config.json');
   fs.writeFileSync(
     explicitConfig,
@@ -259,11 +268,11 @@ test('AGENT_DEVICE_CONFIG loads an explicit config path', async () => {
 
 test('active remote connection defaults override generic config and env for remote commands', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   const stateDir = path.join(root, 'state');
   fs.mkdirSync(path.join(stateDir, 'remote-connections'), { recursive: true });
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ session: 'project-session', platform: 'ios' }),
     'utf8',
   );
@@ -1203,9 +1212,9 @@ test('disconnect removes malformed connection state', async () => {
 
 test('config and env defaults include session lock policy flags', async () => {
   const { root, home, project } = makeTempWorkspace();
-  fs.mkdirSync(path.join(home, '.agent-device'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.silicon-extend', 'engine'), { recursive: true });
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ sessionLock: 'reject' }),
     'utf8',
   );
@@ -1226,7 +1235,7 @@ test('config and env defaults include session lock policy flags', async () => {
 test('config defaults drive bound-session metadata without env-only fallbacks', async () => {
   const { root, home, project } = makeTempWorkspace();
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ session: 'qa-ios', platform: 'ios', sessionLock: 'reject' }),
     'utf8',
   );
@@ -1264,7 +1273,7 @@ test('missing explicit config path returns parse error before daemon dispatch', 
 test('invalid config key returns parse error before daemon dispatch', async () => {
   const { root, home, project } = makeTempWorkspace();
   fs.writeFileSync(
-    path.join(project, 'agent-device.json'),
+    path.join(project, 'extend-engine.json'),
     JSON.stringify({ notARealFlag: true }),
     'utf8',
   );

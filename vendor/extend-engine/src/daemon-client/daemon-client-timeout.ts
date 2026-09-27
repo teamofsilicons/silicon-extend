@@ -15,9 +15,9 @@ import {
 } from './daemon-client-metadata.ts';
 
 const IOS_RUNNER_XCODEBUILD_KILL_PATTERNS = [
-  'xcodebuild .*AgentDeviceRunnerUITests/RunnerTests/testCommand',
-  String.raw`xcodebuild .*AgentDeviceRunner\.env\.session-`,
-  String.raw`xcodebuild build-for-testing .*apple/runner/AgentDeviceRunner/AgentDeviceRunner\.xcodeproj`,
+  'xcodebuild .*SiliconExtendHelperUITests/RunnerTests/testCommand',
+  String.raw`xcodebuild .*SiliconExtendHelper\.env\.session-`,
+  String.raw`xcodebuild build-for-testing .*apple/runner/SiliconExtendHelper/SiliconExtendHelper\.xcodeproj`,
 ];
 
 // `--platform` selectors that AFFIRMATIVELY name (or alias) an Apple device.
@@ -136,7 +136,7 @@ export function resolveRequestTimeoutHint(params: {
     // exporting there and its finished file stays retrievable by asking again. A local timeout
     // resets the daemon mid-export, where that promise would be false.
     if (command === PUBLIC_COMMANDS.record && action === 'stop') {
-      return `The remote daemon is still exporting the recording. Run agent-device record stop${
+      return `The remote daemon is still exporting the recording. Run extend record stop${
         session ? ` --session ${session}` : ''
       } again to wait for that export and receive the completed recording.`;
     }
@@ -145,7 +145,7 @@ export function resolveRequestTimeoutHint(params: {
   if (!resetDaemon) {
     const iosPrepareHint =
       appleCleanupEvidence && command === PUBLIC_COMMANDS.snapshot
-        ? ' If this was the first Apple-platform snapshot on the device, run agent-device prepare ios-runner with the same --platform before snapshot/test so runner startup is handled explicitly.'
+        ? ' If this was the first Apple-platform snapshot on the device, run extend prepare ios-runner with the same --platform before snapshot/test so runner startup is handled explicitly.'
         : '';
     const appleCleanupNote = appleCleanupEvidence
       ? ' and Apple runner work was aborted when detected'

@@ -62,7 +62,7 @@ test.each([
 ])(
   'classifies recorder exit $exitCode with pid=$pid and identity=$hasIdentity',
   async ({ exitCode, pid, hasIdentity, code }) => {
-    const root = mkdtempForTestSync('agent-device-recording-busy-');
+    const root = mkdtempForTestSync('silicon-extend-recording-busy-');
     const failed = background(pid);
     const stderr =
       'Error starting video recorder: Error Domain=NSPOSIXErrorDomain Code=16 "Resource busy"\nNSLocalizedFailureReason=Host recording is already in progress';
@@ -113,7 +113,7 @@ test('classifies a recorder exit that settles during the final identity poll', a
     return undefined;
   });
   try {
-    const root = mkdtempForTestSync('agent-device-recording-identity-deadline-');
+    const root = mkdtempForTestSync('silicon-extend-recording-identity-deadline-');
     const starting = withTransport(
       failed.process,
       async () => await startAppleSimulatorRecording(simulator, path.join(root, 'failed.mp4')),
@@ -136,7 +136,7 @@ test('classifies a recorder exit that settles during the final identity poll', a
 });
 
 test('waits for delayed output and rejects an early nonzero exit', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-ready-');
+  const root = mkdtempForTestSync('silicon-extend-recording-ready-');
   const outputPath = path.join(root, 'capture.mp4');
   const running = background(42);
   const starting = withTransport(
@@ -158,7 +158,7 @@ test('waits for delayed output and rejects an early nonzero exit', async () => {
 });
 
 test('cancellation during readiness kills and settles with the exact reason', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-cancel-');
+  const root = mkdtempForTestSync('silicon-extend-recording-cancel-');
   const controller = new AbortController();
   const reason = new Error('cancel simulator readiness');
   const running = background(44);
@@ -207,7 +207,7 @@ test.each([
 ])(
   'discards a transport rejection that arrives when the start was aborted %s',
   async ({ abortedInStart }) => {
-    const root = mkdtempForTestSync('agent-device-recording-rejected-start-');
+    const root = mkdtempForTestSync('silicon-extend-recording-rejected-start-');
     const controller = new AbortController();
     const reason = new Error('cancel simulator transport start');
     let rejectStart: ((error: unknown) => void) | undefined;
@@ -239,7 +239,7 @@ test.each([
 );
 
 test('resolved provider acquisition aborted before publication removes partial output and settles', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-acquired-abort-');
+  const root = mkdtempForTestSync('silicon-extend-recording-acquired-abort-');
   const outputPath = path.join(root, 'capture.mp4');
   fs.writeFileSync(outputPath, 'partial recording');
   const controller = new AbortController();
@@ -265,7 +265,7 @@ test('resolved provider acquisition aborted before publication removes partial o
 });
 
 test('post-publication abort does not kill the adopted process', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-adopted-');
+  const root = mkdtempForTestSync('silicon-extend-recording-adopted-');
   const outputPath = path.join(root, 'capture.mp4');
   fs.writeFileSync(outputPath, 'recording');
   const controller = new AbortController();
@@ -282,7 +282,7 @@ test('post-publication abort does not kill the adopted process', async () => {
 });
 
 test('publishes the post-exec simulator identity after readiness', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-post-exec-');
+  const root = mkdtempForTestSync('silicon-extend-recording-post-exec-');
   const outputPath = path.join(root, 'capture.mp4');
   const running = background(47, `xcrun simctl io ${simulator.id} recordVideo ${outputPath}`);
   const postExecCommand = `/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl io ${simulator.id} recordVideo ${outputPath}`;
@@ -301,7 +301,7 @@ test('publishes the post-exec simulator identity after readiness', async () => {
 });
 
 test('stops a locally launched simulator recorder after xcrun execs the simctl binary', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-xcrun-exec-');
+  const root = mkdtempForTestSync('silicon-extend-recording-xcrun-exec-');
   const outputPath = path.join(root, 'capture.mp4');
   fs.writeFileSync(outputPath, 'recording');
   const running = background(48, `xcrun simctl io ${simulator.id} recordVideo ${outputPath}`);
@@ -340,7 +340,7 @@ test.each([
       `/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl io ${simulator.id} screenshot ${outputPath}`,
   ],
 ])('does not stop a simctl process whose %s changed after capture', async (_name, observed) => {
-  const root = mkdtempForTestSync('agent-device-recording-xcrun-mismatch-');
+  const root = mkdtempForTestSync('silicon-extend-recording-xcrun-mismatch-');
   const outputPath = path.join(root, 'capture.mp4');
   fs.writeFileSync(outputPath, 'recording');
   const running = background(49, `xcrun simctl io ${simulator.id} recordVideo ${outputPath}`);
@@ -361,7 +361,7 @@ test.each([
 });
 
 test('ends the recorder through its handle when the host cannot confirm its identity', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-unreadable-identity-');
+  const root = mkdtempForTestSync('silicon-extend-recording-unreadable-identity-');
   const outputPath = path.join(root, 'capture.mp4');
   fs.writeFileSync(outputPath, 'recording');
   const running = background(51, `xcrun simctl io ${simulator.id} recordVideo ${outputPath}`);
@@ -379,7 +379,7 @@ test('ends the recorder through its handle when the host cannot confirm its iden
 });
 
 test('a recorder whose stop was refused can be stopped by the next stop', async () => {
-  const root = mkdtempForTestSync('agent-device-recording-refused-stop-');
+  const root = mkdtempForTestSync('silicon-extend-recording-refused-stop-');
   const outputPath = path.join(root, 'capture.mp4');
   fs.writeFileSync(outputPath, 'recording');
   const running = background(50, `xcrun simctl io ${simulator.id} recordVideo ${outputPath}`);

@@ -306,7 +306,7 @@ function buildReadAndRemoveHelperOutputArgs(outputPath: string): string[] {
     'sh',
     '-c',
     'cat "$1"; status=$?; rm -f "$1"; exit "$status"',
-    'agent-device-snapshot-helper-output',
+    'extend-engine-snapshot-helper-output',
     outputPath,
   ];
 }

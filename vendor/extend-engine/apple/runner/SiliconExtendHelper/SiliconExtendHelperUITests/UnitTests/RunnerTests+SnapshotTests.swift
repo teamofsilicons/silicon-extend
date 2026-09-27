@@ -86,7 +86,7 @@ extension RunnerTests {
     let releaseMain = DispatchSemaphore(value: 0)
     let finished = expectation(description: "fail-closed capture returned while main was blocked")
 
-    DispatchQueue(label: "agent-device.runner.tests.ax-unavailable-invalidation").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.ax-unavailable-invalidation").async {
       _ = try? self.runMainThreadWork(
         "command_execution",
         timeout: 0,
@@ -247,7 +247,7 @@ extension RunnerTests {
     entryPointName: String,
     callEntryPoint: @escaping (SnapshotCaptureTarget, PresentationOptions) throws -> DataPayload
   ) {
-    let targetBundleId = "com.callstack.agentdevice.runner.missing.snapshot-timeout-test"
+    let targetBundleId = "com.teamofsilicons.extend.helper.missing.snapshot-timeout-test"
     let snapshotTarget = XCUIApplication(bundleIdentifier: targetBundleId)
     let probeReleaseGate = DispatchSemaphore(value: 0)
     let captureTarget = MainActor.assumeIsolated {
@@ -285,7 +285,7 @@ extension RunnerTests {
       description: "\(entryPointName) recovered while the probe was abandoned, then released it"
     )
     let drained = expectation(description: "\(entryPointName) modal probe drained")
-    DispatchQueue(label: "agent-device.runner.tests.modal-probe-timeout").async {
+    DispatchQueue(label: "silicon-extend.helper.tests.modal-probe-timeout").async {
       box.payload = try? callEntryPoint(
         captureTarget,
         PresentationOptions(interactiveOnly: false, depth: nil, scope: nil, raw: false)

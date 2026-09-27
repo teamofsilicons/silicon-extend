@@ -82,7 +82,7 @@ function readConfiguredPlatform(raw: string | undefined): CliFlags['platform'] |
   }
   throw new AppError(
     'INVALID_ARGS',
-    `Invalid AGENT_DEVICE_PLATFORM: ${raw}. Use ios, android, or apple.`,
+    `Invalid EXTEND_ENGINE_PLATFORM: ${raw}. Use ios, android, or apple.`,
   );
 }
 

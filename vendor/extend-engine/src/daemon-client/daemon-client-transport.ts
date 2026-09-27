@@ -108,7 +108,7 @@ export async function readRemoteDaemonHealth(info: DaemonInfo): Promise<RemoteDa
       remoteService: incompatible.service,
       supportedRpcProtocolVersion: DAEMON_RPC_PROTOCOL_VERSION,
       remoteRpcProtocolVersion: incompatible.rpcProtocolVersion,
-      hint: 'Upgrade agent-device on the client or remote host so both support the same daemon RPC protocol.',
+      hint: 'Update the device engine on the client or the remote host so both support the same daemon RPC protocol.',
     });
   }
   return health;

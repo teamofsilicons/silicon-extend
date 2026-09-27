@@ -43,6 +43,21 @@ class CommandJobsTest {
         assertEquals("session_ended", sent[0].error!!.code)
     }
 
+    @Test fun aDroppedPairConnectionStopsOnlyItsOwnCommands() {
+        val startedA = CompletableDeferred<Unit>()
+        val startedB = CompletableDeferred<Unit>()
+        val finishB = CompletableDeferred<Unit>()
+        jobs.submit(frame("a", session = "sA"), { startedA.complete(Unit); awaitCancellation() }, { sent += it }, pairId = "pairA")
+        jobs.submit(frame("b", session = "sB"), { startedB.complete(Unit); finishB.await(); ok("b") }, { sent += it }, pairId = "pairB")
+        runBlocking { withTimeout(5000) { startedA.await(); startedB.await() } }
+        jobs.cancelPair("pairA")
+        runBlocking { withTimeout(5000) { while (jobs.running > 1) kotlinx.coroutines.delay(10) } }
+        assertTrue("pair A's socket is gone: its command can't answer", sent.isEmpty())
+        finishB.complete(Unit)
+        awaitSent(1)
+        assertEquals("pair B's command answers on its own socket", "b", sent.single().id)
+    }
+
     @Test fun aQueuedCommandAlsoAnswers() {
         val lock = Mutex()
         val holding = CompletableDeferred<Unit>()

@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 
 /** Repository-relative path of the positive-control source the runner gate builds compile. */
 export const ISOLATION_CANARY_PATH =
-  'apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerIsolationCanary.swift';
+  'apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerIsolationCanary.swift';
 const ISOLATION_CANARY_MARKER = '// isolation-canary';
 
 /** A compiler diagnostic line: `<file>:<line>:<column>: warning|error: <message>`. */

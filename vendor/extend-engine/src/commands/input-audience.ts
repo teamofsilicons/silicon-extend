@@ -58,7 +58,9 @@ function operatorPathSentence(key: string, source: OperatorInputSource): string 
   // The type admits an empty `envFlagKeys` only together with `operatorConfig`,
   // so a source can never render a sentence naming no path at all.
   const envNames = (source.envFlagKeys ?? [key]).map(buildPrimaryEnvVarName).join(' or ');
-  if (envNames === '') return `Set ${key} in ~/.agent-device/config.json ${forTheServer}`;
-  const configPath = source.operatorConfig ? ` (or ${key} in ~/.agent-device/config.json)` : '';
+  if (envNames === '') return `Set ${key} in ~/.silicon-extend/engine/config.json ${forTheServer}`;
+  const configPath = source.operatorConfig
+    ? ` (or ${key} in ~/.silicon-extend/engine/config.json)`
+    : '';
   return `Set the ${envNames} environment variable${configPath} ${forTheServer}`;
 }

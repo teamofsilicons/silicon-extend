@@ -12,11 +12,29 @@ export type SourceValueDefinition = {
 const BOOLEAN_TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const BOOLEAN_FALSE_VALUES = new Set(['0', 'false', 'no', 'off']);
 
-export function buildPrimaryEnvVarName(key: string): string {
-  return `AGENT_DEVICE_${key
+// Silicon Extend names every engine setting EXTEND_ENGINE_<X>; the fork's own name, AGENT_DEVICE_<X>,
+// still works (src/extend-env.ts copies a set EXTEND_ENGINE_<X> onto it at every entry point). A
+// setting is looked up under both, the Extend name first, so a message about a bad value names the
+// variable that was actually set, and advice names only the Extend one.
+const ENV_VAR_PREFIX = 'EXTEND_ENGINE_';
+const LEGACY_ENV_VAR_PREFIX = 'AGENT_DEVICE_';
+
+function envVarSuffix(key: string): string {
+  return key
     .replaceAll(/([A-Z])/g, '_$1')
     .replaceAll(/[^A-Za-z0-9_]/g, '_')
-    .toUpperCase()}`;
+    .toUpperCase();
+}
+
+/** The name to set a setting under, and to name in advice: `EXTEND_ENGINE_<X>`. */
+export function buildPrimaryEnvVarName(key: string): string {
+  return `${ENV_VAR_PREFIX}${envVarSuffix(key)}`;
+}
+
+/** Every name a setting is read from, in priority order: `EXTEND_ENGINE_<X>`, `AGENT_DEVICE_<X>`. */
+export function buildEnvVarNames(key: string): string[] {
+  const suffix = envVarSuffix(key);
+  return [`${ENV_VAR_PREFIX}${suffix}`, `${LEGACY_ENV_VAR_PREFIX}${suffix}`];
 }
 
 // fallow-ignore-next-line complexity

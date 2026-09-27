@@ -22,8 +22,8 @@ extension RunnerTests {
     // Non-vacuity: label-only semantic values fail the identifier-only and value-only fixtures.
     let fixtureURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent() // UnitTests
-      .deletingLastPathComponent() // AgentDeviceRunnerUITests
-      .deletingLastPathComponent() // AgentDeviceRunner
+      .deletingLastPathComponent() // SiliconExtendHelperUITests
+      .deletingLastPathComponent() // SiliconExtendHelper
       .deletingLastPathComponent() // runner
       .deletingLastPathComponent() // apple
       .deletingLastPathComponent() // repo root

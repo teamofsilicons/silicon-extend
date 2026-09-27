@@ -71,7 +71,7 @@ const BASE_WEBDRIVER_CAPABILITIES: CloudWebDriverCapabilityMap = {
   },
   snapshot: {
     support: 'partial',
-    note: 'Uses Appium page source XML, not agent-device native snapshot backends.',
+    note: "Uses Appium page source XML, not the device engine's native snapshot backends.",
   },
   screenshot: supported,
   tap: supported,
@@ -117,7 +117,7 @@ const BASE_WEBDRIVER_CAPABILITIES: CloudWebDriverCapabilityMap = {
   portReverse: unsupported,
   nativeSnapshotBackend: {
     support: 'unsupported',
-    note: 'Cloud WebDriver cannot upload or run agent-device native runner/helper backends.',
+    note: "Cloud WebDriver cannot upload or run the device engine's native runner/helper backends.",
   },
 };
 

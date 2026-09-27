@@ -16,14 +16,14 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use extend_driver::{Driver, Invocation, Output, Probe};
 use extend_protocol::DeviceOs;
-use extend_protocol::model::{MissingCapability, Setup, StepStatus};
+use extend_protocol::model::{MissingCapability, Setup, SleepState, StepStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::HostedDevice;
 use crate::common::{
     self, Button, CLIENT_NAME, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json, step,
-    step_error, step_help, unsupported, unsupported_command, url_host,
+    step_failure, step_help, unsupported, unsupported_command, url_host,
 };
 use crate::script;
 use crate::ws::{self, Ws};
@@ -257,6 +257,21 @@ struct Session {
 struct Info {
     model: Option<String>,
     os_version: Option<String>,
+    /// The TV's own id (its MAC address): the same whichever computer or Carbon asks, so one
+    /// TV carried for two Carbons is known as one device.
+    hardware_id: Option<String>,
+}
+
+/// What `com.webos.service.tvpower/power/getPowerState` says, as awake and why not:
+/// "Active" (and the screensaver) is awake, "Screen Off" has its screen off, anything else
+/// ("Active Standby", "Suspend", "Power Off") is in standby.
+pub(crate) fn awake_from_power_state(state: Option<&str>) -> (Option<bool>, Option<SleepState>) {
+    match state.map(str::trim) {
+        None | Some("") => (None, None),
+        Some(s) if s.eq_ignore_ascii_case("Active") || s.eq_ignore_ascii_case("Screen Saver") => (Some(true), None),
+        Some(s) if s.eq_ignore_ascii_case("Screen Off") => (Some(false), Some(SleepState::ScreenOff)),
+        Some(_) => (Some(false), Some(SleepState::Standby)),
+    }
 }
 
 struct Inner {
@@ -638,11 +653,35 @@ impl Inner {
             (Some(p), _, _) => Some(p),
             _ => Some("webOS".into()),
         };
+        // The MAC address, wired first: the one id every host sees the same.
+        let net = self
+            .request("com.webos.service.connectionmanager/getinfo", json!({}))
+            .await
+            .unwrap_or(Value::Null);
+        let mac = ["wiredInfo", "wifiInfo"].iter().find_map(|k| {
+            net.get(k)
+                .and_then(|i| i.get("macAddress"))
+                .and_then(Value::as_str)
+                .filter(|m| !m.is_empty() && *m != "00:00:00:00:00:00")
+                .map(|m| m.to_ascii_uppercase())
+        });
         *self.info.lock().unwrap() = Info {
             model: s(&sys, "modelName"),
             os_version,
+            hardware_id: mac.or_else(|| s(&sys, "deviceId")),
         };
         Ok(())
+    }
+
+    /// Whether the TV is awake, read without turning anything on.
+    async fn power_state(&self) -> (Option<bool>, Option<SleepState>) {
+        match self
+            .request("com.webos.service.tvpower/power/getPowerState", json!({}))
+            .await
+        {
+            Ok(v) => awake_from_power_state(v.get("state").and_then(Value::as_str)),
+            Err(_) => (None, None),
+        }
     }
 
     async fn reachable(&self) -> Result<(), String> {
@@ -665,6 +704,8 @@ impl Driver for LgDriver {
         let full = DeviceOs::LgTv.full_capabilities();
         let reach_title = "The TV is on and on the same network as this computer";
         let approve_title = "Approve the connection on the TV";
+        const UNREACHABLE: &str =
+            "The TV can't be reached. Turn it on and connect it to the same network as this computer.";
         let (online, reach, approve) = if me.client_key().is_some() {
             match me.refresh_info().await {
                 Ok(()) => (
@@ -678,7 +719,13 @@ impl Driver for LgDriver {
                     (
                         true,
                         step("network", reach_title, StepStatus::Done),
-                        step_error("approve", approve_title, StepStatus::NeedsCarbon, None, e),
+                        step_failure(
+                            "approve",
+                            approve_title,
+                            StepStatus::NeedsCarbon,
+                            "The TV no longer knows Silicon Extend. Choose Accept when it asks again.",
+                            e,
+                        ),
                     )
                 }
                 Err(e) => {
@@ -688,13 +735,7 @@ impl Driver for LgDriver {
                     };
                     (
                         false,
-                        step_error(
-                            "network",
-                            reach_title,
-                            StepStatus::NeedsCarbon,
-                            Some("Turn the TV on and connect it to the same network as this computer."),
-                            m,
-                        ),
+                        step_failure("network", reach_title, StepStatus::NeedsCarbon, UNREACHABLE, m),
                         step("approve", approve_title, StepStatus::Done),
                     )
                 }
@@ -703,13 +744,7 @@ impl Driver for LgDriver {
             match me.reachable().await {
                 Err(m) => (
                     false,
-                    step_error(
-                        "network",
-                        reach_title,
-                        StepStatus::NeedsCarbon,
-                        Some("Turn the TV on and connect it to the same network as this computer."),
-                        m,
-                    ),
+                    step_failure("network", reach_title, StepStatus::NeedsCarbon, UNREACHABLE, m),
                     step("approve", approve_title, StepStatus::Todo),
                 ),
                 Ok(()) => {
@@ -717,18 +752,24 @@ impl Driver for LgDriver {
                     let approve = match state {
                         Pairing::Denied(m) => {
                             *me.pairing.lock().unwrap() = Pairing::Idle;
-                            step_error(
+                            step_failure(
                                 "approve",
                                 approve_title,
                                 StepStatus::Failed,
-                                Some("Accept \"Silicon Extend\" when the TV asks; Extend asks again shortly."),
+                                "The TV turned Silicon Extend down. Choose Accept (or Yes) when the TV asks; Extend asks again shortly, or tap Retry.",
                                 m,
                             )
                         }
                         Pairing::Failed(m) => {
                             *me.pairing.lock().unwrap() = Pairing::Idle;
                             me.start_pairing();
-                            step_error("approve", approve_title, StepStatus::NeedsCarbon, None, m)
+                            step_failure(
+                                "approve",
+                                approve_title,
+                                StepStatus::NeedsCarbon,
+                                "Silicon Extend couldn't ask the TV to accept it. Keep the TV on and on the same network as this computer; it asks again shortly.",
+                                m,
+                            )
                         }
                         Pairing::Idle | Pairing::Waiting { .. } => {
                             me.start_pairing();
@@ -745,6 +786,7 @@ impl Driver for LgDriver {
             }
         };
         let ready = online && me.client_key().is_some();
+        let (awake, sleep_state) = if ready { me.power_state().await } else { (None, None) };
         let info = me.info.lock().unwrap().clone();
         let reason = if !online {
             "The TV is off or can't be reached"
@@ -767,8 +809,11 @@ impl Driver for LgDriver {
                     .collect()
             },
             setup: Setup::from_steps(vec![reach, approve]),
-            agent_device_version: None,
+            engine_version: None,
             online,
+            awake,
+            sleep_state,
+            hardware_id: info.hardware_id,
         }
     }
 
@@ -822,6 +867,14 @@ impl Driver for LgDriver {
             }
         })
         .await
+    }
+
+    /// Retry: a refused or failed acceptance asks the TV again at the probe that follows at once.
+    async fn retry_setup(&self, _step: Option<&str>) {
+        let mut p = self.inner.pairing.lock().unwrap();
+        if matches!(*p, Pairing::Denied(_) | Pairing::Failed(_)) {
+            *p = Pairing::Idle;
+        }
     }
 }
 
@@ -931,6 +984,8 @@ mod tests {
         requests: Arc<Mutex<Vec<Value>>>,
         pointer: Arc<Mutex<Vec<String>>>,
         registers: Arc<Mutex<Vec<Value>>>,
+        /// What getPowerState answers.
+        power: Arc<Mutex<String>>,
     }
 
     async fn mock_lg(deny: bool) -> MockLg {
@@ -941,12 +996,18 @@ mod tests {
             requests: Arc::default(),
             pointer: Arc::default(),
             registers: Arc::default(),
+            power: Arc::new(Mutex::new("Active".into())),
         };
-        let (reqs, ptr, regs) = (tv.requests.clone(), tv.pointer.clone(), tv.registers.clone());
+        let (reqs, ptr, regs, power) = (
+            tv.requests.clone(),
+            tv.pointer.clone(),
+            tv.registers.clone(),
+            tv.power.clone(),
+        );
         tokio::spawn(async move {
             loop {
                 let Ok((s, _)) = l.accept().await else { return };
-                let (reqs, ptr, regs) = (reqs.clone(), ptr.clone(), regs.clone());
+                let (reqs, ptr, regs, power) = (reqs.clone(), ptr.clone(), regs.clone(), power.clone());
                 tokio::spawn(async move {
                     let path = Arc::new(Mutex::new(String::new()));
                     let p2 = path.clone();
@@ -1017,6 +1078,15 @@ mod tests {
                                 ok(json!({"appId":"netflix","returnValue":true}))
                             }
                             "system/turnOff" => ok(json!({"returnValue":true})),
+                            "com.webos.service.tvpower/power/getPowerState" => {
+                                let state = power.lock().unwrap().clone();
+                                ok(json!({"state": state, "returnValue": true}))
+                            }
+                            "com.webos.service.connectionmanager/getinfo" => ok(json!({
+                                "wiredInfo": {"state":"disconnected","macAddress":"a8:23:fe:00:11:22"},
+                                "wifiInfo": {"state":"connected","macAddress":"a8:23:fe:00:11:33"},
+                                "returnValue": true
+                            })),
                             _ => {
                                 json!({"type":"error","id":id,"error":"404 no such service or method","payload":{}})
                             }
@@ -1073,6 +1143,15 @@ mod tests {
         assert_eq!(p.model.as_deref(), Some("OLED55C1PUB"));
         assert_eq!(p.os_version.as_deref(), Some("webOSTV 6.0 (03.21.20)"));
         assert_eq!(p.capabilities, DeviceOs::LgTv.full_capabilities().to_vec());
+        assert_eq!((p.awake, p.sleep_state), (Some(true), None));
+        assert_eq!(p.hardware_id.as_deref(), Some("A8:23:FE:00:11:22"));
+        *tv.power.lock().unwrap() = "Screen Off".into();
+        let p = d.probe().await;
+        assert!(p.online);
+        assert_eq!((p.awake, p.sleep_state), (Some(false), Some(SleepState::ScreenOff)));
+        *tv.power.lock().unwrap() = "Active Standby".into();
+        assert_eq!(d.probe().await.sleep_state, Some(SleepState::Standby));
+        *tv.power.lock().unwrap() = "Active".into();
         // A new driver (the host app restarted) presents the saved key and gets no prompt.
         let d = driver(&tv, dir.path());
         let p = d.probe().await;
@@ -1149,6 +1228,12 @@ mod tests {
         wait_until(|| matches!(*d.inner.pairing.lock().unwrap(), Pairing::Denied(_))).await;
         let p = d.probe().await;
         assert_eq!(p.setup.steps[1].status, StepStatus::Failed);
-        assert!(p.setup.steps[1].error.as_deref().unwrap().contains("denied"));
+        let error = p.setup.steps[1].error.as_deref().unwrap();
+        // Said plainly, with what to do; the TV's own words stay in the log.
+        assert!(
+            error.contains("turned Silicon Extend down") && error.contains("Accept"),
+            "{error}"
+        );
+        assert!(!error.contains("403"), "{error}");
     }
 }

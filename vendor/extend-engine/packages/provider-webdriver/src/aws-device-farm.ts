@@ -23,7 +23,7 @@ export const AWS_DEVICE_FARM_CAPABILITY_OVERRIDES = {
   },
   portReverse: {
     support: 'unsupported',
-    note: 'AWS Device Farm remote access does not expose agent-device port reverse.',
+    note: "AWS Device Farm remote access does not expose the device engine's port reverse.",
   },
   artifacts: {
     support: 'supported',

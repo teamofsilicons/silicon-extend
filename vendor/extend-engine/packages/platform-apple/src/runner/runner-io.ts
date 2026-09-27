@@ -137,7 +137,7 @@ export function cleanupTempFile(filePath: string): void {
 export function resolveRunnerLaunchLogPath(logPath: string | undefined, deviceId: string): string {
   if (logPath) return logPath;
   const safeDeviceId = deviceId.replaceAll(/[^A-Za-z0-9._-]/g, '_');
-  return path.join(os.tmpdir(), 'agent-device', 'apple-runner', 'logs', `${safeDeviceId}.log`);
+  return path.join(os.tmpdir(), 'extend-engine', 'apple-runner', 'logs', `${safeDeviceId}.log`);
 }
 
 const RUNNER_LOG_TAIL_DEFAULT_POLL_MS = 50;

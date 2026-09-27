@@ -114,11 +114,14 @@ function deviceStatusResponse(command: string): AdbResult | undefined {
 function recordingManifestResponse(command: string): AdbResult | undefined {
   if (
     command.startsWith('shell test -e ') &&
-    command.includes('agent-device-recording-active.json')
+    command.includes('silicon-extend-recording-active.json')
   ) {
     return adbResult('', 1);
   }
-  if (command.startsWith('shell printf %s ') && command.includes('agent-device-recording-active')) {
+  if (
+    command.startsWith('shell printf %s ') &&
+    command.includes('silicon-extend-recording-active')
+  ) {
     return adbResult();
   }
   return undefined;
@@ -151,7 +154,7 @@ function recordingArtifactResponse(
   if (command.startsWith('shell test -e ') && command.includes(activeRecordingPath)) {
     return adbResult();
   }
-  if (/^shell stat -c %s \/sdcard\/agent-device-recording-\d+\.mp4$/.test(command)) {
+  if (/^shell stat -c %s \/sdcard\/silicon-extend-recording-\d+\.mp4$/.test(command)) {
     return adbResult('2048\n');
   }
   return undefined;

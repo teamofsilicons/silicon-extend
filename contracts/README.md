@@ -7,10 +7,23 @@ published consumer fails before it ships.
 
 ```
 contracts/
-  v1/client/    silicon-extend-client (and so the extend CLI, which calls Extend only through it)
-  v1/device/    the Android app (android.*) and the Mac, Windows and Linux app (agent.*)
-  internal/honeycomb/   Honeycomb's test-environment lifecycle instructions (not API-versioned)
+  v1/client/          silicon-extend-client (and so the extend CLI, which calls Extend only through it), current version
+  v1/client-1.0.0/    the released 1.0.0 client's fixtures, frozen: 1.0.0 CLIs and apps built on it are still in use
+  v1/device/          the Android app (android.*) and the Mac, Windows and Linux app (agent.*), every supported version
+  internal/honeycomb/ Honeycomb's test-environment lifecycle instructions (not API-versioned)
 ```
+
+A consumer that is still in use keeps its fixtures until its version stops being supported. So a new
+release adds fixtures instead of editing the old ones:
+
+- **Client:** before the crate's fixtures are regenerated for a new release, copy the released ones
+  to `v1/client-<released version>/` (1.1.0 did this for 1.0.0). Nothing ever rewrites a frozen
+  directory.
+- **Device apps:** the 1.0.0 fixtures in `v1/device/` stay exactly as they are (they still send
+  `agent_device_version`, which 1.0 apps send and the service still reads). A 1.1 app's fixture is a
+  new file, named for a new operation (`android.device.socket.wake.json`) or with the version in its
+  name (`android.device.self.1_1.json`, `agent.enrollments.create.1_1.json`), and says
+  `"consumer_version": "1.1.0"`.
 
 ## Who writes them
 
@@ -28,8 +41,10 @@ contracts/
 - **Device apps:** derived by hand from `docs/device-protocol.md`, the Android app's Kotlin models
   (`apps/android/.../protocol/Frames.kt`, `net/ExtendApi.kt`: a field without a default is
   required) and the desktop agent's requests (`crates/extend-agent/src/service.rs`, with
-  `extend-protocol` types). Until the apps dump their own frames from their frame tests, update
-  these by hand when an app changes what it sends or reads.
+  `extend-protocol` types). Until the apps dump their own frames from their frame tests, add
+  fixtures by hand when an app changes what it sends or reads. The 1.1.0 fixtures were written from
+  the 1.1 protocol before the 1.1 apps were finished; check them against the apps' frame tests when
+  those land.
 - **Honeycomb:** derived from `silicon-honeycomb`'s participant client
   (`crates/server/src/participant_management.rs`), which sends exactly these twelve fields and
   checks that the receipt echoes six of them.
@@ -41,10 +56,11 @@ contracts/
   "contract": 1,                          // fixture format version
   "consumer": "silicon-extend-client",    // who depends on this
   "consumer_version": "1.0.0",
-  "api_version": 1,                       // must match the v{n} directory; null under internal/
+  "api_version": 1,                       // must match the v{n} directory (v1/client-1.0.0 is 1 too); null under internal/
   "operation": "devices.update",
   "given": ["device"],                    // provider states the replay sets up first
   "kind": "http",                         // or "device_socket", "enrollment_socket"; default http
+  "effect": "device_enrollment",          // http only, optional: what the answer must then make possible (below)
   "request": {
     "method": "PATCH",
     "path": "/api/v1/devices/{device_id}",
@@ -63,21 +79,42 @@ contracts/
 
 Paths are read inside the envelope's `data` (or the bare body). `*` walks every array element. A
 missing or null parent passes: the consumer reads that parent as optional, and a separate entry
-says otherwise when it isn't.
+says otherwise when it isn't. A field an app reads only when it is there (a 1.1 field a 1.0 service
+leaves out, such as `/instance_id`) goes in `non_null` only: it may be absent, but never null.
+
+An HTTP fixture's optional `effect` is checked after a 2xx answer:
+
+- `device_enrollment` (`POST /api/v1/device/enrollments`, "Pair with another Carbon"): c:bob claims
+  the `pairing_code` the answer gave, and the new device must be a second pair of the same physical
+  device: c:bob's device and the fixture's device report the same `instance_id` in
+  `GET /api/v1/device` for their credentials, c:alice's view says `paired_by_others: true`, and
+  c:bob's device has its own `device_id`.
 
 A `device_socket` fixture pairs a device, opens `request.path` with its headers, and sends each
 frame of `sends` in order. Each frame must still parse as the service's `DeviceFrame`, and its
-`effect` must happen: `hello` (the device shows the hello's app version, model and OS version),
-`setup_progress`, `result` (answers a real command, uploading the listed file first), `takeover_done`,
-`stop`, `attached`, `stop_target`, or `none`. Every frame the service sends meanwhile must carry the
-fields `reads` lists for its type. An `enrollment_socket` fixture checks the `code` and `paired`
-frames the same way.
+`effect` must happen. Every frame the service sends meanwhile must carry the fields `reads` lists
+for its type. An `enrollment_socket` fixture checks the `code` and `paired` frames the same way.
+
+| `effect` | Before sending, the replay | After sending, it checks |
+|---|---|---|
+| `hello` | | The device shows the hello's app version, model and OS version, and its `engine_version` when the hello has one |
+| `setup_progress` | | The device's setup state is the frame's |
+| `result` | Starts a session and runs a command; uploads the listed file | The command answers as the frame says |
+| `takeover_done` | Starts a session and a takeover | The takeover ended |
+| `stop` | Starts a session (its `session_started` is read like any frame) | The session ended `stopped_by_carbon` |
+| `attached` | Attaches an Apple TV through the device (fills `{attached_id}`) | The carried device's `online` is the frame's; its awake state too, when the frame has one |
+| `stop_target` | Gives si:chef access to the carried device and starts a session on it | That session ended `stopped_by_carbon` |
+| `awake` | | c:alice's view of the device has `awake` (and `sleep_state`) as sent. When the frame says awake, with `input_seen` not false, and a wake request is open, a `wake_request_ended` for it arrives and the request reads `woken` |
+| `wake_request_shown` | si:chef asks to wake the device (`POST .../wake-requests`) and waits for its `wake_request` frame (fills `{wake_id}`) | The request's `device_notice` is `shown` or `not_shown` as sent, with the frame's `note` |
+| `credential_saved` | Makes the device a computer two Carbons paired (c:bob pairs it through Pair with another Carbon, and a scripted 1.1 app keeps c:bob's pair connected), runs and ends a session of si:chef through the fixture's pair, and waits for the `credential` frame | `GET /api/v1/device` answers 200 with the credential that frame gave, and 401 with the old one |
+| `setup_retry` | c:alice retries the first failed step of the device's setup (or of the carried device the frame names): `POST /api/v1/devices/{id}/setup/retry` with `{"step": <key>}` answers 202 naming that step, and the `setup_retry` frame arrives | The setup of that device (the fixture's, or the carried device the `attached` frame names) is the frame's |
+| `none` | | Nothing |
 
 ## Placeholders and provider states
 
-Always available: `{carbon_token}` (c:alice), `{silicon_token}` (si:chef), `{other_silicon_token}`
-(si:sous), `{carbon_slt}`, `{silicon_id}`, `{team}`, `{isi}`, `{honeycomb_token}`, and
-`{idempotency_key}` (fresh for each request).
+Always available: `{carbon_token}` (c:alice), `{other_carbon_token}` (c:bob, also in acme),
+`{silicon_token}` (si:chef), `{other_silicon_token}` (si:sous), `{carbon_slt}`, `{silicon_id}`,
+`{team}`, `{isi}`, `{honeycomb_token}`, and `{idempotency_key}` (fresh for each request).
 
 | `given` | Sets up | Fills |
 |---|---|---|
@@ -92,7 +129,10 @@ Always available: `{carbon_token}` (c:alice), `{silicon_token}` (si:chef), `{oth
 | `attached` | `host`, carrying an Apple TV | `{attached_id}` |
 | `test_environment` | a prepared test environment and its test application | `{testing_secret}` |
 | `honeycomb_environment` | one environment id for a whole `sequence` | `{environment_id}`, `{org_id}`, `{testing_key}`, `{operation_id}` (fresh per fixture) |
-| `paired` | (device sockets) the device the fixture pairs | `{device_id}`, `{device_credential}`, `{command_id}`, `{upload_id}`, `{attached_id}` |
+| `shared_device` | `device`, also paired by c:bob through Pair with another Carbon: a second pair of the same phone, with c:bob's own id, access for si:chef in acme | `{shared_device_id}` (c:bob's pair) |
+| `shared_computer` | `host`, also paired by c:bob the same way, both pairs connected by 1.1 apps | `{shared_host_id}` (c:bob's pair) |
+| `wake_request` | `device`, reporting itself not awake (screen off), with an open wake request from si:chef | `{wake_id}` |
+| `paired` | (device sockets) the device the fixture pairs | `{device_id}`, `{device_credential}`, `{command_id}`, `{upload_id}`, `{attached_id}`, `{wake_id}` |
 
 A fixture that needs a new state fails `every_fixture_is_well_formed` until the state is added to
 `crates/extend-service/tests/contracts.rs` and this table.
@@ -103,8 +143,8 @@ A fixture that needs a new state fails `every_fixture_is_well_formed` until the 
 cargo test -p extend-service --test contracts        # needs PostgreSQL, EXTEND_TEST_ADMIN_URL
 ```
 
-It replays `v{n}/client` and `v{n}/device` for every major the service still serves (not sunset),
-and `internal/honeycomb` in its `sequence` order.
+It replays `v{n}/client`, every frozen `v{n}/client-<version>/`, and `v{n}/device` for every major
+the service still serves (not sunset), and `internal/honeycomb` in its `sequence` order.
 
 CI runs both sides in the `rust` job's "Consumer contracts" step, before the workspace tests:
 

@@ -64,9 +64,10 @@ import kotlin.math.sin
 data class Outcome(val output: JsonElement, val text: String)
 
 /**
- * Runs agent-device commands on this device through [ExtendAccessibilityService]. Commands run one
- * at a time (as agent-device's daemon serialises a session); refs from `snapshot` are kept per
- * session until the next snapshot.
+ * Runs the device engine's commands (`extend snapshot`, `extend click`, …) on this device through
+ * [ExtendAccessibilityService]. Commands run one at a time (as the engine's daemon serialises a
+ * session); refs from `snapshot` are kept per session until the next snapshot. Each command answers
+ * on the connection of the pair it came through, and uploads its files with that pair's credential.
  */
 class CommandExecutor(
     private val extend: Extend,
@@ -78,7 +79,7 @@ class CommandExecutor(
         var baseline: Snapshot? = null
     }
 
-    private class Run(val frame: ServiceFrame.Command, val session: Session, val deadline: Long) {
+    private class Run(val frame: ServiceFrame.Command, val session: Session, val deadline: Long, val pairId: String) {
         /** Attachments written to the command's scratch directory, by attachment name. */
         val localFiles = LinkedHashMap<String, File>()
         var scratch: File? = null
@@ -89,6 +90,8 @@ class CommandExecutor(
     }
 
     private val sessions = ConcurrentHashMap<String, Session>()
+    /** The pair each session runs through (kept while the session is retained offline). */
+    private val sessionPairs = ConcurrentHashMap<String, String>()
     private val jobs = CommandJobs(extend.scope)
     private val stoppedSessions = ConcurrentHashMap.newKeySet<String>()
     private val retention = SessionRetention(retentionGraceMs)
@@ -96,12 +99,20 @@ class CommandExecutor(
     private val lock = Mutex()
     private val context get() = extend.context
 
-    /** Extend announced a session (new, or again after a reconnect: it continues with its state). */
-    fun beginSession(sessionId: String) {
+    /**
+     * Extend announced a session through the pair [pairId] (new, or again after a reconnect: it
+     * continues with its state).
+     */
+    fun beginSession(sessionId: String, pairId: String = "") {
         stoppedSessions.remove(sessionId)
         retention.confirmed(sessionId)
+        sessionPairs[sessionId] = pairId
         sessions.getOrPut(sessionId) { Session() }
     }
+
+    /** The sessions (with state, or retained while offline) that run through [pairId]. */
+    private fun sessionsOf(pairId: String): Set<String> =
+        (sessions.keys + retention.pending() + extend.adbExecutor.sessionIds()).filter { sessionPairs[it] == pairId }.toSet()
 
     /**
      * The session ended (Extend said so, or the Carbon pressed Stop): its running and queued
@@ -118,6 +129,7 @@ class CommandExecutor(
         )
         jobs.cancelSession(sessionId, reason)
         sessions.remove(sessionId)
+        sessionPairs.remove(sessionId)
         extend.scope.launch { extend.adbExecutor.endSession(sessionId, lostReason) }
     }
 
@@ -127,19 +139,32 @@ class CommandExecutor(
     }
 
     /**
-     * The device socket dropped. Running commands can't answer any more, so they stop. Sessions
-     * keep their state: Extend keeps them alive while the device is briefly offline and announces
-     * them again on reconnect ([SessionRetention]).
+     * The pair [pairId]'s connection dropped. Its running commands can't answer any more, so they
+     * stop; the other pairs' commands carry on. Its sessions keep their state: Extend keeps them
+     * alive while the device is briefly offline and announces them again on reconnect
+     * ([SessionRetention]).
      */
-    fun connectionLost() {
-        jobs.cancelAll()
-        retention.disconnected(sessions.keys + extend.adbExecutor.sessionIds(), SystemClock.elapsedRealtime())
+    fun connectionLost(pairId: String) {
+        jobs.cancelPair(pairId)
+        retention.disconnected(sessionsOf(pairId), SystemClock.elapsedRealtime())
         scheduleRetention()
     }
 
-    /** After a reconnect, Extend's current session is [active]: sessions it no longer announces have ended. */
-    fun reconcile(active: String?) {
-        retention.reconcile(active).forEach(::endSession)
+    /**
+     * After the pair [pairId] reconnected, Extend's current session through it is [active]: the
+     * pair's other sessions have ended.
+     */
+    fun reconcile(active: String?, pairId: String) {
+        retention.reconcile(active, sessionsOf(pairId)).forEach(::endSession)
+    }
+
+    /** The pair [pairId] ended (revoked, or unpaired by Extend): its sessions end with it. */
+    fun forgetPair(pairId: String) {
+        jobs.cancelPair(pairId)
+        for (id in sessionsOf(pairId)) {
+            retention.forget(id)
+            endSession(id)
+        }
     }
 
     @Synchronized private fun scheduleRetention() {
@@ -159,6 +184,7 @@ class CommandExecutor(
         retentionJob?.cancel()
         for (id in sessions.keys + retention.pending()) retention.forget(id)
         sessions.clear()
+        sessionPairs.clear()
         extend.scope.launch { extend.adbExecutor.endAll() }
     }
 
@@ -171,17 +197,19 @@ class CommandExecutor(
         jobs.cancelCommands(ADB_COMMANDS, reason)
     }
 
-    fun submit(frame: ServiceFrame.Command, send: (DeviceFrame.Result) -> Unit) =
-        jobs.submit(frame, { lock.withLock { run(frame) } }, send)
+    /** Runs [frame], which came on the pair [pairId]'s connection; [send] answers on that connection. */
+    fun submit(frame: ServiceFrame.Command, pairId: String, send: (DeviceFrame.Result) -> Unit) =
+        jobs.submit(frame, { lock.withLock { run(frame, pairId) } }, send, pairId)
 
     /** Runs one command frame to its `result`. */
-    suspend fun run(frame: ServiceFrame.Command): DeviceFrame.Result {
+    suspend fun run(frame: ServiceFrame.Command, pairId: String = ""): DeviceFrame.Result {
         if (frame.sessionId in stoppedSessions) return DeviceFrame.Result(
             frame.id, false, JsonNull, "This session has ended.", CommandError(CommandFailure.SESSION_ENDED, "This session has ended. Start a new session to continue."), emptyList(),
         )
         val session = sessions.getOrPut(frame.sessionId) { Session() }
+        sessionPairs.putIfAbsent(frame.sessionId, pairId)
         val budget = (frame.timeoutMs - 750).coerceAtLeast(1_000)
-        val run = Run(frame, session, SystemClock.elapsedRealtime() + budget)
+        val run = Run(frame, session, SystemClock.elapsedRealtime() + budget, pairId)
         return try {
             if (frame.target != null) {
                 throw CommandFailure.unsupported("This Android device doesn't carry other devices; the command was addressed to ${frame.target}.")
@@ -384,8 +412,8 @@ class CommandExecutor(
         val id = run.frame.uploadIds.getOrNull(run.uploadCursor)
             ?: throw CommandFailure(CommandFailure.UPLOAD_FAILED, "The command came with ${run.frame.uploadIds.size} upload slots, all used, so ${file.name} wasn't sent. $again")
         run.uploadCursor++
-        val cred = extend.secrets.readCredential()
-            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired, so ${file.name} can't be uploaded. Pair it again in the Extend app.")
+        val cred = extend.connection.credentialFor(run.pairId)
+            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired through this session's Carbon, so ${file.name} can't be uploaded. Start a new session.")
         val budget = run.remainingMs() - 250
         val sent = try {
             if (budget <= 0) null else withTimeoutOrNull(budget) { extend.api.uploadFile(cred, id, file, artifact.contentType) }
@@ -726,9 +754,15 @@ class CommandExecutor(
         val a = a11y()
         if (r.node != null && cmd.count == 1 && cmd.holdMs == null) {
             val target = r.node.nearestClickable()
-            if (target != null && info(target)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
-                return Outcome(targetJson(r, "accessibility_click"), "Tapped ${r.desc}")
+            if (target != null) {
+                val before = a.changes
+                val clicked = info(target)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                if (clicked && a.awaitChange(before, ClickFallback.SETTLE_MS)) {
+                    return Outcome(targetJson(r, "accessibility_click"), "Tapped ${r.desc}")
+                }
+                Extend.log("click ${r.desc}: the accessibility click ${if (clicked) "changed nothing on screen" else "was refused"}; trying the fallback")
             }
+            return clickFallback(r, a)
         }
         repeat(cmd.count) { i ->
             if (!a.tap(r.x.toFloat(), r.y.toFloat(), cmd.holdMs ?: 50)) {
@@ -738,6 +772,38 @@ class CommandExecutor(
         }
         val times = if (cmd.count > 1) " ${cmd.count} times" else ""
         return Outcome(targetJson(r, "tap"), "Tapped ${r.desc}$times")
+    }
+
+    /**
+     * The click the accessibility click couldn't do ([ClickFallback]): focus the element on a TV,
+     * then press select or tap through Android debugging, accessibility's select key, or a gesture.
+     */
+    private suspend fun clickFallback(r: Resolved, a: ExtendAccessibilityService): Outcome {
+        val tv = extend.isTv
+        val focusTarget = r.node?.let { n -> generateSequence(n) { it.parent }.firstOrNull { it.focusable } }
+        val focused = tv && focusTarget != null && (focusTarget.focused || info(focusTarget)?.performAction(AccessibilityNodeInfo.ACTION_FOCUS) == true)
+        for (method in ClickFallback.order(tv, extend.adb.connected, focused, ExtendAccessibilityService.dpadSupported)) {
+            when (method) {
+                ClickFallback.Method.ADB_SELECT, ClickFallback.Method.ADB_TAP -> try {
+                    val res = extend.adb.shell(ClickFallback.adbCommand(method, r.x, r.y, android.os.Build.VERSION.SDK_INT), check = false)
+                    if (res.exitCode == 0) return Outcome(targetJson(r, method.wire), "${if (method == ClickFallback.Method.ADB_SELECT) "Selected" else "Tapped"} ${r.desc}")
+                    Extend.log("click ${r.desc}: ${method.wire} exited ${res.exitCode}: ${res.text.take(300)}")
+                } catch (e: java.io.IOException) {
+                    Extend.log("click ${r.desc}: ${method.wire} through Android debugging failed", e)
+                }
+                ClickFallback.Method.ACCESSIBILITY_SELECT ->
+                    if (ExtendAccessibilityService.dpadSupported && a.global(dpadAction("select"))) {
+                        return Outcome(targetJson(r, method.wire), "Selected ${r.desc}")
+                    }
+                ClickFallback.Method.GESTURE_TAP -> {
+                    if (!a.tap(r.x.toFloat(), r.y.toFloat())) {
+                        throw CommandFailure(CommandFailure.ACTION_FAILED, "Android cancelled the tap at (${r.x}, ${r.y}), usually because the screen changed or another gesture started.")
+                    }
+                    return Outcome(targetJson(r, method.wire), "Tapped ${r.desc}")
+                }
+            }
+        }
+        throw CommandFailure(CommandFailure.ACTION_FAILED, "Nothing could click ${r.desc}.")
     }
 
     private suspend fun longPress(cmd: Cmd.LongPress, run: Run): Outcome {
@@ -1613,7 +1679,8 @@ class CommandExecutor(
             "The command came with ${run.frame.uploadIds.size} upload id(s), all used, so $name can't be uploaded.",
         )
         run.uploadCursor++
-        val cred = extend.secrets.readCredential() ?: throw CommandFailure(CommandFailure.NOT_READY, "This device isn't paired.")
+        val cred = extend.connection.credentialFor(run.pairId)
+            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired through this session's Carbon, so $name can't be uploaded. Start a new session.")
         try {
             extend.api.upload(cred, id, bytes, contentType, name)
         } catch (e: ApiException) {

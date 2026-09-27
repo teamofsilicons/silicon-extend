@@ -211,10 +211,10 @@ function buildPlistMessage(
   fields: Record<string, string | number> = {},
 ): string {
   const entries: Array<[string, string | number]> = [
-    ['BundleID', 'com.callstack.agent-device'],
-    ['ClientVersionString', 'agent-device'],
+    ['BundleID', 'com.teamofsilicons.extend.engine'],
+    ['ClientVersionString', 'silicon-extend-engine'],
     ['MessageType', messageType],
-    ['ProgName', 'agent-device'],
+    ['ProgName', 'silicon-extend-engine'],
     ['kLibUSBMuxVersion', 3],
     ...Object.entries(fields),
   ];

@@ -1,9 +1,11 @@
 # Silicon Extend for Android (phones, tablets, Android TV, Google TV, Fire OS)
 
-One APK, package `com.teamofsilicons.extend`, version 1.0.2 (versionCode 3; 1.0.0 had minSdk 30),
-minSdk 26 (Android 8.0), target/compile SDK 36. It
-pairs the device with Extend, keeps it connected, shows who is using it with a Stop button, and runs
-a Silicon's agent-device commands on the device. It speaks exactly `docs/device-protocol.md`.
+One APK, package `com.teamofsilicons.extend`, version 1.1.0 (versionCode 4; 1.0.2 was versionCode 3,
+1.0.0 had minSdk 30), minSdk 26 (Android 8.0), target/compile SDK 36. It
+pairs the device with Extend (with one Carbon or several, like a family TV), keeps it connected,
+shows who is using it with a Stop button, says whether the device is awake and shows a Silicon's
+request to wake it, and runs a Silicon's device commands (`extend snapshot`, `extend click`, …)
+on the device. It speaks exactly `docs/device-protocol.md`.
 Phones, tablets, Android TV, Google TV and Fire OS 7 on Android 8 and later install it; many TVs,
 TV boxes, projectors and Fire TV sticks run Android 8–10 (see "Android versions" below).
 
@@ -203,9 +205,72 @@ Sideloaded APKs on Android 13+ must first get **Allow restricted settings** (Set
 Silicon Extend › ⋮) before Android lets the Carbon turn on the accessibility service or notification
 access; the setup help says so.
 
+## Several Carbons, waking, and setup retries (1.1)
+
+UNDERSTANDING.md, The Extend app, Pairing, Access, Waking a device and Always visible.
+
+- **One pair per Carbon.** The app keeps a sealed list of `{device id, credential}`
+  (`security/SecretStore.kt`, `PairVault`), one per Carbon who paired the device; a 1.0 app's single
+  credential becomes the first pair on the first read (and stays readable as a fallback until that
+  pair ends). `core/ConnectionManager.kt` runs one connection per pair (`core/PairLink.kt`,
+  `PairSupervisor`): each is exactly a 1.0 device connection with that pair's credential, with its
+  own hello, back-off, `superseded` (Reconnect for that Carbon's pair) and `unpaired` (that pair
+  only; after the last one the app shows a pairing code). Commands answer on the connection they
+  came on and upload with that pair's credential. Stop goes on the session's own pair's connection,
+  else on any other (Extend stops the device's session from any of them), else `POST /device/stop`.
+- **Pair with another Carbon** (paired screen, "Carbons" card): first the shared-device note
+  ("Silicons any Carbon gives access to can use this whole device, including what others leave on
+  it"), then a new pairing code from `POST /api/v1/device/enrollments` (no body, a live pair's
+  credential), shown large on a TV and followed like a first pairing. A 1.0 service (404) and the
+  pair limit (409) end it with the reason. The card lists every Carbon with their name for the
+  device, and **Revoke pair** per Carbon with a confirmation naming that Carbon; it ends only that
+  pair (`DELETE /api/v1/device` with its credential). The in-use card says through which Carbon the
+  Silicon has access ("· through c:alice"); the breadcrumb no longer shows a Team.
+- **Awake.** `core/Wakefulness.kt`: a phone is awake only past its lock screen (`USER_PRESENT`
+  after the last `SCREEN_OFF`, or unlocked when a connection opens; an unlock sends
+  `input_seen: true`); a TV is awake while on (a screensaver counts), else `standby`. Receivers are
+  registered at runtime by the foreground service; a 5 s partial wake lock (`WAKE_LOCK`) lets the
+  `awake: false` frame leave when the screen goes off, and a connection quiet for more than 20 s is
+  re-made when the screen comes on. Every connection gets `awake` after its hello and on every
+  change, with one random `run` per app process and one `seq` across all connections. Awake is
+  never a gate, and the app never wakes a device (the TV power button stays refused).
+- **Wake requests.** One notification for every open request (`service/WakeNotifications.kt`,
+  channel "Silicons asking to use this device", id 4): `VISIBILITY_PRIVATE` with a public version
+  that names the Silicon but not its reason, `CATEGORY_REMINDER`, quiet unless the frame says
+  `alert` (a group that never alerts, on every Android version), gone at `expires_at`
+  (`setTimeoutAfter`); never a full-screen intent or `setTurnScreenOn`. `wake_request_shown` goes
+  once per request, with why not when notifications or the channel are off. A TV shows nothing and
+  answers `shown: false` ("This TV can't show notifications; its Carbon was told through Ting.").
+  The paired screen lists the requests the same way. A request goes on `wake_request_ended`, at its
+  expiry, or when the device reports itself awake.
+- **Sides.** While a session runs, every request whose side differs from the session's
+  (`session_started.side`) shows no Silicon and no reason ("A Silicon asked to use this phone. Its
+  Carbon was told through Ting."). The app hides them, and re-posts the notification and waits until
+  Android shows the new version, before it handles the next frame, so before that session's first
+  command. `notifications` never lists Silicon Extend's own notifications.
+- **Keeping the screen on** only while a session runs, the device is awake, and it isn't stopping or
+  in a takeover: on a TV the in-use badge's window gets `FLAG_KEEP_SCREEN_ON`; on a phone a
+  one-pixel, untouchable accessibility overlay titled "Silicon Extend keeps the screen on" does
+  (`a11y/ScreenKeeper.kt`). No wake locks that could turn a screen on; the Carbon can still lock it.
+- **Setup retries** (`hello.features: ["setup_retry"]`): the failed steps are Android debugging
+  that the Carbon connected and Extend can't reconnect to, and accessibility switched on but never
+  started by Android (Android 8–9 after an update). Each shows a plain-language error and a Retry
+  button; Retry here or `setup_retry` from Extend (the website's Retry, `extend device setup
+  --retry`) marks it in progress, reconnects at once (debugging) or looks again (accessibility),
+  and the next `setup_progress` says how it went. Technical detail goes to the app's log.
+- **Clicks on TVs.** When the accessibility click on an element and its nearest clickable ancestor
+  is refused, or nothing on screen changes within a second, `click` (and `find … click`) focuses
+  the element on a TV and presses select through Android debugging (`input keyevent 23`, result
+  `method: adb_select`), taps it through Android debugging (`input tap`, `adb_tap`), presses
+  accessibility's select key on Android 13+ TVs (`accessibility_select`), or finally taps it with a
+  gesture (`tap`).
+- **Android 8.0/8.1:** the accessibility service also receives `typeViewScrolled` (and the click
+  events); without it those versions kept a scrolled list's old rows in the node cache, so a
+  snapshot after a scroll showed the rows from before it.
+
 ## Tests
 
-- **JVM unit tests** (`app/src/test`, 181 tests): every frame example in `docs/device-protocol.md`
+- **JVM unit tests** (`app/src/test`, 226 tests; 236 with `vendor/libadb`): every frame example in `docs/device-protocol.md`
   decoded/encoded (plus the `{"type","data"}` envelope form and unknown frames), argument parsing for
   every command (and the refusals), selector parsing/matching, snapshot filtering/ref assignment/
   text/JSON/diff, alert detection, `.ad`/batch parsing, reconnect backoff; and for Android
@@ -249,12 +314,47 @@ access; the setup help says so.
   `vendor/libadb/src/test` (10 tests: `ExtendTransportTest` 7, `AndroidPubkeyTest` 3) covers the
   transport changes against a scripted peer. `app/src/androidTest` has 20 instrumented tests
   (below).
+  1.1: `PairVaultTest` (the pair list, the 1.0 migration and its fallback, a lost Keystore key),
+  `PairLinkTest` (one connection per credential, `unpaired` on one keeps the others, superseded waits
+  for Reconnect, back-off, a quiet connection re-made at screen-on, and a session's frames handled
+  in order so `session_started` finishes before its first command), `WakefulnessTest` (the awake
+  table for phones and TVs), `WakeRequestsTest` (sides and redaction, the one notification's words,
+  its private/public/quiet spec, the listener leaving out Extend's own notifications),
+  `MultiCarbonTest` (the Carbons line, the connection summary, Pair with another Carbon's refusals,
+  keeping the screen on, the TV click fallback's order, setup retries), plus the 1.1 frames in
+  `FramesTest`, plain setup errors in `AndroidVersionsTest` and `DebuggingAfterRestartTest`, a
+  pair's commands in `CommandJobsTest`, a pair's sessions in `SessionRetentionTest`, and a final
+  refusal in `EnrollmentLoopTest`.
 - **Fake service** `tools/fake-service/fake_extend.py` (Python standard library only: HTTP + a
-  minimal WebSocket). It implements the device half of the protocol, checks upload digests, and
-  runs scenarios. `tools/fake-service/run-emulator-test.sh phone|tv` does everything on a running
-  emulator: install, launch pointed at the fake, check the code on screen equals the service's, grant
-  access with adb, claim the code, run the scenario (84 checks on a phone and 36 on a TV passed on
-  2026-09-26; the scenario was not rerun on 2026-09-27).
+  minimal WebSocket). It implements the device half of the protocol for several Carbons' pairs
+  (c:alice, c:bob, …; `POST /api/v1/device/enrollments`, one socket per pair), checks upload
+  digests, and runs scenarios: `phone`, `tv`, `smoke` and `multi` (Pair with another Carbon with its
+  note and code, a second connection, a wake notification and `wake_request_shown` once, another
+  side's `session_started` then `notifications` at once and `dumpsys notification --noredact` with
+  no other side's Silicon or reason, the keep-screen-on window during a session and not after,
+  Stop while the session's own pair is down, SLEEP/WAKEUP giving `awake` frames in order on both
+  connections, `setup_retry`, Revoke pair for one Carbon, and a pairing code after the last pair
+  ends). `tools/fake-service/run-emulator-test.sh <scenario>` does everything on one emulator:
+  install, launch pointed at the fake, check the code on screen equals the service's, grant access
+  with adb, claim the code, run the scenario. It names the device on every adb call: pass
+  `SERIAL=emulator-5580` for an emulator you started, or `AVD=<name> EMU_PORT=5580` to have it start
+  that AVD and stop that emulator (by its serial) at the end. It stops only what it started (the
+  emulator by serial, the fake service by process id) and runs on emulators only unless
+  `ALLOW_PHYSICAL=1`.
+  Results with 1.1.0 (2026-09-27, emulators on ports 5610–5616, arm64): `multi` passed 42 of 42 on
+  Android 8.0 (API 26 `default`), Android 9 (API 28, three runs) and Android 16 (API 36), and 35 of
+  35 on the Android TV 14 emulator (it leaves out the phone-only checks); `phone` passed 84 of 84 on
+  Android 16 and 79 of 84 on Android 9 (the five failures are the expected ones: no
+  `screen.capture` and three `screenshot` refusals without Android debugging before Android 11,
+  and a `text="Apps"` selector that matches only newer Settings); `tv` passed 36 of 36 on Android
+  TV 14. On Android 9 in TV mode (`FORCE_TV=1`) `tv` fails only the expected refusals (no D-pad
+  and no screenshots without Android debugging before Android 13 and 11), and `multi` can't reach
+  the buttons below the fold there for the same reason (a Silicon can't scroll a TV without a
+  D-pad). Android TV images for Android 9–11 exist only for x86, which doesn't run on this arm64
+  Mac. A snapshot after `scroll down` showed the new rows on Android 8.0 (the stale-cache fix), and
+  a `find … click` on a TV that fell back to a tap answered `method: tap`. Not run: physical
+  devices (the Pixel and Samsung lock screens, an Android TV in standby, a Fire TV), and the
+  instrumented `app/src/androidTest` suites (unchanged in 1.1).
   `tools/fake-service/bcmd <command> [args…]` sends one command to a device paired with a running
   fake (`/_test/command`); `/_test/frame` and `/_test/close` send any frame or close code.
 - **Real service** (`crates/extend-service` on `http://127.0.0.1:8480`, emulator `10.0.2.2:8480`,
@@ -270,21 +370,21 @@ access; the setup help says so.
 
 1. **An AccessibilityService, not ADB over loopback, reads and acts on the screen.** An app can't
    drive its own device's ADB without the wireless-debugging pairing dance, it breaks on every
-   reboot, and needs Wi-Fi. The accessibility tree gives the same element list agent-device's
+   reboot, and needs Wi-Fi. The accessibility tree gives the same element list the device engine's
    Android helper reads (it is itself built on `UiAutomation`), `dispatchGesture` taps/swipes,
    `performGlobalAction` presses back/home/recents/D-pad, and `takeScreenshot` (API 30+) captures
    the screen (before Android 11, screenshots need Android debugging's `screencap`). The service is also what Android allows to start activities from the background,
    which `open`, `display` and `clipboard read` need.
-2. **agent-device semantics, re-implemented in Kotlin.** The snapshot follows agent-device's Android
+2. **The device engine's semantics, re-implemented in Kotlin.** The snapshot follows the engine's Android
    presentation (`ui-hierarchy-inclusion.ts`, `snapshot-lines.ts`): label = text or content
    description, value = text, identifier = resource id; `-i` keeps touch/focus targets and their
    labelled proxies; unlabelled groups fold away; refs `@e1…` in document order, held per session
-   until the next snapshot; capped at 5000 nodes (`truncated`). Selectors are agent-device's grammar
+   until the next snapshot; capped at 5000 nodes (`truncated`). Selectors are the engine's grammar
    (`role="button" label="Continue" || text=Next`, boolean keys, case/space-insensitive equality);
    `role` matches the Android class (`button`, `edittext`) or the display role (`text-field`); `id`
    also matches the bare entry name. `find` scores exact over contains and rejects ambiguity unless
-   `--first/--last`. `agent_device_version` is sent as null because agent-device itself isn't
-   embedded.
+   `--first/--last`. `hello` and the enrollment leave `engine_version` out because the engine itself
+   isn't embedded.
 3. **Capabilities are exactly what works now.** Accessibility-backed capabilities appear only while
    the service is connected; notifications only while notification access is connected. The app
    sends `hello` again when capabilities change and `setup_progress` when only setup changes (polled
@@ -299,8 +399,10 @@ access; the setup help says so.
 5. **TV in-use badge** is a `TYPE_ACCESSIBILITY_OVERLAY` window (no "display over other apps"
    permission), not focusable or touchable, left out of snapshots.
 6. **Credential storage**: AES-256-GCM key in the Android Keystore; only ciphertext on disk
-   (EncryptedSharedPreferences is deprecated). The enrollment secret stays in memory; an abandoned
-   enrollment is discarded with `DELETE /api/v1/enrollments/{id}`.
+   (EncryptedSharedPreferences is deprecated), one sealed list of every pair's credential. The
+   enrollment secret stays in memory; an abandoned enrollment is discarded with
+   `DELETE /api/v1/enrollments/{id}`. Android pairs are never rotated: `adb shell` can't read the
+   app's private storage or its Keystore key, so the app ignores `credential` frames (computers only).
 7. **Foreground service type `specialUse`** (allowed to start from `BOOT_COMPLETED` on Android 15+),
    started at boot and after app updates when paired.
 8. **Attachments** (`docs/device-protocol.md`, "Attachments") are written to a per-command scratch
@@ -353,8 +455,10 @@ Phone (Android 16 emulator) and TV (Android TV 14 emulator):
   the network returns), close codes 4401 (forget → pairing), 4409 (stop, show Reconnect), 4426
   (stop, "Update Silicon Extend"), `superseded`, `unpaired`, `refresh` → `GET /device`,
   `environment` → permanent banner, start at boot and after updates.
-- Paired screen: device name, owner, team, connection, who is using it, Stop, takeover reason + Done
-  (`takeover_done`), setup cards with deep links, Revoke pair with confirmation (`DELETE /device`).
+- Paired screen: device name, the Carbons it is paired to, connection, who is using it and through
+  which Carbon, Stop, takeover reason + Done (`takeover_done`), wake requests, setup cards with deep
+  links and Retry on a failed step, Pair with another Carbon, Revoke pair per Carbon with
+  confirmation (`DELETE /device`).
   Phone notification "si:chef is using this device" with Stop (tested from the shade); TV badge.
 - Commands: `snapshot` (`-i -d -s --raw --diff`), `diff snapshot`, `get text|attrs`, `find` (all
   locators/actions), `is` (all predicates), `wait` (ms, text, ref, selector, absent), `screenshot`
@@ -380,8 +484,8 @@ Phone (Android 16 emulator) and TV (Android TV 14 emulator):
   send those keys), and D-pad buttons before Android 13.
 - `hover`, `click --button secondary`, `open --surface` (computer-only), `gesture transform`,
   `replay --from/--plan-digest`, Maestro flows, `close --save-script`, `diff screenshot`,
-  `snapshot --actions` (iOS-only in agent-device too), batch steps in agent-device's structured
-  `input` form (use `{"command","args"}`).
+  `snapshot --actions` (iOS only), batch steps in the structured `input` form (use
+  `{"command","args"}`).
 - `clipboard read` briefly takes window focus (Android 10+ only lets the focused app read the
   clipboard), which can close the keyboard or a menu in the app underneath.
 - `close` goes home and ends background processes; force-stop needs Android debugging.
@@ -549,7 +653,7 @@ is disconnected.
   `action_failed` and a hint to split it on the device first. File names with non-ASCII characters work (the upload header
   carries an ASCII form; the file keeps its name). The CLI attaches local inputs for push/install.
 - `extend install <package.name> <local.apk>` checks APK package identity, then installs over any
-  existing copy, keeping its data. `reinstall` gives fresh data as agent-device does: it uninstalls
+  existing copy, keeping its data. `reinstall` gives fresh data as the device engine does: it uninstalls
   the app (and its data) first, then installs; if that install then fails, the app stays removed and
   the message says so. `adb install [-r] <local.apk>` and `adb uninstall <package>` are also
   supported. The service limit of 8 MiB total inline attachments still applies; large APKs and
@@ -638,18 +742,18 @@ Verification commands:
 
 ```sh
 ./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest
-adb -s emulator-5554 install -r -g app/build/outputs/apk/debug/app-debug.apk
-adb -s emulator-5554 install -r -g app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s emulator-5580 install -r -g app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-5580 install -r -g app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 # Legacy lane, dedicated emulator only: enable TCP debugging once and approve the app's RSA prompt.
 # Emulators before Android 11 (checked on API 28) never listen on TCP: also run
 # `adb -s <serial> reverse tcp:5555 tcp:<console port + 1>` (see "Checked on Android 8.0 and 9").
-adb -s emulator-5554 tcpip 5555
-adb -s emulator-5554 shell am instrument -w -e class com.teamofsilicons.extend.LocalAdbTest \
+adb -s emulator-5580 tcpip 5555
+adb -s emulator-5580 shell am instrument -w -e class com.teamofsilicons.extend.LocalAdbTest \
   -e local_daemon true com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner
-adb -s emulator-5554 shell am instrument -w -e class com.teamofsilicons.extend.RecordingTest \
+adb -s emulator-5580 shell am instrument -w -e class com.teamofsilicons.extend.RecordingTest \
   com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner
 # TLS lane, dedicated emulator only: pairs through Android's own pairing-code dialog.
-python3 tools/wireless-debugging-lane.py --serial emulator-5554
+python3 tools/wireless-debugging-lane.py --serial emulator-5580
 # With this device paired to the local Extend service and debugging connected:
 ../../e2e/android-adb.sh <device-id>
 ```
@@ -670,7 +774,7 @@ uninstalled after the test.
 a still screen (one-frame segments), a burst followed by a still screen, an automatic stop at the
 duration limit, left-out empty and corrupt segments, a retried delivery and too little free space.
 Long Android recording verification (dedicated emulator only): `RUN_LONG=1 bash
-e2e/android-recording.sh emulator-5554` from the repository root also runs
+e2e/android-recording.sh emulator-5580` from the repository root also runs
 `RecordingTest#beyondNativeLimit` (about 190 seconds, requires frames after the 180-second
 boundary). Proof videos are saved under the target app's external files directory. Decode
 variable-rate Android video with its source time base, e.g.
@@ -681,10 +785,10 @@ For long-video relay/upload/download through the real local development service,
 emulator's on-device debugging client enabled with the opt-in instrumentation setup:
 
 ```sh
-adb -s emulator-5554 shell am instrument -w \
+adb -s emulator-5580 shell am instrument -w \
   -e class com.teamofsilicons.extend.LocalAdbTest#connectLocalForService -e service_test true \
   com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner
-adb -s emulator-5554 shell am start -n com.teamofsilicons.extend/.ui.MainActivity
+adb -s emulator-5580 shell am start -n com.teamofsilicons.extend/.ui.MainActivity
 python3 e2e/android-recording-service.py <paired-emulator-device-id>
 ```
 

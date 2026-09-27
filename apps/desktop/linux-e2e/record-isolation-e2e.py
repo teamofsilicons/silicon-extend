@@ -15,7 +15,7 @@ import time
 root=Path('/src')
 out=Path(tempfile.mkdtemp(prefix='isolated-recording-',dir='/tmp/out'))
 fixture_script=root/'apps/desktop/linux-e2e/record-fixture.py'
-worker=root/'vendor/agent-device/linux/screen-record.py'
+worker=root/'vendor/extend-engine/linux/screen-record.py'
 fixture=subprocess.Popen(['python3',str(fixture_script)])
 peer=None
 recorder=None

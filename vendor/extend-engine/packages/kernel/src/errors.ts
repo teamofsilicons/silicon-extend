@@ -512,7 +512,7 @@ export function defaultHintForCode(code: string): string | undefined {
     case 'AMBIGUOUS_MATCH':
       return 'Multiple candidates matched. Narrow the query or pass an exact identifier.';
     case 'DEVICE_IN_USE':
-      return 'The device is busy with another agent-device request; retry once it frees up.';
+      return 'The device is busy with another device engine request; retry once it frees up.';
     case 'REPLAY_DIVERGENCE':
       return 'Read details.divergence (screen/suggestions) for repair context, or rerun with --json for the full report.';
     case 'REPAIR_SESSION_EXPIRED':

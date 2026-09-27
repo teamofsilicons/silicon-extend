@@ -4,10 +4,7 @@ import { emitAndroidAdbDiagnostic, requireAndroidAdbHost } from './adb-host.ts';
 import { resolveAndroidAdbExecutor } from './adb-provider-scope.ts';
 import { runAdbShell } from './adb-executor.ts';
 import type { AndroidAdbExecutor } from './adb-transport.ts';
-import {
-  ANDROID_IME_HELPER_SERVICE_COMPONENT,
-  getAndroidImeHelperDeviceKey,
-} from './ime-helper.ts';
+import { getAndroidImeHelperDeviceKey, isAndroidImeHelperServiceComponent } from './ime-helper.ts';
 import {
   clearPersistedPreviousIme,
   readAndroidDefaultInputMethod,
@@ -63,7 +60,8 @@ function isDeviceRecoveryComplete(reason: AndroidTestImeRestoreReason): boolean 
 
 // Undo the helper switch on one device. Invariants the review requires:
 //  - Never restore a device a live session in this process owns (the fire-and-forget startup race).
-//  - Only touch the IME when the helper is STILL the active input method. If the user (or a
+//  - Only touch the IME when the helper (under its Silicon Extend or its fork name) is STILL the
+//    active input method. If the user (or a
 //    concurrent session) already switched away, leave their choice alone.
 //  - Only clear the persisted recovery value AFTER confirming the previous IME is actually
 //    restored (read-back). A failed `ime set` keeps the value so recovery can retry.
@@ -81,7 +79,7 @@ async function restoreAndroidTestImeFor(
     return { restored: false, reason: 'no-record' };
   }
   const currentIme = await readAndroidDefaultInputMethod(adb);
-  if (currentIme !== ANDROID_IME_HELPER_SERVICE_COMPONENT) {
+  if (!isAndroidImeHelperServiceComponent(currentIme)) {
     // Helper is not active — the user switched away, or the helper was never really set. Do not
     // overwrite the current IME, and do not clear the device record (a concurrent activation could
     // have just written it).

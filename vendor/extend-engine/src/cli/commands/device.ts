@@ -61,7 +61,7 @@ async function runDeviceRelease(flags: CliFlags): Promise<boolean> {
       'INVALID_ARGS',
       'device release only releases provably stale claims; pass --stale to confirm.',
       {
-        hint: 'A live owner is released by closing its session from its own workspace, or by stopping its daemon: agent-device daemon stop --state-dir <owner state dir>.',
+        hint: 'A live owner is released by closing its session from its own workspace, or by stopping its daemon: extend daemon stop --state-dir <owner state dir>.',
       },
     );
   }
@@ -125,7 +125,7 @@ function releaseRefusalHint(outcome: DeviceClaimStaleReleaseOutcome): string {
   }
   if (outcome.classification === 'live' || outcome.classification === 'owner-state-dir-gone') {
     return outcome.stateDir
-      ? `close the owning session from its workspace, or stop its daemon: agent-device daemon stop --state-dir ${shellQuoteIfNeeded(outcome.stateDir)}`
+      ? `close the owning session from its workspace, or stop its daemon: extend daemon stop --state-dir ${shellQuoteIfNeeded(outcome.stateDir)}`
       : 'close the owning session from its workspace first.';
   }
   return 'only provably dead owners are released; nothing was changed.';
@@ -245,5 +245,5 @@ function buildStaleInspectionCommand(
     flags.udid ? `--udid ${shellQuoteIfNeeded(flags.udid)}` : null,
     flags.serial ? `--serial ${shellQuoteIfNeeded(flags.serial)}` : null,
   ].filter((part): part is string => Boolean(part));
-  return [`agent-device device ${subcommand}`, ...selectors, '--stale'].join(' ');
+  return [`extend device ${subcommand}`, ...selectors, '--stale'].join(' ');
 }

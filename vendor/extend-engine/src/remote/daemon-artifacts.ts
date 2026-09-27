@@ -13,7 +13,7 @@ import { createStderrUploadProgressReporter, type UploadProgressSink } from './u
 // (the daemon's own default). Duplicated rather than imported: pulling it from
 // `@agent-device/contracts` grew that package's pinned eager-import closure by 3 modules for one
 // string (#2246) — not worth it for a literal that only ever changes alongside this comment.
-const DEFAULT_TEST_ARTIFACTS_ROOT = '.agent-device/test-artifacts';
+const DEFAULT_TEST_ARTIFACTS_ROOT = '.silicon-extend/engine/test-artifacts';
 
 export type DaemonArtifactEndpoint = {
   baseUrl?: string;
@@ -339,7 +339,7 @@ function buildRemoteTempArtifactPath(prefix: string, extension: string): string 
   const safeExtension = extension.startsWith('.') ? extension : `.${extension}`;
   return path.posix.join(
     '/tmp',
-    `agent-device-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${safeExtension}`,
+    `extend-engine-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${safeExtension}`,
   );
 }
 
@@ -347,7 +347,7 @@ function buildRemoteTempArtifactPath(prefix: string, extension: string): string 
 function buildRemoteTempArtifactDirPath(prefix: string): string {
   return path.posix.join(
     '/tmp',
-    `agent-device-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    `extend-engine-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
 }
 

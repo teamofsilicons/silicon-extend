@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs inside the silicon-extend-linux-e2e container (see run.sh). Builds extend-agent, starts a
 # real X11 desktop with the AT-SPI bus and GNOME Calculator, and drives it through the agent's own
-# Linux driver (agent-device underneath): probe, open, snapshot, click, type, get, screenshot,
+# Linux driver (the device engine underneath): probe, open, snapshot, click, type, get, screenshot,
 # clipboard, apps, terminal, close. With EXTEND_E2E_SERVICE set, it also runs the full agent
 # against that Extend service: pair, session, commands with uploads, stop, remove.
 set -euo pipefail
@@ -15,13 +15,13 @@ export EXTEND_AGENT_CREDENTIAL_STORE=file
 mkdir -p "$SILICON_HOME" /tmp/out
 rm -rf /tmp/out/*
 
-log "Copy the source (read-only mount) and agent-device's runtime files"
-mkdir -p /work /opt/agent-device
-tar -C /src --exclude=./target --exclude=node_modules --exclude=./.git --exclude=./vendor/agent-device -cf - . | tar -C /work -xf -
-# agent-device's dist is self-contained: bin/, dist/, linux/atspi-dump.py and package.json are all it needs.
-tar -C /src/vendor/agent-device -cf - bin dist linux package.json | tar -C /opt/agent-device -xf -
-export EXTEND_AGENT_DEVICE=/opt/agent-device/bin/agent-device.mjs
-node "$EXTEND_AGENT_DEVICE" --version
+log "Copy the source (read-only mount) and the device engine's runtime files"
+mkdir -p /work /opt/extend-engine
+tar -C /src --exclude=./target --exclude=node_modules --exclude=./.git --exclude=./vendor/extend-engine -cf - . | tar -C /work -xf -
+# The engine's dist is self-contained: bin/, dist/, linux/atspi-dump.py and package.json are all it needs.
+tar -C /src/vendor/extend-engine -cf - bin dist linux package.json | tar -C /opt/extend-engine -xf -
+export EXTEND_ENGINE=/opt/extend-engine/bin/extend-engine.mjs
+node "$EXTEND_ENGINE" --version
 
 log "Build extend-agent (with the tray, to prove the Linux UI compiles)"
 cd /work
@@ -36,7 +36,7 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
 fi
 
 log "Headless probe (no DISPLAY): a server gets only the terminal"
-# Its own home: agent-device's daemon keeps the environment of the run that started it, so the
+# Its own home: the engine's daemon keeps the environment of the run that started it, so the
 # desktop runs below must not share a daemon started without a display.
 env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -c '{capabilities, setup: .setup.state, missing: [.missing[] | select(.capability == "apps.launch")]}'
 [[ "$(env -u DISPLAY SILICON_HOME=/tmp/server-home "$BA" probe --json | jq -c .capabilities)" == '["terminal"]' ]] || fail "headless capabilities"
@@ -56,7 +56,7 @@ gnome-calculator >/tmp/calculator.log 2>&1 &
 for _ in $(seq 100); do wmctrl -l 2>/dev/null | grep -qi calculator && break; sleep 0.2; done
 wmctrl -l
 # GTK4 on X11 reports its window at (0,0) to AT-SPI whatever the window manager chose, so
-# agent-device's screen coordinates are only right for a window at the top-left corner.
+# the engine's screen coordinates are only right for a window at the top-left corner.
 wmctrl -r Calculator -e 0,0,0,-1,-1
 sleep 0.5
 xwininfo -name Calculator | grep -E "Absolute upper-left|Width|Height"
@@ -86,7 +86,7 @@ SEVEN=$(ref_for 7); PLUS=$(ref_for "+"); FIVE=$(ref_for 5); EQUALS=$(ref_for "="
 echo "refs: 7=@$SEVEN +=@$PLUS 5=@$FIVE ==@$EQUALS"
 [[ -n "$SEVEN" && -n "$PLUS" && -n "$FIVE" && -n "$EQUALS" ]] || fail "calculator buttons not found in the snapshot"
 
-log "click @ref 7, then selectors + 5 = (an action expires earlier refs, as in agent-device)"
+log "click @ref 7, then selectors + 5 = (an action expires earlier refs, as in the engine)"
 run 03-click-ref click "@$SEVEN"; ok 03-click-ref
 i=0
 for l in "+" "5" "="; do i=$((i+1)); run "03-click-$i" click "role=\"button\" label=\"$l\""; ok "03-click-$i"; done
@@ -116,7 +116,7 @@ run 09-clip-read clipboard read; ok 09-clip-read
 jq -r .text /tmp/out/09-clip-read.json | grep -q "extend-e2e" || fail "clipboard read"
 
 log "apps / appstate"
-# agent-device has no app inventory on Linux; the probe reports apps.list as missing, and the
+# The engine has no app inventory on Linux; the probe reports apps.list as missing, and the
 # command answers unsupported_on_device.
 run 10-apps apps
 [[ "$(jq -r .error.code /tmp/out/10-apps.json)" == "unsupported_on_device" ]] || jq -e .ok /tmp/out/10-apps.json >/dev/null || fail "apps"

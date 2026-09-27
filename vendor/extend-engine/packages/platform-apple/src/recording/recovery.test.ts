@@ -341,7 +341,7 @@ test.each([
   [
     'macOS runner with remote path',
     { ...coreDevice, appleOs: 'macos' as const, target: 'desktop' as const },
-    'tmp/agent-device-recording-123.mp4',
+    'tmp/silicon-extend-recording-123.mp4',
   ],
 ] as const)(
   'rejects %s descriptor coherence before any ownership side effect',
@@ -354,7 +354,7 @@ test.each([
               ? {
                   runnerSessionId: 'runner-session',
                   runnerAuthority: 'local-lease',
-                  remotePath: 'tmp/agent-device-recording-123.mp4',
+                  remotePath: 'tmp/silicon-extend-recording-123.mp4',
                 }
               : {},
         },

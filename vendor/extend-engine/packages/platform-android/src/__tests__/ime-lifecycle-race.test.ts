@@ -14,7 +14,7 @@ import {
   runStartupRecoveryFence,
 } from '@agent-device/contracts/startup-recovery-fence';
 
-const HELPER_SERVICE = 'com.callstack.agentdevice.imehelper/.TestInputMethodService';
+const HELPER_SERVICE = 'com.teamofsilicons.extend.imehelper/.TestInputMethodService';
 const LATIN_IME = 'com.google.android.inputmethod.latin/.LatinIME';
 const PREVIOUS_IME_KEY = 'agent_device_ime_helper_previous_ime';
 const STATE_DIR = '/ime-race-state';
@@ -50,7 +50,7 @@ vi.mock('../ime-helper.ts', async (importOriginal) => {
       version: '0.0.0',
       assetName: 'ime-helper.apk',
       sha256: 'fixture',
-      packageName: 'com.callstack.agentdevice.imehelper',
+      packageName: 'com.teamofsilicons.extend.imehelper',
       versionCode: 1,
       serviceComponent: HELPER_SERVICE,
       broadcastProtocol: 'android-ime-helper-v1' as const,

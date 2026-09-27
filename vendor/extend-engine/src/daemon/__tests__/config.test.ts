@@ -20,14 +20,14 @@ test('resolveDaemonPaths keeps packaged installs on the global daemon state dire
   const home = mkdtempForTestSync('agent-device-config-home-');
   const packageRoot = mkdtempForTestSync('agent-device-package-root-');
   try {
-    fs.writeFileSync(path.join(packageRoot, 'package.json'), '{"name":"agent-device"}\n');
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), '{"name":"silicon-extend-engine"}\n');
 
     const paths = resolveDaemonPaths(undefined, {
       env: { HOME: home },
       projectRoot: packageRoot,
     });
 
-    assert.equal(paths.baseDir, path.join(home, '.agent-device'));
+    assert.equal(paths.baseDir, path.join(home, '.silicon-extend', 'engine'));
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(packageRoot, { recursive: true, force: true });
@@ -40,7 +40,7 @@ test('resolveDaemonPaths scopes source checkout defaults by project root', () =>
   const secondRoot = mkdtempForTestSync('agent-device-source-b-');
   try {
     for (const root of [firstRoot, secondRoot]) {
-      fs.writeFileSync(path.join(root, 'package.json'), '{"name":"agent-device"}\n');
+      fs.writeFileSync(path.join(root, 'package.json'), '{"name":"silicon-extend-engine"}\n');
       fs.mkdirSync(path.join(root, 'src'), { recursive: true });
       fs.writeFileSync(path.join(root, 'src', 'daemon.ts'), 'export {};\n');
     }
@@ -54,8 +54,8 @@ test('resolveDaemonPaths scopes source checkout defaults by project root', () =>
       projectRoot: secondRoot,
     });
 
-    assert.match(firstPaths.baseDir, /^.+\/\.agent-device\/dev\/agent-device-source-a-/);
-    assert.match(secondPaths.baseDir, /^.+\/\.agent-device\/dev\/agent-device-source-b-/);
+    assert.match(firstPaths.baseDir, /^.+\/\.silicon-extend\/engine\/dev\/agent-device-source-a-/);
+    assert.match(secondPaths.baseDir, /^.+\/\.silicon-extend\/engine\/dev\/agent-device-source-b-/);
     assert.notEqual(firstPaths.baseDir, secondPaths.baseDir);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });

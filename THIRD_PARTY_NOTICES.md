@@ -12,21 +12,22 @@ What ships where:
 |---|---|---|
 | `extend` CLI (Honeycomb archive, six targets) | Rust crates | `licences/` in every target of the archive (`targets/<target>/licences/`): `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
 | Extend service (container image) | Rust crates, including `silicon-iam-client` | `/usr/share/doc/silicon-extend/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt` |
-| Mac app (`Silicon Extend.app`) | Rust crates, the agent-device fork and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`, `agent-device/LICENSE`, `node/LICENSE` |
-| Linux tarball and `.deb` | Rust crates, the agent-device fork (including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `share/doc/silicon-extend/` (`LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`), `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE` |
-| Windows zip | Rust crates, fonts inlined in the window (no Node.js, no agent-device) | `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt` beside the executable |
+| Mac app (`Silicon Extend.app`) | Rust crates, the device engine (a fork of agent-device) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`, `agent-device/LICENSE`, `node/LICENSE` |
+| Linux tarball and `.deb` | Rust crates, the device engine (a fork of agent-device, including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `share/doc/silicon-extend/` (`LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`), `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE` |
+| Windows zip | Rust crates, fonts inlined in the window (no Node.js, no device engine) | `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt` beside the executable |
 | Android APK | libadb-android, spake2-android, Conscrypt/BoringSSL, Bouncy Castle, AndroidX/Compose, Kotlin, OkHttp/Okio, fonts | The app's **Open-source licences** screen: `apps/android/app/src/main/assets/open_source_licences.txt`, with the full licence texts |
 | Configuration website | SolidJS, Lucide icons, fonts | [`/licences.txt`](https://extend.teamofsilicons.com/licences.txt): Extend's licence and the full text of each package the site ships (`web/scripts/gen-licences.mjs`, run by every build) |
 
 ## Forked and vendored components
 
-### agent-device (fork)
+### agent-device (fork): the device engine, `vendor/extend-engine`
 
 - Upstream: https://github.com/callstack/agent-device, forked at `bce6f52` (v0.21.15).
-- Licence: **MIT**, Copyright (c) 2026 Callstack. Text: [`vendor/agent-device/LICENSE`](vendor/agent-device/LICENSE),
+- Licence: **MIT**, Copyright (c) 2026 Callstack. Text: [`vendor/extend-engine/LICENSE`](vendor/extend-engine/LICENSE),
   shipped next to the runtime in the Mac and Linux packages.
 - Modified by Silicon Extend. Every change is listed, newest first, in
-  [`vendor/agent-device/FORK.md`](vendor/agent-device/FORK.md).
+  [`vendor/extend-engine/FORK.md`](vendor/extend-engine/FORK.md). Silicon Extend names it
+  `silicon-extend-engine` and calls it the device engine.
 - Its build (`dist/`) inlines these npm packages (the fork's `tsdown.config.ts`, `deps.onlyBundle`),
   so they ship inside the Mac and Linux packages:
 
@@ -59,7 +60,7 @@ What ships where:
   | `yaml` | 2.9.0 | ISC |
   | `yauzl` | 3.4.0 | MIT |
 
-  Versions are the ones installed in `vendor/agent-device/node_modules` on 2026-09-27; `pnpm-lock.yaml`
+  Versions are the ones installed in `vendor/extend-engine/node_modules` on 2026-09-27; `pnpm-lock.yaml`
   is the authority. The fork's other workspace packages (`@agent-device/*`) are part of the fork itself.
 
 ### Node.js 22.23.3 (bundled in the Mac and Linux packages)
@@ -236,9 +237,9 @@ By licence expression (as `cargo metadata` reports it, with `A/B` spelled `A OR 
   licences; a crate under any other licence stops the generation). The CLI archive, the service
   image and the desktop packages copy `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt`
   (`scripts/package-cli.py`, `Dockerfile`, `apps/desktop/*/build-*`).
-- **agent-device:** after rebuilding the fork, re-read `deps.onlyBundle` in
-  `vendor/agent-device/tsdown.config.ts` and the licences of those packages; record fork changes in
-  `vendor/agent-device/FORK.md`.
+- **The device engine:** after rebuilding it, re-read `deps.onlyBundle` in
+  `vendor/extend-engine/tsdown.config.ts` and the licences of those packages; record changes to it
+  in `vendor/extend-engine/FORK.md`.
 - **Android:** run `python3 tools/notices/generate_notices.py` in `apps/android` after any
   dependency change (it fails on a licence it does not know), and refresh
   `gradle/verification-metadata.xml` as `apps/android/README.md` describes.

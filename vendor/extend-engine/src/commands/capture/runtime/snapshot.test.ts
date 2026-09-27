@@ -730,7 +730,7 @@ function createSnapshotOnlyDevice(result: BackendSnapshotResult) {
 function assertReactNativeOverlayWarning(warnings: string[] | undefined) {
   assert.equal(warnings?.length, 1);
   assert.match(warnings[0] ?? '', /Hint: React Native warning\/error overlay detected/);
-  assert.match(warnings[0] ?? '', /agent-device react-native dismiss-overlay/);
+  assert.match(warnings[0] ?? '', /extend react-native dismiss-overlay/);
   assert.match(warnings[0] ?? '', /verifies the overlay is gone/);
 }
 

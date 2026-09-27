@@ -186,7 +186,10 @@ test('doctor command opts into progress rows for human output', async () => {
   assert.equal(result.calls.length, 1);
   assert.equal(result.calls[0]?.command, 'doctor');
   assert.equal(result.calls[0]?.meta?.requestProgress, 'command');
-  assert.match(result.stdout, /✓ agent-device: agent-device 0\.17\.9 using \/tmp\/agent-device/);
+  assert.match(
+    result.stdout,
+    /✓ engine: Silicon Extend device engine 0\.17\.9 using \/tmp\/agent-device/,
+  );
 });
 
 test('doctor command keeps json output non-streaming', async () => {
@@ -846,7 +849,7 @@ test('test command writes JUnit report with failure metadata', async () => {
     const xml = await fs.readFile(reportPath, 'utf8');
     assert.match(
       xml,
-      /<testsuite name="agent-device replay suite" tests="3" failures="1" skipped="1" time="0\.025">/,
+      /<testsuite name="Silicon Extend replay suite" tests="3" failures="1" skipped="1" time="0\.025">/,
     );
     assert.match(
       xml,
@@ -885,7 +888,7 @@ test('test command supports explicit reporter lists', async () => {
     assert.equal(result.code, 1);
     assert.doesNotMatch(result.stdout, /Test summary:/);
     const xml = await fs.readFile(reportPath, 'utf8');
-    assert.match(xml, /<testsuite name="agent-device replay suite" tests="3" failures="1"/);
+    assert.match(xml, /<testsuite name="Silicon Extend replay suite" tests="3" failures="1"/);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

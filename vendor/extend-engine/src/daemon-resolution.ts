@@ -4,6 +4,7 @@ import path from 'node:path';
 import { expandUserHomePath, resolveUserPath } from '@agent-device/host-kit/file';
 import { findProjectRoot, isSourceCheckoutProjectRoot } from '@agent-device/host-kit/version';
 import { type EnvMap } from '@agent-device/kernel/source-value';
+import { ENGINE_HOME_DIRECTORY_SEGMENTS } from '@agent-device/kernel/extend-names';
 
 import type { DaemonServerMode, DaemonTransportPreference } from '@agent-device/kernel/contracts';
 export type { DaemonServerMode, DaemonTransportPreference };
@@ -54,7 +55,10 @@ function resolveStateDir(raw: string | undefined, options: ResolveDaemonPathsOpt
 }
 
 function resolveDefaultDaemonStateDir(options: ResolveDaemonPathsOptions = {}): string {
-  const globalStateDir = path.join(expandUserHomePath('~', { env: options.env }), '.agent-device');
+  const globalStateDir = path.join(
+    expandUserHomePath('~', { env: options.env }),
+    ...ENGINE_HOME_DIRECTORY_SEGMENTS,
+  );
   const projectRoot = options.projectRoot ?? findProjectRoot();
   if (!isSourceCheckoutProjectRoot(projectRoot)) {
     return globalStateDir;
@@ -66,7 +70,7 @@ function buildSourceCheckoutStateDirName(projectRoot: string): string {
   const resolvedRoot = resolveRealPath(projectRoot);
   const slug = path.basename(resolvedRoot).replaceAll(/[^a-zA-Z0-9._-]+/g, '-');
   const hash = crypto.createHash('sha1').update(resolvedRoot).digest('hex').slice(0, 12);
-  return `${slug || 'agent-device'}-${hash}`;
+  return `${slug || 'extend-engine'}-${hash}`;
 }
 
 function resolveRealPath(filePath: string): string {

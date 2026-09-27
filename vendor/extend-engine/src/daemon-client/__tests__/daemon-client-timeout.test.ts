@@ -49,7 +49,7 @@ test('request timeout hint only names Apple runner cleanup on actual evidence', 
       command: 'snapshot',
       appleCleanupEvidence: true,
     }),
-    'Retry with --debug and check daemon diagnostics logs. The timed-out snapshot request was canceled and Apple runner work was aborted when detected; the daemon was kept alive so the session can still be closed or inspected. If this was the first Apple-platform snapshot on the device, run agent-device prepare ios-runner with the same --platform before snapshot/test so runner startup is handled explicitly.',
+    'Retry with --debug and check daemon diagnostics logs. The timed-out snapshot request was canceled and Apple runner work was aborted when detected; the daemon was kept alive so the session can still be closed or inspected. If this was the first Apple-platform snapshot on the device, run extend prepare ios-runner with the same --platform before snapshot/test so runner startup is handled explicitly.',
   );
 
   // appleCleanupEvidence: false — no Apple-runner claim in any branch, and
@@ -107,7 +107,7 @@ test('a timed-out remote recording names the retry that returns the export', () 
       action: 'stop',
       session: 'recording',
     }),
-    'The remote daemon is still exporting the recording. Run agent-device record stop --session recording again to wait for that export and receive the completed recording.',
+    'The remote daemon is still exporting the recording. Run extend record stop --session recording again to wait for that export and receive the completed recording.',
   );
   assert.equal(
     resolveRequestTimeoutHint({
@@ -117,7 +117,7 @@ test('a timed-out remote recording names the retry that returns the export', () 
       appleCleanupEvidence: false,
       action: 'stop',
     }),
-    'The remote daemon is still exporting the recording. Run agent-device record stop again to wait for that export and receive the completed recording.',
+    'The remote daemon is still exporting the recording. Run extend record stop again to wait for that export and receive the completed recording.',
   );
   // A local timeout resets the daemon mid-export, so no keep-exporting promise is made.
   assert.equal(

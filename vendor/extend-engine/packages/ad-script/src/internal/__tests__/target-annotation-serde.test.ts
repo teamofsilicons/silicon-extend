@@ -56,9 +56,31 @@ test('serializeTargetAnnotationV1 uses the exact canonical field order from deci
   );
 });
 
-test('formatTargetAnnotationCommentLine emits the ASCII # agent-device:target-v1 prefix', () => {
+test('formatTargetAnnotationCommentLine emits the ASCII # extend:target-v1 prefix', () => {
   const line = formatTargetAnnotationCommentLine(baseEvidence());
-  assert.ok(line.startsWith('# agent-device:target-v1 {'));
+  assert.ok(line.startsWith('# extend:target-v1 {'));
+});
+
+test('a script saved under the fork name, # agent-device:target-v1, still reads the same', () => {
+  const evidence = baseEvidence();
+  const legacyLine = formatTargetAnnotationCommentLine(evidence).replace(
+    '# extend:target-v1',
+    '# agent-device:target-v1',
+  );
+  assert.deepEqual(parseTargetAnnotationCommentLine(legacyLine), { kind: 'v1', evidence });
+
+  const pair = {
+    source: baseEvidence({ id: 'source', label: 'Source' }),
+    destination: baseEvidence({ id: 'destination', label: 'Destination' }),
+  };
+  const legacyPairLine = formatMultiTargetAnnotationCommentLine(pair).replace(
+    '# extend:targets-v1',
+    '# agent-device:targets-v1',
+  );
+  assert.deepEqual(parseMultiTargetAnnotationCommentLine(legacyPairLine), {
+    kind: 'v1',
+    evidence: pair,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -103,7 +125,7 @@ test('targets-v1 rejects a wrapper above its bounded two-target payload cap', ()
 
 test('parseTargetAnnotationCommentLine accepts known fields in any JSON key order', () => {
   const line =
-    '# agent-device:target-v1 {"verification":"verified","sibling":0,"role":"button","viewportOrder":2,"ancestry":[],"id":"save"}';
+    '# extend:target-v1 {"verification":"verified","sibling":0,"role":"button","viewportOrder":2,"ancestry":[],"id":"save"}';
   const result = parseTargetAnnotationCommentLine(line);
   assert.equal(result.kind, 'v1');
   if (result.kind !== 'v1') throw new Error('unreachable');
@@ -119,7 +141,7 @@ test('parseTargetAnnotationCommentLine accepts known fields in any JSON key orde
 
 test('parseTargetAnnotationCommentLine ignores unknown fields', () => {
   const line =
-    '# agent-device:target-v1 {"role":"button","verification":"verified","futureField":{"nested":true}}';
+    '# extend:target-v1 {"role":"button","verification":"verified","futureField":{"nested":true}}';
   const result = parseTargetAnnotationCommentLine(line);
   assert.equal(result.kind, 'v1');
   if (result.kind !== 'v1') throw new Error('unreachable');
@@ -127,12 +149,12 @@ test('parseTargetAnnotationCommentLine ignores unknown fields', () => {
 });
 
 test('an unknown future target-vN annotation is an ordinary comment to a v1 reader', () => {
-  const result = parseTargetAnnotationCommentLine('# agent-device:target-v2 {"anything":"goes"}');
+  const result = parseTargetAnnotationCommentLine('# extend:target-v2 {"anything":"goes"}');
   assert.deepEqual(result, { kind: 'future-version' });
 });
 
 test('a line that merely mentions the tag in prose is an ordinary comment', () => {
-  assert.deepEqual(parseTargetAnnotationCommentLine('# see agent-device:target-v1 docs'), {
+  assert.deepEqual(parseTargetAnnotationCommentLine('# see extend:target-v1 docs'), {
     kind: 'none',
   });
   assert.deepEqual(parseTargetAnnotationCommentLine('# just a comment'), { kind: 'none' });
@@ -144,7 +166,7 @@ test('a line that is not a comment at all is not a target annotation', () => {
 
 test('leading and trailing whitespace around the annotation line does not break parsing', () => {
   const result = parseTargetAnnotationCommentLine(
-    '   # agent-device:target-v1 {"role":"button","verification":"verified"}   ',
+    '   # extend:target-v1 {"role":"button","verification":"verified"}   ',
   );
   assert.equal(result.kind, 'v1');
 });
@@ -204,7 +226,7 @@ test('Unicode labels (including astral code points) round trip losslessly', () =
 
 test('a v1 reader treats an annotation with only role + verification as valid, defaulting the rest', () => {
   const result = parseTargetAnnotationCommentLine(
-    '# agent-device:target-v1 {"role":"button","verification":"verified"}',
+    '# extend:target-v1 {"role":"button","verification":"verified"}',
   );
   assert.equal(result.kind, 'v1');
   if (result.kind !== 'v1') throw new Error('unreachable');
@@ -606,7 +628,7 @@ test('the annotation-line pattern rejects an interior-whitespace non-match in li
   // so the match FAILS — the retired form re-tried every split of the tab run
   // (quadratic; multi-second at this size), while the `\S` anchor admits a
   // single split point.
-  const adversarial = `#agent-device:target-v1${'\t'.repeat(100_000)}x\n`;
+  const adversarial = `#extend:target-v1${'\t'.repeat(100_000)}x\n`;
   const startedAt = Date.now();
   const match = TARGET_ANNOTATION_LINE_RE.exec(adversarial);
   const elapsedMs = Date.now() - startedAt;
@@ -615,6 +637,6 @@ test('the annotation-line pattern rejects an interior-whitespace non-match in li
 });
 
 test('parseTargetAnnotationCommentLine still recognizes versions across an interior whitespace run', () => {
-  const line = `#agent-device:target-v0\t${'\t\t'.repeat(20_000)}x`;
+  const line = `#extend:target-v0\t${'\t\t'.repeat(20_000)}x`;
   assert.deepEqual(parseTargetAnnotationCommentLine(line), { kind: 'future-version' });
 });

@@ -12,27 +12,27 @@ import { mkdtempForTestSync } from './tmp-dir.ts';
 
 test('resolveAppleRunnerSourceRoot prefers checkout source over packaged source', () => {
   const root = makeTempRoot();
-  const checkoutSource = path.join(root, 'apple', 'runner', 'AgentDeviceRunner');
-  const packagedSource = path.join(root, 'dist', 'apple', 'runner', 'AgentDeviceRunner');
-  fs.mkdirSync(path.join(checkoutSource, 'AgentDeviceRunner.xcodeproj'), { recursive: true });
-  fs.mkdirSync(path.join(packagedSource, 'AgentDeviceRunner.xcodeproj'), { recursive: true });
+  const checkoutSource = path.join(root, 'apple', 'runner', 'SiliconExtendHelper');
+  const packagedSource = path.join(root, 'dist', 'apple', 'runner', 'SiliconExtendHelper');
+  fs.mkdirSync(path.join(checkoutSource, 'SiliconExtendHelper.xcodeproj'), { recursive: true });
+  fs.mkdirSync(path.join(packagedSource, 'SiliconExtendHelper.xcodeproj'), { recursive: true });
 
   assert.equal(resolveAppleRunnerSourceRoot(root), checkoutSource);
   assert.equal(
     resolveAppleRunnerProjectPath(root),
-    path.join(checkoutSource, 'AgentDeviceRunner.xcodeproj'),
+    path.join(checkoutSource, 'SiliconExtendHelper.xcodeproj'),
   );
 });
 
 test('resolveAppleRunnerSourceRoot falls back to packaged source', () => {
   const root = makeTempRoot();
-  const packagedSource = path.join(root, 'dist', 'apple', 'runner', 'AgentDeviceRunner');
-  fs.mkdirSync(path.join(packagedSource, 'AgentDeviceRunner.xcodeproj'), { recursive: true });
+  const packagedSource = path.join(root, 'dist', 'apple', 'runner', 'SiliconExtendHelper');
+  fs.mkdirSync(path.join(packagedSource, 'SiliconExtendHelper.xcodeproj'), { recursive: true });
 
   assert.equal(resolveAppleRunnerSourceRoot(root), packagedSource);
   assert.equal(
     resolveAppleRunnerProjectPath(root),
-    path.join(packagedSource, 'AgentDeviceRunner.xcodeproj'),
+    path.join(packagedSource, 'SiliconExtendHelper.xcodeproj'),
   );
 });
 
@@ -56,10 +56,10 @@ test('resolveAppleSnapshotPresentationSourceRoot falls back to packaged source',
 
 test('computeRunnerSourceFingerprint covers the shared snapshot presentation sources', () => {
   const root = makeTempRoot();
-  fs.mkdirSync(path.join(root, 'apple', 'runner', 'AgentDeviceRunner'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'apple', 'runner', 'SiliconExtendHelper'), { recursive: true });
   fs.mkdirSync(path.join(root, 'apple', 'snapshot-presentation', 'Sources'), { recursive: true });
   fs.writeFileSync(
-    path.join(root, 'apple', 'runner', 'AgentDeviceRunner', 'Runner.swift'),
+    path.join(root, 'apple', 'runner', 'SiliconExtendHelper', 'Runner.swift'),
     'runner\n',
   );
   const sharedSource = path.join(
@@ -79,10 +79,10 @@ test('computeRunnerSourceFingerprint covers the shared snapshot presentation sou
 
 test('computeRunnerSourceFingerprint ignores development-only SwiftPM trees but keeps runner unit tests', () => {
   const root = makeTempRoot();
-  const runnerRoot = path.join(root, 'apple', 'runner', 'AgentDeviceRunner');
+  const runnerRoot = path.join(root, 'apple', 'runner', 'SiliconExtendHelper');
   const runnerUnitTest = path.join(
     runnerRoot,
-    'AgentDeviceRunnerUITests',
+    'SiliconExtendHelperUITests',
     'UnitTests',
     'Invariant.swift',
   );

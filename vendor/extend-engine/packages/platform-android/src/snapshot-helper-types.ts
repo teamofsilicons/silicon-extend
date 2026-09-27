@@ -12,7 +12,7 @@ export type AndroidSnapshotHelperInstallReason =
   | 'skipped';
 
 export const ANDROID_SNAPSHOT_HELPER_NAME = 'android-snapshot-helper';
-export const ANDROID_SNAPSHOT_HELPER_PACKAGE = 'com.callstack.agentdevice.snapshothelper';
+export const ANDROID_SNAPSHOT_HELPER_PACKAGE = 'com.teamofsilicons.extend.snapshothelper';
 export const ANDROID_SNAPSHOT_HELPER_PROTOCOL = 'android-snapshot-helper-v1';
 export const ANDROID_SNAPSHOT_HELPER_OUTPUT_FORMAT = 'uiautomator-xml';
 // Keep common snapshots biased toward post-microinteraction reliability. The

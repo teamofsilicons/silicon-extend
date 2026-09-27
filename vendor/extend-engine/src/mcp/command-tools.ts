@@ -74,7 +74,7 @@ type McpToolConfig = {
 const CONFIG_LOADER_AUDIENCE: InputAudienceMap = {
   config: operatorAudience({
     operatorPath:
-      'Point the process serving these tools at a config file with the AGENT_DEVICE_CONFIG environment variable.',
+      'Point the process serving these tools at a config file with the EXTEND_ENGINE_CONFIG environment variable.',
   }),
   remoteConfig: operatorAudience({
     operatorPath:

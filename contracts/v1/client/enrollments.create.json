@@ -2,15 +2,15 @@
   "api_version": 1,
   "call": "Client::enroll",
   "consumer": "silicon-extend-client",
-  "consumer_version": "1.0.0",
+  "consumer_version": "1.1.0",
   "contract": 1,
   "given": [],
   "operation": "enrollments.create",
   "request": {
     "body": {
       "data": {
-        "agent_device_version": "0.13.0",
-        "app_version": "1.0.0",
+        "app_version": "1.1.0",
+        "engine_version": "0.13.0",
         "model": "Pixel 9",
         "os": "android",
         "os_version": "15"

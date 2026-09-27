@@ -75,7 +75,10 @@ import com.teamofsilicons.extend.config.DeviceInfo
 import com.teamofsilicons.extend.core.FindHelp
 import com.teamofsilicons.extend.core.FinderResults
 import com.teamofsilicons.extend.core.Link
+import com.teamofsilicons.extend.core.Links
 import com.teamofsilicons.extend.core.OpenResult
+import com.teamofsilicons.extend.core.PairUi
+import com.teamofsilicons.extend.core.WakeRequests
 import com.teamofsilicons.extend.core.OpenedScreen
 import com.teamofsilicons.extend.core.Phase
 import com.teamofsilicons.extend.core.SettingsCandidate
@@ -93,6 +96,8 @@ import java.time.format.DateTimeFormatter
 /** What the setup steps' buttons do; MainActivity wires them to this device. */
 class SetupActions(
     val requestNotifications: () -> Unit,
+    /** Runs a failed step again (its Retry button). */
+    val retry: (String) -> Unit = {},
     /** Opens a step's settings page: the page itself, only the main settings screen, or nothing (with a message). */
     val open: (SettingsTarget) -> OpenResult,
     /** Opens a screen from a step's "Can't find it?" list; the message to show when it didn't open. */
@@ -112,6 +117,11 @@ fun AppScreen(
     val footer: @Composable () -> Unit = { Footer(state, onOpenDeveloperSettings, onOpenLicences) }
     if (state.phase == Phase.UNPAIRED && state.isTv) {
         TvPairingScreen(state, footer)
+        return
+    }
+    val adding = state.addingPair
+    if (state.phase == Phase.PAIRED && adding != null) {
+        AddPairScreen(extend, state, adding)
         return
     }
     // Each phase opens at the top, with the Silicon using the device first.
@@ -162,11 +172,13 @@ fun ScrollingPage(
     }
 }
 
-/** The breadcrumb gives context, never the page title: the Team once paired, like Interface's. */
+/**
+ * The breadcrumb gives context, never the page title. A device belongs to the Carbons who paired
+ * it, not to a Team, so it is "Devices" once paired too.
+ */
 private fun breadcrumb(state: UiState): String? = when (state.phase) {
     Phase.STARTING -> null
-    Phase.UNPAIRED -> "Devices"
-    Phase.PAIRED -> state.device?.team?.takeIf { it.isNotBlank() } ?: "Devices"
+    Phase.UNPAIRED, Phase.PAIRED -> "Devices"
 }
 
 /**
@@ -366,7 +378,10 @@ private fun PosterCode(code: String?, maxSp: Float) {
 }
 
 @Composable
-private fun CodeExpiry(state: UiState) {
+private fun CodeExpiry(state: UiState) = CodeExpiry(state.pairing, state.isTv)
+
+@Composable
+private fun CodeExpiry(pairing: com.teamofsilicons.extend.core.PairingUi, tv: Boolean) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -374,21 +389,21 @@ private fun CodeExpiry(state: UiState) {
             now = System.currentTimeMillis()
         }
     }
-    val expires = state.pairing.expiresAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+    val expires = pairing.expiresAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
     val left = expires?.let { ((it - now) / 1000).coerceAtLeast(0) }
     val status = when {
-        state.pairing.code == null -> "Getting a code…"
+        pairing.code == null -> "Getting a code…"
         left == null -> ""
         left == 0L -> "Getting a new code…"
         else -> "New code in ${left / 60}:${"%02d".format(left % 60)}"
     }
-    val reconnecting = !state.pairing.live && state.pairing.code != null
+    val reconnecting = !pairing.live && pairing.code != null
     Row(verticalAlignment = Alignment.CenterVertically) {
-        PixelIndicator(if (state.pairing.live) Tokens.Cobalt else Tokens.MutedMark, on = state.pairing.live, size = if (state.isTv) 12.dp else 10.dp)
+        PixelIndicator(if (pairing.live) Tokens.Cobalt else Tokens.MutedMark, on = pairing.live, size = if (tv) 12.dp else 10.dp)
         Spacer(Modifier.width(10.dp))
         Mono("$status${if (reconnecting) " · reconnecting" else ""}")
         Spacer(Modifier.weight(1f))
-        if (state.pairing.live) Mono("Live", color = Tokens.Cobalt)
+        if (pairing.live) Mono("Live", color = Tokens.Cobalt)
     }
 }
 
@@ -456,34 +471,35 @@ private fun formatTime(ts: String?): String = ts?.let {
     runCatching { DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.parse(it)) }.getOrNull()
 } ?: ""
 
+/** "Paired to Alice (c:alice)", or "Paired to c:alice (Living room TV) · c:bob (Family TV)" when several Carbons paired it. */
+internal fun pairedToLine(pairs: List<PairUi>): String = when {
+    pairs.isEmpty() -> "Paired"
+    pairs.size == 1 -> pairs[0].let { p -> if (p.owner != null) "Paired to ${p.carbonLabel}" else "Paired · device ${p.deviceId}" }
+    else -> "Paired to " + pairs.joinToString(" · ") { p -> p.carbon + (p.name?.let { " ($it)" } ?: "") }
+}
+
 @Composable
 private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) {
-    val s = LocalScale.current
     val tv = state.isTv
     val noun = if (tv) "TV" else "device"
-    val scope = rememberCoroutineScope()
-    var confirmRevoke by remember { mutableStateOf(false) }
-    var revokeError by remember { mutableStateOf<String?>(null) }
-    var revoking by remember { mutableStateOf(false) }
+    val first = state.pairs.firstOrNull()
 
     Eyebrow(if (tv) "This TV" else "This device")
     Gap(8.dp)
-    Title(state.device?.name ?: "Paired $noun")
+    Title(first?.name ?: "Paired $noun")
     Gap(6.dp)
-    val owner = state.device?.owner
-    Muted(
-        if (owner != null) "Paired to ${owner.displayName?.let { "$it (${owner.id})" } ?: owner.id}${state.device.team.takeIf { it.isNotEmpty() }?.let { " · team $it" } ?: ""}"
-        else "Paired${state.deviceId?.let { " · device $it" } ?: ""}",
-    )
+    Muted(pairedToLine(state.pairs))
     Gap(8.dp)
     LinkStatus(state)
-    if (state.link == Link.SUPERSEDED || state.link == Link.UPGRADE_REQUIRED) {
+    // One pair: its Reconnect sits here. With several, each Carbon's row has its own.
+    if (state.pairs.size <= 1 && (state.link == Link.SUPERSEDED || state.link == Link.UPGRADE_REQUIRED)) {
         Gap(10.dp)
-        ExtendButton("Reconnect", { extend.connection.reconnect() }, tone = Tone.Secondary)
+        ExtendButton("Reconnect", { first?.let { extend.connection.reconnect(it.deviceId) } ?: extend.connection.reconnect() }, tone = Tone.Secondary)
     }
 
     Gap(22.dp)
     InUseCard(extend, state)
+    WakeRequestsCard(state)
 
     val report = state.report
     if (report != null) {
@@ -495,14 +511,7 @@ private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) 
         Gap(6.dp)
         CardTitle(if (setup.state == "complete") "Setup is done" else "Finish setting up")
         Gap(4.dp)
-        Muted(
-            when {
-                setup.state != "complete" -> "Do these on this $noun, one at a time."
-                report.optionalNeedsCarbon ->
-                    "Core device control is ready. Android debugging needs you again: see the step below."
-                else -> "Core device control is ready. Android debugging below adds app installation, logs and recording."
-            },
-        )
+        Muted(if (setup.state != "complete") "Do these on this $noun, one at a time." else report.doneSummary)
         Gap(14.dp)
         // The finder's notes say more when Developer options are still off.
         val devOptions = report.items.any { it.step.key == "developer_options" && it.step.status == "done" }
@@ -519,54 +528,216 @@ private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) 
         }
     }
 
+    // The Carbons before Android debugging: on a TV the remote reaches Pair with another Carbon and
+    // Revoke pair without passing the debugging card's text fields (which open the keyboard).
+    CarbonsCard(extend, state)
     AndroidDebuggingCard(extend, state)
-    Gap(28.dp)
-    ExtendButton(
-        if (revoking) "Revoking…" else "Revoke pair",
-        { confirmRevoke = true },
-        enabled = !revoking,
-        tone = Tone.Danger,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    revokeError?.let {
-        Gap(10.dp)
-        ErrorNote(it)
+}
+
+/**
+ * The Carbons this device is paired to, each with their name for it, their pair's connection and
+ * Revoke pair (UNDERSTANDING.md, The Extend app 3, 6 and 7), and "Pair with another Carbon".
+ */
+@Composable
+private fun CarbonsCard(extend: Extend, state: UiState) {
+    val s = LocalScale.current
+    val noun = if (state.isTv) "TV" else "device"
+    val scope = rememberCoroutineScope()
+    var confirm by remember { mutableStateOf<PairUi?>(null) }
+    var revoking by remember { mutableStateOf<String?>(null) }
+    var revokeError by remember { mutableStateOf<String?>(null) }
+    val several = state.pairs.size > 1
+
+    Gap(22.dp)
+    Panel {
+        Eyebrow(if (several) "Paired to ${state.pairs.size} Carbons" else "Paired to")
+        Gap(6.dp)
+        CardTitle(if (several) "Carbons who paired this $noun" else "The Carbon who paired this $noun")
+        Gap(4.dp)
+        Muted(
+            if (several) "Each Carbon names this $noun, gives access to their own Silicons and can end their own pair. Only one Silicon uses it at a time, and any of them can stop it."
+            else "Another Carbon, like someone else in your home, can pair this $noun to their own account too, with the button below.",
+        )
+        state.pairs.forEachIndexed { i, pair ->
+            Gap(14.dp)
+            if (i > 0) {
+                Hairline()
+                Gap(14.dp)
+            }
+            Body(pair.carbonLabel, weight = FontWeight.Medium)
+            Mono(listOfNotNull(pair.name, "device ${pair.deviceId}", "installed Extend here".takeIf { pair.firstPair == true && several }).joinToString(" · "))
+            if (several && pair.link != Link.CONNECTED) {
+                Gap(4.dp)
+                Muted(pairLinkText(pair, several), color = if (pair.link == Link.SUPERSEDED || pair.link == Link.UPGRADE_REQUIRED) Tokens.StopDeep else Tokens.Muted)
+            }
+            Gap(10.dp)
+            if (several && (pair.link == Link.SUPERSEDED || pair.link == Link.UPGRADE_REQUIRED)) {
+                ExtendButton("Reconnect", { extend.connection.reconnect(pair.deviceId) }, tone = Tone.Secondary)
+                Gap(8.dp)
+            }
+            ExtendButton(
+                if (revoking == pair.deviceId) "Revoking…" else "Revoke pair",
+                { confirm = pair },
+                enabled = revoking == null,
+                tone = Tone.Danger,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        revokeError?.let {
+            Gap(10.dp)
+            ErrorNote(it)
+        }
+        Gap(18.dp)
+        Hairline()
+        Gap(14.dp)
+        ExtendButton("Pair with another Carbon", { extend.connection.startAddPair() }, tone = Tone.Secondary, modifier = Modifier.fillMaxWidth())
     }
 
-    if (confirmRevoke) {
+    confirm?.let { pair ->
+        val others = state.pairs.size > 1
         AlertDialog(
-            onDismissRequest = { confirmRevoke = false },
+            onDismissRequest = { confirm = null },
             containerColor = Tokens.Paper,
             shape = PanelShape,
             title = { Text("Revoke pair?", style = Type.cardTitle(s)) },
             text = {
                 Muted(
-                    "This removes ${state.device?.name ?: "this device"} from ${state.device?.owner?.id ?: "your"} account and ends every Silicon's access to it, " +
-                        "including any session running now. To use it with Extend again you'll pair it with a new code.",
+                    "This removes ${pair.name ?: "this $noun"} from ${pair.carbon}'s account and ends access for the Silicons ${pair.carbon} gave access to, " +
+                        "including a session of theirs running now. " +
+                        (if (others) "The other Carbons' pairs stay. " else "") +
+                        "To pair it to ${pair.carbon} again, you'll need a new code.",
                 )
             },
             confirmButton = {
                 ExtendButton(
                     "Revoke pair",
                     {
-                        confirmRevoke = false
-                        revoking = true
+                        confirm = null
+                        revoking = pair.deviceId
                         revokeError = null
                         scope.launch {
                             try {
-                                extend.connection.revokePair()
+                                extend.connection.revokePair(pair.deviceId)
                             } catch (e: Exception) {
-                                revokeError = "Couldn't revoke the pair: ${e.message ?: "the service didn't answer"}. Check this $noun's connection and try again."
+                                revokeError = "Couldn't revoke ${pair.carbon}'s pair: ${e.message?.trimEnd('.') ?: "the service didn't answer"}. Check this $noun's connection and try again."
                             } finally {
-                                revoking = false
+                                revoking = null
                             }
                         }
                     },
                     tone = Tone.Stop,
                 )
             },
-            dismissButton = { ExtendButton("Cancel", { confirmRevoke = false }, tone = Tone.Secondary) },
+            dismissButton = { ExtendButton("Cancel", { confirm = null }, tone = Tone.Secondary) },
         )
+    }
+}
+
+/** One pair's connection, for its row when the device has several. */
+private fun pairLinkText(pair: PairUi, several: Boolean): String = when (pair.link) {
+    Link.CONNECTED -> "Connected"
+    Link.CONNECTING -> "Connecting…"
+    Link.OFFLINE -> "Offline${pair.linkDetail?.let { " · $it" } ?: ""}"
+    Link.SUPERSEDED -> Links.supersededText(pair, several)
+    Link.UPGRADE_REQUIRED -> pair.linkDetail ?: "This version of the app is too old for ${pair.carbon}'s pair. Install the latest from extend.teamofsilicons.com."
+}
+
+/**
+ * "Pair with another Carbon": first what sharing the device means, then a new pairing code the
+ * other Carbon enters on the website (large on a TV), until it pairs or the Carbon cancels.
+ */
+@Composable
+private fun AddPairScreen(extend: Extend, state: UiState, adding: com.teamofsilicons.extend.core.AddPairUi) {
+    val tv = state.isTv
+    val noun = if (tv) "TV" else "device"
+    ScrollingPage(topBar = { TopBar(context = "Devices", trailing = { ExtendButton("Cancel", { extend.connection.cancelAddPair() }, tone = Tone.Quiet, flushEnd = true) }) }) {
+        state.environment?.let { EnvironmentBanner(it.name) }
+        Eyebrow("${DeviceInfo.appName(tv)} · Pair with another Carbon")
+        Gap(8.dp)
+        Title("Pair with another Carbon")
+        Gap(8.dp)
+        if (!adding.showingCode) {
+            Panel(highlight = true) {
+                Eyebrow("Before you share this $noun", color = Tokens.Cobalt)
+                Gap(6.dp)
+                CardTitle(SHARED_DEVICE_NOTE, heading = false)
+                Gap(8.dp)
+                Muted(
+                    "The other Carbon pairs this $noun to their own account and gives access to their own Silicons. " +
+                        "You each see only your own Silicons and their activity. Only one Silicon uses the $noun at a time, " +
+                        "and any Carbon who paired it can stop it. Each of you can revoke your own pair here.",
+                )
+            }
+            Gap(18.dp)
+            ExtendButton("Show a pairing code", { extend.connection.showAddPairCode() }, modifier = Modifier.fillMaxWidth())
+            Gap(10.dp)
+            ExtendButton("Cancel", { extend.connection.cancelAddPair() }, tone = Tone.Secondary, modifier = Modifier.fillMaxWidth())
+            return@ScrollingPage
+        }
+        Muted("The other Carbon chooses Add a device on extend.teamofsilicons.com and enters this code. It pairs this $noun to their account.")
+        Gap(18.dp)
+        adding.error?.let {
+            ErrorNote(it)
+            Gap(14.dp)
+            ExtendButton("Back", { extend.connection.cancelAddPair() }, tone = Tone.Secondary, modifier = Modifier.fillMaxWidth())
+            return@ScrollingPage
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Tokens.Paper, PanelShape)
+                .border(1.dp, Tokens.Line, PanelShape)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Eyebrow("Pairing code for another Carbon")
+            Gap(6.dp)
+            PosterCode(adding.pairing.code, maxSp = if (tv) 168f else 120f)
+            Gap(10.dp)
+            Hairline()
+            Gap(10.dp)
+            CodeExpiry(adding.pairing, tv)
+        }
+        adding.pairing.error?.let {
+            Gap(14.dp)
+            ErrorNote(it)
+        }
+        Gap(18.dp)
+        Muted("The code changes every 5 minutes and works once. Your own pair stays as it is.")
+        Gap(14.dp)
+        ExtendButton("Cancel", { extend.connection.cancelAddPair() }, tone = Tone.Secondary, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/** What sharing a device means, shown before another Carbon's code (UNDERSTANDING.md, Pairing and Access). */
+internal const val SHARED_DEVICE_NOTE = "Silicons any Carbon gives access to can use this whole device, including what others leave on it."
+
+/** The device's open wake requests, with the same hiding as the notification ([WakeRequests.lines]). */
+@Composable
+private fun WakeRequestsCard(state: UiState) {
+    val lines = WakeRequests.lines(state.wakeRequests, state.session)
+    if (lines.isEmpty()) return
+    val noun = if (state.isTv) "TV" else "device"
+    Gap(22.dp)
+    Panel {
+        Eyebrow("Asked to use this $noun")
+        Gap(6.dp)
+        val named = lines.firstOrNull { it.silicon != null }?.silicon
+        CardTitle(
+            when {
+                lines.size == 1 && named != null -> "$named asks to use this $noun"
+                lines.size == 1 -> "A Silicon asked to use this $noun"
+                else -> "${lines.size} Silicons asked to use this $noun"
+            },
+            heading = false,
+        )
+        lines.forEach { l ->
+            Gap(10.dp)
+            Body(l.silicon ?: "A Silicon", weight = FontWeight.Medium)
+            Muted(l.reason ?: com.teamofsilicons.extend.core.WakeNotice.TING)
+            Mono("Until ${formatTime(l.expiresAt)}")
+        }
+        Gap(10.dp)
+        Muted(if (state.isTv) "This TV is on, so they hear it's awake." else "You're using this $noun, so they hear it's awake.")
     }
 }
 
@@ -622,7 +793,7 @@ private fun InUseCard(extend: Extend, state: UiState) {
                     Spacer(Modifier.width(8.dp))
                     SiliconBadge()
                 }
-                Mono("Since ${formatTime(session.since)} · session ${session.sessionId}")
+                Mono("Since ${formatTime(session.since)} · session ${session.sessionId}${session.carbon?.let { " · through $it" } ?: ""}")
             }
         }
         Gap(14.dp)
@@ -692,7 +863,11 @@ private fun StepRow(index: Int, item: SetupItem, tv: Boolean, devOptions: Boolea
                 }
                 step.error?.let {
                     Gap(6.dp)
-                    Muted(it, color = Tokens.StopDeep)
+                    Muted(it, color = Tokens.StopDeep, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+                if (step.status == com.teamofsilicons.extend.core.SetupRetry.FAILED) {
+                    Gap(12.dp)
+                    ExtendButton("Retry", { actions.retry(step.key) }, tone = Tone.Primary)
                 }
                 val label = item.actionLabel
                 val open = item.open
@@ -936,7 +1111,7 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
                 Mono("Emulator → this computer")
                 Mono("http://10.0.2.2:8480", color = Tokens.Ink)
             }
-            if (paired) Muted("Saving a different URL forgets this device's pair here (it isn't revoked on the old service).", color = Tokens.StopDeep)
+            if (paired) Muted("Saving a different URL forgets this device's pairs here (they aren't revoked on the old service).", color = Tokens.StopDeep)
             ExtendSwitch("Behave as a TV (android_tv, corner badge, remote)", forceTv, { forceTv = it })
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 ExtendButton("Save", {
@@ -948,8 +1123,7 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
                     var changed = false
                     if (clean != extend.config.serviceUrl) {
                         extend.config.serviceUrl = clean
-                        extend.secrets.clearCredential()
-                        extend.config.clearPair()
+                        extend.connection.forgetPairsLocally()
                         changed = true
                     }
                     if (forceTv != extend.config.forceTv) {
@@ -969,7 +1143,7 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
                 }, tone = Tone.Secondary)
             }
             message?.let { Muted(it) }
-            Mono("Device id: ${state.deviceId ?: "—"} · os: ${extend.os} · build ${BuildConfig.BUILD_TYPE}")
+            Mono("Device ids: ${state.pairs.joinToString { it.deviceId }.ifEmpty { "—" }} · os: ${extend.os} · build ${BuildConfig.BUILD_TYPE}")
         }
     }
 }
@@ -1112,7 +1286,10 @@ private fun AndroidDebuggingCard(extend: Extend, state: UiState) {
                     val component = com.teamofsilicons.extend.a11y.ExtendAccessibilityService.component(extend.context).flattenToString()
                     val r = extend.adb.shell(DebuggingPath.enableAccessibilityCommand(component), check = false)
                     if (r.exitCode == 0) "Asked Android to turn on accessibility for ${DeviceInfo.appName(state.isTv)}. It shows as allowed above within a few seconds."
-                    else "Android didn't turn on accessibility (exit ${r.exitCode}: ${r.text.trim().take(300)}). Try the Accessibility settings button above."
+                    else {
+                        Extend.log("turning on accessibility through debugging exited ${r.exitCode}: ${r.text.trim().take(300)}")
+                        "Android didn't turn on accessibility this way. Try the Accessibility settings button above."
+                    }
                 }
             }, enabled = !busy, tone = Tone.Primary)
         }

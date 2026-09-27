@@ -9,6 +9,7 @@ Install it with Honeycomb (`honeycomb install extend`) or from crates.io:
 cargo install silicon-extend-cli
 extend login <slt>                      # a short-lived token from Silicon IAM
 extend device ls
+extend device wake 7c1e09ab --reason "Need the screen on"   # only when it isn't awake: its Carbon is asked
 extend session new 7c1e09ab --connect
 extend snapshot -i
 extend click @e2

@@ -30,10 +30,14 @@ class SessionRetention(private val graceMs: Long = GRACE_MS) {
         deadlines.remove(id)
     }
 
-    /** Extend's current view after a reconnect: every unconfirmed session other than [active] has ended. */
-    @Synchronized fun reconcile(active: String?): List<String> {
-        val ended = deadlines.keys.filter { it != active }
-        deadlines.clear()
+    /**
+     * Extend's current view after a reconnect: every unconfirmed session other than [active] has
+     * ended. [among]: only these sessions (the ones of the pair that reconnected; the others wait
+     * for their own pair's connection).
+     */
+    @Synchronized fun reconcile(active: String?, among: Collection<String>? = null): List<String> {
+        val ended = deadlines.keys.filter { it != active && (among == null || it in among) }
+        if (among == null) deadlines.clear() else among.forEach(deadlines::remove)
         return ended
     }
 

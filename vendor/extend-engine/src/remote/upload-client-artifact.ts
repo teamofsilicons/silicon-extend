@@ -54,7 +54,7 @@ export async function prepareUploadArtifact(
 }
 
 async function createGzipTarArchive(localPath: string, cleanupPaths: string[]): Promise<string> {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-device-upload-${randomUUID()}-`));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `extend-engine-upload-${randomUUID()}-`));
   cleanupPaths.push(tempDir);
   const archivePath = path.join(tempDir, `${path.basename(localPath)}.tar.gz`);
   await runCmd(

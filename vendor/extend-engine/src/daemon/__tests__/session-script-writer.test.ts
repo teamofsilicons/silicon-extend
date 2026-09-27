@@ -184,7 +184,7 @@ test('a recorded drag writes and parses one targets-v1 annotation for both endpo
   });
 
   const { script, parsed } = writeAndParse(writer, session);
-  expect(script.match(/agent-device:targets-v1/g)).toHaveLength(1);
+  expect(script.match(/extend:targets-v1/g)).toHaveLength(1);
   expect(parsed.actions[0]?.targetEvidences).toEqual({
     source: { ...evidence, id: 'source' },
     destination: { ...evidence, id: 'destination' },

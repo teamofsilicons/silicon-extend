@@ -70,7 +70,7 @@ test('batch help documents the step shape and the commands batch accepts', async
   assert.match(help, /batch and replay never nest/);
   // A step's input is keyed by structured field names no CLI help spells out, so the examples are
   // this text's only statement of them. `cli-help-examples.test.ts` runs them through the readers.
-  assert.match(help, /\n\nExamples:\n {2}agent-device batch --steps '\[/);
+  assert.match(help, /\n\nExamples:\n {2}extend batch --steps '\[/);
   assert.match(help, /"command":"press","input":\{"target":\{"kind":"ref"/);
   assert.match(help, /"command":"fill",.*"text":"qa@example\.com"/);
   assert.match(help, /"command":"snapshot","input":\{"interactiveOnly":true\}/);
@@ -84,7 +84,7 @@ test('scripting and workflow topics name only the accepted batch step source', a
   const workflow = await usageForCommand('workflow');
   if (scripting === null || workflow === null) throw new Error('Expected both help texts');
 
-  assert.match(scripting, /agent-device batch --steps-file \.\/steps\.json/);
+  assert.match(scripting, /extend batch --steps-file \.\/steps\.json/);
   assert.doesNotMatch(scripting, /positionals\/flags/);
   assert.match(workflow, /batch --steps-file \.\/steps\.json/);
   assert.doesNotMatch(workflow, /batch \.\/steps\.json/);
@@ -134,17 +134,17 @@ test('root help routes detailed reference material to progressive topics', async
     throw new Error('Expected commands and workflow help text');
   }
 
-  assert.match(rootHelp, /All \d+ commands: agent-device help commands/);
+  assert.match(rootHelp, /All \d+ commands: extend help commands/);
   assert.match(rootHelp, /workflow\s+full refs, selectors, waits, recovery/);
   assert.doesNotMatch(rootHelp, /^Configuration:/m);
   assert.doesNotMatch(rootHelp, /^Environment:/m);
 
   assert.match(commandsHelp, /^Configuration:/m);
-  assert.match(commandsHelp, /Default config files: ~\/\.agent-device\/config\.json/);
+  assert.match(commandsHelp, /Default config files: ~\/\.silicon-extend\/engine\/config\.json/);
   assert.match(commandsHelp, /^Environment:/m);
-  assert.match(commandsHelp, /AGENT_DEVICE_SESSION\s+Explicit session name/);
+  assert.match(commandsHelp, /EXTEND_ENGINE_SESSION\s+Explicit session name/);
   assert.match(commandsHelp, /^Examples:/m);
-  assert.match(commandsHelp, /agent-device open Settings --platform ios/);
+  assert.match(commandsHelp, /extend open Settings --platform ios/);
 
   assert.match(workflowHelp, /Command shapes, refs, selectors, waits, recovery/);
   assert.match(workflowHelp, /run serially within one session/i);
@@ -170,15 +170,15 @@ test('usageForCommand resolves Maestro compatibility help topic', async () => {
 test('remote help documents lease-bound takeover and distinct host administration', async () => {
   const help = await usageForCommand('remote');
   if (help === null) throw new Error('Expected remote help text');
-  assert.match(help, /agent-device takeover --session remote-session/);
+  assert.match(help, /extend takeover --session remote-session/);
   assert.match(help, /authenticated GET\/PUT\/DELETE requests/);
-  assert.match(help, /not forwarded by agent-device proxy/);
+  assert.match(help, /not forwarded by extend proxy/);
 });
 
 test('usageForCommand resolves workflow help topic', async () => {
   const help = await usageForCommand('workflow');
   if (help === null) throw new Error('Expected workflow help text');
-  assert.match(help, /^agent-device \S+ — workflow/);
+  assert.match(help, /^Silicon Extend device engine \S+ — workflow/);
   assert.ok(
     Buffer.byteLength(help, 'utf8') < 9100,
     `workflow help topic should stay close to the compact-card size target, was ${Buffer.byteLength(help, 'utf8')} bytes`,
@@ -265,21 +265,18 @@ test('usageForCommand resolves workflow help topic', async () => {
   assert.match(help, /help react-native for Metro\/Re\.Pack reload/);
   assert.match(help, /Lifecycle facts \(trust these instead of probing\)/);
   assert.match(help, /open without --relaunch is idempotent-foreground/);
-  assert.match(help, /already owned by another agent-device daemon/);
+  assert.match(help, /already owned by another device engine daemon/);
   assert.match(help, /Env vars: help physical-device/);
   assert.match(help, /Escalate:/);
   assert.match(help, /help scripting recording, save-script, batch, replay repair/);
   assert.match(help, /help gestures multi-touch gesture shapes\/quirks/);
   assert.match(help, /help react-devtools/);
   assert.match(help, /help react-native/);
-  assert.doesNotMatch(help, /agent-device react-devtools profile/);
+  assert.doesNotMatch(help, /extend react-devtools profile/);
   // Deep content moved out of the compact card, not deleted: it now lives in the
   // owning sub-topic (see the corresponding topic tests below).
   assert.doesNotMatch(help, /prepare ios-runner builds\/reuses the XCTest runner/);
-  assert.doesNotMatch(
-    help,
-    /agent-device fill 'id="password"' "\$AD_VAR_PASSWORD" --record-as PASSWORD/,
-  );
+  assert.doesNotMatch(help, /extend fill 'id="password"' "\$AD_VAR_PASSWORD" --record-as PASSWORD/);
   assert.doesNotMatch(help, /REPLAY_DIVERGENCE/);
   assert.doesNotMatch(help, /gesture transform 200 420 80 -40 2 35 700/);
 });
@@ -287,13 +284,13 @@ test('usageForCommand resolves workflow help topic', async () => {
 test('usageForCommand resolves scripting help topic', async () => {
   const help = await usageForCommand('scripting');
   if (help === null) throw new Error('Expected scripting help text');
-  assert.match(help, /^agent-device \S+ — scripting/);
-  assert.match(help, /agent-device open com\.example\.app --relaunch --save-script=screen-x\.ad/);
-  assert.match(help, /agent-device session save-script/);
+  assert.match(help, /^Silicon Extend device engine \S+ — scripting/);
+  assert.match(help, /extend open com\.example\.app --relaunch --save-script=screen-x\.ad/);
+  assert.match(help, /extend session save-script/);
   assert.match(help, /publishes the sole recorded open through the destination guard/);
   assert.match(help, /A second successful open aborts publication/);
   assert.match(help, /export AD_VAR_PASSWORD='<secret>'/);
-  assert.match(help, /agent-device fill 'id="password"' "\$AD_VAR_PASSWORD" --record-as PASSWORD/);
+  assert.match(help, /extend fill 'id="password"' "\$AD_VAR_PASSWORD" --record-as PASSWORD/);
   assert.match(help, /published script contain only \$\{PASSWORD\}/);
   assert.match(help, /Do not record passwords\/tokens without --record-as/);
   assert.match(help, /test --json marks a failed test with infrastructure: true/);
@@ -306,7 +303,7 @@ test('usageForCommand resolves scripting help topic', async () => {
   assert.match(help, /record-and-heal means press the correct control via a blessed @ref/);
   assert.match(help, /state-repair means the script is correct but app state is not/);
   assert.match(help, /close --save-script\[=<out>\] \(default <stem>\.healed\.ad\)/);
-  assert.match(help, /agent-device batch --steps '\[\{"command":"open"/);
+  assert.match(help, /extend batch --steps '\[\{"command":"open"/);
   assert.match(help, /Step keys are command, input, and optional runtime -- that is the whole/);
   assert.match(help, /test \.\/e2e\/maestro --maestro --device udid1,emulator-5554 --shard-all 2/);
   assert.match(help, /Android adb screenrecord has a 180s limit/);
@@ -317,9 +314,9 @@ test('usageForCommand resolves scripting help topic', async () => {
 test('usageForCommand resolves gestures help topic', async () => {
   const help = await usageForCommand('gestures');
   if (help === null) throw new Error('Expected gestures help text');
-  assert.match(help, /^agent-device \S+ — gestures/);
-  assert.match(help, /agent-device gesture pan 200 420 80 -40 700 --pointer-count 2/);
-  assert.match(help, /agent-device gesture transform 200 420 80 -40 2 35 700/);
+  assert.match(help, /^Silicon Extend device engine \S+ — gestures/);
+  assert.match(help, /extend gesture pan 200 420 80 -40 700 --pointer-count 2/);
+  assert.match(help, /extend gesture transform 200 420 80 -40 2 35 700/);
   assert.match(help, /press <x> <y> --count <n> --jitter-px <n> for tap series/);
   assert.match(
     help,
@@ -330,23 +327,23 @@ test('usageForCommand resolves gestures help topic', async () => {
   assert.match(help, /tvOS coordinate pan and fling preserve only the dominant direction/);
   assert.match(help, /falls back to the visible snapshot union/);
   assert.match(help, /Rare iOS accessibility gap/);
-  assert.match(help, /agent-device click @e66 --button secondary --platform macos/);
+  assert.match(help, /extend click @e66 --button secondary --platform macos/);
   assert.match(help, /fixed pixel wheel steps/);
 });
 
 test('usageForCommand resolves tv help topic', async () => {
   const help = await usageForCommand('tv');
   if (help === null) throw new Error('Expected tv help text');
-  assert.match(help, /^agent-device \S+ — tv/);
-  assert.match(help, /agent-device tv-remote press down/);
-  assert.match(help, /agent-device screenshot \.\/tv-focus\.png --overlay-refs/);
+  assert.match(help, /^Silicon Extend device engine \S+ — tv/);
+  assert.match(help, /extend tv-remote press down/);
+  assert.match(help, /extend screenshot \.\/tv-focus\.png --overlay-refs/);
   assert.match(help, /tv-remote longpress select/);
   assert.match(help, /tv-remote press select --duration-ms 500/);
   assert.match(help, /longpress is CLI sugar for --duration-ms 500/);
   assert.match(help, /ok, center, and enter are input aliases for select/);
   assert.match(help, /do not switch to raw adb keyevent/);
   assert.match(help, /Use --platform ios --target tv/);
-  assert.match(help, /agent-device devices --platform vega --target tv/);
+  assert.match(help, /extend devices --platform vega --target tv/);
   assert.match(help, /Vega OS uses the exact hold duration through inputd-cli/);
   assert.match(help, /Use --platform vega --target tv/);
   assert.match(help, /Initial support is VVD-only/);
@@ -357,30 +354,30 @@ test('usageForCommand resolves tv help topic', async () => {
 test('usageForCommand resolves web help topic', async () => {
   const help = await usageForCommand('web');
   if (help === null) throw new Error('Expected web help text');
-  assert.match(help, /^agent-device \S+ — web/);
+  assert.match(help, /^Silicon Extend device engine \S+ — web/);
   assert.match(help, /Browser mechanics come from a managed, pinned agent-browser backend/);
-  assert.match(help, /agent-device owns command\/session\/replay integration/);
+  assert.match(help, /The device engine owns command\/session\/replay integration/);
   assert.match(help, /agent-browser owns browser launch, page control, screenshots/);
   assert.match(
     help,
-    /Use --platform web when a browser step belongs inside an agent-device session/,
+    /Use --platform web when a browser step belongs inside a device engine session/,
   );
   assert.match(help, /Use agent-browser directly for standalone web automation/);
-  assert.match(help, /agent-device web setup/);
-  assert.match(help, /agent-device web doctor/);
-  assert.match(help, /agent-device open https:\/\/example\.com --platform web/);
-  assert.match(help, /agent-device snapshot -i --platform web/);
-  assert.match(help, /agent-device get text @e2 --platform web/);
-  assert.match(help, /agent-device is visible 'label="Welcome"' --platform web/);
-  assert.match(help, /agent-device find text "Welcome" exists --platform web/);
-  assert.match(help, /agent-device click @e12 --platform web/);
-  assert.match(help, /agent-device fill @e13 "qa@example\.com" --platform web/);
-  assert.match(help, /agent-device wait text "Welcome" 3000 --platform web/);
-  assert.match(help, /agent-device network dump 25 --include headers --platform web/);
-  assert.match(help, /agent-device audio probe start 10 1000 --platform web/);
+  assert.match(help, /extend web setup/);
+  assert.match(help, /extend web doctor/);
+  assert.match(help, /extend open https:\/\/example\.com --platform web/);
+  assert.match(help, /extend snapshot -i --platform web/);
+  assert.match(help, /extend get text @e2 --platform web/);
+  assert.match(help, /extend is visible 'label="Welcome"' --platform web/);
+  assert.match(help, /extend find text "Welcome" exists --platform web/);
+  assert.match(help, /extend click @e12 --platform web/);
+  assert.match(help, /extend fill @e13 "qa@example\.com" --platform web/);
+  assert.match(help, /extend wait text "Welcome" 3000 --platform web/);
+  assert.match(help, /extend network dump 25 --include headers --platform web/);
+  assert.match(help, /extend audio probe start 10 1000 --platform web/);
   assert.match(help, /Audio probe start uses duration seconds first, then bucket milliseconds/);
-  assert.match(help, /agent-device screenshot \.\/artifacts\/web-home\.png --platform web/);
-  assert.match(help, /agent-device close --platform web/);
+  assert.match(help, /extend screenshot \.\/artifacts\/web-home\.png --platform web/);
+  assert.match(help, /extend close --platform web/);
   assert.match(help, /open <url>, snapshot -i, get text\/attrs/);
   assert.match(help, /is visible\/hidden\/exists\/absent\/focused\/text, find text\/selector/);
   assert.match(help, /click\/press @ref or selector/);
@@ -395,7 +392,7 @@ test('usageForCommand resolves web help topic', async () => {
 test('usageForCommand resolves debugging help topic', async () => {
   const help = await usageForCommand('debugging');
   if (help === null) throw new Error('Expected debugging help text');
-  assert.match(help, /^agent-device \S+ — debugging/);
+  assert.match(help, /^Silicon Extend device engine \S+ — debugging/);
   assert.match(help, /Use logs when you need the lead-up timeline/);
   assert.match(help, /relaunches the session app through devicectl process launch --console/);
   assert.match(help, /Use debug symbols when you have crash\.ips\/crash\.log/);
@@ -403,24 +400,24 @@ test('usageForCommand resolves debugging help topic', async () => {
   assert.match(help, /debug symbols --artifact crash\.ips --search-path \.\/build/);
   assert.match(help, /Android Java\/R8 mapping\.txt and native ndk-stack\/addr2line/);
   assert.match(help, /network\/audio evidence/);
-  assert.match(help, /agent-device alert wait 3000/);
+  assert.match(help, /extend alert wait 3000/);
   assert.match(help, /iOS support is runner-derived/);
   assert.match(help, /resolved app executable/);
   assert.match(help, /--launch-console is only for direct iOS simulator app launches/);
   assert.match(help, /runnerLogPath and requestLogPath/);
   assert.match(
     help,
-    /AGENT_DEVICE_EXEC_TRACE=1 when you need host-tool spawn timing without full debug streaming/,
+    /EXTEND_ENGINE_EXEC_TRACE=1 when you need host-tool spawn timing without full debug streaming/,
   );
   assert.match(help, /open --debug --json/);
   assert.match(help, /open_timing event/);
   assert.match(help, /requests\/<request-id>\.ndjson holds daemon request diagnostics/);
   assert.match(help, /daemon\.log is global daemon lifecycle evidence/);
-  assert.match(help, /agent-device perf memory sample --json/);
-  assert.match(help, /agent-device audio probe start 10 1000 --platform web/);
-  assert.match(help, /agent-device audio probe start 10 1000 --platform macos/);
-  assert.match(help, /agent-device audio probe start 10 1000 --platform ios/);
-  assert.match(help, /agent-device audio probe start 10 1000 --platform android/);
+  assert.match(help, /extend perf memory sample --json/);
+  assert.match(help, /extend audio probe start 10 1000 --platform web/);
+  assert.match(help, /extend audio probe start 10 1000 --platform macos/);
+  assert.match(help, /extend audio probe start 10 1000 --platform ios/);
+  assert.match(help, /extend audio probe start 10 1000 --platform android/);
   assert.match(help, /compact rmsDbfs and peakDbfs arrays/);
   assert.match(help, /requires Screen Recording permission/);
   assert.match(help, /Physical iOS and Android devices are not supported/);
@@ -441,15 +438,15 @@ test('usageForCommand resolves debugging help topic', async () => {
 test('usageForCommand resolves remote help topic', async () => {
   const help = await usageForCommand('remote');
   if (help === null) throw new Error('Expected remote help text');
-  assert.match(help, /agent-device connect/);
+  assert.match(help, /extend connect/);
   assert.match(help, /Remote connection providers use the same lifecycle/);
   assert.match(help, /connect -> install\/open -> commands -> close -> disconnect/);
-  assert.match(help, /agent-device connect cloud discovers the agent-device cloud profile/);
-  assert.match(help, /Direct proxy: agent-device connect proxy/);
+  assert.match(help, /extend connect cloud discovers the cloud profile/);
+  assert.match(help, /Direct proxy: extend connect proxy/);
   assert.match(help, /stores the shared proxy profile and client identity/);
-  assert.match(help, /BrowserStack: agent-device connect browserstack/);
-  assert.match(help, /AWS Device Farm: agent-device connect aws-device-farm/);
-  assert.match(help, /Limrun: agent-device connect limrun/);
+  assert.match(help, /BrowserStack: extend connect browserstack/);
+  assert.match(help, /AWS Device Farm: extend connect aws-device-farm/);
+  assert.match(help, /Limrun: extend connect limrun/);
   assert.match(help, /It does not create an App Automate session/);
   assert.match(help, /It does not create a remote access session/);
   assert.match(help, /It does not create an instance/);
@@ -458,7 +455,7 @@ test('usageForCommand resolves remote help topic', async () => {
   assert.match(help, /Do not run devices as a pre-open catalog probe/);
   assert.match(help, /Limrun is the exception for apps/);
   assert.match(help, /AWS Device Farm cannot install after allocation/);
-  assert.match(help, /agent-device open com\.example\.app --remote-config \.\/remote-config\.json/);
+  assert.match(help, /extend open com\.example\.app --remote-config \.\/remote-config\.json/);
   assert.match(help, /disconnect --remote-config \.\/remote-config\.json/);
   assert.match(help, /connect browserstack --platform android/);
   assert.match(help, /connect aws-device-farm --platform android/);
@@ -466,23 +463,23 @@ test('usageForCommand resolves remote help topic', async () => {
   assert.match(help, /AWS_REGION=us-west-2 AWS_ACCESS_KEY_ID/);
   assert.match(help, /AWS Device Farm uses the AWS CLI credential chain/);
   assert.match(help, /Prefer short-lived AWS role credentials in CI/);
-  assert.match(help, /agent-device artifacts --json/);
+  assert.match(help, /extend artifacts --json/);
   assert.match(help, /Script flow, per-command config/);
   assert.match(help, /Direct proxy flow for a remote Mac/);
-  assert.match(help, /agent-device proxy --port 4310/);
+  assert.match(help, /extend proxy --port 4310/);
   assert.match(
     help,
     /connect proxy --daemon-base-url https:\/\/example\.trycloudflare\.com\/agent-device --daemon-auth-token <token>/,
   );
-  assert.match(help, /agent-device open Maps --platform ios/);
-  assert.match(help, /agent-device snapshot -i --platform ios/);
-  assert.match(help, /agent-device close/);
+  assert.match(help, /extend open Maps --platform ios/);
+  assert.match(help, /extend snapshot -i --platform ios/);
+  assert.match(help, /extend close/);
   assert.match(help, /Proxy device leases are acquired on open/);
   assert.match(help, /expire after five minutes without commands/);
   assert.match(help, /Multiple agents can share one proxy/);
   assert.match(help, /disconnect releases local connection state/);
   assert.match(help, /A busy direct-proxy device error means another agent owns the device/);
-  assert.match(help, /AGENT_DEVICE_HTTP_AUTH_HOOK configured treats HTTP requests as remote/);
+  assert.match(help, /EXTEND_ENGINE_HTTP_AUTH_HOOK configured treats HTTP requests as remote/);
   assert.match(help, /host-path install sources are rejected/);
   assert.match(help, /uploaded artifacts remain supported/);
   assert.match(help, /Limrun, BrowserStack, and AWS Device Farm through local provider profiles/);
@@ -499,10 +496,10 @@ test('usageForCommand resolves remote help topic', async () => {
 test('usageForCommand resolves physical-device help topic', async () => {
   const help = await usageForCommand('physical-device');
   if (help === null) throw new Error('Expected physical-device help text');
-  assert.match(help, /^agent-device \S+ — physical-device/);
+  assert.match(help, /^Silicon Extend device engine \S+ — physical-device/);
   assert.match(help, /Start with Automatic Signing and only these env vars/);
-  assert.match(help, /AGENT_DEVICE_IOS_TEAM_ID=ABCDE12345/);
-  assert.match(help, /AGENT_DEVICE_IOS_BUNDLE_ID=com\.yourname\.agentdevice\.runner/);
+  assert.match(help, /EXTEND_ENGINE_IOS_TEAM_ID=ABCDE12345/);
+  assert.match(help, /EXTEND_ENGINE_IOS_BUNDLE_ID=com\.yourname\.extend\.helper/);
   assert.match(help, /profile name\/specifier, not a file path/);
   assert.match(help, /Older devices visible only to xctrace use the XCTest backend automatically/);
   assert.match(help, /runner commands travel through macOS usbmuxd/);
@@ -515,11 +512,11 @@ test('usageForCommand resolves physical-device help topic', async () => {
     help,
     /one simctl launch --terminate-running-process call instead of a separate terminate-then-launch/,
   );
-  assert.match(help, /AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS/);
-  assert.match(help, /AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS/);
+  assert.match(help, /EXTEND_ENGINE_IOS_RUNNER_IDLE_STOP_MS/);
+  assert.match(help, /EXTEND_ENGINE_DAEMON_IDLE_TIMEOUT_MS/);
   assert.match(
     help,
-    /a stale iOS runner lease — its owner process dead, or its AGENT_DEVICE_STATE_DIR deleted — is reclaimed automatically/i,
+    /a stale iOS runner lease — its owner process dead, or its EXTEND_ENGINE_STATE_DIR deleted — is reclaimed automatically/i,
   );
   assert.match(
     help,
@@ -531,8 +528,8 @@ test('usageForCommand resolves physical-device help topic', async () => {
 test('usageForCommand resolves ios-system-ui help topic', async () => {
   const help = await usageForCommand('ios-system-ui');
   if (help === null) throw new Error('Expected ios-system-ui help text');
-  assert.match(help, /^agent-device \S+ — ios-system-ui/);
-  assert.match(help, /agent-device open com\.apple\.springboard --platform ios/);
+  assert.match(help, /^Silicon Extend device engine \S+ — ios-system-ui/);
+  assert.match(help, /extend open com\.apple\.springboard --platform ios/);
   assert.match(help, /longpress <x> <y> on an empty area of the home screen/);
   assert.match(help, /discover them from the current snapshot/);
   assert.match(
@@ -546,7 +543,7 @@ test('usageForCommand resolves ios-system-ui help topic', async () => {
 test('usageForCommand resolves manual QA help topic', async () => {
   const help = await usageForCommand('manual-qa');
   if (help === null) throw new Error('Expected manual QA help text');
-  assert.match(help, /^agent-device \S+ — manual-qa/);
+  assert.match(help, /^Silicon Extend device engine \S+ — manual-qa/);
   assert.match(help, /Execute the script/);
   assert.match(help, /Run snapshot -i to get current refs/);
   assert.match(help, /press\/fill\/click\/longpress <ref-or-selector> --settle/);
@@ -566,7 +563,7 @@ test('usageForCommand resolves manual QA help topic', async () => {
 test('usageForCommand resolves validate help topic', async () => {
   const help = await usageForCommand('validate');
   if (help === null) throw new Error('Expected validate help text');
-  assert.match(help, /^agent-device \S+ — validate/);
+  assert.match(help, /^Silicon Extend device engine \S+ — validate/);
   assert.match(help, /validating a code change/);
   assert.match(help, /Required freshness gate before device verification/);
   assert.match(help, /For a TypeScript runtime or CLI output change, start with pnpm build/);
@@ -576,14 +573,14 @@ test('usageForCommand resolves validate help topic', async () => {
   assert.match(help, /Do not build the Apple runner for TypeScript-only changes/);
   assert.match(help, /Use the settled diff as evidence/);
   assert.match(help, /Close sessions and release leases/);
-  assert.match(help, /exact key that includes the agent-device package and Xcode version/);
+  assert.match(help, /exact key that includes the device engine's version and the Xcode version/);
   assert.match(help, /Avoid broad restore-key fallbacks/);
 });
 
 test('usageForCommand resolves macos help topic', async () => {
   const help = await usageForCommand('macos');
   if (help === null) throw new Error('Expected macos help text');
-  assert.match(help, /agent-device click @e66 --button secondary --platform macos/);
+  assert.match(help, /extend click @e66 --button secondary --platform macos/);
   assert.match(help, /Context menus are not ambient UI/);
   assert.match(help, /menu-item refs/);
 });
@@ -591,7 +588,7 @@ test('usageForCommand resolves macos help topic', async () => {
 test('usageForCommand resolves dogfood help topic', async () => {
   const help = await usageForCommand('dogfood');
   if (help === null) throw new Error('Expected dogfood help text');
-  assert.match(help, /^agent-device \S+ — dogfood/);
+  assert.match(help, /^Silicon Extend device engine \S+ — dogfood/);
   assert.match(help, /Find user-visible issues from runtime behavior/);
   assert.match(help, /Severity: critical blocks a core flow\/data\/crashes/);
   assert.match(help, /Interactive\/behavioral issues need step screenshots/);
@@ -600,10 +597,10 @@ test('usageForCommand resolves dogfood help topic', async () => {
   assert.match(help, /Expo Go\/dev-client shells/);
   assert.match(help, /direct Android localhost URL opens with a port auto-configure/);
   assert.match(help, /Keep stateful commands serial within the same session/);
-  assert.match(help, /agent-device wait 'role=tab' 10000/);
+  assert.match(help, /extend wait 'role=tab' 10000/);
   assert.match(help, /scroll takes a selector-less direction\+amount form/);
   assert.match(help, /Use --settle to wait for the UI to go quiet/);
-  assert.match(help, /prefer agent-device open "Expo Go" <url>/);
+  assert.match(help, /prefer extend open "Expo Go" <url>/);
   assert.match(help, /dogfood-output\/report\.md/);
   assert.match(help, /ID, severity, category, title, affected flow\/screen/);
   assert.match(help, /Never delete screenshots, videos, traces, or report artifacts/);
@@ -613,21 +610,18 @@ test('usageForCommand resolves dogfood help topic', async () => {
 test('usageForCommand resolves react-devtools help topic', async () => {
   const help = await usageForCommand('react-devtools');
   if (help === null) throw new Error('Expected react-devtools help text');
-  assert.match(help, /agent-device react-devtools start/);
-  assert.match(help, /agent-device react-devtools wait --component <ComponentName>/);
-  assert.match(help, /agent-device react-devtools find <ComponentName> --exact/);
-  assert.match(help, /agent-device react-devtools errors/);
-  assert.match(help, /agent-device react-devtools profile report @c5/);
-  assert.match(help, /agent-device react-devtools profile timeline --limit 20/);
-  assert.match(help, /agent-device react-devtools profile export profile\.json/);
-  assert.match(
-    help,
-    /agent-device react-devtools profile diff before\.json after\.json --limit 10/,
-  );
+  assert.match(help, /extend react-devtools start/);
+  assert.match(help, /extend react-devtools wait --component <ComponentName>/);
+  assert.match(help, /extend react-devtools find <ComponentName> --exact/);
+  assert.match(help, /extend react-devtools errors/);
+  assert.match(help, /extend react-devtools profile report @c5/);
+  assert.match(help, /extend react-devtools profile timeline --limit 20/);
+  assert.match(help, /extend react-devtools profile export profile\.json/);
+  assert.match(help, /extend react-devtools profile diff before\.json after\.json --limit 10/);
   assert.match(help, /render causes and changed props\/state\/hooks/);
-  assert.match(help, /Run agent-device react-devtools status first/);
+  assert.match(help, /Run extend react-devtools status first/);
   assert.match(help, /start is not a connection check/);
-  assert.match(help, /Always run agent-device react-devtools wait --connected after status/);
+  assert.match(help, /Always run extend react-devtools wait --connected after status/);
   assert.match(help, /logs clear --restart before the first logs mark/);
   assert.match(help, /one bounded first-pass survey/);
   assert.match(help, /profile slow --limit 5 once/);
@@ -635,11 +629,11 @@ test('usageForCommand resolves react-devtools help topic', async () => {
   assert.match(help, /profile timeline --limit 20 only when commit timing matters/);
   assert.match(help, /Do not repeatedly raise broad profile slow limits/);
   assert.match(help, /profile report unless you have a specific target/);
-  assert.match(help, /agent-device logs mark "before catalog search"/);
-  assert.match(help, /agent-device react-devtools profile timeline --limit 20/);
+  assert.match(help, /extend logs mark "before catalog search"/);
+  assert.match(help, /extend react-devtools profile timeline --limit 20/);
   assert.match(help, /Do not write agent-devtools/);
-  assert.match(help, /Every profiling and survey line must begin with agent-device react-devtools/);
-  assert.match(help, /agent-device network dump --include headers/);
+  assert.match(help, /Every profiling and survey line must begin with extend react-devtools/);
+  assert.match(help, /extend network dump --include headers/);
   assert.match(help, /@c refs reset after reload\/remount/);
   assert.match(help, /use separate sessions\/devices/);
   assert.match(help, /local service tunnel/);
@@ -649,7 +643,7 @@ test('usageForCommand resolves react-devtools help topic', async () => {
 test('usageForCommand resolves cdp help topic', async () => {
   const help = await usageForCommand('cdp');
   if (help === null) throw new Error('Expected cdp help text');
-  assert.match(help, /agent-device cdp target list --url http:\/\/127\.0\.0\.1:8081/);
+  assert.match(help, /extend cdp target list --url http:\/\/127\.0\.0\.1:8081/);
   assert.match(help, /memory usage sample --label baseline --gc/);
   assert.match(help, /memory snapshot leak-triplet --baseline ms_1 --action ms_2 --cleanup ms_3/);
   assert.match(help, /memory snapshot retainers --snapshot ms_3 --id <node-id>/);
@@ -661,7 +655,7 @@ test('usageForCommand resolves cdp help topic', async () => {
 test('usageForCommand resolves react-native help topic', async () => {
   const help = await usageForCommand('react-native');
   if (help === null) throw new Error('Expected react-native help text');
-  assert.match(help, /^agent-device \S+ — react-native/);
+  assert.match(help, /^Silicon Extend device engine \S+ — react-native/);
   assert.match(help, /React Native-specific automation hazards/);
   assert.match(help, /Choose the next help topic/);
   assert.match(help, /help workflow/);
@@ -677,24 +671,24 @@ test('usageForCommand resolves react-native help topic', async () => {
   assert.match(help, /Multiple local worktrees can reuse one native iOS simulator build/);
   assert.match(help, /--metro-host 127\.0\.0\.1 --metro-port 8081/);
   assert.match(help, /One simulator cannot run two copies of the same bundle id/);
-  assert.match(help, /Keep the agent-device react-devtools prefix/);
+  assert.match(help, /Keep the extend react-devtools prefix/);
   assert.match(help, /Use help react-devtools for status\/wait/);
-  assert.match(help, /Keep the agent-device cdp prefix/);
+  assert.match(help, /Keep the extend cdp prefix/);
   assert.match(help, /Use help cdp for JS heap usage samples/);
   assert.match(help, /logs clear --restart/);
   assert.match(help, /network dump --include headers/);
-  assert.match(help, /agent-device open "Agent Device Tester" --platform android/);
+  assert.match(help, /extend open "Agent Device Tester" --platform android/);
   assert.match(help, /Start React Native slow-flow plans with this ordered scaffold/);
   assert.match(help, /include the open command even when it also describes the current screen/);
-  assert.match(help, /agent-device react-devtools status/);
+  assert.match(help, /extend react-devtools status/);
   assert.match(help, /Profiling plans need both status and wait --connected before profile start/);
   assert.match(help, /Do not substitute react-devtools start for status/);
   assert.match(help, /If snapshot reports a React Native warning\/error overlay/);
-  assert.match(help, /agent-device react-native dismiss-overlay/);
+  assert.match(help, /extend react-native dismiss-overlay/);
   assert.match(help, /verifies the overlay is gone with a fresh post-dismiss snapshot -i/);
   assert.match(help, /Do not use a plain snapshot after dismiss-overlay/);
   assert.match(help, /When overlay evidence and React diagnostics are required/);
-  assert.match(help, /agent-device react-devtools errors/);
+  assert.match(help, /extend react-devtools errors/);
   assert.match(help, /overlay is still visible/);
   assert.match(help, /Do not manually press warning\/error text bodies/);
   assert.match(help, /dismiss-overlay command owns the narrow LogBox\/RedBox targeting policy/);

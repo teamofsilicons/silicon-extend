@@ -432,7 +432,7 @@ test('a foreign live claim rejects open before platform preparation or mutation'
     stateDir: ownerStateDir,
   });
   assert.deepEqual(response.error.details?.recovery, {
-    command: 'agent-device device status --platform android --serial emulator-5554',
+    command: 'extend device status --platform android --serial emulator-5554',
   });
   assert.equal(mockEnsureDeviceReady.mock.calls.length, 0);
   assert.equal(mockResolveAndroidPackage.mock.calls.length, 0);

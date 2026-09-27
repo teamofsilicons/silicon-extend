@@ -213,7 +213,7 @@ async function verifyReactNativeOverlayDismissal(
       verified: false,
       verificationWarning:
         'React Native overlay dismissal could not be verified because the post-dismiss accessibility tree is unreadable. Use screenshot as visual truth.',
-      nextCommand: 'agent-device screenshot',
+      nextCommand: 'extend screenshot',
     };
   }
   const overlay = analyzeReactNativeOverlay(verificationSnapshot.nodes);
@@ -226,7 +226,7 @@ async function verifyReactNativeOverlayDismissal(
     verified: false,
     verificationWarning:
       'React Native overlay is still detected after dismissal. Use screenshot --overlay-refs for visual evidence and report the overlay instead of pressing the warning body.',
-    nextCommand: 'agent-device screenshot --overlay-refs',
+    nextCommand: 'extend screenshot --overlay-refs',
   };
 }
 

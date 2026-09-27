@@ -40,7 +40,7 @@ export async function symbolicateCrashArtifact(
   });
   if (dsymPaths.length === 0) {
     throw new AppError('INVALID_ARGS', 'debug symbols requires --dsym or --search-path.', {
-      hint: 'Pass a matching .dSYM bundle directly, or pass --search-path <dir> so agent-device can match crash image UUIDs to local dSYMs.',
+      hint: 'Pass a matching .dSYM bundle directly, or pass --search-path <dir> so the device engine can match crash image UUIDs to local dSYMs.',
     });
   }
 

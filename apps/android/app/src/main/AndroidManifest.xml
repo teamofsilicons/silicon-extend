@@ -14,8 +14,11 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
-    <!-- "apps (all)" lists every installed app, as agent-device does. The app is distributed from
-         extend.teamofsilicons.com, not a store with a package-visibility policy. -->
+    <!-- A 5 s partial wake lock when the screen goes off, so the "awake: false" frame leaves before
+         the device sleeps (core/Wakefulness.kt). Partial: it never turns the screen on. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- "apps (all)" lists every installed app, as the device engine does. The app is distributed
+         from extend.teamofsilicons.com, not a store with a package-visibility policy. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />

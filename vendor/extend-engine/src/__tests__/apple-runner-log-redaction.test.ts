@@ -7,7 +7,7 @@ import { test } from 'vitest';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const commitWaitPath = path.join(
   repoRoot,
-  'apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedCommitDeadline.swift',
+  'apple/runner/SiliconExtendHelper/SiliconExtendHelperUITests/RunnerTests+SynthesizedCommitDeadline.swift',
 );
 
 // The synthesized replacement commit wait polls the target field's live value on the shipped

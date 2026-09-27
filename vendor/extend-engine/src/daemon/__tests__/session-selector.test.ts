@@ -77,9 +77,9 @@ test('selector mismatch explains session recovery commands', () => {
       assert.equal(err.code, 'INVALID_ARGS');
       assert.match(err.message, /Session "default" is already bound to android device "Pixel 9"/i);
       assert.match(err.message, /--platform=ios/i);
-      assert.match(err.details?.hint ?? '', /agent-device session list/i);
+      assert.match(err.details?.hint ?? '', /extend session list/i);
       assert.match(err.details?.hint ?? '', /--session default/i);
-      assert.match(err.details?.hint ?? '', /agent-device close --session default/i);
+      assert.match(err.details?.hint ?? '', /extend close --session default/i);
       return true;
     },
   );

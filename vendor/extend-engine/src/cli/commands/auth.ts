@@ -16,7 +16,7 @@ export const authCommand: ClientCommandHandler = async ({ positionals, flags }) 
     const login = await loginWithDeviceAuth({
       stateDir,
       flags,
-      commandLabel: 'agent-device auth login',
+      commandLabel: 'extend auth login',
     });
     const data = {
       authenticated: true,

@@ -3,11 +3,11 @@
 #if TARGET_OS_OSX
 #import <Cocoa/Cocoa.h>
 
-@interface AgentDeviceRunnerAppDelegate : NSObject <NSApplicationDelegate>
+@interface SiliconExtendHelperAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @end
 
-@implementation AgentDeviceRunnerAppDelegate
+@implementation SiliconExtendHelperAppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
   (void)notification;
@@ -18,9 +18,9 @@
                                                        NSWindowStyleMaskMiniaturizable)
                                               backing:NSBackingStoreBuffered
                                                 defer:NO];
-  self.window.title = @"Agent Device Runner";
+  self.window.title = @"Silicon Extend";
 
-  NSTextField *label = [NSTextField labelWithString:@"Agent Device Runner"];
+  NSTextField *label = [NSTextField labelWithString:@"Silicon Extend"];
   label.font = [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold];
   label.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -45,7 +45,7 @@ int main(int argc, const char *argv[]) {
 
   @autoreleasepool {
     NSApplication *application = [NSApplication sharedApplication];
-    AgentDeviceRunnerAppDelegate *delegate = [[AgentDeviceRunnerAppDelegate alloc] init];
+    SiliconExtendHelperAppDelegate *delegate = [[SiliconExtendHelperAppDelegate alloc] init];
     application.delegate = delegate;
     [application setActivationPolicy:NSApplicationActivationPolicyRegular];
     [application run];
@@ -60,7 +60,7 @@ int main(int argc, const char *argv[]) {
 #import <UserNotifications/UserNotifications.h>
 #endif
 
-@interface AgentDeviceRunnerViewController : UIViewController
+@interface SiliconExtendHelperViewController : UIViewController
 @property(nonatomic, strong) UILabel *alertActionStatus;
 @property(nonatomic, strong) UILabel *alertActivationBusyAnswer;
 @property(nonatomic, assign) NSUInteger firstAlertActions;
@@ -80,11 +80,11 @@ int main(int argc, const char *argv[]) {
 @end
 
 #if TARGET_OS_IOS
-@interface AgentDeviceRunnerViewController () <UNUserNotificationCenterDelegate>
+@interface SiliconExtendHelperViewController () <UNUserNotificationCenterDelegate>
 @end
 #endif
 
-@implementation AgentDeviceRunnerViewController
+@implementation SiliconExtendHelperViewController
 
 #if TARGET_OS_IOS
 // An animation that never ends is what "busy" looks like to XCTest while it decides whether the app
@@ -95,7 +95,7 @@ int main(int argc, const char *argv[]) {
 // the backstop after `--agent-device-alert-activation-busy`, sized to outlast its whole resolution
 // and activation budget, so a slow host cannot end the busy state before the answer lands. A layer
 // animation on its own is not enough; only a UIView animation counts as in-flight work here.
-static NSTimeInterval AgentDeviceAlertActivationBusyWindow(void) {
+static NSTimeInterval HelperAlertActivationBusyWindow(void) {
   NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
   NSUInteger flag = [arguments indexOfObject:@"--agent-device-alert-activation-busy"];
   return flag + 1 < arguments.count ? arguments[flag + 1].doubleValue : 0;
@@ -105,7 +105,7 @@ static NSTimeInterval AgentDeviceAlertActivationBusyWindow(void) {
   if (self.alertActivationBusyBackstop != nil) {
     return;
   }
-  self.alertActivationBusyBackstop = [NSTimer scheduledTimerWithTimeInterval:AgentDeviceAlertActivationBusyWindow()
+  self.alertActivationBusyBackstop = [NSTimer scheduledTimerWithTimeInterval:HelperAlertActivationBusyWindow()
                                                                       target:self
                                                                     selector:@selector(stopAlertActivationBusy)
                                                                     userInfo:nil
@@ -152,7 +152,7 @@ static NSTimeInterval AgentDeviceAlertActivationBusyWindow(void) {
 
 - (void)postAlertBanner {
   UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
-  content.title = @"Agent Device banner";
+  content.title = @"Silicon Extend banner";
   content.body = @"Shown over the alert fixture";
   UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:NSUUID.UUID.UUIDString
                                                                         content:content
@@ -258,7 +258,7 @@ static NSTimeInterval AgentDeviceAlertActivationBusyWindow(void) {
 // erasure back into its model, which is why the field stays wrong instead of healing when the burst
 // finishes. The window is decided at the edit rather than scheduled, so a loaded host, which
 // stretches the gaps between characters, can only make this app keep up better.
-static NSTimeInterval AgentDeviceTextEntryAcknowledgeWindow(void) {
+static NSTimeInterval HelperTextEntryAcknowledgeWindow(void) {
   NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
   NSUInteger index = [arguments indexOfObject:@"--agent-device-text-entry-acknowledge-window"];
   return index == NSNotFound || index + 1 >= arguments.count ? 0 : [arguments[index + 1] doubleValue];
@@ -266,9 +266,9 @@ static NSTimeInterval AgentDeviceTextEntryAcknowledgeWindow(void) {
 
 // Edits further apart than this belong to different bursts: one runner command's characters arrive
 // well inside it, and two commands are separated by at least a commit-wait poll and a status read.
-static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
+static const NSTimeInterval HelperTextEntryBurstBreakSeconds = 1.0;
 
-- (void)agentDeviceTextEntryDidChange:(UITextField *)textField {
+- (void)helperTextEntryDidChange:(UITextField *)textField {
   // A field whose app owns its value, the way a controlled React Native `TextInput` does. A burst
   // typed faster than the app renders loses the characters that arrived while a render was in
   // flight, and the field settles stable short of the request.
@@ -276,7 +276,7 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     NSTimeInterval gap = now - self.textEntryLastEditTime;
     BOOL overtookARender = self.textEntryRenderedValue != nil && gap < self.textEntryAcknowledgeWindowSeconds;
-    if (self.textEntryBurstEdits == 0 || gap > AgentDeviceTextEntryBurstBreakSeconds) {
+    if (self.textEntryBurstEdits == 0 || gap > HelperTextEntryBurstBreakSeconds) {
       self.textEntryBurstStartTime = now;
       self.textEntryBurstEdits = 0;
       self.textEntryBurstMinGap = 0;
@@ -309,7 +309,7 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
   self.view.backgroundColor = UIColor.whiteColor;
 
   UILabel *label = [[UILabel alloc] init];
-  label.text = @"Agent Device Runner";
+  label.text = @"Silicon Extend";
   label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
   label.textAlignment = NSTextAlignmentCenter;
   label.translatesAutoresizingMaskIntoConstraints = NO;
@@ -353,7 +353,7 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
       textField.inputView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
     }
     [textField addTarget:self
-                  action:@selector(agentDeviceTextEntryDidChange:)
+                  action:@selector(helperTextEntryDidChange:)
         forControlEvents:UIControlEventEditingChanged];
     textField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:textField];
@@ -364,7 +364,7 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
       [textField.heightAnchor constraintEqualToConstant:44],
     ]];
     if ([NSProcessInfo.processInfo.arguments containsObject:@"--agent-device-text-entry-app-owned-value"]) {
-      self.textEntryAcknowledgeWindowSeconds = AgentDeviceTextEntryAcknowledgeWindow();
+      self.textEntryAcknowledgeWindowSeconds = HelperTextEntryAcknowledgeWindow();
       // Reports how many edits this app rendered and how many writes it had to make because a
       // character overtook one, so a lane test can tell a burst the app kept up with from an inert
       // fixture. Counts only: no field content crosses into the test.
@@ -423,11 +423,11 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
 @end
 
 // UIApplicationSceneManifest in Info.plist names this class; a rename must update the manifest.
-@interface AgentDeviceRunnerSceneDelegate : UIResponder <UIWindowSceneDelegate>
+@interface SiliconExtendHelperSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
 
-@implementation AgentDeviceRunnerSceneDelegate
+@implementation SiliconExtendHelperSceneDelegate
 
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
@@ -440,7 +440,7 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
   }
 
   self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-  self.window.rootViewController = [[AgentDeviceRunnerViewController alloc] init];
+  self.window.rootViewController = [[SiliconExtendHelperViewController alloc] init];
 #if TARGET_OS_IOS
   if ([NSProcessInfo.processInfo.arguments containsObject:@"--agent-device-dismiss-popup-window"]) {
     self.window.accessibilityIdentifier = @"Dismiss popup";
@@ -451,15 +451,15 @@ static const NSTimeInterval AgentDeviceTextEntryBurstBreakSeconds = 1.0;
 
 @end
 
-@interface AgentDeviceRunnerAppDelegate : UIResponder <UIApplicationDelegate>
+@interface SiliconExtendHelperAppDelegate : UIResponder <UIApplicationDelegate>
 @end
 
-@implementation AgentDeviceRunnerAppDelegate
+@implementation SiliconExtendHelperAppDelegate
 @end
 
 int main(int argc, char *argv[]) {
   @autoreleasepool {
-    return UIApplicationMain(argc, argv, nil, NSStringFromClass(AgentDeviceRunnerAppDelegate.class));
+    return UIApplicationMain(argc, argv, nil, NSStringFromClass(SiliconExtendHelperAppDelegate.class));
   }
 }
 

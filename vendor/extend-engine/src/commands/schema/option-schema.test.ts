@@ -17,7 +17,7 @@ test('option schema exposes config/env metadata for global options', () => {
   const spec = getOptionSpec('platform');
   assert.ok(spec);
   assert.equal(spec.configurable, true);
-  assert.deepEqual(spec.env.names, ['AGENT_DEVICE_PLATFORM']);
+  assert.deepEqual(spec.env.names, ['EXTEND_ENGINE_PLATFORM', 'AGENT_DEVICE_PLATFORM']);
   assert.equal(spec.supportsCommand('open'), true);
   assert.equal(spec.supportsCommand('snapshot'), true);
   assert.equal(spec.supportsCommand('auth'), false);
@@ -32,11 +32,17 @@ test('option schema exposes env defaults and command scoping', () => {
 
   const androidDeviceAllowlist = getOptionSpec('androidDeviceAllowlist');
   assert.ok(androidDeviceAllowlist);
-  assert.deepEqual(androidDeviceAllowlist.env.names, ['AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST']);
+  assert.deepEqual(androidDeviceAllowlist.env.names, [
+    'EXTEND_ENGINE_ANDROID_DEVICE_ALLOWLIST',
+    'AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST',
+  ]);
 
   const iosXctestrunFile = getOptionSpec('iosXctestrunFile');
   assert.ok(iosXctestrunFile);
-  assert.deepEqual(iosXctestrunFile.env.names, ['AGENT_DEVICE_IOS_XCTESTRUN_FILE']);
+  assert.deepEqual(iosXctestrunFile.env.names, [
+    'EXTEND_ENGINE_IOS_XCTESTRUN_FILE',
+    'AGENT_DEVICE_IOS_XCTESTRUN_FILE',
+  ]);
   assert.equal(iosXctestrunFile.supportsCommand('open'), true);
   assert.equal(iosXctestrunFile.supportsCommand('snapshot'), true);
   assert.equal(iosXctestrunFile.supportsCommand('auth'), false);
@@ -44,12 +50,16 @@ test('option schema exposes env defaults and command scoping', () => {
   const iosXctestDerivedDataPath = getOptionSpec('iosXctestDerivedDataPath');
   assert.ok(iosXctestDerivedDataPath);
   assert.deepEqual(iosXctestDerivedDataPath.env.names, [
+    'EXTEND_ENGINE_IOS_XCTEST_DERIVED_DATA_PATH',
     'AGENT_DEVICE_IOS_XCTEST_DERIVED_DATA_PATH',
   ]);
 
   const iosXctestEnvDir = getOptionSpec('iosXctestEnvDir');
   assert.ok(iosXctestEnvDir);
-  assert.deepEqual(iosXctestEnvDir.env.names, ['AGENT_DEVICE_IOS_XCTEST_ENV_DIR']);
+  assert.deepEqual(iosXctestEnvDir.env.names, [
+    'EXTEND_ENGINE_IOS_XCTEST_ENV_DIR',
+    'AGENT_DEVICE_IOS_XCTEST_ENV_DIR',
+  ]);
 
   const snapshotDepth = getOptionSpec('snapshotDepth');
   assert.ok(snapshotDepth);
@@ -58,13 +68,19 @@ test('option schema exposes env defaults and command scoping', () => {
 
   const screenshotScale = getOptionSpec('screenshotScale');
   assert.ok(screenshotScale);
-  assert.deepEqual(screenshotScale.env.names, ['AGENT_DEVICE_SCREENSHOT_SCALE']);
+  assert.deepEqual(screenshotScale.env.names, [
+    'EXTEND_ENGINE_SCREENSHOT_SCALE',
+    'AGENT_DEVICE_SCREENSHOT_SCALE',
+  ]);
   assert.equal(screenshotScale.supportsCommand('screenshot'), true);
   assert.equal(screenshotScale.supportsCommand('record'), false);
 
   const metroBearerToken = getOptionSpec('metroBearerToken');
   assert.ok(metroBearerToken);
-  assert.deepEqual(metroBearerToken.env.names, ['AGENT_DEVICE_METRO_BEARER_TOKEN']);
+  assert.deepEqual(metroBearerToken.env.names, [
+    'EXTEND_ENGINE_METRO_BEARER_TOKEN',
+    'AGENT_DEVICE_METRO_BEARER_TOKEN',
+  ]);
 });
 
 test('remote config schema stays aligned with CLI option metadata', () => {
@@ -153,7 +169,7 @@ test('option schema parses repeatable string options from config arrays and env 
     parseOptionValueFromSource(
       spec,
       'authorization: Bearer token',
-      'environment variable AGENT_DEVICE_HEADER',
+      'environment variable EXTEND_ENGINE_HEADER',
       'AGENT_DEVICE_HEADER',
     ),
     ['authorization: Bearer token'],

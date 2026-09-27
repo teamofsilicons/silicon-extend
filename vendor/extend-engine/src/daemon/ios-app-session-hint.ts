@@ -40,5 +40,5 @@ function buildOpenCommand(device: DeviceInfo, bundleId: string): string {
   const deviceSetFlag = device.simulatorSetPath
     ? ` --ios-simulator-device-set ${shellQuoteIfNeeded(device.simulatorSetPath)}`
     : '';
-  return `agent-device open ${bundleId} --platform ios --udid ${device.id}${deviceSetFlag}`;
+  return `extend open ${bundleId} --platform ios --udid ${device.id}${deviceSetFlag}`;
 }

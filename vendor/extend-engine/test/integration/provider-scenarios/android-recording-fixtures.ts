@@ -56,7 +56,7 @@ export function seedAndroidRecordingResource(
 ): void {
   const remotePath = manifest.chunks.at(-1)?.remotePath ?? manifest.pendingRemotePath;
   if (!remotePath) throw new Error('Android recording fixture needs a native remote path');
-  const manifestPath = `${path.posix.dirname(remotePath)}/agent-device-recording-active.json`;
+  const manifestPath = `${path.posix.dirname(remotePath)}/silicon-extend-recording-active.json`;
   screenRecordingResourceStore.write(
     screenRecordingResourceStore.resolvePath(daemon.sessionDir(manifest.sessionId)),
     createDurableResourceEnvelope({

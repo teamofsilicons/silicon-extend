@@ -68,7 +68,7 @@ test.each(['owner-process-dead', 'owner-process-reused', 'owner-state-dir-gone']
   (classification) => {
     assert.equal(
       buildDeviceClaimInspectionCommand(device, conflict(classification)),
-      'agent-device device status --platform android --serial emulator-5554 --stale',
+      'extend device status --platform android --serial emulator-5554 --stale',
     );
   },
 );
@@ -80,10 +80,10 @@ test('routes conflict presentation through the canonical error response shape', 
   assert.equal(response.error.retriable, false);
   assert.equal(
     response.error.hint,
-    'Inspect the owner with: agent-device device status --platform android --serial emulator-5554',
+    'Inspect the owner with: extend device status --platform android --serial emulator-5554',
   );
   assert.deepEqual(response.error.details?.recovery, {
-    command: 'agent-device device status --platform android --serial emulator-5554',
+    command: 'extend device status --platform android --serial emulator-5554',
   });
 });
 
@@ -92,7 +92,7 @@ test('routes a provably dead owner to the exact stale release command', () => {
   assert.equal(response.ok, false);
   if (response.ok) return;
   assert.deepEqual(response.error.details?.recovery, {
-    command: 'agent-device device release --platform android --serial emulator-5554 --stale',
+    command: 'extend device release --platform android --serial emulator-5554 --stale',
   });
   assert.match(String(response.error.hint), /settle its resources and release the claim with:/);
 });
@@ -196,7 +196,7 @@ test('an allocator-held conflict names the allocator instance and installation a
   assert.match(response.error.message, /held by managed-device allocator "sim-a"/);
   assert.doesNotMatch(response.error.message, /undefined/);
   assert.deepEqual(response.error.details?.recovery, {
-    command: 'agent-device device status --platform android --serial emulator-5554',
+    command: 'extend device status --platform android --serial emulator-5554',
   });
   assert.doesNotMatch(String(response.error.hint), /--stale|device release/);
   // Replay retries every conflict reason as infrastructure; an allocator-held device is not one.

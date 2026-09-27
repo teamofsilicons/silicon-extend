@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
             os_version: Some("1".into()),
             model: Some("Fake device".into()),
             app_version: "1.0.0".into(),
-            agent_device_version: None,
+            engine_version: None,
         })
         .await?;
     println!("PAIRING_CODE {}", e.pairing_code);
@@ -79,10 +79,11 @@ async fn main() -> anyhow::Result<()> {
         os,
         os_version: Some("1".into()),
         model: Some("Fake device".into()),
-        agent_device_version: None,
+        engine_version: None,
         capabilities: os.full_capabilities().to_vec(),
         missing: vec![],
         setup: Setup::complete(),
+        features: vec![],
     });
     ws.send(Message::Text(serde_json::to_string(&hello)?.into())).await?;
     while let Some(msg) = ws.next().await {

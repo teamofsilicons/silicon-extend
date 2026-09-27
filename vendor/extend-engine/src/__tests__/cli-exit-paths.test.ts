@@ -132,7 +132,7 @@ test('bare `help` with no target exits 0 and prints usage', async () => {
   }
 
   assert.equal(exitCode, 0);
-  assert.ok(stdout.read().includes('agent-device'));
+  assert.ok(stdout.read().includes('extend <command>'));
 });
 
 test('no command exits 1 and prints usage', async () => {

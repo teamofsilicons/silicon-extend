@@ -244,7 +244,7 @@ test('installAndroidInstallablePath .aab reports missing bundletool tooling', as
   }
 });
 
-test('installAndroidInstallablePath .aab rejects relative AGENT_DEVICE_BUNDLETOOL_JAR overrides', async () => {
+test('installAndroidInstallablePath .aab rejects relative EXTEND_ENGINE_BUNDLETOOL_JAR overrides', async () => {
   const tmpDir = await mkdtempForTest('agent-device-android-install-aab-relative-jar-');
   const aabPath = path.join(tmpDir, 'Sample.aab');
   await fs.writeFile(aabPath, 'placeholder', 'utf8');

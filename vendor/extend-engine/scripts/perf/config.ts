@@ -4,7 +4,7 @@ import type { Platform } from './types.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..', '..');
-const CLI_BIN = path.join(REPO_ROOT, 'bin', 'agent-device.mjs');
+const CLI_BIN = path.join(REPO_ROOT, 'bin', 'extend-engine.mjs');
 const DEFAULT_OUT_DIR = path.join(HERE, '.results');
 
 export type PerfConfig = {
@@ -18,7 +18,7 @@ export type PerfConfig = {
   serial?: string; // Android device override
 };
 
-// How to invoke the CLI. Defaults to the built dist binary (bin/agent-device.mjs).
+// How to invoke the CLI. Defaults to the built dist binary (bin/extend-engine.mjs).
 // Set AGENT_DEVICE_PERF_CLI to run from source instead, e.g. on CI:
 //   AGENT_DEVICE_PERF_CLI="--experimental-strip-types src/bin.ts"
 // (matches the device workflows, which run from source and skip the dist build).

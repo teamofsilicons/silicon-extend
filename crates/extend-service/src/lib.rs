@@ -12,11 +12,13 @@ macro_rules! sql {
 
 pub mod config;
 pub mod db;
+pub mod delivery;
 pub mod domain;
 pub mod error;
 pub mod files;
 pub mod hub;
 pub mod iam;
+pub mod membership;
 pub mod revocation;
 pub mod routes;
 pub mod scheduler;
@@ -24,11 +26,13 @@ pub mod state;
 pub mod telemetry;
 pub mod ting;
 pub mod versions;
+pub mod wake;
 
 use std::sync::Arc;
 
 use config::{Config, FilesMode, IamMode, TingMode};
 use state::{AppState, Shared};
+use tokio::sync::RwLock;
 
 /// Builds the shared state from configuration: connects the database, runs migrations, and wires
 /// IAM, Briefcase and Ting (or their local stand-ins).
@@ -37,6 +41,9 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let pool = db::connect(&cfg.database_url).await?;
     db::migrate_global(&pool).await?;
+    // Every test world that still exists reaches the current schema before anything touches it:
+    // the scheduler walks them, and device sockets reach worlds nobody has selected yet.
+    let test_worlds = db::ensure_test_worlds(&pool).await?;
     std::fs::create_dir_all(cfg.data_dir.join("uploads"))?;
     let (iam, local_iam): (iam::DynIam, Option<Arc<iam::LocalIam>>) = match &cfg.iam {
         IamMode::Sdk {
@@ -58,6 +65,9 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
         ),
         IamMode::Local => {
             let local = Arc::new(iam::LocalIam::new(cfg.local_members.clone(), pool.clone()));
+            if cfg.tuning.local_iam_strict_readers {
+                local.set_reader_mode(iam::ReaderMode::Strict);
+            }
             (local.clone(), Some(local))
         }
     };
@@ -76,7 +86,7 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
             (t.clone(), Some(t))
         }
     };
-    Ok(Arc::new(AppState {
+    let state = Arc::new(AppState {
         cfg,
         pool,
         iam,
@@ -87,13 +97,28 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
         hub: hub::Hub::default(),
         auth_cache: iam::AuthCache::default(),
         http: reqwest::Client::new(),
-        ready_worlds: Default::default(),
+        ready_worlds: RwLock::new(test_worlds.iter().cloned().collect()),
         selections: Default::default(),
         selection_revisions: Default::default(),
         fences: Default::default(),
         session_principals: Default::default(),
         limits: Default::default(),
-    }))
+        owner_cache: Default::default(),
+        waiting_logins: Default::default(),
+        ting_checked: Default::default(),
+    });
+    // Tings that wait for a member's login go at that member's next call; which members those
+    // are is rebuilt from the database (the logins Extend held died with the last process).
+    scheduler::rebuild_waiting(&state, &db::World::production()).await;
+    for schema in &test_worlds {
+        if let Some(id) = schema
+            .strip_prefix("extend_test_")
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+        {
+            scheduler::rebuild_waiting(&state, &db::World::test(id)).await;
+        }
+    }
+    Ok(state)
 }
 
 /// Serves until the process is told to stop.

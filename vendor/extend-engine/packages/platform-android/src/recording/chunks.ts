@@ -25,7 +25,8 @@ export function candidateRemotePaths(
   const dirs = preferredDir
     ? [preferredDir, '/sdcard', '/data/local/tmp']
     : ['/sdcard', '/data/local/tmp'];
-  return [...new Set(dirs)].map((directory) => `${directory}/agent-device-recording-${now}.mp4`);
+  // `/sdcard` is the device's shared storage, where a Carbon browsing its files sees the recording.
+  return [...new Set(dirs)].map((directory) => `${directory}/silicon-extend-recording-${now}.mp4`);
 }
 
 export async function startChunkAt(

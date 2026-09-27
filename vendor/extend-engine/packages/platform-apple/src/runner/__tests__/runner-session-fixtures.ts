@@ -47,8 +47,8 @@ export function makeRunnerLease(
     sessionId: `session-${overrides.deviceId}`,
     runnerPid: 4242,
     port: 8123,
-    xctestrunPath: `/tmp/AgentDeviceRunner.env.session-${overrides.deviceId}-${ownerToken}-8123.xctestrun`,
-    jsonPath: `/tmp/AgentDeviceRunner.env.session-${overrides.deviceId}-${ownerToken}-8123.json`,
+    xctestrunPath: `/tmp/SiliconExtendHelper.env.session-${overrides.deviceId}-${ownerToken}-8123.xctestrun`,
+    jsonPath: `/tmp/SiliconExtendHelper.env.session-${overrides.deviceId}-${ownerToken}-8123.json`,
     createdAtMs: Date.now(),
   };
   return { ...lease, ...overrides, ownerToken };

@@ -31,8 +31,15 @@ pnpm dev             # the website on http://localhost:5190 against the Rust ser
 `pnpm dev` proxies `/api` to `EXTEND_API_PROXY` (default `http://127.0.0.1:8480`), so the site is
 same-origin in development. With the mock:
 
-- Sign in with the SLT `oac_saket` (Carbon `c:saket`, teams `acme` and `labs`), or through the mock
-  consent screen ("Continue with Silicon IAM").
+- Sign in with the SLT `oac_saket` (Carbon `c:saket`, Teams `acme` and `labs`), or through the mock
+  consent screen ("Continue with Silicon IAM"). `oac_si_chef` signs in as the Silicon `si:chef`.
+- 1.1 scenarios in the seed: a family TV and a Mac that `c:saket` and `c:alice` both paired (Alice
+  installed Extend on the Mac, so Saket's Silicons get no terminal there), a request Alice's Silicon
+  sent that was routed to Saket, a locked MacBook with a wake request, a grant in a Team Saket's login
+  doesn't reach (`studio`), and Ting types missing in `labs`. Controls under `/__mock/`: `enroll`
+  (`instance_of` for "Pair with another Carbon", `app_version`), `fail-step` (a setup step fails, for
+  Retry), `scenario` (`carried_busy`), `carried` (duplicate or recognising), `awake`, `ting-manager`,
+  `directory-fails`, `retries`.
 - A live pairing code `4F9C2A` exists at start. More: `curl -XPOST localhost:8490/__mock/enroll -d '{"os":"android"}'`.
 - Test environment secret: printed when the mock starts (`ask_checkoutE2Etestenvironment…`). In it,
   sign in with a member id: `c:alice`, `c:saket`, `si:chef`, `si:scout`.
@@ -44,7 +51,14 @@ same-origin in development. With the mock:
 pnpm test            # vitest: API client, pairing codes, wizard state machine, IAM callback
 pnpm test:e2e        # Playwright against the mock (starts its own mock on 8491 and site on 5191)
 pnpm test:e2e:real   # against a running Rust service (EXTEND_REAL_URL, default :8480)
+pnpm test:e2e:compat # the released 1.0.0 website (built from git tag v1.0.0) against the 1.1 mock
 ```
+
+`pnpm typecheck` is `pnpm check`. `e2e/v1-1.spec.ts` covers 1.1: the device list whatever Team is
+selected, several Carbons and their separate sides, access per Team with the "Sign in to Extend for
+<team>" marker, waking, Ting types per Team, setup Retry (contract A) and a device in the 1.0 shape.
+The compat suite builds the 1.0.0 bundle same-origin and aborts any request that isn't to localhost,
+so it never reaches the production service.
 
 The e2e suites write full-page screenshots at 1280 px and 390 px to `test-results/screenshots/`
 (mock) and `test-results/screenshots-real/` (real service), and fail if a page scrolls sideways at
@@ -101,7 +115,8 @@ and field, on a shape the CLI reference page can't show.
 ```
 src/config.ts               API URL, download files (stable GitHub release asset names), device kinds and guides
 src/lib/api.ts              the Extend client: envelopes, errors, headers, serialised token refresh
-src/lib/session.ts          worlds (production / test environment), tokens, team, telemetry
+src/lib/session.ts          worlds (production / test environment), tokens, the Team menu, telemetry
+src/lib/ting.ts             Extend's Ting types and the register command for a Team's Ting manager
 src/lib/auth.ts             IAM consent redirect and callback
 src/lib/pairing.ts          pairing-code and Silicon-id parsing
 src/lib/wizard.ts           "Add a device" state machine
@@ -109,11 +124,29 @@ src/pages/*                 sign-in, callback, devices (list + device), add a de
 src/components/Shader.tsx   the dithered colour study (WebGL, with a CSS fallback)
 src/components/CommandMenu.tsx  ⌘K: find a device or a page
 mock/                       in-memory mock of the service + stand-in IAM consent screen
-e2e/, e2e-real/             Playwright suites (mock, real service)
+e2e/, e2e-real/, e2e-compat/  Playwright suites (mock, real service, the 1.0.0 bundle against the mock)
 tests/unit/                 vitest
 ```
 
 ## Decisions
+
+- **1.1: devices belong to Carbons.** The device list shows every device the Carbon paired, whichever
+  Team the menu selects; the menu is only the default Team for grants (and a Silicon's Team). There is
+  no "Team devices" tab and no visibility setting. Grants are per Team: the access picker chooses from
+  any of the Carbon's Teams (`GET /team/silicons?team=any`), grants are grouped by Team, and a Team the
+  login doesn't reach says "Sign in to Extend for <team>". Several Carbons can pair one device: each
+  sees only their own side ("In use" with Stop for another Carbon's Silicon; a carried device another
+  Carbon paired shows without Stop), and a request routed to the Carbon shows which Silicon asked and
+  why. On a computer several Carbons paired, the page says only Silicons given access by the Carbon who
+  installed Extend there get the terminal (the service reports it as missing for the others). Signing
+  out says it ends the running sessions of the Silicons the Carbon gave access to.
+- **1.1: waking and Ting.** Awake is shown, never a gate. The wake banner answers "It's awake" (every
+  Carbon's side) or "Decline" (the Carbon's own), and turns wake requests off per device or Silicon.
+  Where Ting lacks Extend's types in a Team, the device page and Settings show the exact
+  `ting --org <team> types register …` command.
+- **1.1: setup Retry.** A failed step shows the device's plain-language error and Retry
+  (`POST /devices/{id}/setup/retry`); refusals (nothing failed, offline, an app older than 1.1, too
+  soon) show the service's own message under the step.
 
 - **Sign-in** follows IAM's client docs: `<iam_login_url>?app_id=<app_id>&redirect_uri=<origin>/auth/callback?state=<random>`,
   IAM returns `?slt=…` on that callback, and the website posts it to `POST /api/v1/auth/login`

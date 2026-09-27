@@ -106,6 +106,8 @@ export default defineConfig({
     finders: 'src/sdk/finders.ts',
     'ai-sdk': 'src/ai-sdk/index.ts',
     'internal/bin': 'src/bin.ts',
+    // Imported first by bin/extend-engine.mjs and Extend's runtime entry (see src/extend-env.ts).
+    'internal/extend-env': 'src/extend-env.ts',
     'internal/companion-tunnel': 'src/client/companion-tunnel.ts',
     'internal/daemon': 'src/daemon.ts',
     'internal/run-script-http-child': 'packages/maestro/src/daemon-port/run-script-http-child.ts',

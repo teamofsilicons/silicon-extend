@@ -63,8 +63,8 @@ test('the non-macOS refusal names what this host can drive instead', async () =>
   assert.equal(refusal.details?.retriable, false);
   const hint = String(refusal.details?.hint);
   assert.match(hint, /runs Linux/);
-  assert.match(hint, /agent-device devices --platform android/);
-  assert.match(hint, /agent-device open <app\.apk> --platform android/);
+  assert.match(hint, /extend devices --platform android/);
+  assert.match(hint, /extend open <app\.apk> --platform android/);
   assert.match(hint, /--daemon-base-url/);
 });
 

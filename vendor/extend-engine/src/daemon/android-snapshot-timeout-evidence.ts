@@ -81,7 +81,7 @@ async function captureAndroidSnapshotTimeoutEvidence(
       );
     }
     const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), 'agent-device-android-snapshot-timeout-'),
+      path.join(os.tmpdir(), 'extend-engine-android-snapshot-timeout-'),
     );
     const screenshotPath = path.join(tempDir, 'snapshot-timeout-overlay-refs.png');
     await capture.runtime.captureScreenshot({

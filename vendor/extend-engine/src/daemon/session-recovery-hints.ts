@@ -92,8 +92,8 @@ function buildRecordingSessionRecoveryHint(
   context: SessionRecoveryContext,
 ): string {
   const sessionArg = shellQuoteIfNeeded(sessionAddress);
-  const closeCommand = `agent-device close --session ${sessionArg}`;
-  const recordStopCommand = `agent-device record stop --session ${sessionArg}`;
+  const closeCommand = `extend close --session ${sessionArg}`;
+  const recordStopCommand = `extend record stop --session ${sessionArg}`;
   const reuseText =
     context === 'selector-conflict'
       ? `To keep using this device, rerun the command with --session ${sessionArg} and remove conflicting device selectors.`
@@ -101,9 +101,9 @@ function buildRecordingSessionRecoveryHint(
 
   return (
     `Recording session "${sessionAddress}" owns this device. ` +
-    `Run ${recordStopCommand}; if the session still appears in agent-device session list, run ${closeCommand}. ` +
+    `Run ${recordStopCommand}; if the session still appears in extend session list, run ${closeCommand}. ` +
     `${reuseText} ` +
-    `Run agent-device session list to inspect active sessions.`
+    `Run extend session list to inspect active sessions.`
   );
 }
 
@@ -122,9 +122,9 @@ function buildForeignWorkspaceSessionRecoveryHint(
   const sessionArg = shellQuoteIfNeeded(sessionAddress);
   return (
     `${describeOpenWaitAttempt(options)}Session "${sessionAddress}" belongs to another workspace. ` +
-    `Run agent-device close --session ${sessionArg} to release this device from that workspace, ` +
-    `agent-device devices to choose another device. ` +
-    `${waitForDeviceHint(options)}Run agent-device session list to inspect active sessions.`
+    `Run extend close --session ${sessionArg} to release this device from that workspace, ` +
+    `extend devices to choose another device. ` +
+    `${waitForDeviceHint(options)}Run extend session list to inspect active sessions.`
   );
 }
 
@@ -135,10 +135,10 @@ function buildOpenSessionRecoveryHint(
 ): string {
   const sessionAddress = ref.address;
   const sessionArg = shellQuoteIfNeeded(sessionAddress);
-  const closeCommand = `agent-device close --session ${sessionArg}`;
+  const closeCommand = `extend close --session ${sessionArg}`;
   if (context === 'selector-conflict') {
     return (
-      `Run agent-device session list to inspect active sessions. ` +
+      `Run extend session list to inspect active sessions. ` +
       `To reuse this device, rerun the command with --session ${sessionArg} and remove conflicting device selectors. ` +
       `To switch devices, first run ${closeCommand}, then open the desired device with a different --session name.` +
       implicitPlatformSessionHint(ref, options)
@@ -146,7 +146,7 @@ function buildOpenSessionRecoveryHint(
   }
 
   return (
-    `${describeOpenWaitAttempt(options)}Run agent-device session list to inspect active sessions. ` +
+    `${describeOpenWaitAttempt(options)}Run extend session list to inspect active sessions. ` +
     `To reuse this device, rerun the command with --session ${sessionArg}. ` +
     `To open a new session on this device, first run ${closeCommand}. ` +
     `${waitForDeviceHint(options)}`.trimEnd()

@@ -76,7 +76,7 @@ test('overlay burns touches through a cached helper and same-directory temp outp
   expect(inputPath).toBe(videoPath);
   expect(outputPath).not.toBe(videoPath);
   expect(path.dirname(outputPath)).toBe(tmpDir);
-  expect(path.basename(outputPath)).toMatch(/^\.recording\.agent-device-/);
+  expect(path.basename(outputPath)).toMatch(/^\.recording\.extend-engine-/);
   expect(fs.existsSync(outputPath)).toBe(false);
   expect(fs.readFileSync(videoPath, 'utf8')).toBe(`processed ${path.basename(helperCmd)}`);
   expect(helperOptions?.env?.HOME).toBe(path.join(tmpDir, 'swift-cache', 'home'));
