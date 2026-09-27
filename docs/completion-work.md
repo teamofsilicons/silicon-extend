@@ -21,19 +21,22 @@ setup retry, the device engine named Silicon Extend) is built and its automated 
 
 ### Needs the Carbon
 
-- **Reconcile the 1.1 drafts** of `understanding/TECHNICAL.md`, `api.yaml` and `cli.yaml` with the
-  accepted design and completed implementation. The `UNDERSTANDING.md` changes they follow are
-  already committed (`3fe0347`, `5326b68`); do not ask for that work again.
-- **Answer `TECHNICAL.md` open questions 16–20**: the terminal when the installer's pair ends, the
-  terminal rule and terminal apps on the screen, the device for the iPhone lock-state check,
-  app-level Ting types, and routed requests to a Carbon who shares no Team with the asking Silicon.
+- **Review the concrete contract patch** for `understanding/TECHNICAL.md`, `api.yaml` and `cli.yaml`:
+  `../extend-publish-drafts/release-1.1.0/contracts/REVIEW.md` from the repository root. The copies
+  and patch are validated; their protected-file edit approval is pending. `UNDERSTANDING.md`
+  changes are already committed (`3fe0347`, `5326b68`) and are not being requested again.
+- **Physical TV and iPad availability** is needed for their remaining checks. The iPad is
+  unavailable and no physical TV is connected through ADB in the latest local inventory.
+  Technical questions 16–20 introduce no new product decision: accepted first-pair terminal and
+  routed-request behavior is retained, the Ting premise is corrected, and iOS awake-state evidence
+  remains a physical verification task. Transferring terminal ownership would be a separate change.
 - **Ting types.** Production currently has only `extend.device.requested` for app `extend` in
   `tos`. Register the three wake types through the owning Team's manager in each used context.
   Real Ting 0.1.9 resolves type names by context and app across delivery Teams; the earlier demand
   for duplicate registration in every delivery Team was incorrect. Its published OBO catalog has
   no `types.register`; use the supported manager CLI and retain the visible fallback.
-- **Reconcile the Ting request**, `docs/requests/ting-app-level-types.md`: its per-Team premise
-  is obsolete. No maintainer message has been sent; that needs explicit messaging authorization.
+- The obsolete Ting request is now marked superseded in `docs/requests/ting-app-level-types.md`.
+  No maintainer message was sent; the unsupported per-Team premise is not a release dependency.
 - **A Carbon's logout** uses the accepted `access_removed` behavior (`TECHNICAL.md` C9 and the
   saved design); verification remains required, but the reason does not need another decision.
 
@@ -44,8 +47,7 @@ was accepted by Apple. The permanent Android key exists under `~/.silicon-releas
 Preserve those identities for update compatibility. Honeycomb, Ting, GitHub and Vercel sessions
 are authenticated, and the published backend and GitHub assets remain 1.0.0. The Carbon renewed
 AWS profile `silicon-production`; STS access and the existing production stack were verified.
-Historical signing
-and "nothing published" entries below are not current blockers. No 1.1 CI or publication has run.
+Historical signing and "nothing published" entries below are not current blockers. No 1.1 CI or publication has run.
 
 ### Engineering left for 1.1.0
 
