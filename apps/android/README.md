@@ -809,6 +809,24 @@ It ends its session and closes its fixture without removing the existing device 
 Artifacts and logs are kept under `target/android-recording/`. Local IAM/storage evidence
 does not verify production IAM/OBO or Briefcase.
 
+For automatic debugging recovery, use a dedicated emulator paired with
+`tools/fake-service/fake_extend.py --port 8498` without a scenario. Install both debug APKs,
+enable its debugging port, run the `connectLocalForService` setup above (approve the initial
+Android authorization dialog), and reopen the app once after instrumentation. Then run:
+
+```sh
+python3 tools/adb-reconnect-lane.py --serial emulator-5640 --port 8498 \
+  --out ../../target/adb-reconnect-verification/api34
+```
+
+The lane verifies remote shell access, sends Home, kills only that app's PID, and checks that
+Android restarts it and debugging returns without opening an activity. It also restarts that
+emulator's adbd and checks recovery. It records results, memory snapshots and logs. The serial
+must be an emulator whose AVD name matches the fake service's device. API 26/28 pipe-only emulator
+images need `adb -s <serial> reverse tcp:5555 tcp:<console-port-plus-one>` before setup, plus
+`--legacy-emulator-bridge` so the lane restores that test route after adbd restart. This is a
+destructive process-lifecycle test for a dedicated AVD; it is not a physical-device lane.
+
 ### In-use banner choice (1.1 follow-up)
 
 The paired/setup screen lets the Carbon hide in-use announcements entirely. The choice is saved

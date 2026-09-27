@@ -49,8 +49,11 @@ Remaining from the Carbon's final requests, before the release gates below:
   and restart/reconnect behavior. Exercise drag/collapse, ten-second hiding, takeover persistence,
   Stop after hiding and TV bottom-centre placement on native targets. A metadata-only attach now
   preserves the live driver; verify it during a real recording as well.
-- Diagnose and repair the TV's Android debugging disconnect/reconnect after process death;
-  measure and reduce its memory usage. These are not covered by the banner changes.
+- Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
+  Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
+  and adbd restart; the repeatable lane and timings are in `verification.md`. No production
+  reconnect defect was reproduced there. Measure and reduce overall TV memory use; initial
+  debug-build background baselines are recorded, not a physical-TV memory result.
 - iPhone/iPad: first-screenshot attachment is implemented and verified through the real engine on
   an isolated iPad simulator, preserving the current screen without launching an app or a runner.
   Verify it on a physical iPad as well (including disconnect/reconnect and a new session).

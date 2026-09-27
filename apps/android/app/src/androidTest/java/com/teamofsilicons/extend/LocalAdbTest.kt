@@ -42,7 +42,9 @@ class LocalAdbTest {
         assumeTrue(args.getString("service_test") == "true")
         emulatorOnly()
         val adb = Extend.get(context).adb
-        assertTrue(adb.lastError, adb.connect(5555))
+        // Initial setup must allow time to answer Android's RSA authorization dialog.
+        val connected = adb.connect(5555, startedByCarbon = true)
+        assertTrue(adb.lastError, connected)
         assertEquals("2000", adb.shell("id -u").text.trim())
         // Keep the explicit emulator connection enabled for the separately running service lane.
     }

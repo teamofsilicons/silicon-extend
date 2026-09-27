@@ -32,6 +32,38 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — Android debugging recovery after process death
+
+The existing reconnect implementation passed on two fresh, isolated emulators. After the one-time
+debugging authorization and pairing with an isolated fake service, the lane sends the app Home,
+kills its exact PID with `run-as`, and waits for a real remote `adb shell id -u` result of 2000.
+It does not reopen the activity or press Connect. The foreground service and debugging connection
+return automatically. Restarting that emulator's adbd also restores commands automatically.
+
+| Emulator | Process death | adbd restart | Background PSS after process death |
+| --- | --- | --- | --- |
+| Android TV 14, API 34, `ExtendReconnectVerification`, emulator-5640 | 2.111 s | 14.284 s | 55,967 KiB |
+| Android 9 Google APIs, API 28, TV override, `ExtendReconnectLegacyVerification`, emulator-5642 | 2.119 s | 14.337 s | 29,622 KiB |
+
+API 28's emulator adbd exposes only its emulator pipe. As in the earlier legacy lane, the test
+uses `reverse tcp:5555 tcp:5643` and restores that route after adbd restarts. This verifies the
+app's legacy connection recovery, not a physical TV's daemon or networking. API 34 uses its real
+on-device TCP listener. Both runs used the debug APK and a local fake service, not production.
+The API 28 setup activity retained before process death measured 60,949 KiB PSS in the background;
+this is a profiling baseline, not proof of a memory optimization or a leak.
+
+Added `apps/android/tools/adb-reconnect-lane.py` with explicit emulator selection, matching the
+remote AVD name before process mutation, real shell checks, captured meminfo and logcat. The
+initial instrumentation helper now uses the same 60-second authorization wait as a manual Connect
+and reports the error after the connection attempt. Its native Android 9 run and the instrumentation
+APK build pass. The earlier 8-second helper timed out during first authorization on API 34; that
+was test setup, not evidence of a production reconnect failure.
+
+Evidence: `target/adb-reconnect-verification/{api34,api28}/results.json`, `memory-*.txt`,
+`logcat.txt`, service logs and `build.log`. Neither pre-existing emulator (5620/5622) was changed.
+The reported physical-TV disconnect, manufacturer process restrictions, TLS recovery on that TV,
+reboot behavior and overall memory reduction remain open. No runtime reconnect code was changed.
+
 ## 2026-09-28 — display stored Extend files
 
 `display show --image/--video` accepts a bare file UUID, `file:<file_id>`, its stored Briefcase
