@@ -32,6 +32,28 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — release artifact audit and service image smoke
+
+All eleven artifact ZIPs from release workflow `36357336309` match GitHub's SHA256 digests and
+pass ZIP integrity checks. Thirteen static audit groups passed: six CLI architectures and exact
+byte matches within the Honeycomb archive, Windows x64/arm64 package contents and PE architecture,
+and Linux x64/arm64 ELF architecture, independently recomputed engine runtime stamps, and identical
+`.deb`/tarball payloads including file modes. `honeycomb validate` also passed. Evidence and
+checksums: `target/release-candidate/ci-ae9dbdde211732df9f2bc55920e679b3a459a212/`. This static audit
+did not execute downloaded binaries or establish interactive platform behavior.
+
+The ARM64 service image was built from immutable `git archive 1120401` as
+`silicon-extend-candidate:1.1.0-1120401`; local image ID
+`sha256:94b96b16b55cfd28895b1356ec8f5db4dcd07acd8d380b1908388148c79a282a`.
+Six smoke groups passed: production startup refuses missing IAM configuration, an owned local
+development database migrates and reaches readiness, API negotiation reports service 1.1/API v1,
+synthetic Carbon authentication and device listing work, the created world is schema 5, and the
+image is ARM64 with the non-root `extend` user. The exact container/database were removed.
+Evidence: `target/release-candidate/backend-1120401/{artifact-manifest.json,smoke-report.json,
+smoke-service.log,build.log}`. The first smoke assertion expected an array instead of the documented
+paginated device-list envelope; correcting that harness assertion needed no product change.
+This image has not been pushed or deployed and this smoke uses local IAM/files/Ting stand-ins.
+
 ## 2026-09-28 — signed Android upgrade and two-Carbon TV checks
 
 Twelve checks passed on the owned Android TV API 34 emulator `ExtendReconnectVerification`
