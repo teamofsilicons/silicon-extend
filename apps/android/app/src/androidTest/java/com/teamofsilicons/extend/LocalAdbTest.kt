@@ -275,11 +275,52 @@ class LocalAdbTest {
             android.util.Log.i("ExtendAdbTest", "session end")
             executor.execute("s2", AdbCommand.Logs("start"), emptyList())
             executor.execute("s2", AdbCommand.Record("start", "revoked"), emptyList())
-            executor.execute("s2", AdbCommand.Raw(listOf("shell", "nohup sh -c 'sleep 300' >/dev/null 2>&1 &")), emptyList())
+            // Retain the original detached launch; printing its PID is diagnostic, not a
+            // readiness handshake. It can affect timing, so a pass alone proves no cause.
+            val detached = executor.execute("s2", AdbCommand.Raw(listOf("shell",
+                "nohup sh -c 'sleep 300' >/dev/null 2>&1 & printf '%s\\n' \"\$!\"")), emptyList())
+            val detachedPid = detached.output?.get("stdout")?.jsonPrimitive?.content?.trim()
+                ?.takeIf { it.matches(Regex("[1-9][0-9]*")) && (it.toIntOrNull() ?: 0) > 1 }
+            fun startTicks(stat: String): String? = stat.takeIf { detachedPid != null && it.startsWith("$detachedPid (") }
+                ?.substringAfterLast(") ", "")?.trim()?.split(Regex("\\s+"))?.getOrNull(19)
+                ?.takeIf { it.matches(Regex("[0-9]+")) }
+            suspend fun diagnostic(command: String): AdbWire.Result? = try {
+                withTimeoutOrNull(3_000) { adb.shell(command, check = false) }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.e("ExtendAdbTest", "owned PID diagnostic failed: ${e.javaClass.simpleName}")
+                null
+            }
+            // A separate command after the parent has returned cannot hold its shell open.
+            val detachedStat = detachedPid?.let { diagnostic("cat /proc/$it/stat") }
+            val detachedStart = detachedStat?.text?.let(::startTicks)
             val tag = AdbWire.quote("${AdbExecutor.SESSION_VARIABLE}=s2")
             val tagged = "grep -lzxF -- $tag /proc/[0-9]*/environ 2>/dev/null | wc -l"
             // The shell returns as soon as it forked; the tag shows in /proc once the child has exec'd.
             val tagSeen = withTimeoutOrNull(5_000) { while (adb.shell(tagged, check = false).text.trim() == "0") delay(100); true }
+            if (tagSeen == null) {
+                android.util.Log.e("ExtendAdbTest", "detached launch exit=${detached.exitCode} pid=$detachedPid start=$detachedStart " +
+                    "stderr=${detached.output?.get("stderr")?.jsonPrimitive?.content?.take(1024)} " +
+                    "stat_exit=${detachedStat?.exitCode} stat_stderr=${detachedStat?.stderr?.toString(Charsets.UTF_8)?.take(1024)}")
+                val inspected = withTimeoutOrNull(3_000) {
+                    if (detachedPid != null) {
+                        val current = diagnostic("cat /proc/$detachedPid/stat")
+                        val sameProcess = detachedStart != null && current?.text?.let(::startTicks) == detachedStart
+                        android.util.Log.e("ExtendAdbTest", "owned PID stat exit=${current?.exitCode} same_start=$sameProcess " +
+                            "stderr=${current?.stderr?.toString(Charsets.UTF_8)?.take(1024)}")
+                        // Never inspect a reused PID, or print any process's environment values.
+                        if (sameProcess) {
+                            val metadata = diagnostic("sed -n '/^Uid:/p' /proc/$detachedPid/status; " +
+                                "printf 'cmdline_hex='; od -An -tx1 /proc/$detachedPid/cmdline")
+                            android.util.Log.e("ExtendAdbTest", "owned PID metadata exit=${metadata?.exitCode}: ${metadata?.text?.take(2048)}")
+                            val exactTag = diagnostic("grep -lzxF -- $tag /proc/$detachedPid/environ >/dev/null")
+                            android.util.Log.e("ExtendAdbTest", "owned PID exact tag exit=${exactTag?.exitCode} stderr=${exactTag?.stderr?.toString(Charsets.UTF_8)?.take(1024)}")
+                        }
+                    }
+                    true
+                }
+                if (inspected == null) android.util.Log.e("ExtendAdbTest", "owned PID diagnostics timed out after 3 s")
+            }
             assertNotNull("The detached process carries its session's tag", tagSeen)
             executor.endSession("s2")
             assertEquals("Detached processes end with their session", "0", adb.shell(tagged, check = false).text.trim())
