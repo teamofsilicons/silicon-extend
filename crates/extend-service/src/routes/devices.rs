@@ -1824,6 +1824,52 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
 /// delivered as sent (the reason itself is 1–300 characters without it).
 const REASON_WITH_WHITESPACE_MAX_CHARS: usize = 1_000;
 
+/// Serialises only the recent-request check and insert, including across service processes.
+/// Distinct from the test-device limit's advisory-lock class.
+const REQUEST_FOLD_LOCK_CLASS: i32 = 7_342_012;
+const REQUEST_FOLD_WAIT: Duration = Duration::from_secs(5);
+
+fn request_fold_busy() -> AppError {
+    AppError::new(
+        ErrorCode::ServiceUnavailable,
+        "Another request with this reason is being saved. Try again in a moment.",
+    )
+    .hint("Retry shortly; use a new Idempotency-Key for a new attempt.")
+    .details(serde_json::json!({"retry_after_s": 1}))
+}
+
+async fn begin_request_fold(state: &AppState, key: &str) -> AppResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let deadline = tokio::time::Instant::now() + REQUEST_FOLD_WAIT;
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(request_fold_busy());
+        }
+        let mut tx = tokio::time::timeout_at(deadline, state.pool.begin())
+            .await
+            .map_err(|_| request_fold_busy())??;
+        let acquired: bool = tokio::time::timeout_at(
+            deadline,
+            sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1, hashtext($2))")
+                .bind(REQUEST_FOLD_LOCK_CLASS)
+                .bind(key)
+                .fetch_one(&mut *tx),
+        )
+        .await
+        .map_err(|_| request_fold_busy())??;
+        if acquired {
+            return Ok(tx);
+        }
+        // A busy fold must not occupy a pooled connection while waiting for another process.
+        tokio::time::timeout_at(deadline, tx.rollback())
+            .await
+            .map_err(|_| request_fold_busy())??;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(request_fold_busy());
+        }
+        tokio::time::sleep_until((tokio::time::Instant::now() + Duration::from_millis(25)).min(deadline)).await;
+    }
+}
+
 /// A request's or a wake request's reason: 1–300 characters not counting the whitespace around it,
 /// which is kept exactly as written, and at most 1,000 with it.
 pub fn check_reason(reason: &str) -> AppResult<()> {
@@ -1913,6 +1959,10 @@ pub async fn request_send(
                 ));
             }
             let same_side = holder_pair == d.device_id && holder_team == team;
+            let fold_key = serde_json::to_string(&(&world.schema, &device_id, &team, p.id(), &session, &reason))
+                .map_err(AppError::internal)?;
+            let app_id = st.notifier.app_id().to_owned();
+            let mut tx = begin_request_fold(&st, &fold_key).await?;
             // Validate/replay the idempotency key before folding a recent same-reason request.
             // A repeat without a stored key keeps its 200 response and sends nothing; a new
             // reason is a new request. Team and holder session keep unrelated requests separate.
@@ -1928,9 +1978,10 @@ pub async fn request_send(
             .bind(&reason)
             .bind(&session)
             .bind(&team)
-            .fetch_optional(&st.pool)
+            .fetch_optional(&mut *tx)
             .await?;
             if let Some(r) = recent.and_then(|r| r.view(p.id())) {
+                tx.commit().await?;
                 return Ok((
                     StatusCode::OK,
                     "request",
@@ -1938,7 +1989,6 @@ pub async fn request_send(
                 ));
             }
             let id = Uuid::now_v7();
-            let app_id = st.notifier.app_id().to_owned();
             let (to, session_col, routed_to, routed_to_id, ting_team, body, chain) = if same_side {
                 let ting = DeviceRequestTing {
                     request_id: id,
@@ -1965,7 +2015,7 @@ pub async fn request_send(
                 )
             } else {
                 // The recipient's own name and id for the device.
-                let their = domain::load_device(&st, &world, &holder_pair)
+                let their = domain::load_device_in(&mut *tx, &world, &holder_pair)
                     .await?
                     .ok_or_else(|| domain::device_not_found(&holder_pair))?;
                 let own_carbon = holder_carbon == d.owner_id;
@@ -2041,8 +2091,11 @@ pub async fn request_send(
             .bind(&session)
             .bind(&ting_team)
             .bind(&body)
-            .execute(&st.pool)
+            .execute(&mut *tx)
             .await?;
+            // Delivery and activity helpers can call providers and acquire their own connections.
+            // The atomic fold is complete before any of that work begins.
+            tx.commit().await?;
             let attempt = delivery::send(&st, &world, &chain, &body).await;
             if !attempt.delivered {
                 tracing::warn!(request_id = %id, error = ?attempt.error, "Ting delivery failed; will retry");

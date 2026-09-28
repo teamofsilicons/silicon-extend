@@ -32,6 +32,23 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — fold simultaneous device requests atomically
+
+Different keys, or no key, could create duplicate same-reason requests and notifications when
+two service instances checked for a recent request before either inserted it. The check and
+insert now share a short transaction and an advisory lock scoped to world, device, Team,
+requester, holder session and the exact untrimmed reason. Busy callers release their connection
+between attempts and stop after five seconds. The transaction commits before notification or
+activity helpers run, including cross-pair routing with a one-connection pool.
+
+Three deterministic concurrency tests and both existing reason/routing regressions pass. They
+prove one 201 and one folded 200, one row and one Ting for simultaneous no-key or distinct-key
+requests; bounded contention, retained keyed refusal and a fresh retry; and preserved raw-reason
+and cross-Carbon routing. The old code fails at the forced overlapping insert. Strict Clippy and
+formatting pass. Exact owned databases and temporary files were removed, with the original
+database set preserved. Evidence: `target/request-fold-verification/`. This uses local provider
+fixtures and does not establish crash-safe exactly-once notification delivery.
+
 ## 2026-09-28 — reserve keyed operations across service instances
 
 The old helper could execute the same keyed operation twice when separate instances both missed
@@ -119,8 +136,8 @@ request-routing test pass after the fix, including complete response/header repl
 and malformed keys, a keyed folded-200 response, and retries after the holder ends, changes or
 becomes the requester. No extra Ting is sent. Strict service Clippy and formatting pass; all 43
 owned test databases were removed with the pre-existing set preserved. Evidence:
-`target/request-replay-verification/`. Concurrent duplicate sends and concurrent same-key
-reservation remain separate open issues; this change does not serialize them.
+`target/request-replay-verification/`. The subsequent reservation and request-folding passes
+above now cover simultaneous same-key operations and distinct-key/no-key duplicate requests.
 
 CI `36361278876` passed all five jobs at `a9bede4`. The immutable backend image at that source,
 `silicon-extend-candidate:1.1.0-a9bede4`, passed six smoke groups: fail-closed production configuration,
