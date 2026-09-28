@@ -57,10 +57,15 @@ six CLI targets, Honeycomb and both Linux packages. The Windows path assertion i
 `36360098249` passed unit/integration and native terminal checks on both architectures, and real
 input/capture on x64. Run `36361296700` repeated x64 success but showed ARM64's activation is
 denied, rather than merely delayed. Run `36362498227` showed the STATIC fixture class rejects
-hit testing, so the fixture now uses a real application window class; native verification needs
-another run. The service
-pairing-replay fix is included in green CI and a six-group backend-image smoke check at `a9bede4`.
-Subsequent service fixes still need final CI and inclusion in a refreshed deployment image.
+hit testing, so the fixture now uses a real application window class. Run `36363796014` repeated
+all 206 x64 checks and passed its package audit. Focused ARM64 diagnostics in `36365191010`
+identify Windows' initial privacy-setup screen in WWAHost.exe covering the fixture. The exact
+ownership guard sent zero input; native ARM64 GUI verification requires a prepared runner.
+CI `36363764146` passed all five jobs; final service changes are in run `36365195398` at `cc81c37`.
+The full service suite reported 172 passes with one explicit ignore (the real-provider entry
+point separately returns early without its fixture); strict Clippy/formatting pass. The dedicated
+real IAM/Briefcase/Ting lane now passes 75/75 at `cc81c37`, retaining the first-time Carbon sharing
+gap. The immutable `a1b180d` backend includes all service fixes and passes all six smoke groups.
 No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0

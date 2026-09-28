@@ -32,7 +32,44 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — refreshed backend and real-provider checks
+
+The immutable `a1b180d` backend includes all final replay/reservation/request-folding fixes.
+Its native arm64 image passed six smoke groups: fail-closed production configuration, readiness,
+service 1.1.0/API v1, synthetic authentication, schema 5 and actual non-root UID 10001. Digest:
+`sha256:3bb4b00516da452d7fb11b9ee3965fafd8d9ffa5d6adfe564a3390b009e0df9f`.
+Both owned containers, the exact smoke database and port were removed; older images remain.
+Evidence: `target/release-candidate/backend-a1b180d/`. Nothing was pushed to ECR or deployed.
+
+A fresh dedicated IAM/Briefcase/Ting lane at `cc81c37` passed 75/75 checks in 108 seconds,
+using frozen Extend binary hashes and pinned provider images/Ting binary. It covers real routing,
+file access, token refresh, revocation, signed removal events and testing-plane behavior. All ten
+owned containers, the network, database, service process and five ports were cleaned, while
+baseline services including port 8480 remained unchanged. Evidence:
+`target/realiam-1.1-verification/cc81c37-final/`.
+
+The first-time Carbon Briefcase projection failure remains reproduced; priming that recipient
+does not close the proposed provider fix. Ting's missing delegated `types.register` operation
+is an expected provider constraint: registration remains with a manager in the app-owning Team,
+as already implemented/documented. This is not an additional outstanding API implementation.
+
 ## 2026-09-28 — Windows ARM64 fixture diagnostics
+
+The focused native run `36365191010` at `cc81c37` identified the covering process as
+`C:\Windows\System32\WWAHost.exe`, with a full-screen topmost `Microsoft account` window.
+The saved screenshot shows Windows' initial "Choose privacy settings for your device" screen.
+The fixture is visible, enabled, uncloaked and topmost; parent and child use session 2,
+`WinSta0\Default`, the active input desktop, and 96 DPI. Its queue acknowledges messages.
+This identifies runner provisioning, rather than a DPI/input-desktop mismatch, as the blocker.
+The 177 unit, 27 integration and terminal tests passed, but the exact ownership guard sent zero
+input before the GUI driver could run. No ARM64 package was uploaded and no privacy choices or
+covering-process changes were made. GUI verification still requires a prepared ARM64 desktop.
+Evidence: `target/release-candidate/ci-cc81c37e538b80d9c7187cff4c8c2aaa829b2e49/`.
+This matches the open upstream [runner-image issue #14069](https://github.com/actions/runner-images/issues/14069).
+The proposed [image fix #14673](https://github.com/actions/runner-images/pull/14673) was still
+unmerged when checked; it prevents the prompt before a later logon and does not dismiss an
+already-open window. No further unchanged rerun is expected to establish GUI coverage. A fixed
+hosted image or a separately prepared ARM64 interactive runner is required.
 
 Main CI `36363764146` passed all five jobs at `b3158bc`. Windows run `36363796014` passed
 all 206 x64 checks and its ZIP audit (SHA256
