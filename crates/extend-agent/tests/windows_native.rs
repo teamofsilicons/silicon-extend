@@ -2,6 +2,9 @@
 //! Run through apps/desktop/windows/verify-native.ps1; fixtures are child test processes we own.
 #![cfg(windows)]
 
+#[path = "windows_native/diagnostics.rs"]
+mod diagnostics;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -225,7 +228,8 @@ impl OwnedWindow {
                 cursor,
                 cursor_safe: &cursor_safe,
             };
-            SetWindowPos(
+            let before_topmost = diagnostics::window(hwnd);
+            let positioned = SetWindowPos(
                 hwnd,
                 Some(HWND_TOPMOST),
                 0,
@@ -233,8 +237,15 @@ impl OwnedWindow {
                 0,
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            )
-            .unwrap();
+            );
+            let positioning = diagnostics::outcome(positioned.clone());
+            let after_topmost = diagnostics::window(hwnd);
+            save(
+                &log,
+                &json!({"sent_inputs": 0, "before_topmost": before_topmost,
+                "positioning": positioning, "after_topmost": after_topmost}),
+            );
+            positioned.unwrap();
             let mut title = TITLEBARINFO {
                 cbSize: std::mem::size_of::<TITLEBARINFO>() as u32,
                 ..Default::default()
@@ -256,7 +267,16 @@ impl OwnedWindow {
             let title_bar = message(hwnd, WM_NCHITTEST, WPARAM(0), packed);
             let mut evidence = json!({"expected_window": hwnd.0 as usize, "expected_pid": self.process.id(),
                 "hit_window": hit.0 as usize, "hit_pid": hit_pid, "hit_test": title_bar,
-                "x": point.x, "y": point.y, "sent_inputs": 0});
+                "x": point.x, "y": point.y, "sent_inputs": 0,
+                "before_topmost": before_topmost, "positioning": positioning, "after_topmost": after_topmost});
+            if hit != hwnd || hit_pid != self.process.id() || title_bar != HTCAPTION as usize {
+                evidence["diagnostics"] =
+                    diagnostics::failure(hwnd, hit, point, &self.ready, &log.with_extension("png"));
+                evidence["parent_setup"] = std::fs::read(self.evidence.parent().unwrap().join("parent-context.json"))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .unwrap_or(Value::Null);
+            }
             save(&log, &evidence);
             assert_eq!(
                 hit, hwnd,
@@ -277,11 +297,13 @@ impl OwnedWindow {
                 (point.x, point.y),
                 "pointer must reach the verified point"
             );
-            assert_eq!(
-                WindowFromPoint(actual),
-                hwnd,
-                "recheck the hit immediately before input"
-            );
+            let actual_hit = WindowFromPoint(actual);
+            if actual_hit != hwnd {
+                evidence["pre_input_diagnostics"] =
+                    diagnostics::failure(hwnd, actual_hit, actual, &self.ready, &log.with_extension("png"));
+                save(&log, &evidence);
+            }
+            assert_eq!(actual_hit, hwnd, "recheck the hit immediately before input");
             let mut release = ReleaseClick {
                 pending: false,
                 log: log.with_extension("cleanup.json"),
@@ -458,6 +480,8 @@ fn fixture_window() {
                 "window": window.0 as usize, "edit": edit.0 as usize, "check": check.0 as usize,
                 "window_class": "ExtendNativeFixtureWindow", "class_atom": class_atom,
                 "foreground_requested": foreground_requested, "parent_foreground_allowed": parent_allowed,
+                "context": diagnostics::current(), "window_observation": diagnostics::window(window),
+                "set_process_dpi_awareness": {"called": false, "reason": "fixture preserves its existing default DPI context"},
             }),
         );
         let mut msg = MSG::default();
@@ -493,9 +517,14 @@ async fn owned_window_snapshot_click_type_and_capture() {
     std::fs::create_dir(&out).unwrap();
     // Match the driver's coordinate space before fixture hit testing. This affects this
     // disposable test process only, never Windows' global display or focus settings.
-    unsafe {
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    }
+    let before_dpi = diagnostics::current();
+    let dpi_result =
+        diagnostics::outcome(unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) });
+    save(
+        out.join("parent-context.json"),
+        &json!({"before": before_dpi,
+        "set_process_dpi_awareness": dpi_result, "after": diagnostics::current()}),
+    );
     let sentinel = OwnedWindow::start(&out.join("sentinel")).await;
     let target = OwnedWindow::start(&out.join("target")).await;
     target.foreground();

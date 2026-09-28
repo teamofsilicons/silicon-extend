@@ -6,6 +6,11 @@ on:
         description: Only rebuild and verify Windows desktop packages
         type: boolean
         default: false
+      windows_arch:
+        description: Windows architecture for a Windows-only diagnostic run
+        type: choice
+        options: [all, x64, arm64]
+        default: all
   push:
     tags: ['v*']
 permissions:
@@ -101,9 +106,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {os: windows-2025, arch: x64, rustup: x86_64}
-          - {os: windows-11-arm, arch: arm64, rustup: aarch64}
+        include: >-
+          ${{ fromJSON(
+            github.event_name == 'workflow_dispatch' && inputs.windows_only && inputs.windows_arch == 'arm64'
+              && '[{"os":"windows-11-arm","arch":"arm64","rustup":"aarch64"}]'
+            || github.event_name == 'workflow_dispatch' && inputs.windows_only && inputs.windows_arch == 'x64'
+              && '[{"os":"windows-2025","arch":"x64","rustup":"x86_64"}]'
+            || '[{"os":"windows-2025","arch":"x64","rustup":"x86_64"},{"os":"windows-11-arm","arch":"arm64","rustup":"aarch64"}]'
+          ) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

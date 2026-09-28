@@ -32,6 +32,26 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — Windows ARM64 fixture diagnostics
+
+Main CI `36363764146` passed all five jobs at `b3158bc`. Windows run `36363796014` passed
+all 206 x64 checks and its ZIP audit (SHA256
+`4a430b1d36af1a65ff4a932683871a77ca97ec038785581f68f8440ed0b2c118`). ARM64 passed
+portable tests and terminal containment, but its GUI fixture guard saw a foreign window at the
+owned title-bar point. The new application class reports `HTCAPTION` correctly; the guard still
+refused all input before product-driver creation. Existing evidence cannot identify that foreign
+process or establish whether the input desktop, DPI or window state caused the mismatch.
+
+The fixture now records read-only process/window/DPI/desktop observations and a bounded screenshot
+only on the confirmed normal runner input desktop. It preserves the original ownership failure,
+does not switch desktops and cannot turn those observations into permission to inject input.
+Both Windows target checks, strict x64 Clippy, formatting and independent review pass. A focused
+ARM64 rerun is required; the workflow's optional architecture selector applies only to manual
+Windows-only runs, while normal releases still build both architectures. These are test-only
+changes, including the Windows Dwm dev feature. Evidence:
+`target/release-candidate/ci-b3158bc9e7b2933f4b88cfdd910f4c91b02a5540/` and
+`target/windows-ci-assessment/diagnostics-*.log`.
+
 ## 2026-09-28 — fold simultaneous device requests atomically
 
 After integrating all replay/reservation/folding fixes, the full service suite reported 172

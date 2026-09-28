@@ -113,5 +113,5 @@ axum.workspace = true
 tempfile = "3.23.0"
 
 [target.'cfg(windows)'.dev-dependencies]
-# The owned native test window registers a class against its executable's module handle.
-windows = { version = "0.62.2", features = ["Win32_System_LibraryLoader"] }
+# The owned native fixture's window class and read-only failure diagnostics.
+windows = { version = "0.62.2", features = ["Win32_System_LibraryLoader", "Win32_Graphics_Dwm"] }
