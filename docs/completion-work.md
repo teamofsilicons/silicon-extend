@@ -52,10 +52,12 @@ Linux/Windows desktop packages built successfully in release workflow `363573363
 1.1 CI run exposed consumer-contract setup races and a misplaced browser test. Both are fixed;
 CI `36358256243` passed all five jobs at `b891822`. At `0159b7a`, refreshed Mac signing/notarization
 and Linux static/native package checks pass, including the banner and wake-notification fixes.
-Final CI `36359411111` passed all five jobs. Release workflow `36359407414` built all six CLI targets,
-Honeycomb and both Linux packages; its Windows verification stopped on a Unix-only test-path
-assertion before reaching native input tests. That assertion is corrected and Windows
-verification remains open. No 1.1 publication or deployment has run.
+CI `36359411111` and `36360092796` passed all five jobs. Release workflow `36359407414` built all
+six CLI targets, Honeycomb and both Linux packages. The Windows path assertion is fixed; run
+`36360098249` passed unit/integration and native terminal checks on both architectures, and real
+input/capture on x64. ARM64's window fixture needs a rerun after correcting its focus wait.
+The newer service pairing-replay fix also needs final CI and inclusion in the service image.
+No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
 
@@ -135,8 +137,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   native Stop and two-Carbon terminal rules, using an isolated headless file-store fixture.
   The signed Android upgrade and native two-Carbon TV-emulator lane passed twelve checks, with
   pairing/credential/session continuity and the native sharing/Stop/removal behavior recorded.
-  These do not close physical TV, installed Mac UI/Keychain upgrade, credential
-  rotation or carried-device linking checks.
+  A separate signed native Mac Keychain upgrade now passes eight groups, including migration,
+  reconnect, saved session and Stop, with exact owned-account cleanup. These do not close
+  physical TV, installed Mac GUI upgrade, credential rotation or carried-device linking checks.
 
 ### Physical devices
 

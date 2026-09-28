@@ -32,6 +32,41 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — native Windows runtime and signed Mac Keychain migration
+
+At `fba6cc3`, CI `36360092796` passed all five jobs. In release run `36360098249`, both native
+Windows architectures passed 177 agent unit and 27 fake-service integration tests. x64 also
+passed both native fixtures: real UI Automation snapshots, SendInput checkbox click and edit
+typing, a nonblank 1024×768 full-runner screenshot, an unchanged sentinel window, and terminal
+child containment across session end, timeout and cancellation. Its ZIP passed GitHub digest,
+CRC, x64 PE, exact five-file payload and license checks; SHA256
+`a3902bdcb05ba5646d6532709ba1afc248218d5c20f7e958c4648a8f0d23be7c`.
+
+ARM64 passed native terminal containment but its window fixture checked foreground immediately
+after requesting asynchronous activation and failed before any driver input call. The test now
+waits up to five seconds for the owned window's message acknowledgement before checking its
+exact HWND/PID, following [Microsoft's documented activation behavior](https://devblogs.microsoft.com/oldnewthing/20161118-00/?p=94745).
+Both architecture cross-checks and strict Clippy pass; the native ARM64 rerun is still required.
+Evidence: `target/windows-ci-assessment/run-36360098249-native-review.json`, the per-architecture
+evidence directories, and `target/release-candidate/ci-fba6cc3c029a7ffef8fc7c6c3b04009d669dbf4b/`.
+Runner proof does not establish Windows banner, recording, physical lock/sleep, UAC or multiple
+display behavior. The fixture fix changes no production driver code.
+
+`e2e/released-agent-keychain.py` passed eight groups using the actual signed 1.0 Mac agent and
+the signed `0159b7a` Mac candidate. Their Developer ID designated requirements match. In a fresh
+loopback-service namespace, 1.0 paired into the native Keychain and reconnected; 1.1 migrated the
+legacy entry to its index and pair entries, deleted the legacy entry, and reconnected again.
+Device identity, server credential digest and the pre-upgrade live session were preserved.
+Native Stop cancelled the owned terminal in 74 ms. No `credential.json` fallback, Keychain prompt,
+ACL/unlock change or autostart mutation occurred. All three exact owned Keychain entries, the
+database, child processes and listener were independently confirmed removed; signed binary hashes
+and signatures were unchanged.
+
+Evidence: `target/desktop-agent-keychain-upgrade-0159b7a-retry/{report.json,cleanup-verification.json}`.
+The first attempt exhausted the shared PostgreSQL connection limit while another suite was
+running and cleaned up; the isolated retry passed in 3.903 seconds. This proves native headless
+Keychain migration with synthetic IAM, not installed GUI replacement, TCC or carried-device linking.
+
 ## 2026-09-28 — pairing retry when a test environment becomes full
 
 The older round-2 pairing replay issue was still present: a successful fifth pairing consumed
