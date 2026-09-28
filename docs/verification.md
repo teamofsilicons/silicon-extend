@@ -32,6 +32,35 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — reserve keyed operations across service instances
+
+The old helper could execute the same keyed operation twice when separate instances both missed
+the stored response. A deterministic negative control reproduced two executions. The helper
+now reserves the existing idempotency row atomically before doing work. Duplicate callers wait
+boundedly for its status/body, changed bodies conflict, and final persistence must succeed before
+the original caller receives its answer. No connection is held while running the operation or
+sleeping between reads. Every explicit result, including errors and unusual HTTP status overrides,
+is retained; a retry preserves the original error's request ID. Invalid opaque/non-ASCII keys
+are refused rather than treated as missing.
+
+Eight targeted tests pass with independent states and one-connection pools: single execution,
+pending/completed conflicts, exact response/error replay, ordinary final 503, cancellation,
+owner-nonce replacement, forced finalization failure, old completed rows and key validation.
+Strict Clippy and independent review pass. All ten owned databases were removed. Evidence:
+`target/idempotency-concurrency-verification/`. No schema change is needed: an in-progress claim
+is a valid 503 error envelope. Old writers must stop before the new implementation starts.
+Interrupted or indeterminate operations retain their claims without automatic expiry/takeover;
+recovery requires operation-specific reconciliation. This proves concurrent execution exclusion,
+not exactly-once provider delivery across process crashes or cross-version route-key migration.
+
+Wake-request mute checks and report quota counting now run only for a new reserved operation.
+Negative controls reproduced a refused successful wake retry after muting and report retries
+incorrectly consuming the hourly quota. Four retry tests and all eight waking tests pass;
+replays add no notification, while new operations still obey mute and quota rules. Seventeen
+owned test databases were removed with the prior set preserved. Evidence:
+`target/wake-report-replay-verification/`. Simultaneous same-reason requests without the same
+idempotency key are covered by the separate request-folding pass.
+
 ## 2026-09-28 — session and attachment response replay
 
 Session creation checked the device's live busy/readiness/online state before its stored response;

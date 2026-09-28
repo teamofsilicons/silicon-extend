@@ -113,3 +113,61 @@ async fn attachment_retry_replays_after_host_disconnect_without_another_attach()
         .unwrap();
     assert_eq!(count, 1, "retries must not attach another device");
 }
+
+#[tokio::test]
+async fn report_retries_do_not_consume_new_report_quota() {
+    let env = start().await;
+    let alice = login(&env, "c:alice").await;
+    let body = json!({"type": "report", "data": {"message": "Owned retry fixture", "client_version": "1.1.0"}});
+    let first = post(&env, &alice, "/api/v1/reports", "report-retry", &body).await;
+    assert_eq!(first.status(), 202);
+    let first = first.json::<Value>().await.unwrap();
+    for _ in 0..12 {
+        let replay = post(&env, &alice, "/api/v1/reports", "report-retry", &body).await;
+        assert_eq!(replay.status(), 202, "{}", replay.text().await.unwrap_or_default());
+        assert_eq!(replay.headers()["idempotency-replayed"], "true");
+        assert_eq!(replay.json::<Value>().await.unwrap(), first);
+    }
+    for i in 1..10 {
+        let fresh = post(&env, &alice, "/api/v1/reports", &format!("new-report-{i}"), &body).await;
+        assert_eq!(fresh.status(), 202);
+    }
+    let limited = post(&env, &alice, "/api/v1/reports", "eleventh-report", &body).await;
+    assert_eq!(limited.status(), 429);
+    assert_eq!(limited.json::<Value>().await.unwrap()["data"]["code"], "rate_limited");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.reports")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 10);
+}
+
+#[tokio::test]
+async fn wake_retries_replay_after_muting_without_another_notification() {
+    let env = start().await;
+    let alice = login(&env, "c:alice").await;
+    let chef = login(&env, "si:chef").await;
+    let (device, _) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Phone", &["si:chef"]).await;
+    let path = format!("/api/v1/devices/{device}/wake-requests");
+    let body = json!({"type": "wake_request", "data": {"reason": "Owned wake retry"}});
+    let first = post(&env, &chef, &path, "wake-retry", &body).await;
+    assert_eq!(first.status(), 201, "{}", first.text().await.unwrap_or_default());
+    let first = first.json::<Value>().await.unwrap();
+    let (status, settings) = api(
+        &env,
+        "PUT",
+        &format!("/api/v1/devices/{device}/wake-settings"),
+        &alice,
+        Some("acme"),
+        Some(json!({"type": "wake_settings", "data": {"muted": true}})),
+    )
+    .await;
+    assert_eq!(status, 200, "{settings}");
+    let ting = env.state.local_ting.clone().unwrap();
+    let sent = ting.sent.lock().await.len();
+    assert_replay(post(&env, &chef, &path, "wake-retry", &body).await, &first).await;
+    let fresh = post(&env, &chef, &path, "fresh-wake-key", &body).await;
+    assert_eq!(fresh.status(), 409);
+    assert_eq!(fresh.json::<Value>().await.unwrap()["data"]["code"], "conflict");
+    assert_eq!(ting.sent.lock().await.len(), sent);
+}

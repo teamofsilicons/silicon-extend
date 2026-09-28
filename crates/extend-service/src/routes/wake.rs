@@ -168,18 +168,6 @@ pub async fn create(
     )
     .await?;
     super::devices::check_reason(&input.reason)?;
-    let grant_muted: Option<bool> = sqlx::query_scalar(sql!(
-        "SELECT wake_muted FROM {} WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
-        auth.world.t("device_access")
-    ))
-    .bind(&device_id)
-    .bind(&team)
-    .bind(auth.p.id())
-    .fetch_optional(&state.pool)
-    .await?;
-    if d.wake_muted || grant_muted == Some(true) {
-        return Err(muted_error(&d));
-    }
     let hash = hash_json(&input);
     let (st, world, p, sel) = (state.clone(), auth.world.clone(), auth.p.clone(), auth.sel.clone());
     idempotent(
@@ -189,7 +177,21 @@ pub async fn create(
         &format!("wake-requests:{team}:{device_id}"),
         &headers,
         &hash,
-        || async move { ask(&st, &world, &d, &team, &p, sel, input.reason).await },
+        || async move {
+            let grant_muted: Option<bool> = sqlx::query_scalar(sql!(
+                "SELECT wake_muted FROM {} WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
+                world.t("device_access")
+            ))
+            .bind(&device_id)
+            .bind(&team)
+            .bind(p.id())
+            .fetch_optional(&st.pool)
+            .await?;
+            if d.wake_muted || grant_muted == Some(true) {
+                return Err(muted_error(&d));
+            }
+            ask(&st, &world, &d, &team, &p, sel, input.reason).await
+        },
     )
     .await
 }

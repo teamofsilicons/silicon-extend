@@ -50,6 +50,19 @@ documented tuning variables, including `EXTEND_OWNER_CHECK_AT_USE=false`. Run
 `python3 deploy/aws/test_render_env.py` before deployment; verify the selected non-secret settings
 in the rendered environment afterward. Absent overrides continue using service defaults.
 
+Keep the existing stop-old-container/start-new-container order for the idempotency update. Old
+writers do not reserve keys before running an operation, so overlapping old and new writers would
+not provide the new concurrency guarantee. Reservations use the existing table and a valid 503
+error envelope; completed successes and explicit errors are both stored before they are returned.
+
+An interrupted operation or uncertain final database write can leave a pending claim. It must
+not expire into an automatic rerun: first reconcile its session/device/request/report/wake record
+and any provider delivery. Do not delete the claim or advise a new key merely because it is old.
+Backup/restore must preserve the idempotency records together with the affected operation data.
+The 503 marker is readable by older code only under the same route namespace; the existing 1.0
+session/request route keys differ from 1.1, so marker compatibility alone is not rollback replay
+proof for those operations.
+
 The outage lasts a few seconds, and devices reconnect by themselves. Pass `PinnedImageId`, `InstanceType` and `--tags Service=silicon-extend Environment=production` on every stack update (leaving the tags out strips them from every resource), and read the change set first: `Instance` must never show a replacement.
 
 ## Rollback

@@ -7,6 +7,8 @@ mod devices;
 mod display_files;
 pub mod enroll;
 mod files;
+mod idempotency;
+pub use idempotency::idempotent;
 mod ops;
 pub mod sessions;
 mod system;
@@ -28,7 +30,6 @@ use sha2::{Digest as _, Sha256};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use uuid::Uuid;
 
-use crate::db::World;
 use crate::error::{AppError, AppResult, REQUEST_ID};
 use crate::state::Shared;
 use crate::versions::Registry;
@@ -196,77 +197,6 @@ pub fn envelope<T: serde::Serialize>(status: StatusCode, kind: &str, data: T) ->
 
 pub fn no_content() -> Response {
     StatusCode::NO_CONTENT.into_response()
-}
-
-/// Replays a stored response when the same Idempotency-Key and body come back; refuses a changed body.
-pub async fn idempotent<F, Fut>(
-    state: &Shared,
-    world: &World,
-    principal: &str,
-    route: &str,
-    headers: &http::HeaderMap,
-    body_hash: &str,
-    run: F,
-) -> AppResult<Response>
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = AppResult<(StatusCode, &'static str, serde_json::Value)>>,
-{
-    let key = headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    if let Some(k) = &key {
-        if k.len() < 8 || k.len() > 255 || !k.bytes().all(|b| (b'!'..=b'~').contains(&b)) {
-            return Err(AppError::invalid("Idempotency-Key must be 8–255 printable characters."));
-        }
-        let found: Option<(String, i32, serde_json::Value)> = sqlx::query_as(sql!(
-            "SELECT request_hash, status, response FROM {} WHERE principal = $1 AND route = $2 AND key = $3",
-            world.t("idempotency")
-        ))
-        .bind(principal)
-        .bind(route)
-        .bind(k)
-        .fetch_optional(&state.pool)
-        .await?;
-        if let Some((hash, status, response)) = found {
-            if hash != body_hash {
-                return Err(AppError::new(
-                    ErrorCode::Conflict,
-                    "This Idempotency-Key was already used with a different body.",
-                )
-                .hint("Use a new key for a new request; reuse a key only to retry the identical request."));
-            }
-            let mut resp = (
-                StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK),
-                Json(response),
-            )
-                .into_response();
-            resp.headers_mut()
-                .insert("idempotency-replayed", HeaderValue::from_static("true"));
-            return Ok(resp);
-        }
-    }
-    let (status, kind, data) = run().await?;
-    let body = serde_json::json!({"type": kind, "data": data});
-    if let Some(k) = key {
-        let _ = sqlx::query(sql!(
-            "INSERT INTO {} (principal, route, key, request_hash, status, response) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
-            world.t("idempotency")
-        ))
-        .bind(principal)
-        .bind(route)
-        .bind(k)
-        .bind(body_hash)
-        .bind(i32::from(status.as_u16()))
-        .bind(&body)
-        .execute(&state.pool)
-        .await;
-    }
-    let mut resp = (status, Json(body)).into_response();
-    resp.headers_mut()
-        .insert("cache-control", HeaderValue::from_static("no-store"));
-    Ok(resp)
 }
 
 pub fn hash_json<T: serde::Serialize>(v: &T) -> String {

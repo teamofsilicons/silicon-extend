@@ -107,8 +107,10 @@ Remaining from the Carbon's final requests, before the release gates below:
   publish/deploy and verify the release. None of this checkpoint updates installed apps.
   The audit fixed full-test-environment pairing retries, device-request/session/attachment response
   replay, and sessions incorrectly ending when IAM cannot confirm Team membership;
-  negative controls and passing service checks are recorded in `verification.md`. Concurrent
-  duplicate device requests and concurrent idempotency-key reservation remain open. Include all
+  negative controls and passing service checks are recorded in `verification.md`. Durable
+  idempotency-key reservation now passes eight cross-instance checks, including explicit error
+  replay and failure/cancellation handling. Simultaneous same-reason device-request folding is
+  undergoing its separate verification. Include all
   final service changes in CI and the deployment image.
 
 
@@ -266,7 +268,8 @@ verifiers and not fixed.
     the current call refused; seven membership checks and the old-code negative control verify it.
   - *(Corrected 2026-09-28)* `request_send` now checks the idempotency key before repeat folding
     and live-holder validation. Sequential retries replay the stored status/body even after the
-    holder changes. Concurrent identical sends and same-key reservation are still not serialized.
+    holder changes. Same-key reservation is now serialized across instances; concurrent identical
+    sends with distinct/no keys are being verified separately.
   - *(verifier)* The pending-request message says it "is sent when <sender> next uses Extend", but
     the request fails after 6 attempts (about 2.5 minutes). The file download's 404 has no hint.
   - A takeover released while a command runs resets the idle window to 300 s (matters only for a
