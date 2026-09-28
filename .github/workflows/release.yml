@@ -15,6 +15,11 @@ on:
         type: choice
         options: [all, x64, arm64]
         default: all
+      windows_verification:
+        description: ARM64-only manual runs may omit GUI checks blocked by runner privacy setup
+        type: choice
+        options: [full, terminal-only]
+        default: full
   push:
     tags: ['v*']
 permissions:
@@ -107,6 +112,8 @@ jobs:
             target/desktop/linux/*.deb
           if-no-files-found: error
   desktop-windows:
+    env:
+      EXTEND_WINDOWS_VERIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_verification || 'full' }}
     strategy:
       fail-fast: false
       matrix:
@@ -121,6 +128,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate Windows verification selection
+        shell: pwsh
+        env:
+          WINDOWS_ARCH_SELECTION: ${{ inputs.windows_arch }}
+          WINDOWS_ONLY_SELECTION: ${{ inputs.windows_only }}
+          DESKTOP_ONLY_SELECTION: ${{ inputs.desktop_only }}
+        run: |
+          if ($env:EXTEND_WINDOWS_VERIFICATION -eq "terminal-only" -and (
+              $env:GITHUB_EVENT_NAME -ne "workflow_dispatch" -or
+              $env:RUNNER_ARCH -ne "ARM64" -or
+              $env:WINDOWS_ARCH_SELECTION -ne "arm64" -or
+              ($env:WINDOWS_ONLY_SELECTION -ne "true" -and $env:DESKTOP_ONLY_SELECTION -ne "true"))) {
+            throw "Terminal-only verification requires an explicit ARM64-only manual desktop run."
+          }
       - name: Rust
         shell: pwsh
         run: |
@@ -138,7 +159,7 @@ jobs:
       - name: Verify native agent and owned Windows fixtures
         shell: pwsh
         timeout-minutes: 15
-        run: ./apps/desktop/windows/verify-native.ps1
+        run: ./apps/desktop/windows/verify-native.ps1 -VerificationMode $env:EXTEND_WINDOWS_VERIFICATION
       - uses: actions/upload-artifact@v4
         if: always()
         with:
