@@ -76,7 +76,8 @@ ting --org <app-owning-team> types register --type extend.device.woken --descrip
 ting --org <app-owning-team> types register --type extend.device.wake_declined --description 'A Carbon turned down a request to wake a device'
 ```
 
-In production only `extend.device.requested` in `tos` was registered for 1.0.0. The runbook for new
+All four types are now registered in the production app-owning Team, `tos`; no notification was
+sent during registration. The runbook for new
 Teams and for finding missing types is in [operations.md](operations.md#extends-ting-types).
 `e2e/real-iam/realiam.py --briefcase --ting` seeds this catalog against local services and is the
 reference for it; it verifies delivery across Teams and genuine missing-type failures. The current
@@ -108,9 +109,13 @@ only when `EXTEND_ANDROID_SIGNING_PROPERTIES` names a properties file with `stor
 Desktop: `apps/desktop` builds the macOS app bundle, the Linux tarball and `.deb`, and the Windows
 zip. Distribute only the Mac zip without a suffix (`Silicon-Extend-<version>-macos-<arch>.zip`),
 which `build-app.sh` produces only after Apple accepted the notarization and the ticket is stapled;
-`-unnotarized` and `-adhoc` zips are for testing. Which Developer ID signs releases is still the
-Carbon's decision, and changing it after release resets the Accessibility and Screen Recording
-grants Carbons gave the app. The Windows zip has never been built on Windows.
+`-unnotarized` and `-adhoc` zips are for testing. Releases use the existing Developer ID Application
+identity for Team `LTBSK59BJ2`; the 1.1 Mac candidate is signed, notarized and stapled. Changing the
+signing identity can reset the Accessibility and Screen Recording grants Carbons gave the app.
+Windows x64 has been built and verified on Windows. Windows ARM64 has a manual terminal-only
+verification option because the hosted runner's privacy setup screen blocks the owned GUI fixture;
+an artifact from that option must disclose that its GUI behavior remains unverified. Default and
+tag-triggered Windows verification still requires both native fixtures.
 
 ## Licences in what ships
 

@@ -135,7 +135,10 @@ Both original and resulting hashes match its manifest; both YAML files parse wit
 446 local API references resolve and all 64 operation IDs are unique. The human-owned
 `UNDERSTANDING.md` was unchanged. The Carbon then canceled the briefly authorized IAM/OBO
 implementation and directed publication after the current diagnostic round. Only this attempt's
-new member-read edits are being restored; the pre-existing IAM redesign is preserved.
+new member-read edits have been restored. All 120 captured pre-existing dirty/untracked IAM
+files and the two previously clean tracked files match their recorded baselines; only this
+attempt's three new source/migration files were removed. No IAM build, deployment or fixture
+resource was started. The pre-existing IAM redesign is preserved.
 
 Windows ARM64 still requires a prepared desktop after the privacy-setup overlay blocked the
 owned fixture with zero input sent. First-time Briefcase sharing and the remaining physical
