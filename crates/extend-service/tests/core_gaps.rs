@@ -8,6 +8,9 @@
 //! (`EXTEND_TEST_ADMIN_URL`, default `postgres://extend:extend@127.0.0.1:5440/postgres`), the real
 //! HTTP and WebSocket stack, the official client crate, and scripted fake devices.
 
+#[path = "common/readiness.rs"]
+mod readiness;
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -268,7 +271,7 @@ impl Device {
         ws.send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        readiness::ready(&client.authed(&token, Some("acme")), &id).await;
         Device { id, credential, ws }
     }
 

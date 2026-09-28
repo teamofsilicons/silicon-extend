@@ -32,6 +32,26 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — service fixture readiness under CI load
+
+CI `36365195398` passed contracts, web, fork and Android, but Rust's request-reason test started
+a session before its Android fixture's Hello had finished updating setup. Its helper waited a
+fixed 150 milliseconds. Complete-setup helpers now observe online/ready state with a bounded
+deadline. The shared helper also fences connection initialization/Hello with a unique WebSocket
+Ping/Pong before checking the exact persisted setup, version and capabilities, preserving failed
+setup and identical-metadata reconnect tests. No product code or session retry was added.
+
+The affected suite first exposed the identical-reconnect gap in a state-only barrier; the
+Ping/Pong fence fixed it. A later privacy assertion matched session `b06` inside an unrelated
+request UUID containing `b068`, despite correctly redacted holder data. That assertion now checks
+the exact redacted details shape and human-text identity/session tokens instead of arbitrary
+UUID substrings. Final targeted runs cover all 79 affected tests across 11 suites, with strict
+all-targets service Clippy, workspace formatting and independent review passing. The intermediate
+failures remain in the report. Exactly 131 created databases and matching temporary directories
+were removed, preserving all 825 baseline databases. Evidence:
+`target/fixture-readiness-verification/`. A fresh CI run is required. Backend runtime inputs are
+unchanged from the verified `a1b180d` image; the 75-check provider lane at `cc81c37` is unaffected.
+
 ## 2026-09-28 — refreshed backend and real-provider checks
 
 The immutable `a1b180d` backend includes all final replay/reservation/request-folding fixes.

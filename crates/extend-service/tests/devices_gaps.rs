@@ -5,6 +5,9 @@
 //! fake devices speaking docs/device-protocol.md. Needs a PostgreSQL the tests can create databases
 //! on: `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+#[path = "common/readiness.rs"]
+mod readiness;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -193,7 +196,7 @@ impl FakeDevice {
             features: vec![],
         }))
         .await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        readiness::ready(&client.authed(&token, Some("acme")), &d.id).await;
         d
     }
 
@@ -976,8 +979,7 @@ async fn hosted_device_end_to_end() {
         hardware_key: None,
     }))
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let seen = c.device(&atv_id).await.unwrap();
+    let seen = readiness::ready(&c, &atv_id).await;
     assert!(seen.online);
     assert_eq!(seen.state, DeviceState::Ready);
     assert_eq!(seen.os_version.as_deref(), Some("18.2"));

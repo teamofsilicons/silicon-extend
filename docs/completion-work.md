@@ -61,7 +61,9 @@ hit testing, so the fixture now uses a real application window class. Run `36363
 all 206 x64 checks and passed its package audit. Focused ARM64 diagnostics in `36365191010`
 identify Windows' initial privacy-setup screen in WWAHost.exe covering the fixture. The exact
 ownership guard sent zero input; native ARM64 GUI verification requires a prepared runner.
-CI `36363764146` passed all five jobs; final service changes are in run `36365195398` at `cc81c37`.
+CI `36363764146` passed all five jobs. Run `36365195398` at `cc81c37` passed four jobs but exposed
+a test-fixture readiness race in Rust. The fixed state/connection barriers and a separate privacy
+assertion correction now pass all 79 affected tests; fresh CI is required.
 The full service suite reported 172 passes with one explicit ignore (the real-provider entry
 point separately returns early without its fixture); strict Clippy/formatting pass. The dedicated
 real IAM/Briefcase/Ting lane now passes 75/75 at `cc81c37`, retaining the first-time Carbon sharing

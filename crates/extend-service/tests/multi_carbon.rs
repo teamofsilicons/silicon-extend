@@ -200,12 +200,18 @@ async fn each_viewer_sees_their_own_side() {
     // Another side's start names nobody.
     let (s, e) = session(&env, &scout, "globex", &d).await;
     assert_eq!((s, e["data"]["code"].as_str()), (409, Some("device_in_use")));
-    let text = e.to_string();
-    assert!(
-        !text.contains("si:sous") && !text.contains(sess["data"]["session_id"].as_str().unwrap()),
-        "{e}"
-    );
-    assert_eq!(e["data"]["details"]["in_use"]["hidden"], true);
+    assert_eq!(e["data"]["details"], json!({"in_use": {"hidden": true}}), "{e}");
+    let sid = sess["data"]["session_id"].as_str().unwrap();
+    for field in ["message", "hint"] {
+        let text = e["data"][field].as_str().unwrap();
+        assert!(!text.contains("si:sous"), "{e}");
+        // Session IDs can be only three characters; an unrelated request UUID or public device
+        // ID can contain the same substring. Check human text tokens and the exact details shape.
+        assert!(
+            !text.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == sid),
+            "{e}"
+        );
+    }
     assert!(
         e["data"]["hint"]
             .as_str()

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use extend_protocol::DeviceOs;
 use extend_protocol::frames::{DeviceFrame, Hello};
-use extend_protocol::model::{EnrollmentCreate, EnrollmentState, Setup};
+use extend_protocol::model::{EnrollmentCreate, EnrollmentState, Setup, SetupState};
 use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode, Tuning};
 use extend_service::state::Shared;
 use futures::{SinkExt as _, StreamExt as _};
@@ -288,6 +288,13 @@ impl Drop for App {
 
 impl App {
     pub async fn connect(env: &Env, credential: &str, hello: Value) -> App {
+        let DeviceFrame::Hello(expected) = serde_json::from_value(hello.clone()).expect("fixture Hello") else {
+            panic!("App::connect needs a Hello frame")
+        };
+        let (world, id) = extend_service::state::device_by_credential(&env.state, credential)
+            .await
+            .unwrap()
+            .expect("paired fixture device");
         let mut req = env
             .client
             .ws_url("/api/v1/device/connect")
@@ -297,12 +304,18 @@ impl App {
             .insert("authorization", format!("Extend-Device {credential}").parse().unwrap());
         let (mut ws, _) = tokio_tungstenite::connect_async(req).await.expect("device socket");
         ws.send(Message::Text(hello.to_string().into())).await.unwrap();
+        // The service processes this connection's Hello before reading the next control frame.
+        // Its matching Pong also fences reconnect initialization when old metadata is identical.
+        let hello_fence = Uuid::new_v4().as_bytes().to_vec();
+        ws.send(Message::Ping(hello_fence.clone().into())).await.unwrap();
+        let (applied, observed) = tokio::sync::oneshot::channel();
         let frames = Arc::new(Mutex::new(Vec::new()));
         let closed = Arc::new(AtomicBool::new(false));
         let fail_commands = Arc::new(AtomicBool::new(false));
         let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
         let (f, c, fail) = (frames.clone(), closed.clone(), fail_commands.clone());
         let task = tokio::spawn(async move {
+            let mut applied = Some(applied);
             loop {
                 tokio::select! {
                     out = rx.recv() => {
@@ -311,6 +324,13 @@ impl App {
                     }
                     m = ws.next() => {
                         let Some(Ok(m)) = m else { break };
+                        if let Message::Pong(ref bytes) = m
+                            && bytes.as_ref() == hello_fence.as_slice()
+                            && let Some(applied) = applied.take()
+                        {
+                            let _ = applied.send(());
+                            continue;
+                        }
                         let Message::Text(t) = m else {
                             if matches!(m, Message::Close(_)) { break }
                             continue;
@@ -342,7 +362,44 @@ impl App {
             fail_commands,
             task,
         };
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // Retain the state assertion too: a processed Hello must have persisted its reported
+        // setup and capabilities, including deliberately failed setup and old app versions.
+        let mut capabilities = expected.capabilities.clone();
+        capabilities.sort();
+        let expected_state = if expected.setup.state == SetupState::Complete || expected.setup.steps.is_empty() {
+            "ready"
+        } else {
+            "setup"
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            observed.await.expect("fixture socket closed before its Hello fence");
+            loop {
+                assert!(
+                    !app.is_closed(),
+                    "fixture socket closed before its required state was observed"
+                );
+                let d = extend_service::domain::load_device(&env.state, &world, &id)
+                    .await
+                    .unwrap()
+                    .expect("paired fixture device");
+                if d.state == expected_state
+                    && d.setup() == expected.setup
+                    && d.app_version.as_deref() == Some(expected.app_version.as_str())
+                    && d.os() == expected.os
+                    && d.os_version == expected.os_version
+                    && d.model == expected.model
+                    && d.engine_version == expected.engine_version
+                    && d.capabilities == json!(capabilities)
+                    && d.missing == json!(expected.missing)
+                    && env.state.hub.is_connected(&d.key(&world)).await
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("fixture device {id} never matched its reported state: {expected:?}"));
         app
     }
 

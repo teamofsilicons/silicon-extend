@@ -4,6 +4,9 @@
 //! Needs a PostgreSQL the tests can create databases on:
 //! `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+#[path = "common/readiness.rs"]
+mod readiness;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -168,11 +171,11 @@ impl Device {
             id,
             credential,
         };
-        d.hello(os).await;
+        d.hello(os, &client.authed(&token, Some("acme"))).await;
         d
     }
 
-    async fn hello(&mut self, os: DeviceOs) {
+    async fn hello(&mut self, os: DeviceOs, owner: &silicon_extend_client::Authed<'_>) {
         let caps: Vec<Capability> = os.full_capabilities().to_vec();
         let hello = DeviceFrame::Hello(Hello {
             app_version: "1.0.0".into(),
@@ -186,7 +189,7 @@ impl Device {
             features: vec![],
         });
         self.send(&hello).await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        readiness::ready(owner, &self.id).await;
     }
 
     async fn send(&mut self, f: &DeviceFrame) {
@@ -615,7 +618,7 @@ async fn pairing_rules_and_device_management() {
             }
         }
     }
-    d2.hello(DeviceOs::Macos).await;
+    d2.hello(DeviceOs::Macos, &b).await;
 
     // Pair expiry after inactivity.
     sqlx::query("UPDATE extend.devices SET last_activity_at = now() - interval '2 days' WHERE device_id = $1")
