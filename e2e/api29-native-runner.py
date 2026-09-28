@@ -23,6 +23,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 SOURCE = "cf43b539c5d9ae91e363172436bb8d1d677d2441"
+MULTI_FIXTURE_FILES = tuple("apps/android/tools/fake-service/" + name for name in
+                            ("run-emulator-test.sh", "fake_extend.py", "make_test_png.py"))
 PKG = "com.teamofsilicons.extend"
 ACCESSIBILITY_COMPONENT = PKG + "/" + PKG + ".a11y.ExtendAccessibilityService"
 TEST_RUNNER = PKG + ".test/androidx.test.runner.AndroidJUnitRunner"
@@ -51,6 +53,24 @@ def write_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n")
     temporary.replace(path)
+
+
+def redacted(text):
+    text = re.sub(r"\b(?:edc|ees)_[A-Za-z0-9_-]+\b", "[redacted-token]", text)
+    text = re.sub(r"(?i)(Extend-Device|Extend-Enrollment|Bearer) [^\s\"',}]+", r"\1 [redacted]", text)
+    text = re.sub(r'''(?i)([\"'](?:device_credential|credential|access_token|refresh_token|secret)[\"']\s*:\s*)[\"'][^\"'\n]*[\"']''', r'\1"[redacted]"', text)
+    text = re.sub(r"(?i)((?:Received public key|Received connected key message|Logging key):? )[A-Za-z0-9+/=]{80,}", r"\1[redacted-public-key]", text)
+    return text
+
+
+def tv_emulator_lifecycle(text):
+    # Emulator debug tags can print raw ADB packets. Export only lifecycle lines;
+    # keep packet data, public keys and APK payloads in the disposable runner.
+    lifecycle = re.compile(r"Adb (?:connected|closed)|reset connection|host connection|guest connection|"
+                           r"connection (?:terminated|closed|reset|accepted)|socket (?:closed|opened|accepted)|"
+                           r"Android emulator version|qemu\.dalvik\.vm\.heapsize|Boot completed")
+    return redacted("\n".join(line for line in text.splitlines() if lifecycle.search(line)
+                    and not re.search(r"(?i)payload|packet|(?:public |logging )key|data[=:]", line)) + "\n")
 
 
 def sdk_properties(path):
@@ -213,6 +233,7 @@ def inapplicable_test(profile, cls, method):
 class Lane:
     def __init__(self, args, run_id, avds):
         self.root, self.sdk, self.out = args.root.resolve(), args.sdk.resolve(), args.out.resolve()
+        self.harness_root = Path(__file__).resolve().parents[1]
         self.run_id, self.avds, self.profile = run_id, avds, args.profile
         self.env = dict(os.environ, ANDROID_SDK_ROOT=str(self.sdk), ANDROID_HOME=str(self.sdk))
         self.env["PATH"] = str(self.sdk / "platform-tools") + os.pathsep + self.env["PATH"]
@@ -240,7 +261,53 @@ class Lane:
                               timeout=timeout, check=check, env=self.env, cwd=self.root)
 
     def adb(self, *command, timeout=45, check=True):
-        return self.cmd([self.adb_bin, "-s", self.serial, *command], timeout, check).stdout.strip()
+        def record_failure(returncode, stderr):
+            if getattr(self, "case", {}).get("name") != "tv":
+                return
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            entry = {"at_unix_s": time.time(), "command": list(command), "returncode": returncode,
+                     "stderr": (stderr or "")[-4000:]}
+            errors = self.case.setdefault("adb_command_failures", [])
+            errors.append(json.loads(redacted(json.dumps(entry))))
+            del errors[:-20]
+            self.flush()
+        try:
+            result = self.cmd([self.adb_bin, "-s", self.serial, *command], timeout, check)
+        except subprocess.CalledProcessError as error:
+            record_failure(error.returncode, error.stderr)
+            raise
+        except subprocess.TimeoutExpired as error:
+            record_failure("timeout", error.stderr)
+            raise
+        if result.returncode:
+            record_failure(result.returncode, result.stderr)
+        return result.stdout.strip()
+
+    def tv_adb_key_metadata(self, label):
+        if self.case["name"] != "tv":
+            return
+        entry = {"label": label, "at_unix_s": time.time(), "command": ["shell", "ls", "-ldnZ",
+                 "/data/misc/adb", "/data/misc/adb/adb_keys"], "contents_read": False}
+        try:
+            result = self.cmd([self.adb_bin, "-s", self.serial, *entry["command"]], timeout=5, check=False)
+            entry.update(returncode=result.returncode, stdout=result.stdout[-4000:], stderr=result.stderr[-4000:])
+        except (OSError, subprocess.SubprocessError) as error:
+            entry["diagnostic_error"] = str(error)
+        self.case.setdefault("adb_key_metadata", []).append(json.loads(redacted(json.dumps(entry))))
+        self.flush()
+
+    def tv_emulator_debug_flags(self):
+        if self.case["name"] != "tv":
+            return []
+        help_text = self.cmd([self.sdk / "emulator/emulator", "-help-debug-tags"]).stdout
+        tags = ("adb", "adbserver", "init", "time")
+        assert all(re.search(r"(?m)^\s+" + tag + r"\s+", help_text) for tag in tags), "Emulator lacks required diagnostic tags"
+        (self.caseout / "emulator-debug-tags.txt").write_text(help_text)
+        self.case["emulator_debug"] = {"tags": list(tags), "supported_by_runtime_help": True,
+                                       "public_log": "Lifecycle lines only; raw packet payloads excluded"}
+        self.flush()
+        return ["-debug", ",".join(tags)]
 
     def spawn(self, command, logfile, extra_env=None):
         log = logfile.open("w"); self.logs.append(log)
@@ -601,6 +668,7 @@ class Lane:
         config = self.avds / (self.avd + ".avd/config.ini")
         properties = sdk_properties(config)
         memory, emulator_flags = avd_memory(name)
+        emulator_flags += self.tv_emulator_debug_flags()
         properties.update({**memory, "disk.dataPartition.size": "6G",
                            "hw.lcd.width": "720" if name == "phone" else "1280",
                            "hw.lcd.height": "1280" if name == "phone" else "720",
@@ -633,10 +701,14 @@ class Lane:
             self.adb("tcpip", "5555")
             self.until("legacy adb control", lambda: self.adb("shell", "id", "-u") == "2000")
             self.transport("initial")
-            self.instrument("LocalAdbTest", "connectLocalForService", timeout=90, authorize=True)
+            self.tv_adb_key_metadata("before-initial-authorization")
+            try:
+                self.instrument("LocalAdbTest", "connectLocalForService", timeout=90, authorize=True)
+            finally:
+                self.tv_adb_key_metadata("after-initial-authorization")
             # Existing multi harness grants required access and checks the actual product frames.
             multi_out = self.caseout / "multi"
-            multi = self.spawn(["sh", self.root / "apps/android/tools/fake-service/run-emulator-test.sh", "multi"], self.caseout / "multi.log",
+            multi = self.spawn(["sh", self.harness_root / MULTI_FIXTURE_FILES[0], "multi"], self.caseout / "multi.log",
                                {"SERIAL": self.serial, "ANDROID_SERIAL": self.serial, "PORT": str(port), "OUT": str(multi_out),
                                 "APK": str(self.apk), "ADB": self.adb_bin, "FORCE_TV": "0"})
             self.wait(multi, 480)
@@ -696,6 +768,11 @@ class Lane:
     def run(self):
         assert self.cmd(["git", "rev-parse", "HEAD"]).stdout.strip() == SOURCE
         assert not self.cmd(["git", "status", "--porcelain", "--untracked-files=no"]).stdout
+        fixture_commit = self.cmd(["git", "-C", self.harness_root, "rev-parse", "HEAD"]).stdout.strip()
+        assert fixture_commit == os.environ["GITHUB_SHA"], "Multi fixture must come from the recorded workflow commit"
+        self.report["multi_fixture"] = {"commit": fixture_commit,
+            "hashes": {name: digest(self.harness_root / name) for name in MULTI_FIXTURE_FILES},
+            "apk_source": SOURCE}
         self.apk = self.root / "apps/android/app/build/outputs/apk/debug/app-debug.apk"
         self.test_apk = self.root / "apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
         self.report["apks"] = [{"name": p.name, "sha256": digest(p)} for p in (self.apk, self.test_apk)]
@@ -720,15 +797,10 @@ def export_evidence(out):
     """Upload only allowlisted diagnostics/results/screenshots, no APK/media/state/HTTP uploads."""
     public = out / "public"
     public.mkdir(exist_ok=True)
-    def redacted(text):
-        text = re.sub(r"\b(?:edc|ees)_[A-Za-z0-9_-]+\b", "[redacted-token]", text)
-        text = re.sub(r"(?i)(Extend-Device|Extend-Enrollment|Bearer) [^\s\"',}]+", r"\1 [redacted]", text)
-        text = re.sub(r'''(?i)([\"'](?:device_credential|credential|access_token|refresh_token|secret)[\"']\s*:\s*)[\"'][^\"'\n]*[\"']''', r'\1"[redacted]"', text)
-        return text
     top = {"report.json", "cleanup.json", "verified-images.json", "runner-image.txt", "disk-before.txt",
            "sdk-installed.txt", "sdk-license-inventory.json", "emulator-version.txt", "acceleration.txt", "adb-version.txt",
            "provenance.json", "source-before.sha256", "source-after.sha256", "source-before.json", "source-after.json", "adapter.sha256", "ffmpeg-version.txt"}
-    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json"}
+    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt"}
     copied = []
     for path in sorted(out.rglob("*")):
         if not path.is_file() or public in path.parents:
@@ -746,6 +818,8 @@ def export_evidence(out):
         target = public / relative; target.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".png":
             shutil.copy2(path, target)
+        elif relative == Path("tv/emulator.log"):
+            target.write_text(tv_emulator_lifecycle(path.read_text(errors="replace")))
         else:
             target.write_text(redacted(path.read_text(errors="replace")))
         copied.append({"path": str(relative), "sha256": digest(target)})

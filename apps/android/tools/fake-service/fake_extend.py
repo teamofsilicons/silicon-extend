@@ -946,6 +946,12 @@ async def wait_for(cond, timeout, step=0.2):
     return cond()
 
 
+def sleeping_after(frames, baseline, sleep_state):
+    """Require a new final sleep state; Android may report locked before screen-off."""
+    return (len(frames) > baseline and frames[-1].get("awake") is False
+            and frames[-1].get("sleep_state") == sleep_state)
+
+
 async def dumpsys_notifications():
     return (await adb("shell", "dumpsys", "notification", "--noredact")).decode(errors="replace")
 
@@ -1120,11 +1126,12 @@ async def multi_scenario(sc: Scenario):
 
     # The screen goes off and comes back: awake frames in order, on every connection.
     before = (len(a.awakes), len(b.awakes))
-    await adb("shell", "input", "keyevent", "KEYCODE_SLEEP")
-    await wait_for(lambda: len(a.awakes) > before[0] and len(b.awakes) > before[1], 8)
-    off_a = a.awakes[-1] if len(a.awakes) > before[0] else None
     want = "standby" if tv else "screen_off"
-    sc.check(f"screen off: awake false ({want}) on both pairs", off_a and off_a["awake"] is False and off_a.get("sleep_state") == want and len(b.awakes) > before[1], (off_a, b.awakes[-1:]))
+    await adb("shell", "input", "keyevent", "KEYCODE_SLEEP")
+    await wait_for(lambda: sleeping_after(a.awakes, before[0], want)
+                   and sleeping_after(b.awakes, before[1], want), 8)
+    off_a = a.awakes[-1] if len(a.awakes) > before[0] else None
+    sc.check(f"screen off: awake false ({want}) on both pairs", off_a and off_a["awake"] is False and off_a.get("sleep_state") == want and sleeping_after(b.awakes, before[1], want), (off_a, b.awakes[-1:]))
     await asyncio.sleep(1.0)
     mid = (len(a.awakes), len(b.awakes))
     await adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")

@@ -9,6 +9,7 @@ on:
       - .github/workflows/android-api29-native.yml
       - .github/android-sdk-licenses/android-sdk-preview-license
       - e2e/api29-native-runner.py
+      - apps/android/tools/fake-service/**
 permissions:
   contents: read
 concurrency:
@@ -70,7 +71,10 @@ jobs:
           hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names if name}
           aggregate = hashlib.sha256(''.join(name + '\0' + hashes[name] + '\n' for name in sorted(hashes)).encode()).hexdigest()
           adapter = ['e2e/api29-native-runner.py', '.github/workflows/android-api29-native.yml',
-                     '.github/android-sdk-licenses/android-sdk-preview-license']
+                     '.github/android-sdk-licenses/android-sdk-preview-license',
+                     'apps/android/tools/fake-service/run-emulator-test.sh',
+                     'apps/android/tools/fake-service/fake_extend.py',
+                     'apps/android/tools/fake-service/make_test_png.py']
           report = {'source_head': head, 'tracked_file_count': len(hashes), 'tracked_hashes': hashes,
                     'aggregate_sha256': aggregate, 'adapter_commit': git('rev-parse', 'HEAD', cwd=harness),
                     'adapter_hashes': {name: hashlib.sha256((harness / name).read_bytes()).hexdigest() for name in adapter},
