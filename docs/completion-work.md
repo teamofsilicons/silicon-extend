@@ -22,8 +22,10 @@ fixes recorded in `verification.md`; its design is
 The Carbon approved the prepared API/CLI/technical contract patch on 2026-09-28. It is applied
 exactly as reviewed; original/resulting hashes, YAML uniqueness, 446 local API references and
 64 unique operation IDs were verified. `UNDERSTANDING.md` was not changed by this pass.
-The generic IAM membership-read and Briefcase first-file design is also approved for implementation;
-its coordinated reusable-OBO migration and real first-recipient verification remain engineering work.
+The Carbon subsequently canceled IAM/OBO changes and directed publication after the current
+diagnostic round. This release retains the existing provider contract. Automatic sharing to a
+Carbon not yet known to Briefcase and uncompleted physical-platform checks are documented
+limitations; they are not represented as passing. The separate IAM redesign remains untouched.
 
 ### Needs the Carbon
 - **Physical device access** is needed for remaining checks. The iPad became available and
@@ -176,8 +178,8 @@ Remaining from the Carbon's final requests, before the release gates below:
   and reports the sharing failure, but it does not automatically re-share that file later. The
   successful real-service/native-TV sharing checks first sign the Carbon into Briefcase; they
   do not close the first-time-recipient requirement in `UNDERSTANDING.md`'s Files section.
-  Resolve the upstream recipient-projection behavior and verify the first-file path, or obtain
-  an explicit scope decision before calling the full file-sharing requirement complete.
+  The Carbon explicitly deferred IAM/OBO changes and authorized publication after diagnostics.
+  Retain this first-recipient limitation in release notes; do not call the full requirement complete.
 - The real-service fixture gates passed: a Silicon reads its granting Carbon's directory entry
   (200, then 404 after removal), and Ting accepts a self-addressed notification (202). Re-run against
   the final release candidate and verify production configuration after deployment.
