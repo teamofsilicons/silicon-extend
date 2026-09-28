@@ -325,8 +325,11 @@ There's no Node and no device engine: Windows uses Extend's own driver. The wind
 which Windows 10 and 11 ship.
 
 The 1.1 release workflow built x64 and arm64 packages on native Windows runners and ran each
-packaged agent's `--version` successfully. The driver's pure logic is unit-tested; interactive
-window, input, recording, sleep and lock behavior still require native verification.
+packaged agent's `--version` successfully. Run `36360098249` passed 177 unit and 27 integration
+tests on both architectures, plus native terminal containment. Its x64 runner also passed real
+window snapshots, click, text input and full-desktop capture. ARM64's window fixture failed before
+driver input while awaiting focus; the fixture now waits for an activation acknowledgement and
+requires a native rerun. Recording, sleep/lock, banner and physical desktop behavior remain open.
 
 The release workflow also runs `windows/verify-native.ps1` on its disposable x64/arm64 Windows
 runners. It runs native agent unit/fake-service tests, then explicitly opts into the owned-window
@@ -334,6 +337,8 @@ and terminal-process fixtures in `tests/windows_native.rs`. Those fixtures are i
 test runs and require the runner opt-in. The captured PNG covers the full disposable runner
 desktop; this lane does not establish physical sleep/lock, UAC, multi-monitor or banner behavior.
 Its logs, runner metadata and owned-fixture evidence upload even when the checks fail.
+For a Windows-specific rerun, dispatch `release.yml` with `windows_only=true`; that skips the
+CLI/Honeycomb and Linux jobs. Normal manual dispatches and release tags still build every target.
 
 ### Packaged daemon update verification
 

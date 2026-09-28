@@ -68,6 +68,7 @@ async fn wait_json(path: &Path) -> Value {
 struct OwnedWindow {
     process: Child,
     ready: Value,
+    evidence: PathBuf,
 }
 
 impl Drop for OwnedWindow {
@@ -87,6 +88,7 @@ impl OwnedWindow {
                 .spawn()
                 .unwrap(),
             ready: Value::Null,
+            evidence: dir.to_path_buf(),
         };
         own.ready = wait_json(&dir.join("ready.json")).await;
         assert_eq!(own.ready["pid"].as_u64(), Some(u64::from(own.process.id())));
@@ -104,8 +106,41 @@ impl OwnedWindow {
     fn foreground(&self) {
         let hwnd = self.handle("window");
         unsafe {
-            let _ = SetForegroundWindow(hwnd);
-            assert_eq!(GetForegroundWindow(), hwnd, "owned fixture must have input focus");
+            let requested = SetForegroundWindow(hwnd).as_bool();
+            // Cross-process activation is asynchronous. WM_NULL acknowledges the fixture's
+            // message queue before we inspect focus; it never changes another window.
+            // https://devblogs.microsoft.com/oldnewthing/20161118-00/?p=94745
+            let mut unused = 0;
+            let acknowledged = SendMessageTimeoutW(
+                hwnd,
+                WM_NULL,
+                WPARAM(0),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG,
+                5_000,
+                Some(&mut unused),
+            )
+            .0 != 0;
+            let foreground = GetForegroundWindow();
+            let mut foreground_pid = 0;
+            GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
+            save(
+                self.evidence.join(format!("foreground-{}.json", uuid::Uuid::new_v4())),
+                &json!({
+                    "requested": requested, "acknowledged": acknowledged,
+                    "expected_window": hwnd.0 as usize, "expected_pid": self.process.id(),
+                    "foreground_window": foreground.0 as usize, "foreground_pid": foreground_pid,
+                }),
+            );
+            assert!(
+                acknowledged,
+                "owned fixture must process its activation within five seconds"
+            );
+            assert_eq!(self.handle("window"), hwnd, "fixture ownership must remain unchanged");
+            assert_eq!(
+                foreground, hwnd,
+                "owned fixture must have input focus (request accepted: {requested})"
+            );
         }
     }
 
@@ -188,14 +223,15 @@ fn fixture_window() {
         )
         .unwrap();
         let _ = ShowWindow(window, SW_SHOW);
-        let _ = SetForegroundWindow(window);
+        let foreground_requested = SetForegroundWindow(window).as_bool();
         let parent = std::env::var("EXTEND_WINDOWS_PARENT").unwrap().parse().unwrap();
-        let _ = AllowSetForegroundWindow(parent);
+        let parent_allowed = AllowSetForegroundWindow(parent).is_ok();
         save(
             dir.join("ready.json"),
             &json!({
                 "pid": std::process::id(), "title": title,
                 "window": window.0 as usize, "edit": edit.0 as usize, "check": check.0 as usize,
+                "foreground_requested": foreground_requested, "parent_foreground_allowed": parent_allowed,
             }),
         );
         let mut msg = MSG::default();

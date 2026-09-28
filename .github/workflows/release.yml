@@ -1,12 +1,18 @@
 name: Honeycomb release archive
 on:
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Only rebuild and verify Windows desktop packages
+        type: boolean
+        default: false
   push:
     tags: ['v*']
 permissions:
   contents: read
 jobs:
   binaries:
+    if: ${{ inputs.windows_only != true }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +64,7 @@ jobs:
           if-no-files-found: error
   # Build and verify Linux/Windows desktop apps: no secrets, nothing published from here.
   desktop-linux:
+    if: ${{ inputs.windows_only != true }}
     strategy:
       fail-fast: false
       matrix:
