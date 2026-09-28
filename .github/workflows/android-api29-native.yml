@@ -27,12 +27,17 @@ jobs:
     env:
       # Product source stays fixed; the separate harness checkout records its own commit.
       EXTEND_API29_SOURCE: cf43b539c5d9ae91e363172436bb8d1d677d2441
-      EXTEND_API29_OUT: ${{ runner.temp }}/extend-api29-evidence
-      ANDROID_AVD_HOME: ${{ runner.temp }}/extend-api29-avds
-      GRADLE_USER_HOME: ${{ runner.temp }}/extend-api29-gradle
       EXTEND_API29_PROFILE: ${{ matrix.profile }}
       EXTEND_API29_IMAGE: ${{ matrix.image }}
     steps:
+      - name: Initialize owned paths on the allocated runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "EXTEND_API29_OUT=$RUNNER_TEMP/extend-api29-evidence" \
+            "ANDROID_AVD_HOME=$RUNNER_TEMP/extend-api29-avds" \
+            "GRADLE_USER_HOME=$RUNNER_TEMP/extend-api29-gradle" >> "$GITHUB_ENV"
       - name: Verification adapter from this workflow commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
