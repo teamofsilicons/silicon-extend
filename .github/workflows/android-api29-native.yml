@@ -1,0 +1,190 @@
+name: Android API 29 native verification
+on:
+  workflow_dispatch:
+  # Bootstrap this verification-only workflow before it exists on the default branch.
+  # Both branch and path must match; unrelated release work does not start new AVD jobs.
+  push:
+    branches: [release/1.1.0]
+    paths:
+      - .github/workflows/android-api29-native.yml
+      - e2e/api29-native-runner.py
+permissions:
+  contents: read
+concurrency:
+  group: android-api29-native-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native:
+    name: API 29 ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {profile: phone, image: 'system-images;android-29;default;x86_64'}
+          - {profile: tv, image: 'system-images;android-29;android-tv;x86'}
+    env:
+      # Product source stays fixed; the separate harness checkout records its own commit.
+      EXTEND_API29_SOURCE: cf43b539c5d9ae91e363172436bb8d1d677d2441
+      EXTEND_API29_OUT: ${{ runner.temp }}/extend-api29-evidence
+      ANDROID_AVD_HOME: ${{ runner.temp }}/extend-api29-avds
+      GRADLE_USER_HOME: ${{ runner.temp }}/extend-api29-gradle
+      EXTEND_API29_PROFILE: ${{ matrix.profile }}
+      EXTEND_API29_IMAGE: ${{ matrix.image }}
+    steps:
+      - name: Verification adapter from this workflow commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Exact product and native test source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: cf43b539c5d9ae91e363172436bb8d1d677d2441
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 17}
+      - name: Record source and verification adapter provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXTEND_API29_OUT"
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / 'source'
+          harness = root.parent / 'harness'
+          def git(*args, cwd=root):
+              return subprocess.check_output(['git', *args], cwd=cwd).decode().strip()
+          head = git('rev-parse', 'HEAD')
+          assert head == os.environ['EXTEND_API29_SOURCE']
+          assert git('status', '--porcelain=v1') == ''
+          names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
+          hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names if name}
+          aggregate = hashlib.sha256(''.join(name + '\0' + hashes[name] + '\n' for name in sorted(hashes)).encode()).hexdigest()
+          adapter = ['e2e/api29-native-runner.py', '.github/workflows/android-api29-native.yml']
+          report = {'source_head': head, 'tracked_file_count': len(hashes), 'tracked_hashes': hashes,
+                    'aggregate_sha256': aggregate, 'adapter_commit': git('rev-parse', 'HEAD', cwd=harness),
+                    'adapter_hashes': {name: hashlib.sha256((harness / name).read_bytes()).hexdigest() for name in adapter},
+                    'github_run_id': os.environ['GITHUB_RUN_ID'], 'github_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                    'profile': os.environ['EXTEND_API29_PROFILE'], 'selected_image': os.environ['EXTEND_API29_IMAGE']}
+          assert report['adapter_commit'] == os.environ['GITHUB_SHA']
+          (pathlib.Path(os.environ['EXTEND_API29_OUT']) / 'source-before.json').write_text(json.dumps(report, indent=2) + '\n')
+          PYTHON
+      - name: Preflight disposable Linux runner and KVM
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$(uname -m)" = x86_64
+          test -c /dev/kvm
+          # Match existing CI reclamation only on this disposable VM; retain Android SDK/tools.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg acl
+          # Access is granted only to this job's user, on this disposable runner's KVM device.
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          printf '%s\n' "ImageOS=${ImageOS:-unknown}" "ImageVersion=${ImageVersion:-unknown}" > "$EXTEND_API29_OUT/runner-image.txt"
+          df -k / "$RUNNER_TEMP" > "$EXTEND_API29_OUT/disk-before.txt"
+          python3 -c 'import os,shutil; assert shutil.disk_usage(os.environ["RUNNER_TEMP"]).free >= 18*1024**3, "Need 18 GiB before SDK/build/AVD work"'
+      - name: Official SDK tools and selected pinned API 29 image revision
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          # Use licenses already accepted by the runner image; never accept new terms here.
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib
+          licenses = pathlib.Path(os.environ['ANDROID_HOME']) / 'licenses'
+          hashes = {str(p.relative_to(licenses)): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in sorted(licenses.rglob('*')) if p.is_file()}
+          assert hashes, 'Runner has no existing Android SDK license inventory'
+          (pathlib.Path(os.environ['EXTEND_API29_OUT']) / 'sdk-license-inventory.json').write_text(json.dumps(hashes, indent=2) + '\n')
+          PYTHON
+          if ! "$SDKMANAGER" --install 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' "$EXTEND_API29_IMAGE" </dev/null; then
+            echo 'Selected SDK package installation failed; any missing license remains unaccepted.' >&2
+            exit 1
+          fi
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib
+          out = pathlib.Path(os.environ['EXTEND_API29_OUT'])
+          licenses = pathlib.Path(os.environ['ANDROID_HOME']) / 'licenses'
+          after = {str(p.relative_to(licenses)): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in sorted(licenses.rglob('*')) if p.is_file()}
+          assert after == json.loads((out / 'sdk-license-inventory.json').read_text()), 'SDK license inventory changed'
+          PYTHON
+          "$SDKMANAGER" --list_installed > "$EXTEND_API29_OUT/sdk-installed.txt"
+          "$ANDROID_HOME/emulator/emulator" -version > "$EXTEND_API29_OUT/emulator-version.txt" 2>&1
+          "$ANDROID_HOME/emulator/emulator" -accel-check > "$EXTEND_API29_OUT/acceleration.txt" 2>&1
+          "$ANDROID_HOME/platform-tools/adb" version > "$EXTEND_API29_OUT/adb-version.txt"
+          python3 harness/e2e/api29-native-runner.py --verify-images --profile "$EXTEND_API29_PROFILE" \
+            --sdk "$ANDROID_HOME" --out "$EXTEND_API29_OUT"
+      - name: Build debug native test APKs without release signing material
+        timeout-minutes: 15
+        working-directory: source/apps/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${EXTEND_ANDROID_SIGNING_PROPERTIES:-}"
+          ./gradlew --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g \
+            -PextendServiceUrl=http://10.0.2.2:8490 :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Native verification on one owned API 29 AVD
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 harness/e2e/api29-native-runner.py --root "$GITHUB_WORKSPACE/source" \
+            --profile "$EXTEND_API29_PROFILE" --sdk "$ANDROID_HOME" --out "$EXTEND_API29_OUT"
+      - name: Exact owned cleanup, including interrupted runs
+        if: always()
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 harness/e2e/api29-native-runner.py --cleanup --profile "$EXTEND_API29_PROFILE" \
+            --sdk "$ANDROID_HOME" --out "$EXTEND_API29_OUT"
+      - name: Verify product source stayed unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE']) / 'source'
+          out = pathlib.Path(os.environ['EXTEND_API29_OUT'])
+          before_path = out / 'source-before.json'
+          if not before_path.is_file():
+              raise SystemExit('Source provenance did not complete; no passing source-integrity claim')
+          before = json.loads(before_path.read_text())
+          names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
+          hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names if name}
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root).decode().strip()
+          status = subprocess.check_output(['git', 'status', '--porcelain=v1'], cwd=root).decode()
+          report = {'source_head': head, 'tracked_file_count': len(hashes), 'clean': status == '',
+                    'all_tracked_hashes_unchanged': hashes == before['tracked_hashes'],
+                    'aggregate_sha256': hashlib.sha256(''.join(name + '\0' + hashes[name] + '\n' for name in sorted(hashes)).encode()).hexdigest()}
+          (out / 'source-after.json').write_text(json.dumps(report, indent=2) + '\n')
+          assert head == before['source_head'] == os.environ['EXTEND_API29_SOURCE']
+          assert report['clean'] and report['all_tracked_hashes_unchanged']
+          PYTHON
+      - name: Export only sanitized diagnostics, results and owned screenshots
+        if: always()
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 harness/e2e/api29-native-runner.py --export-evidence --profile "$EXTEND_API29_PROFILE" \
+            --sdk "$ANDROID_HOME" --out "$EXTEND_API29_OUT"
+      - name: Preserve native evidence, never publish a release
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-api29-native-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EXTEND_API29_OUT }}/public/
+          if-no-files-found: error
+          retention-days: 14
