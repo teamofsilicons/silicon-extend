@@ -27,9 +27,10 @@ fixes recorded in `verification.md`; its design is
   changes are already committed (`3fe0347`, `5326b68`) and are not being requested again.
 - **Physical device access** is needed for remaining checks. The iPad became available and
   passed a runner-free connection and readable screenshot with the exact `cf43b53` packaged
-  runtime. Recording preparation stopped when it locked; after it unlocked, Safari foreground
-  ownership could not be established. The requested Safari screen is still needed before
-  recording. No current helper was installed or launched. The iPhone is locked, and no physical TV is
+  runtime. The current helper subsequently built, installed and started successfully. A nine-second
+  recording of the existing foreground Books app decoded and passed visual review without input
+  or app relaunch. Longer idle-policy, alias cleanup and reconnect checks remain separate. The
+  iPhone is still locked in a fresh readiness check, and no physical TV is
   connected through ADB in the latest local inventory.
   Technical questions 16–20 introduce no new product decision: accepted first-pair terminal and
   routed-request behavior is retained, the Ting premise is corrected, and iOS awake-state evidence
@@ -85,7 +86,7 @@ x64 packages passed their audits. A focused post-build review found the new owne
 delay the runner's normal 60-second idle shutdown. The correction passes 314 relevant tests and
 strict Clippy. Refreshed `cf43b53` Mac/Linux/Windows x64 candidates are now verified: the Mac
 passed Apple notarization and 13 independent checks, Linux package audits passed, and Windows
-passed 206 checks. General CI at `d187051` also passed all five jobs. Subsequent verification
+passed 206 checks. General CI at `d187051` and `0ccafb8` also passed all five jobs. Subsequent verification
 changes leave product runtime unchanged; native source `571868a` includes an Android 10 test
 compatibility correction and bounded failure diagnostics. Its source equivalence is enforced
 by the API29 workflow.
@@ -131,8 +132,11 @@ Remaining from the Carbon's final requests, before the release gates below:
   A physical iPad now passes bare connection and a readable 3180-by-2384 screenshot using the
   exact packaged `cf43b53` engine, without a helper or input. Session/daemon/claim cleanup and
   unchanged protected resources were verified. Physical disconnect/reconnect, carried routing,
-  recording and helper lifecycle remain open. Recording preparation awaits the requested
-  foreground app; no helper build, installation or runner launch was performed.
+  helper lifecycle and carried routing remain open. The current physical helper now builds,
+  installs and starts with the existing signing identity. A nine-second, 18-frame H.264 recording
+  at 3180-by-2384 decoded and passed visual review. Books stayed foreground with its original
+  process; the runner skipped activation, and no input/navigation was sent. Exact cleanup passed,
+  preserving the old helper. This does not cover the 60-second idle policy, alias removal or reconnect.
   A locked physical iPhone completed attachment and cleanup, but Apple returned an all-black PNG;
   readable capture still needs an unlocked phone and does not substitute for the iPad checks.
 - TV image failures now reach the command result; bounded downloads, downsampling and asynchronous

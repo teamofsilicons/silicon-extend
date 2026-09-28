@@ -46,7 +46,8 @@ Evidence: `target/release-candidate/desktop-cf43b53/` and
 The 18 signed upgrade groups retain their earlier `9564044` attribution; their relevant code
 is unchanged, but they were not rerun on the refreshed artifact.
 
-General CI `36378347424` at `a91975a` and `36379967434` at `d187051` passed all five jobs.
+General CI `36378347424` at `a91975a`, `36379967434` at `d187051` and `36381418185`
+at `0ccafb8` passed all five jobs.
 Later changes are verification only:
 a bounded sleep-state wait prevents sampling an intermediate lock event, and the native MP4
 header test uses `DataInputStream.readFully` because `readNBytes` is unavailable on Android 10.
@@ -84,17 +85,50 @@ and owned cleanup. Required counts remain 20 phone/19 TV native methods and 42/3
 checks, with explicit capability exclusions. Later recording/decode/timestamps and reconnect
 checks remain open until observed.
 
+Run `36381413979` at harness `0ccafb8` retained native source `571868a` and runtime reference
+`cf43b53`. Phone timed out installing its test APK after 120 seconds, before native or multi-session
+tests started. Package-manager processing and background dexopt are not install-completion proof.
+The SDK/emulator/runner versions match the five prior attempts that installed successfully; the
+late adbd shutdown warning also appears in successful setup and is not an established cause.
+TV reached authorization without a UI dump timeout. Its valid passive trace retained eight
+control packets with zero drops: the host reverse endpoint sent FIN first, and the emulator
+replied 0.901 ms later. That endpoint is the host ADB reverse connection, so this does not identify
+the Android app as the closer or distinguish a guest close request from a host error/control reset.
+The key-save warning again followed the closure. Evidence:
+`target/api29-remote-plan/run-36381413979/`.
+
+The next harness keeps installation failures unchanged while retaining expected APK/package/hash,
+duration and bounded redacted output. A timeout preserves partial output and performs at most
+15 seconds of read-only package observations after verifying the owned AVD. Both matrix jobs
+start an owned foreground host ADB server on the unchanged default port; a preexisting server
+is refused. Only `ADB_TRACE=adb` lifecycle enums are stored, with byte/time bounds and explicit
+usability/drop counts. Official Linux ADB 37.0.1 was hash-verified and exercised in an isolated
+container: the trace exposes control-reset/online/offline events but cannot distinguish a guest
+per-stream close from a local reverse-socket failure when no reset occurs. Banner, key, payload
+and unmatched text are discarded. No product, native assertion, timeout or transport changes
+were made. The combined 61 focused checks pass; all owned validation containers were removed.
+Evidence: `target/api29-remote-plan/installer-evidence-validation/` and
+`target/api29-remote-plan/tv-host-adb-diagnostic/`.
+
 The physical iPad Air passed bare connection and a plain, visually verified 3180-by-2384 screenshot
 using the exact signed candidate's bundled engine. No helper was installed or launched and no
 input was sent. Exact owned session/daemon/claim cleanup passed; protected services and device
 runner state were unchanged. The capture remains private under
 `target/physical-ipad-cf43/run-c7cca8f27b77/`. This proves direct packaged-engine capture only,
-not carried service routing, recording or physical reconnect. The iPad subsequently locked;
-recording preparation stopped before any build/install/launch. A later unlocked capture could
-not establish that the requested Safari app was foreground, so preparation remains paused.
-That capture was also cleaned up. The exact packaged prepare command has no build-only mode;
-it also starts and health-checks the helper. Reports are under
-`target/physical-ipad-recording-cf43/run-8e1de6dff35e/`.
+not carried service routing, recording or physical reconnect. Later preparation with the existing
+automatic signing identity built, installed and started the current helper. Read-only app-state
+queries identified Books as foreground. Binding that existing app skipped activation; its PID
+stayed unchanged through recording and cleanup. An eight-second recording request produced a
+9.000-second H.264 file (3180 by 2384, 2 FPS, 18 decoded frames, 1,021,734 bytes), with readable
+frames visually checked at one and six seconds. SHA256:
+`87a88483e1a6c4b0d5567f03048d1cca00964039075f9fda683b3bbb532c39b6`.
+No input, navigation or relaunch occurred. Owned daemon/device runner, claims and leases were
+cleaned; protected processes and the old helper were unchanged. Current helper remains installed.
+The video and device evidence remain private under
+`target/physical-ipad-recording-cf43/prepare-908e8aab6ea5/record-report.json`.
+This static, short recording does not prove animation, the 60-second idle policy, alias removal,
+carried service routing or reconnect. The iPhone remains locked in the fresh one-shot readiness
+check at `target/physical-iphone-cf43/run-8727983fa23d/`; no capture or helper was launched there.
 
 Windows ARM64 still requires a prepared desktop after the privacy-setup overlay blocked the
 owned fixture with zero input sent. Protected contract review, first-time Briefcase recipient

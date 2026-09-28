@@ -19,6 +19,7 @@ import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -257,6 +258,106 @@ def tv_tcp_trace_command(console_port):
     return ["/usr/bin/tcpdump", "-i", "lo", "-p", "-nn", "-tt", "-l", "-s", "54", "-c", "256", control]
 
 
+def host_adb_lifecycle_event(line, serial):
+    """Allowlist validated against official Linux adb37.0.1; never return log text."""
+    match = re.fullmatch(r"(\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+) [DIWEF] adb\s*: ([a-z_]+\.cpp):(\d+) (.*)", line)
+    if not match:
+        return None
+    stamp, pid, tid, source, source_line, message = match.groups()
+    event = None
+    if source == "main.cpp" and message == "Event loop starting":
+        event = "server_ready"
+    elif source == "adb.cpp":
+        event = {"Calling send_connect": "send_connect", "Calling send_close": "send_close",
+                 "adb: online": "online", "setting connection_state to kCsDevice": "device_state"}.get(message)
+        if message.startswith("parse_banner: "):
+            event = "received_cnxn_banner"  # Retain no banner fields or bytes.
+        elif message in (serial + ": offline", serial + ": already offline"):
+            event = "offline" if message.endswith(": offline") else "already_offline"
+    elif source == "transport.cpp":
+        event = {serial + ": read thread spawning": "transport_reader_started",
+                 serial + ": write thread spawning": "transport_writer_started",
+                 serial + ": read failed": "transport_read_failed",
+                 serial + ": connection terminated: read failed": "transport_terminated_read_failed",
+                 "BlockingConnectionAdapter(" + serial + "): stopping": "transport_stopping",
+                 "BlockingConnectionAdapter(" + serial + "): stopped": "transport_stopped"}.get(message)
+    if event is None:
+        return None
+    return {"source_time": stamp, "pid": int(pid), "tid": int(tid), "source": source,
+            "source_line": int(source_line), "event": event}
+
+
+class HostAdbLifecycle:
+    """Drain server stderr without raw storage; bounded JSON metadata only."""
+    def __init__(self, stream, path, serial, max_bytes=256 * 1024, max_seconds=900):
+        self.stream, self.path, self.serial = stream, path, serial
+        self.max_bytes, self.max_seconds = max_bytes, max_seconds
+        self.started = time.monotonic()
+        self.ready, self.transport_seen = threading.Event(), threading.Event()
+        self.lock = threading.Lock()
+        self.recording = True
+        self.stats = {"lines_seen": 0, "bytes_seen": 0, "retained_lines": 0, "retained_bytes": 0,
+                      "unmatched_lines": 0, "oversize_lines": 0, "discarded_after_limit": 0,
+                      "discarded_after_window": 0, "limit_reached": False, "reader_finished": False}
+        self.thread = threading.Thread(target=self.drain, daemon=True, name="owned-adb-lifecycle")
+        self.thread.start()
+
+    def drain(self):
+        try:
+            with self.path.open("w") as log:
+                while raw := self.stream.readline(4097):
+                    size = len(raw)
+                    oversized = len(raw) > 4096 or not raw.endswith(b"\n")
+                    if oversized:
+                        while raw and not raw.endswith(b"\n"):
+                            raw = self.stream.readline(4097)
+                            size += len(raw)
+                    with self.lock:
+                        self.stats["lines_seen"] += 1
+                        self.stats["bytes_seen"] += size
+                        if oversized:
+                            self.stats["oversize_lines"] += 1
+                            continue
+                        event = host_adb_lifecycle_event(raw.decode("utf-8", errors="replace").rstrip("\r\n"), self.serial)
+                        if event is None:
+                            self.stats["unmatched_lines"] += 1
+                            continue
+                        if not self.recording:
+                            self.stats["discarded_after_window"] += 1
+                            continue
+                        event["observed_at_unix_s"] = time.time()
+                        encoded = json.dumps(event) + "\n"
+                        if time.monotonic() - self.started > self.max_seconds or self.stats["retained_bytes"] + len(encoded) > self.max_bytes:
+                            self.stats["limit_reached"] = True
+                            self.stats["discarded_after_limit"] += 1
+                            continue
+                        log.write(encoded); log.flush()
+                        self.stats["retained_lines"] += 1
+                        self.stats["retained_bytes"] += len(encoded)
+                        if event["event"] == "server_ready":
+                            self.ready.set()
+                        if event["event"] == "transport_reader_started":
+                            self.transport_seen.set()
+        except Exception as error:
+            with self.lock:
+                self.stats["reader_error_type"] = type(error).__name__
+        finally:
+            with self.lock:
+                self.stats["reader_finished"] = True
+                self.stats["reader_finished_at_unix_s"] = time.time()
+
+    def end_window(self):
+        with self.lock:
+            self.recording = False
+
+    def snapshot(self):
+        with self.lock:
+            result = dict(self.stats)
+        result.update(server_ready=self.ready.is_set(), owned_transport_seen=self.transport_seen.is_set())
+        result["usable"] = result["server_ready"] and result["owned_transport_seen"] and not result["limit_reached"] and "reader_error_type" not in result
+        return result
+
+
 class Lane:
     def __init__(self, args, run_id, avds):
         self.root, self.sdk, self.out = args.root.resolve(), args.sdk.resolve(), args.out.resolve()
@@ -275,6 +376,48 @@ class Lane:
                        "qualification": "Native debug APKs on API29 phone and actual Android TV emulators; no signed-upgrade or physical-device claim"}
         self.flush()
 
+    def start_owned_host_adb_trace(self):
+        assert os.environ.get("GITHUB_ACTIONS") == "true" and platform.system() == "Linux"
+        assert not any(self.env.get(name) for name in ("ADB_SERVER_SOCKET", "ANDROID_ADB_SERVER_PORT", "ANDROID_ADB_SERVER_ADDRESS", "ADB_TRACE")), "Refuse overridden/shared adb server configuration"
+        # Do not contact, stop or reuse a preexisting daemon. The server below uses
+        # the ordinary loopback5037 endpoint and must itself prove startup readiness.
+        for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+            assert 5037 not in tcp_listeners(Path(table).read_text()), "Refuse preexisting adb server listener"
+        with socket.socket() as check:
+            check.bind(("127.0.0.1", 5037))
+        expected = "a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01"
+        assert digest(Path(self.adb_bin)) == expected, "Unreviewed host adb binary; lifecycle diagnostic is unavailable"
+        version = self.cmd([self.adb_bin, "version"], timeout=5).stdout
+        assert "Version 37.0.1-15733141" in version
+        evidence = {"binary_sha256": expected, "version": "37.0.1-15733141", "trace_categories": ["adb"],
+                    "port": 5037, "max_bytes": 256 * 1024, "max_seconds": 900, "raw_log_stored": False,
+                    "limitation": "Exact binary exposes CNXN banner lifecycle and transport state, but not per-packet CLSE identity; absent reset does not distinguish guest CLSE from local reverse socket failure."}
+        self.case["host_adb_lifecycle"] = evidence
+        process = subprocess.Popen([self.adb_bin, "server", "nodaemon"], cwd=self.root,
+                                   env=dict(self.env, ADB_TRACE="adb"), stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        self.handles.append(process)
+        self.state["processes"].append({"pid": process.pid, "start_ticks": process_start(process.pid),
+                                        "command": [self.adb_bin, "server", "nodaemon"]})
+        self.flush()
+        self.host_adb_process = process
+        self.host_adb_trace = HostAdbLifecycle(process.stdout, self.caseout / "host-adb-lifecycle.jsonl", self.serial)
+        self.until("owned host adb lifecycle readiness", lambda: process.poll() is None and self.host_adb_trace.ready.is_set(), 10)
+
+    def finish_host_adb_trace(self):
+        trace = getattr(self, "host_adb_trace", None)
+        if trace is None:
+            return
+        trace.thread.join(timeout=5)
+        joined = not trace.thread.is_alive()
+        result = trace.snapshot()
+        result["usable"] = result["usable"] and joined
+        self.case["host_adb_lifecycle"].update(result, reader_joined=joined,
+                                               process_stopped=self.host_adb_process.poll() is not None)
+        if joined:
+            self.host_adb_process.stdout.close()
+        self.flush()
+
     def flush(self):
         write_json(self.out / "ownership.json", self.state)
         write_json(self.out / "report.json", self.report)
@@ -287,6 +430,67 @@ class Lane:
     def cmd(self, command, timeout=45, check=True, input=None):
         return subprocess.run([str(x) for x in command], input=input, capture_output=True, text=True,
                               timeout=timeout, check=check, env=self.env, cwd=self.root)
+
+    def install_apk(self, apk, package):
+        assert (apk, package) in ((self.apk, PKG), (self.test_apk, PKG + ".test"))
+        entry = {"apk": apk.name, "expected_package": package, "expected_sha256": digest(apk),
+                 "started_at_unix_s": time.time(), "timeout_s": 120}
+        self.case.setdefault("apk_installs", []).append(entry)
+        started = time.monotonic()
+        def output(value):
+            if isinstance(value, bytes):
+                value = value.decode(errors="replace")
+            value = redacted(value or "")
+            return {"text": value[:4096], "truncated": len(value) > 4096}
+        try:
+            result = self.cmd([self.adb_bin, "-s", self.serial, "install", "-r", "-g", apk],
+                              timeout=120, check=False)
+            entry.update(status="succeeded" if result.returncode == 0 else "failed", returncode=result.returncode,
+                         duration_s=round(time.monotonic() - started, 3),
+                         stdout=output(result.stdout), stderr=output(result.stderr))
+            result.check_returncode()
+        except subprocess.TimeoutExpired as error:
+            entry.update(status="timeout", returncode=None, duration_s=round(time.monotonic() - started, 3),
+                         stdout=output(error.stdout), stderr=output(error.stderr))
+            # subprocess.run has killed/reaped this host client. Read-only package
+            # evidence does not turn a timed-out install into success or retry it.
+            deadline = time.monotonic() + 15
+            diagnostics = {"qualification": "Read-only observations after failed install; no install-success claim",
+                           "budget_s": 15, "queries": []}
+            entry["timeout_diagnostics"] = diagnostics
+            def observe(label, command):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    diagnostics["budget_exhausted"] = True
+                    return None
+                item = {"label": label}
+                diagnostics["queries"].append(item)
+                try:
+                    observed = self.cmd([self.adb_bin, "-s", self.serial, *command],
+                                        timeout=min(3, remaining), check=False)
+                    item.update(returncode=observed.returncode,
+                                stdout=output(observed.stdout), stderr=output(observed.stderr))
+                    return observed
+                except (OSError, subprocess.SubprocessError) as failure:
+                    item.update(error=type(failure).__name__, message=output(str(failure)))
+                    return None
+            identity = observe("owned_avd_identity", ["emu", "avd", "name"])
+            if identity is not None and identity.returncode == 0 and identity.stdout.splitlines()[:1] == [self.avd]:
+                observe("exact_package_path", ["shell", "pm", "path", "--user", "0", package])
+                observe("exact_package_state", ["shell", "dumpsys", "package", package])
+                observe("current_user", ["shell", "am", "get-current-user"])
+                observe("boot_completed", ["shell", "getprop", "sys.boot_completed"])
+            else:
+                diagnostics["package_queries_skipped"] = "Owned AVD identity could not be confirmed"
+            raise
+        except OSError as error:
+            entry.update(status="launch_error", returncode=None, duration_s=round(time.monotonic() - started, 3),
+                         error=type(error).__name__, message=output(str(error)))
+            raise
+        finally:
+            entry["evidence_elapsed_s"] = round(time.monotonic() - started, 3)
+            write_json(self.caseout / "install-results.json", self.case["apk_installs"])
+            self.flush()
 
     def adb(self, *command, timeout=45, check=True):
         def record_failure(returncode, stderr):
@@ -779,6 +983,7 @@ class Lane:
                      "instrumentation": [], "skips": [{"class": "LocalAdbTest", "method": m,
                      "reason": "API29 uses legacy network debugging; wireless pairing/TLS begins at API30"} for m in TLS_SKIPS]}
         self.report["cases"].append(self.case); self.flush()
+        self.start_owned_host_adb_trace()
         assert self.serial not in self.cmd([self.adb_bin, "devices"]).stdout
         for number in (console_port, console_port+1, port):
             with socket.socket() as check:
@@ -815,10 +1020,13 @@ class Lane:
                 self.verify_owned_tv_heap()
             else:
                 self.configure_owned_heap()
-            for apk in (self.apk, self.test_apk):
-                self.adb("install", "-r", "-g", str(apk), timeout=120)
+            for apk, package in ((self.apk, PKG), (self.test_apk, PKG + ".test")):
+                self.install_apk(apk, package)
             self.adb("tcpip", "5555")
             self.until("legacy adb control", lambda: self.adb("shell", "id", "-u") == "2000")
+            self.case["host_adb_lifecycle"].update(self.host_adb_trace.snapshot())
+            self.flush()
+            assert self.host_adb_process.poll() is None and self.case["host_adb_lifecycle"]["usable"], "Host adb lifecycle evidence unavailable before authorization"
             tcp_trace = self.start_tv_tcp_trace()
             try:
                 self.transport("initial")
@@ -829,6 +1037,9 @@ class Lane:
                     self.tv_adb_key_metadata("after-initial-authorization")
             finally:
                 self.stop_tv_tcp_trace(tcp_trace)
+                self.host_adb_trace.end_window()
+                self.case["host_adb_lifecycle"]["authorization_window"] = self.host_adb_trace.snapshot()
+                self.flush()
             # Existing multi harness grants required access and checks the actual product frames.
             multi_out = self.caseout / "multi"
             multi = self.spawn(["sh", self.harness_root / MULTI_FIXTURE_FILES[0], "multi"], self.caseout / "multi.log",
@@ -923,7 +1134,7 @@ def export_evidence(out):
     top = {"report.json", "cleanup.json", "verified-images.json", "runner-image.txt", "disk-before.txt",
            "sdk-installed.txt", "sdk-license-inventory.json", "emulator-version.txt", "acceleration.txt", "adb-version.txt",
            "provenance.json", "source-before.sha256", "source-after.sha256", "source-before.json", "source-after.json", "adapter.sha256", "ffmpeg-version.txt"}
-    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt", "tcp-control.log"}
+    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt", "tcp-control.log", "install-results.json", "host-adb-lifecycle.jsonl"}
     copied = []
     for path in sorted(out.rglob("*")):
         if not path.is_file() or public in path.parents:
@@ -983,8 +1194,12 @@ def main():
     try:
         lane.run()
     finally:
+        if hasattr(lane, "host_adb_trace"):
+            lane.case["host_adb_lifecycle"]["cleanup_started_at_unix_s"] = time.time()
+            lane.flush()
         for child in reversed(lane.handles):
             lane.stop(child)
+        lane.finish_host_adb_trace()
         for log in lane.logs:
             log.close()
         cleanup_owned(args.out, run_id, avds)
