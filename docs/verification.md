@@ -32,6 +32,40 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — device-request retries and final-candidate checks
+
+`request_send` previously folded a recent same-reason request before checking its idempotency key.
+Identical keyed retries therefore returned 200 instead of the stored 201, while an already-sent
+reason could bypass changed-body conflicts and malformed-key validation. The key lookup now
+precedes repeat folding and holder-state checks. Authentication, current device access, owner
+membership and reason validation still run before replay; new requests still require another
+Silicon to hold the device.
+
+The negative control failed with 200 instead of 201. All 21 `core_gaps` tests and the multi-Carbon
+request-routing test pass after the fix, including complete response/header replay, conflicting
+and malformed keys, a keyed folded-200 response, and retries after the holder ends, changes or
+becomes the requester. No extra Ting is sent. Strict service Clippy and formatting pass; all 43
+owned test databases were removed with the pre-existing set preserved. Evidence:
+`target/request-replay-verification/`. Concurrent duplicate sends and concurrent same-key
+reservation remain separate open issues; this change does not serialize them.
+
+CI `36361278876` passed all five jobs at `a9bede4`. The immutable backend image at that source,
+`silicon-extend-candidate:1.1.0-a9bede4`, passed six smoke groups: fail-closed production configuration,
+readiness, API/service version, synthetic authentication, schema 5 and actual non-root UID 10001.
+Its digest is `sha256:4b7df4a1255d00acb633e862480f5046445736f613403b204e933fa7ba538bc2`.
+Owned containers, database and listener were removed. Evidence:
+`target/release-candidate/backend-a9bede4/`. Subsequent service changes need a new image and CI;
+no 1.1 image was pushed or deployed.
+
+Windows run `36361296700` at the same source again passed all 177 unit, 27 integration and two
+native tests on x64. Its ZIP passed static audit with SHA256
+`2c5d8e42ddbace9b59315fa2ee7a6c322bfcd00ce7286e062e6224609b5eb9e3`.
+ARM64 passed unit/integration and terminal containment, but programmatic window activation was
+denied even though its message queue acknowledged the request; no product-driver input ran.
+This corrects the earlier asynchronous-focus hypothesis below. An owned-title-bar bootstrap is
+being prepared for a rerun. Evidence: `target/windows-ci-assessment/run-36361296700-native-review.json`
+and `target/release-candidate/ci-a9bede490e55fa0494e6c9a8674fc0f74dea056a/`.
+
 ## 2026-09-28 — native Windows runtime and signed Mac Keychain migration
 
 At `fba6cc3`, CI `36360092796` passed all five jobs. In release run `36360098249`, both native

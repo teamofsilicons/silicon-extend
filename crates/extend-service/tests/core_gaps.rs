@@ -1817,12 +1817,30 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
     let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
     assert_eq!(r.status(), 201);
     let keyed: serde_json::Value = r.json().await.unwrap();
+    let delivered = sent_reasons(&ting).await.len();
     let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
-    assert!(r.status().is_success());
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
     let replay: serde_json::Value = r.json().await.unwrap();
-    assert_eq!(replay["data"]["request_id"], keyed["data"]["request_id"]);
+    assert_eq!(replay, keyed);
     let r = post("core-gaps-key-1", "Another reason").await.unwrap();
     assert_eq!(r.status(), 409);
+    // A reason already sent without a key must not hide a conflicting or malformed key.
+    let r = post("core-gaps-key-1", raw).await.unwrap();
+    assert_eq!(r.status(), 409);
+    let r = post("short", raw).await.unwrap();
+    assert_eq!(r.status(), 422);
+    // A fresh key can fold an existing request; its retry replays that stored 200 response.
+    let r = post("core-gaps-key-2", raw).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(!r.headers().contains_key("idempotency-replayed"));
+    let folded: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(folded["data"]["request_id"], first.request_id.to_string());
+    let r = post("core-gaps-key-2", raw).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), folded);
+    assert_eq!(sent_reasons(&ting).await.len(), delivered);
     // Everything delivered is listed with its reason as sent.
     let mine = s
         .requests(ListQuery {
@@ -1840,8 +1858,18 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
         .end_session(&chef_session)
         .await
         .unwrap();
+    // Completing the original holder's session must not erase a successful keyed response.
+    let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
+    assert_eq!(
+        s.send_request(&id, "Nobody is using it").await.unwrap_err().code(),
+        ErrorCode::DeviceNotInUse
+    );
     let line = login(&env.client, "si:line").await;
-    env.client
+    let line_session = env
+        .client
         .authed(&line, Some("acme"))
         .start_session(&id.parse().unwrap())
         .await
@@ -1852,4 +1880,23 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
         (to_line.to.as_str(), to_line.delivery),
         ("si:line", Delivery::Delivered)
     );
+    let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
+    env.client
+        .authed(&line, Some("acme"))
+        .end_session(line_session.session_id.as_ref())
+        .await
+        .unwrap();
+    s.start_session(&id.parse().unwrap()).await.unwrap();
+    let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
+    assert_eq!(
+        s.send_request(&id, "I am using it now").await.unwrap_err().code(),
+        ErrorCode::Conflict
+    );
+    assert_eq!(sent_reasons(&ting).await.len(), delivered + 1);
 }

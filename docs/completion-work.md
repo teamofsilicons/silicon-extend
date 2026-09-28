@@ -52,11 +52,13 @@ Linux/Windows desktop packages built successfully in release workflow `363573363
 1.1 CI run exposed consumer-contract setup races and a misplaced browser test. Both are fixed;
 CI `36358256243` passed all five jobs at `b891822`. At `0159b7a`, refreshed Mac signing/notarization
 and Linux static/native package checks pass, including the banner and wake-notification fixes.
-CI `36359411111` and `36360092796` passed all five jobs. Release workflow `36359407414` built all
+CI `36359411111`, `36360092796` and `36361278876` passed all five jobs. Release workflow `36359407414` built all
 six CLI targets, Honeycomb and both Linux packages. The Windows path assertion is fixed; run
 `36360098249` passed unit/integration and native terminal checks on both architectures, and real
-input/capture on x64. ARM64's window fixture needs a rerun after correcting its focus wait.
-The newer service pairing-replay fix also needs final CI and inclusion in the service image.
+input/capture on x64. Run `36361296700` repeated x64 success but showed ARM64's activation is
+denied, rather than merely delayed; its owned-window bootstrap needs a rerun. The service
+pairing-replay fix is included in green CI and a six-group backend-image smoke check at `a9bede4`.
+Subsequent service fixes still need final CI and inclusion in a refreshed deployment image.
 No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
@@ -101,9 +103,10 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Re-run the final feature and requirements audit and integration checks after those fixes;
   reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
   publish/deploy and verify the release. None of this checkpoint updates installed apps.
-  The audit confirmed and fixed the older full-test-environment pairing retry bug; its negative
-  control and eight passing service checks are recorded in `verification.md`. Include this service
-  change in final CI and the deployment image.
+  The audit fixed full-test-environment pairing retries and device-request response replay;
+  negative controls and passing service checks are recorded in `verification.md`. Concurrent
+  duplicate device requests and concurrent idempotency-key reservation remain open. Include all
+  final service changes in CI and the deployment image.
 
 
 - The 1.1 real IAM/Ting lane now covers wake events and routing across Teams, genuine missing-type
@@ -260,9 +263,9 @@ verifiers and not fixed.
     member's login held, or it expired); a Silicon still in the team whose login was approved for
     another team would lose its sessions with the wrong reason. End only when IAM says "not a
     member", as the logout path already does.
-  - *(verifier)* `request_send` folds a repeat before the idempotency lookup: the same key and body
-    within 60 s answer 200 through the repeat path instead of replaying the stored 201; two
-    concurrent identical sends can both be stored (as before).
+  - *(Corrected 2026-09-28)* `request_send` now checks the idempotency key before repeat folding
+    and live-holder validation. Sequential retries replay the stored status/body even after the
+    holder changes. Concurrent identical sends and same-key reservation are still not serialized.
   - *(verifier)* The pending-request message says it "is sent when <sender> next uses Extend", but
     the request fails after 6 attempts (about 2.5 minutes). The file download's 404 has no hint.
   - A takeover released while a command runs resets the idle window to 300 s (matters only for a

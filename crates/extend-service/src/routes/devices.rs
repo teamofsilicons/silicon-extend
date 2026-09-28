@@ -1877,46 +1877,6 @@ pub async fn request_send(
     // delivered exactly as the Silicon wrote it.
     let reason = input.reason.clone();
     check_reason(&reason)?;
-    let (Some(holder), Some(session), Some(holder_pair), Some(holder_team), Some(holder_carbon)) = (
-        d.in_use_silicon.clone(),
-        d.in_use_session.clone(),
-        d.in_use_device_id.clone(),
-        d.in_use_team.clone(),
-        d.in_use_carbon.clone(),
-    ) else {
-        return Err(AppError::new(
-            ErrorCode::DeviceNotInUse,
-            format!("No Silicon is using {} right now, so there's nobody to ask.", d.name),
-        )
-        .hint(format!("Start using it: extend --team {team} session new {device_id}")));
-    };
-    if holder == auth.p.id() {
-        return Err(AppError::new(
-            ErrorCode::Conflict,
-            format!("You are already using {} in session {session}.", d.name),
-        ));
-    }
-    let same_side = holder_pair == d.device_id && holder_team == team;
-    // The same reason from the same Silicon, in the same Team, for the same device and holder
-    // session within 60 s is a repeat (a retry, or a double send): it returns the existing request
-    // and sends nothing. A new reason is a new request and is delivered.
-    let recent: Option<RequestRow> = sqlx::query_as(sql!(
-        "SELECT {} FROM {} r WHERE r.device_id = $1 AND r.from_id = $2 AND r.team = $5 AND r.reason = $3
-           AND r.holder_session_id = $4 AND r.created_at > now() - interval '60 seconds'
-         ORDER BY r.created_at DESC LIMIT 1",
-        request_columns(&auth.world),
-        auth.world.t("requests")
-    ))
-    .bind(&device_id)
-    .bind(auth.p.id())
-    .bind(&reason)
-    .bind(&session)
-    .bind(&team)
-    .fetch_optional(&state.pool)
-    .await?;
-    if let Some(r) = recent.and_then(|r| r.view(auth.p.id())) {
-        return Ok(ok("request", r));
-    }
     let hash = hash_json(&input);
     let world = auth.world.clone();
     let st = state.clone();
@@ -1930,6 +1890,52 @@ pub async fn request_send(
         &headers,
         &hash,
         || async move {
+            // A stored successful request still replays if the holder has since changed or
+            // stopped. Current access was checked above; these live-state checks govern new work.
+            let (Some(holder), Some(session), Some(holder_pair), Some(holder_team), Some(holder_carbon)) = (
+                d.in_use_silicon.clone(),
+                d.in_use_session.clone(),
+                d.in_use_device_id.clone(),
+                d.in_use_team.clone(),
+                d.in_use_carbon.clone(),
+            ) else {
+                return Err(AppError::new(
+                    ErrorCode::DeviceNotInUse,
+                    format!("No Silicon is using {} right now, so there's nobody to ask.", d.name),
+                )
+                .hint(format!("Start using it: extend --team {team} session new {device_id}")));
+            };
+            if holder == p.id() {
+                return Err(AppError::new(
+                    ErrorCode::Conflict,
+                    format!("You are already using {} in session {session}.", d.name),
+                ));
+            }
+            let same_side = holder_pair == d.device_id && holder_team == team;
+            // Validate/replay the idempotency key before folding a recent same-reason request.
+            // A repeat without a stored key keeps its 200 response and sends nothing; a new
+            // reason is a new request. Team and holder session keep unrelated requests separate.
+            let recent: Option<RequestRow> = sqlx::query_as(sql!(
+                "SELECT {} FROM {} r WHERE r.device_id = $1 AND r.from_id = $2 AND r.team = $5 AND r.reason = $3
+                   AND r.holder_session_id = $4 AND r.created_at > now() - interval '60 seconds'
+                 ORDER BY r.created_at DESC LIMIT 1",
+                request_columns(&world),
+                world.t("requests")
+            ))
+            .bind(&device_id)
+            .bind(p.id())
+            .bind(&reason)
+            .bind(&session)
+            .bind(&team)
+            .fetch_optional(&st.pool)
+            .await?;
+            if let Some(r) = recent.and_then(|r| r.view(p.id())) {
+                return Ok((
+                    StatusCode::OK,
+                    "request",
+                    serde_json::to_value(r).map_err(AppError::internal)?,
+                ));
+            }
             let id = Uuid::now_v7();
             let app_id = st.notifier.app_id().to_owned();
             let (to, session_col, routed_to, routed_to_id, ting_team, body, chain) = if same_side {
