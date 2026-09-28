@@ -4,13 +4,16 @@
 //! Tokio runtime in the background and the two talk through [`AgentHandle`]: status comes in as a
 //! watch, taps go out as [`UiAction`]s.
 //!
-//! * Menu: the headline ("Pairing code: 4F9C2A", "Paired to c:alice", "si:chef is using this
-//!   Mac"), the test environment, **Stop** / **Done** (for this computer and for each device it
-//!   carries), Show Silicon Extend…, Start at login, Revoke pair…, Quit.
+//! * Menu: the headline ("Pairing code: 4F9C2A", "Paired to c:alice and c:bob", "si:chef is
+//!   using this Mac"), each Carbon's pair, the test environment, **Stop** / **Done** (for this
+//!   computer and for each device it carries), Reconnect for a pair another connection took over,
+//!   Show Silicon Extend…, Start at login, Pair with another Carbon…, Revoke pair…, Quit.
 //! * Window: the big pairing code and how to use it, the setup steps with buttons that open the
-//!   right settings page, the device and its Carbon, the test-environment banner, devices this
-//!   computer carries, start at login with a switch to turn it off, "Download the update" when
-//!   Extend needs a newer app, and Revoke pair with a confirmation.
+//!   right settings page, the Carbons it is paired to (each with Revoke pair, confirmed, and
+//!   Reconnect when taken over), "Pair with another Carbon" (after the shared-computer warning)
+//!   and its code, Silicons' requests to wake it, the test-environment banner, devices this
+//!   computer carries (and whether they are awake), start at login with a switch to turn it off,
+//!   and "Download the update" when Extend needs a newer app.
 //! * Banner: a small always-on-top strip, "si:chef is using this Mac  [Stop]", shown for as long
 //!   as a Silicon is using the computer or a device it carries (one row each), and "… needs you:
 //!   <reason>  [Done]" during a takeover. It never takes focus by itself, so it doesn't get in the
@@ -21,8 +24,9 @@
 
 pub mod icon;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use extend_protocol::DeviceId;
 use tao::dpi::{LogicalPosition, LogicalSize};
@@ -121,6 +125,7 @@ pub fn run(
         main: None,
         banner: None,
         banner_minimized: false,
+        banner_clock: BannerClock::default(),
         status: AgentStatus::default(),
         shown_code: false,
         agent_thread: Some(agent_thread),
@@ -134,9 +139,14 @@ pub fn run(
     };
 
     event_loop.run(move |event, target, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ui
+            .banner_clock
+            .next_deadline(Instant::now())
+            .map(ControlFlow::WaitUntil)
+            .unwrap_or(ControlFlow::Wait);
         match event {
             Event::NewEvents(StartCause::Init) => ui.create_tray(),
+            Event::NewEvents(StartCause::ResumeTimeReached { .. }) => ui.on_status(ui.status.clone(), target),
             Event::UserEvent(UserEvent::Status(s)) => ui.on_status(*s, target),
             Event::UserEvent(UserEvent::Menu(e)) => ui.on_menu(e.id.0.as_str(), target, control_flow),
             Event::UserEvent(UserEvent::Ipc { banner, body }) => ui.on_ipc(banner, &body, target),
@@ -166,6 +176,7 @@ struct Ui {
     main: Option<(Window, WebView)>,
     banner: Option<(Window, WebView)>,
     banner_minimized: bool,
+    banner_clock: BannerClock,
     status: AgentStatus,
     shown_code: bool,
     agent_thread: Option<std::thread::JoinHandle<()>>,
@@ -189,7 +200,7 @@ struct BannerSession {
 /// The banner's sessions, this computer's first, then the carried devices' in the menu's order.
 fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
     let mut out = Vec::new();
-    if s.in_use.is_some() || s.takeover.is_some() {
+    if (s.in_use_indicator.shows() && s.in_use.is_some()) || s.takeover.is_some() {
         out.push(BannerSession {
             target: None,
             session_id: s.in_use.as_ref().map(|u| u.session_id.clone()),
@@ -197,7 +208,7 @@ fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
         });
     }
     for a in &s.attached {
-        if a.in_use.is_some() || a.takeover.is_some() {
+        if (a.in_use_indicator.shows() && a.in_use.is_some()) || a.takeover.is_some() {
             out.push(BannerSession {
                 target: Some(a.device_id.clone()),
                 session_id: a.in_use.as_ref().map(|u| u.session_id.clone()),
@@ -208,13 +219,78 @@ fn banner_sessions(s: &AgentStatus) -> Vec<BannerSession> {
     out
 }
 
+/// Monotonic deadlines are keyed by device and session; refreshes never extend them.
+#[derive(Default)]
+struct BannerClock {
+    deadlines: BTreeMap<(Option<String>, Option<String>), Instant>,
+}
+impl BannerClock {
+    fn observe(&mut self, s: &AgentStatus, now: Instant) {
+        // Observe hidden sessions too: showing the setting later doesn't restart a session.
+        let mut all = s.clone();
+        all.in_use_indicator = Default::default();
+        for a in &mut all.attached {
+            a.in_use_indicator = Default::default();
+        }
+        let sessions = banner_sessions(&all);
+        self.deadlines.retain(|key, _| {
+            sessions
+                .iter()
+                .any(|b| &(b.target.clone(), b.session_id.clone()) == key)
+        });
+        for b in sessions {
+            let since = match &b.target {
+                None => s.in_use.as_ref(),
+                Some(id) => s
+                    .attached
+                    .iter()
+                    .find(|a| &a.device_id == id)
+                    .and_then(|a| a.in_use.as_ref()),
+            }
+            .map(|u| u.since.as_str());
+            // Reconnecting or restarting the app does not announce an old session again.
+            // Use wall time only when first observing it, then keep a monotonic deadline.
+            let remaining = banner_remaining(since, time::OffsetDateTime::now_utc());
+            self.deadlines
+                .entry((b.target, b.session_id))
+                .or_insert(now + remaining);
+        }
+    }
+    fn visible(&self, s: &AgentStatus, now: Instant) -> Vec<BannerSession> {
+        banner_sessions(s)
+            .into_iter()
+            .filter(|b| {
+                b.takeover.is_some()
+                    || self
+                        .deadlines
+                        .get(&(b.target.clone(), b.session_id.clone()))
+                        .is_some_and(|end| now < *end)
+            })
+            .collect()
+    }
+    fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.deadlines.values().filter(|end| **end > now).min().copied()
+    }
+}
+
+fn banner_remaining(since: Option<&str>, now: time::OffsetDateTime) -> Duration {
+    let timeout = Duration::from_secs(extend_protocol::model::InUseIndicator::AUTO_HIDE_S);
+    let elapsed = since
+        .and_then(|s| time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
+        .map(|start| (now - start).max(time::Duration::ZERO).unsigned_abs())
+        .unwrap_or_default();
+    timeout.saturating_sub(elapsed)
+}
+
 /// The most rows the banner shows at once (a row each for this computer and carried devices).
 const BANNER_MAX_ROWS: usize = 4;
 
 fn icon_state(s: &AgentStatus) -> IconState {
-    if s.in_use.is_some()
+    if (s.in_use_indicator.shows() && s.in_use.is_some())
         || s.takeover.is_some()
-        || s.attached.iter().any(|a| a.in_use.is_some() || a.takeover.is_some())
+        || s.attached
+            .iter()
+            .any(|a| (a.in_use_indicator.shows() && a.in_use.is_some()) || a.takeover.is_some())
     {
         IconState::InUse
     } else if matches!(s.phase, Phase::Enrolling | Phase::Starting) {
@@ -267,6 +343,17 @@ fn banner_size(minimized: bool, environment: bool, rows: usize) -> LogicalSize<f
     }
 }
 
+#[cfg(target_os = "linux")]
+fn fixed_banner_constraints(size: LogicalSize<f64>) -> tao::window::WindowSizeConstraints {
+    use tao::dpi::LogicalUnit;
+    tao::window::WindowSizeConstraints::new(
+        Some(LogicalUnit(size.width).into()),
+        Some(LogicalUnit(size.height).into()),
+        Some(LogicalUnit(size.width).into()),
+        Some(LogicalUnit(size.height).into()),
+    )
+}
+
 fn make_icon(state: IconState) -> Option<Icon> {
     Icon::from_rgba(icon::rgba(state), icon::SIZE, icon::SIZE).ok()
 }
@@ -290,6 +377,15 @@ fn page_state(s: &AgentStatus, extras: &PageExtras) -> String {
         .unwrap_or_default()
         .into();
     v["download_error"] = extras.download_error.clone().into();
+    // In memory only (never in status.json): the wake requests and which carried device a
+    // Silicon asked to wake.
+    v["wake_requests"] = serde_json::to_value(&s.wake_requests).unwrap_or_default();
+    if let Some(list) = v["attached"].as_array_mut() {
+        for (a, info) in list.iter_mut().zip(&s.attached) {
+            a["wake_requested"] = info.wake_requested.into();
+        }
+    }
+    v["share_warning"] = share_warning(&os_user()).into();
     let os_label = if cfg!(target_os = "macos") {
         "Mac"
     } else if cfg!(windows) {
@@ -332,11 +428,10 @@ impl Ui {
             let _ = menu.append(item);
         };
         add(&MenuItem::with_id("headline", s.headline(), false, None));
-        if let Some(d) = &s.device
-            && let Some(name) = &d.name
-            && s.phase != Phase::Enrolling
-        {
-            add(&MenuItem::with_id("name", format!("This {word}: {name}"), false, None));
+        if s.phase != Phase::Enrolling {
+            for line in pair_menu(s, word) {
+                add(&MenuItem::with_id(line.id, line.label, line.enabled, None));
+            }
         }
         if let Some(env) = &s.environment {
             add(&MenuItem::with_id(
@@ -363,7 +458,7 @@ impl Ui {
         }
         add(&PredefinedMenuItem::separator());
         add(&MenuItem::with_id("show", "Show Silicon Extend…", true, None));
-        if s.in_use.is_some() || s.takeover.is_some() {
+        if !banner_sessions(s).is_empty() {
             add(&MenuItem::with_id("banner_restore", "Show activity banner", true, None));
         }
         add(&CheckMenuItem::with_id(
@@ -373,10 +468,15 @@ impl Ui {
             self.autostart.on,
             None,
         ));
-        if s.phase == Phase::Superseded {
-            add(&MenuItem::with_id("reconnect", "Connect this copy instead", true, None));
+        if paired(s) && s.phase == Phase::Online && s.adding_pair.is_none() {
+            add(&MenuItem::with_id(
+                "pair_another",
+                "Pair with another Carbon…",
+                true,
+                None,
+            ));
         }
-        if s.device.is_some() && s.phase != Phase::Enrolling {
+        if !s.pairs.is_empty() && s.phase != Phase::Enrolling {
             add(&MenuItem::with_id("revoke", "Revoke pair…", true, None));
         }
         add(&PredefinedMenuItem::separator());
@@ -386,14 +486,15 @@ impl Ui {
 
     fn on_status(&mut self, s: AgentStatus, target: &EventLoopWindowTarget<UserEvent>) {
         let first_code = s.phase == Phase::Enrolling && !self.shown_code;
-        let banner_needed = !banner_sessions(&s).is_empty();
+        self.banner_clock.observe(&s, Instant::now());
+        let banner_needed = !self.banner_clock.visible(&s, Instant::now()).is_empty();
         let minimized = keep_minimized(self.banner_minimized, &self.status, &s);
         let resize = minimized != self.banner_minimized
             || s.environment.is_some() != self.status.environment.is_some()
             || banner_sessions(&s).len() != banner_sessions(&self.status).len();
         self.banner_minimized = minimized;
         self.status = s;
-        if resize {
+        if resize || self.banner.is_some() {
             self.fit_banner();
         }
         if !self.checked_autostart && paired(&self.status) {
@@ -484,10 +585,18 @@ impl Ui {
     }
 
     fn push_state(&self) {
+        let mut state: serde_json::Value =
+            serde_json::from_str(&page_state(&self.status, &self.extras())).expect("page state is JSON");
+        state["banner_targets"] = serde_json::json!(
+            self.banner_clock
+                .visible(&self.status, Instant::now())
+                .iter()
+                .map(|b| &b.target)
+                .collect::<Vec<_>>()
+        );
         let js = format!(
             "window.__extend && window.__extend({}, {})",
-            page_state(&self.status, &self.extras()),
-            self.banner_minimized
+            state, self.banner_minimized
         );
         for (_, view) in self.main.iter().chain(self.banner.iter()) {
             let _ = view.evaluate_script(&js);
@@ -557,11 +666,18 @@ impl Ui {
             let mut builder = WindowBuilder::new()
                 .with_title("Silicon Extend: in use")
                 .with_inner_size(size)
-                .with_resizable(false)
+                // GTK makes a non-resizable WebKit window at least its 200px natural height.
+                // Keep GTK's resize path active, with equal bounds so the banner still cannot
+                // be resized by the user and can shrink to its expanded or collapsed height.
+                .with_resizable(cfg!(target_os = "linux"))
                 .with_decorations(false)
                 .with_always_on_top(true)
                 .with_focused(false)
                 .with_visible(false);
+            #[cfg(target_os = "linux")]
+            {
+                builder = builder.with_inner_size_constraints(fixed_banner_constraints(size));
+            }
             if let Some(m) = target.primary_monitor() {
                 let scale = m.scale_factor();
                 let screen = m.size().to_logical::<f64>(scale);
@@ -586,6 +702,17 @@ impl Ui {
             self.banner = Some((window, view));
         }
         if let Some((w, _)) = &self.banner {
+            // Tao's set_visible(true) calls makeKeyAndOrderFront on macOS, even when
+            // the window was built with focused=false. Status refreshes must not
+            // take the keyboard away from the app the Carbon or Silicon is using.
+            // SAFETY: Ui runs on the main thread, and Tao owns this NSWindow for w's lifetime.
+            #[cfg(target_os = "macos")]
+            unsafe {
+                use tao::platform::macos::WindowExtMacOS as _;
+                let native = &*w.ns_window().cast::<objc2::runtime::AnyObject>();
+                let _: () = objc2::msg_send![native, orderFront: std::ptr::null::<objc2::runtime::AnyObject>()];
+            }
+            #[cfg(not(target_os = "macos"))]
             w.set_visible(true);
         }
     }
@@ -594,7 +721,7 @@ impl Ui {
         banner_size(
             self.banner_minimized,
             self.status.environment.is_some(),
-            banner_sessions(&self.status).len(),
+            self.banner_clock.visible(&self.status, Instant::now()).len(),
         )
     }
 
@@ -608,6 +735,8 @@ impl Ui {
     fn fit_banner(&self) {
         if let Some((window, _)) = &self.banner {
             // Keep the position chosen by the user. Expanding near an edge must stay reachable.
+            #[cfg(target_os = "linux")]
+            window.set_inner_size_constraints(fixed_banner_constraints(self.banner_size()));
             window.set_inner_size(self.banner_size());
             if let (Ok(position), Some(monitor)) = (window.outer_position(), window.current_monitor()) {
                 let scale = window.scale_factor();
@@ -639,6 +768,9 @@ impl Ui {
             match action {
                 "stop" => self.send(UiAction::Stop { target: Some(device) }),
                 "done" => self.send(UiAction::TakeoverDone { target: Some(device) }),
+                "reconnect" => self.send(UiAction::Reconnect {
+                    device_id: Some(device),
+                }),
                 _ => {}
             }
             return;
@@ -648,17 +780,30 @@ impl Ui {
             "takeover_done" => self.send(UiAction::TakeoverDone { target: None }),
             "show" => self.show_main(target),
             "banner_restore" => {
-                self.set_banner_minimized(false);
-                self.show_banner(target);
+                let now = Instant::now();
+                for b in banner_sessions(&self.status) {
+                    self.banner_clock
+                        .deadlines
+                        .insert((b.target, b.session_id), now + Duration::from_secs(10));
+                }
+                self.banner_minimized = false;
+                self.on_status(self.status.clone(), target);
             }
             "revoke" => {
-                // The confirmation lives in the window.
+                // The confirmation lives in the window (one pair), or the list of Carbons does.
                 self.show_main(target);
                 if let Some((_, v)) = &self.main {
-                    let _ = v.evaluate_script("document.getElementById('confirm').classList.remove('hidden')");
+                    let _ = v.evaluate_script("window.__askRevoke && window.__askRevoke()");
                 }
             }
-            "reconnect" => self.send(UiAction::Reconnect),
+            "pair_another" => {
+                // The shared-computer warning lives in the window.
+                self.show_main(target);
+                if let Some((_, v)) = &self.main {
+                    let _ = v.evaluate_script("window.__askPairAnother && window.__askPairAnother()");
+                }
+            }
+            "reconnect" => self.send(UiAction::Reconnect { device_id: None }),
             "autostart" => {
                 let on = !crate::autostart::is_installed();
                 self.set_autostart(on);
@@ -692,9 +837,23 @@ impl Ui {
             "banner_restore" if banner => self.set_banner_minimized(false),
             "stop" => self.send(UiAction::Stop { target: device() }),
             "takeover_done" => self.send(UiAction::TakeoverDone { target: device() }),
-            "revoke" if !banner => self.send(UiAction::RevokePair),
-            "reconnect" => self.send(UiAction::Reconnect),
+            "revoke" if !banner => {
+                if let Some(device_id) = device() {
+                    self.send(UiAction::RevokePair { device_id });
+                }
+            }
+            "reconnect" => self.send(UiAction::Reconnect { device_id: device() }),
+            "pair_another" if !banner => self.send(UiAction::PairAnother),
+            "cancel_pair_another" if !banner => self.send(UiAction::CancelPairAnother),
             "reprobe" => self.send(UiAction::Reprobe),
+            "set_banner" if !banner => {
+                if let Some(shown) = msg.get("on").and_then(|v| v.as_bool()) {
+                    self.send(match device() {
+                        Some(device_id) => UiAction::SetAttachedInUseIndicator { device_id, shown },
+                        None => UiAction::SetInUseIndicator { shown },
+                    });
+                }
+            }
             "set_autostart" if !banner => {
                 if let Some(on) = msg.get("on").and_then(|v| v.as_bool()) {
                     self.set_autostart(on);
@@ -713,14 +872,19 @@ impl Ui {
 
     fn quit(&mut self, control_flow: &mut ControlFlow) {
         self.handle.shutdown.cancel();
+        // Gone from the screen at once; then the agent gets the time it gives its cleanups
+        // (closing the device engine sessions still open: an iPhone keeps showing "Automation
+        // Running" until its session is closed), and its runtime a moment to wind down.
+        self.tray = None;
+        for (window, _) in self.main.iter().chain(self.banner.iter()) {
+            window.set_visible(false);
+        }
         if let Some(t) = self.agent_thread.take() {
-            // Give the agent a moment to close its socket and agent-device sessions.
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + crate::agent::QUIT_CLEANUP_LIMIT + Duration::from_secs(4);
             while !t.is_finished() && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        self.tray = None;
         *control_flow = ControlFlow::Exit;
     }
 }
@@ -737,9 +901,61 @@ fn open_settings(step: &str) {
     let _ = step;
 }
 
-/// Paired, and past pairing: the computer has a device and a Carbon.
+/// Paired, and past pairing: the computer has at least one Carbon's pair.
 fn paired(s: &AgentStatus) -> bool {
-    s.device.is_some() && !matches!(s.phase, Phase::Enrolling | Phase::Starting | Phase::NotRunning)
+    !s.pairs.is_empty() && !matches!(s.phase, Phase::Enrolling | Phase::Starting | Phase::NotRunning)
+}
+
+/// The account a Silicon's terminal runs as here.
+fn os_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "this computer's account".into())
+}
+
+/// What the Carbon reads before a second Carbon pairs this computer. The terminal runs as the
+/// computer's own account; only the Silicons of the Carbon who installed Silicon Extend get it
+/// (Carbon decision, 2026-09-27), but everyone's Silicons use the screen, keyboard and apps.
+fn share_warning(user: &str) -> String {
+    format!(
+        "Silicons the Carbon who installed Silicon Extend here gives access to use its terminal as {user}, so they can reach what {user} can, including this app's other pairs. Silicons any Carbon gives access to use the screen, the keyboard and the apps, and can see what others leave open. Share a computer only with Carbons you trust."
+    )
+}
+
+/// The menu's lines for the Carbons this computer is paired to: one each once there are several
+/// (with Reconnect for a pair another connection took over).
+fn pair_menu(s: &AgentStatus, word: &str) -> Vec<MenuLine> {
+    let mut out = Vec::new();
+    let many = s.pairs.len() > 1;
+    for p in &s.pairs {
+        let owner = p.owner.as_deref().unwrap_or("a Carbon");
+        if many || p.name.is_some() {
+            let label = match (&p.name, many) {
+                (Some(name), true) => format!("{owner}: {name}"),
+                (Some(name), false) => format!("This {word}: {name}"),
+                (None, _) => owner.to_owned(),
+            };
+            out.push(MenuLine {
+                id: format!("pair:{}", p.device_id),
+                label,
+                enabled: false,
+            });
+        }
+        if p.phase == crate::status::PairPhase::Superseded {
+            out.push(MenuLine {
+                id: format!("reconnect:{}", p.device_id),
+                label: if many {
+                    format!("Reconnect {owner}'s pair")
+                } else {
+                    "Connect this copy again".into()
+                },
+                enabled: true,
+            });
+        }
+    }
+    out
 }
 
 /// A line of the tray menu.
@@ -844,6 +1060,84 @@ mod tests {
     use crate::status::{InUseInfo, PairingInfo, TakeoverInfo};
 
     #[test]
+    fn an_existing_session_does_not_restart_its_banner_after_process_restart() {
+        let wall = time::OffsetDateTime::now_utc();
+        let since = (wall - time::Duration::seconds(20))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        assert_eq!(banner_remaining(Some(&since), wall), Duration::ZERO);
+        let recent = (wall - time::Duration::seconds(4))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        assert_eq!(banner_remaining(Some(&recent), wall), Duration::from_secs(6));
+        let mut s = in_use("a3f");
+        s.in_use.as_mut().unwrap().since = since;
+        let mut carried = carried("aabbccdd", "iPad");
+        carried.in_use = s.in_use.clone();
+        s.attached.push(carried);
+        let now = Instant::now();
+        let mut clock = BannerClock::default();
+        clock.observe(&s, now);
+        assert!(clock.visible(&s, now).is_empty());
+        assert!(s.in_use.is_some());
+        assert!(attached_menu(&s).iter().any(|m| m.id == "stop:aabbccdd"));
+        s.phase = Phase::Reconnecting;
+        clock.observe(&s, now + Duration::from_secs(1));
+        s.phase = Phase::Online;
+        clock.observe(&s, now + Duration::from_secs(2));
+        assert!(clock.visible(&s, now + Duration::from_secs(2)).is_empty());
+        // A genuinely new session still announces itself, even with the same Silicon.
+        s.in_use = in_use("b40").in_use;
+        clock.observe(&s, now + Duration::from_secs(3));
+        assert_eq!(clock.visible(&s, now + Duration::from_secs(3)).len(), 1);
+    }
+
+    #[test]
+    fn banner_timeout_hiding_and_takeover_keep_stop_available() {
+        let now = Instant::now();
+        let mut clock = BannerClock::default();
+        let mut s = AgentStatus {
+            phase: Phase::Online,
+            in_use: Some(InUseInfo {
+                silicon_id: "si:chef".into(),
+                session_id: "abc".into(),
+                since: String::new(),
+                pair: None,
+                carbon: None,
+                side: None,
+            }),
+            ..Default::default()
+        };
+        clock.observe(&s, now);
+        assert_eq!(clock.visible(&s, now).len(), 1);
+        clock.observe(&s, now + Duration::from_secs(9));
+        assert_eq!(clock.visible(&s, now + Duration::from_secs(9)).len(), 1);
+        assert!(clock.visible(&s, now + Duration::from_secs(10)).is_empty());
+        assert_eq!(icon_state(&s), IconState::InUse);
+        assert!(s.in_use.is_some());
+        s.in_use_indicator = extend_protocol::model::InUseIndicator::Hidden;
+        assert!(clock.visible(&s, now).is_empty());
+        assert_eq!(icon_state(&s), IconState::Idle);
+        s.takeover = Some(TakeoverInfo {
+            session_id: "abc".into(),
+            reason: "Sign in".into(),
+            expires_at: String::new(),
+        });
+        assert_eq!(clock.visible(&s, now + Duration::from_secs(60)).len(), 1);
+        s.takeover = None;
+        assert!(clock.visible(&s, now + Duration::from_secs(60)).is_empty());
+        let mut phone = carried("3f2a1b0c", "Phone");
+        phone.in_use = s.in_use.clone();
+        s.attached.push(phone);
+        let later = now + Duration::from_secs(60);
+        clock.observe(&s, later);
+        assert_eq!(clock.visible(&s, later).len(), 1);
+        s.attached[0].in_use_indicator = extend_protocol::model::InUseIndicator::Hidden;
+        assert!(clock.visible(&s, later).is_empty());
+        assert!(attached_menu(&s).iter().any(|m| m.id == "stop:3f2a1b0c"));
+    }
+
+    #[test]
     fn icon_follows_the_status() {
         let mut s = AgentStatus {
             phase: Phase::Enrolling,
@@ -858,6 +1152,9 @@ mod tests {
             silicon_id: "si:chef".into(),
             session_id: "a3f".into(),
             since: String::new(),
+            pair: None,
+            carbon: None,
+            side: None,
         });
         assert_eq!(icon_state(&s), IconState::InUse);
     }
@@ -918,6 +1215,7 @@ mod tests {
 
     fn carried(id: &str, name: &str) -> crate::status::AttachedInfo {
         crate::status::AttachedInfo {
+            in_use_indicator: Default::default(),
             device_id: id.into(),
             name: name.into(),
             os: extend_protocol::DeviceOs::Ios,
@@ -926,6 +1224,10 @@ mod tests {
             takeover: None,
             setup: None,
             error: None,
+            awake: None,
+            sleep_state: None,
+            host: None,
+            wake_requested: false,
         }
     }
 
@@ -944,6 +1246,9 @@ mod tests {
             silicon_id: "si:chef".into(),
             session_id: "b40".into(),
             since: String::new(),
+            pair: None,
+            carbon: None,
+            side: None,
         });
         s.attached = vec![phone.clone(), tv.clone()];
         let menu = attached_menu(&s);
@@ -984,6 +1289,9 @@ mod tests {
             silicon_id: "si:chef".into(),
             session_id: "b40".into(),
             since: String::new(),
+            pair: None,
+            carbon: None,
+            side: None,
         });
         let phone_only = AgentStatus {
             attached: vec![phone.clone()],
@@ -1037,6 +1345,9 @@ mod tests {
                 silicon_id: "si:alpha".into(),
                 session_id: session.into(),
                 since: String::new(),
+                pair: None,
+                carbon: None,
+                side: None,
             }),
             ..Default::default()
         }
@@ -1101,6 +1412,75 @@ mod tests {
     fn messages_end_in_one_full_stop() {
         assert_eq!(sentence("Move it to Applications."), "Move it to Applications.");
         assert_eq!(sentence("permission denied"), "permission denied.");
+    }
+
+    #[test]
+    fn each_carbon_gets_a_menu_line_and_a_taken_over_pair_a_reconnect() {
+        use crate::status::{PairInfo, PairPhase};
+        let one = AgentStatus {
+            phase: Phase::Online,
+            pairs: vec![PairInfo {
+                device_id: "7c1e09ab".into(),
+                name: Some("Studio Mac".into()),
+                owner: Some("c:alice".into()),
+                phase: PairPhase::Online,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let lines = pair_menu(&one, "Mac");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].label, "This Mac: Studio Mac");
+        let mut two = one.clone();
+        two.pairs.push(PairInfo {
+            device_id: "0d44e1f2".into(),
+            name: Some("Family Mac".into()),
+            owner: Some("c:bob".into()),
+            phase: PairPhase::Superseded,
+            ..Default::default()
+        });
+        let lines = pair_menu(&two, "Mac");
+        let labels: Vec<&str> = lines.iter().map(|l| l.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["c:alice: Studio Mac", "c:bob: Family Mac", "Reconnect c:bob's pair"]
+        );
+        assert_eq!(lines[2].id, "reconnect:0d44e1f2");
+        assert!(lines[2].enabled && !lines[0].enabled);
+        let (action, device) = lines[2].id.split_once(':').unwrap();
+        assert_eq!(action, "reconnect");
+        assert!(device.parse::<DeviceId>().is_ok());
+    }
+
+    #[test]
+    fn the_shared_computer_warning_names_the_account_and_no_carbon() {
+        let w = share_warning("alice");
+        assert!(w.contains("use its terminal as alice"), "{w}");
+        assert!(w.contains("including this app's other pairs"), "{w}");
+        assert!(w.ends_with("Share a computer only with Carbons you trust."), "{w}");
+        // The page shows it before any code, and has a Revoke pair per Carbon.
+        assert!(PAGE.contains("data-action=\"pair_another\""));
+        assert!(PAGE.contains("id=\"share-body\""));
+        assert!(PAGE.contains("data-action=\"ask_revoke\" data-target="));
+    }
+
+    #[test]
+    fn wake_requests_reach_the_page_but_not_the_status_file() {
+        let s = AgentStatus {
+            phase: Phase::Online,
+            wake_requests: vec![crate::status::WakeInfo {
+                wake_id: "w".into(),
+                pair: "7c1e09ab".into(),
+                carbon: Some("c:alice".into()),
+                silicon_id: Some("si:chef".into()),
+                reason: Some("Check the order screen".into()),
+                expires_at: "2026-09-27T10:32:00Z".into(),
+            }],
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::from_str(&page_state(&s, &PageExtras::default())).unwrap();
+        assert_eq!(v["wake_requests"][0]["reason"], "Check the order screen");
+        assert!(!serde_json::to_string(&s.for_file()).unwrap().contains("order screen"));
     }
 
     #[test]

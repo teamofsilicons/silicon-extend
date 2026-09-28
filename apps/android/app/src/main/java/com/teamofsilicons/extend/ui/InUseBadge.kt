@@ -1,7 +1,6 @@
 package com.teamofsilicons.extend.ui
 
 import android.content.Context
-import android.content.res.Resources
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Paint
@@ -14,7 +13,9 @@ import android.graphics.fonts.FontFamily
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextUtils
-import android.text.style.TypefaceSpan
+import android.os.Build
+import android.text.TextPaint
+import android.text.style.MetricAffectingSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -24,9 +25,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.teamofsilicons.extend.R
 import com.teamofsilicons.extend.core.UiState
+import com.teamofsilicons.extend.core.InUseIndicator
+import java.io.File
 
 /**
- * What the TV's corner badge says while a Silicon works: short, and always which Silicon.
+ * What the TV's bottom-centre badge says while a Silicon works: short, and always which Silicon.
  * [line] follows the Silicon's name; [detail] is the takeover reason, on a second line.
  */
 data class InUseBadge(
@@ -41,7 +44,7 @@ data class InUseBadge(
     companion object {
         /** The badge for this state, or null when a TV has nothing to show (or this isn't a TV). */
         fun from(state: UiState): InUseBadge? {
-            if (!state.isTv) return null
+            if (!state.isTv || InUseIndicator.show(state) == InUseIndicator.Show.NONE) return null
             val session = state.session
             val takeover = state.takeover
             return when {
@@ -54,7 +57,7 @@ data class InUseBadge(
 }
 
 /**
- * The corner badge a TV shows over other apps, in Interface's system: a cobalt pill with a pale
+ * The bottom-centre badge a TV shows over other apps, in Interface's system: a cobalt pill with a pale
  * cobalt edge, the 3 × 3 pixel indicator, a mono SILICON tag and the Silicon's name in IBM Plex
  * Sans. When a Silicon is waiting for the Carbon it turns ink with an orange-red edge and
  * indicator, and the reason goes on a second line. A plain View: it lives in an accessibility
@@ -64,9 +67,9 @@ class InUseBadgeView(context: Context) : LinearLayout(context) {
     private val density = resources.displayMetrics.density
     private fun dp(v: Float): Int = (v * density).toInt()
 
-    private val sans = plex(resources, R.font.ibm_plex_sans, 400, variable = true)
-    private val sansSemiBold = plex(resources, R.font.ibm_plex_sans, 600, variable = true)
-    private val mono = plex(resources, R.font.ibm_plex_mono_medium, 500, variable = false)
+    private val sans = plex(context, R.font.ibm_plex_sans, 400, variable = true)
+    private val sansSemiBold = plex(context, R.font.ibm_plex_sans, 600, variable = true)
+    private val mono = plex(context, R.font.ibm_plex_mono_medium, 500, variable = false)
 
     private val pixel = PixelDrawable()
     private val indicator = View(context).apply { background = pixel }
@@ -124,7 +127,7 @@ class InUseBadgeView(context: Context) : LinearLayout(context) {
 
     fun bind(badge: InUseBadge) {
         title.text = SpannableStringBuilder()
-            .append(badge.silicon, TypefaceSpan(sansSemiBold), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            .append(badge.silicon, TypefaceCompatSpan(sansSemiBold), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             .append(' ')
             .append(badge.line)
         detail.text = badge.detail
@@ -140,13 +143,30 @@ class InUseBadgeView(context: Context) : LinearLayout(context) {
     }
 
     private companion object {
-        /** A bundled font at a fixed weight (the Plex Sans file is variable, so its axis is set too). */
-        fun plex(res: Resources, id: Int, weight: Int, variable: Boolean): Typeface = runCatching {
-            val font = Font.Builder(res, id).setWeight(weight).apply {
-                if (variable) setFontVariationSettings("'wght' $weight")
-            }.build()
-            Typeface.CustomFallbackBuilder(FontFamily.Builder(font).build()).setSystemFallback("sans-serif").build()
-        }.getOrElse { Typeface.create(Typeface.SANS_SERIF, weight, false) }
+        /**
+         * A bundled font at a fixed weight (the Plex Sans file is variable, so its axis is set too).
+         * Font.Builder is Android 10+; before that Typeface.Builder (Android 8+) reads a copy of the
+         * font in the app's no-backup files, since it can't read a resource directly.
+         */
+        fun plex(context: Context, id: Int, weight: Int, variable: Boolean): Typeface = runCatching {
+            if (Build.VERSION.SDK_INT >= 29) {
+                val font = Font.Builder(context.resources, id).setWeight(weight).apply {
+                    if (variable) setFontVariationSettings("'wght' $weight")
+                }.build()
+                Typeface.CustomFallbackBuilder(FontFamily.Builder(font).build()).setSystemFallback("sans-serif").build()
+            } else {
+                val file = File(context.noBackupFilesDir, "fonts/${context.resources.getResourceEntryName(id)}.ttf")
+                if (!file.exists()) {
+                    file.parentFile?.mkdirs()
+                    val part = File(file.path + ".part")
+                    context.resources.openRawResource(id).use { input -> part.outputStream().use { input.copyTo(it) } }
+                    part.renameTo(file)
+                }
+                Typeface.Builder(file).setWeight(weight).apply {
+                    if (variable) setFontVariationSettings("'wght' $weight")
+                }.setFallback("sans-serif").build() ?: error("The font didn't load")
+            }
+        }.getOrElse { Typeface.create(Typeface.SANS_SERIF, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL) }
     }
 }
 
@@ -181,4 +201,15 @@ private class PixelDrawable : Drawable() {
 
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/** `TypefaceSpan(Typeface)` is Android 9+; this sets the typeface the same way on every version. */
+private class TypefaceCompatSpan(private val typeface: Typeface) : MetricAffectingSpan() {
+    override fun updateDrawState(paint: TextPaint) {
+        paint.typeface = typeface
+    }
+
+    override fun updateMeasureState(paint: TextPaint) {
+        paint.typeface = typeface
+    }
 }

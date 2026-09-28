@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.Build
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
@@ -50,6 +51,13 @@ internal object RecordingMuxer {
             throw e
         }
     }
+
+    /** The largest frame Extend reads. */
+    const val MAX_FRAME = 32L * 1024 * 1024
+    private const val TOO_SMALL = -2
+
+    /** The next read buffer size after [capacity] was too small for a frame (doubled, at most [MAX_FRAME]), or null at the limit. */
+    fun grownCapacity(capacity: Int): Int? = if (capacity >= MAX_FRAME) null else minOf(capacity.toLong() * 2, MAX_FRAME).toInt()
 
     /** Two segments can share one output track only with the same picture size and encoder parameters. */
     fun compatible(a: MediaFormat, b: MediaFormat): Boolean =
@@ -101,12 +109,29 @@ internal object RecordingMuxer {
             var cutOff: String? = null
             while (extractor.sampleTime >= 0) {
                 currentCoroutineContext().ensureActive()
-                val size = extractor.sampleSize
-                if (size !in 1..(32L * 1024 * 1024)) { cutOff = "a frame had an invalid size"; break }
-                if (size > buffer.capacity()) buffer = ByteBuffer.allocateDirect(size.toInt())
-                buffer.clear()
-                val read = extractor.readSampleData(buffer, 0)
-                if (read != size.toInt()) { cutOff = "a frame could not be read completely"; break }
+                val read = if (Build.VERSION.SDK_INT >= 28) {
+                    val size = extractor.sampleSize
+                    if (size !in 1..MAX_FRAME) { cutOff = "a frame had an invalid size"; break }
+                    if (size > buffer.capacity()) buffer = ByteBuffer.allocateDirect(size.toInt())
+                    buffer.clear()
+                    val read = extractor.readSampleData(buffer, 0)
+                    if (read != size.toInt()) { cutOff = "a frame could not be read completely"; break }
+                    read
+                } else {
+                    // MediaExtractor.getSampleSize is Android 9+. Before that readSampleData says a
+                    // buffer is too small by throwing, so grow it (to MAX_FRAME) and read again.
+                    var read = -1
+                    while (true) {
+                        buffer.clear()
+                        read = try { extractor.readSampleData(buffer, 0) } catch (e: IllegalArgumentException) { TOO_SMALL }
+                        if (read != TOO_SMALL) break
+                        val grown = grownCapacity(buffer.capacity()) ?: break
+                        buffer = ByteBuffer.allocateDirect(grown)
+                    }
+                    if (read == TOO_SMALL) { cutOff = "a frame had an invalid size"; break }
+                    if (read <= 0) { cutOff = "a frame could not be read completely"; break }
+                    read
+                }
                 val relative = extractor.sampleTime - source.firstUs
                 if (relative >= limit) {
                     // Past the segment's wall-clock end: it would overlap the next segment.

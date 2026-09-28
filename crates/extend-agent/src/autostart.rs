@@ -243,6 +243,41 @@ pub fn entry_path(opts: &AutostartOptions) -> Result<PathBuf> {
     }
 }
 
+/// The AppUserModelID Windows files Silicon Extend's notifications (wake requests) under.
+pub const AUMID: &str = "TeamOfSilicons.SiliconExtend";
+
+/// Windows: registers [`AUMID`] under `HKCU\Software\Classes\AppUserModelId` with the app's name,
+/// so a toast from this unpackaged app shows as "Silicon Extend", and gives this process that id.
+#[cfg(windows)]
+pub fn register_aumid() -> Result<()> {
+    let key = format!(r"HKCU\Software\Classes\AppUserModelId\{AUMID}");
+    let out = std::process::Command::new("reg")
+        .args([
+            "add",
+            &key,
+            "/v",
+            "DisplayName",
+            "/t",
+            "REG_SZ",
+            "/d",
+            "Silicon Extend",
+            "/f",
+        ])
+        .output()
+        .context("couldn't run reg.exe")?;
+    anyhow::ensure!(
+        out.status.success(),
+        "reg.exe failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // SAFETY: sets this process's own AppUserModelID.
+    unsafe {
+        windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(&windows::core::HSTRING::from(AUMID))
+            .context("couldn't give this process its AppUserModelID")?;
+    }
+    Ok(())
+}
+
 /// Installs the start-at-login entry. Returns where it went.
 pub fn install(opts: &AutostartOptions) -> Result<String> {
     let program = exe()?;

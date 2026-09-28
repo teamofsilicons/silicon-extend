@@ -1,0 +1,178 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { afterEach, expect, test, vi } from 'vitest';
+import type { DaemonStopResult } from '../../../daemon/daemon-stop.ts';
+import { mkdtempForTestSync } from '../../../__tests__/test-utils/tmp-dir.ts';
+
+const mocks = vi.hoisted(() => ({
+  cleanupDaemonOwner: vi.fn(async () => undefined),
+  readDaemonShutdownReport: vi.fn(),
+  readDaemonStopIdentity: vi.fn(),
+  stopDaemon: vi.fn(),
+  writeCommandOutput: vi.fn(),
+}));
+
+vi.mock('../../../daemon/daemon-stop.ts', () => ({
+  readDaemonStopIdentity: mocks.readDaemonStopIdentity,
+  stopDaemon: mocks.stopDaemon,
+}));
+vi.mock('../../../daemon/daemon-shutdown-report.ts', () => ({
+  readDaemonShutdownReport: mocks.readDaemonShutdownReport,
+}));
+vi.mock('../../../platform-runtime-daemon-owner-cleanup.ts', () => ({
+  createDaemonOwnerCleanup: () => ({ cleanup: mocks.cleanupDaemonOwner }),
+}));
+vi.mock('../shared.ts', () => ({ writeCommandOutput: mocks.writeCommandOutput }));
+
+import { daemonCommand } from '../daemon.ts';
+
+const GRACEFUL_RESULT: DaemonStopResult = {
+  stopped: true,
+  mode: 'graceful',
+  cleanupConfidence: 'known',
+  claimsReleased: [],
+  claimsOrphaned: [],
+  claimsSuperseded: [],
+  providerReleases: { status: 'completed', released: [], pending: [] },
+  warnings: [],
+};
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+test('accepts only daemon stop', async () => {
+  await assert.rejects(
+    async () =>
+      await daemonCommand({
+        positionals: [],
+        flags: { help: false, json: false, version: false },
+        client: {} as never,
+      }),
+    (error: { code?: string }) => error.code === 'INVALID_ARGS',
+  );
+  await assert.rejects(
+    async () =>
+      await daemonCommand({
+        positionals: ['stop', 'extra'],
+        flags: { help: false, json: false, version: false },
+        client: {} as never,
+      }),
+    (error: { code?: string }) => error.code === 'INVALID_ARGS',
+  );
+});
+
+test('merges a graceful shutdown report and cleans runner leases with the start-time identity', async () => {
+  const stateDir = mkdtempForTestSync('agent-device-daemon-command-');
+  mocks.readDaemonStopIdentity.mockReturnValue({ pid: 123, processStartTime: 'start-time' });
+  mocks.stopDaemon.mockResolvedValue(GRACEFUL_RESULT);
+  const claim = {
+    deviceKey: 'local:android:none:emulator-5554',
+    session: 'default',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+  };
+  mocks.readDaemonShutdownReport.mockReturnValue({
+    providerReleases: {
+      released: [{ leaseId: 'lease-1', provider: 'limrun' }],
+      pending: [],
+    },
+    claims: { released: [claim], orphaned: [], superseded: [] },
+  });
+
+  try {
+    await daemonCommand({
+      positionals: ['stop'],
+      flags: { clean: true, help: false, json: false, stateDir, version: false },
+      client: {} as never,
+    });
+
+    expect(mocks.cleanupDaemonOwner).toHaveBeenCalledWith({
+      pid: 123,
+      startTime: 'start-time',
+    });
+    expect(mocks.writeCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ clean: true, json: false }),
+      expect.objectContaining({
+        clean: true,
+        providerReleases: {
+          status: 'completed',
+          released: [{ leaseId: 'lease-1', provider: 'limrun' }],
+          pending: [],
+        },
+        // #1799: a graceful stop reports the claims it actually released.
+        claimsReleased: [claim],
+        claimsOrphaned: [],
+        claimsSuperseded: [],
+      }),
+      expect.any(Function),
+    );
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('reports graceful provider cleanup as unknown when the shutdown report is unavailable', async () => {
+  const stateDir = mkdtempForTestSync('agent-device-daemon-command-');
+  mocks.readDaemonStopIdentity.mockReturnValue(null);
+  mocks.stopDaemon.mockResolvedValue(GRACEFUL_RESULT);
+  mocks.readDaemonShutdownReport.mockReturnValue(null);
+
+  try {
+    await daemonCommand({
+      positionals: ['stop'],
+      flags: { help: false, json: false, stateDir, version: false },
+      client: {} as never,
+    });
+
+    expect(mocks.writeCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ json: false }),
+      expect.objectContaining({
+        clean: false,
+        cleanupConfidence: 'unknown',
+        providerReleases: { status: 'unknown', released: [], pending: null },
+        warnings: [expect.stringContaining('provider cleanup state is unknown')],
+      }),
+      expect.any(Function),
+    );
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('warns in text output when a graceful stop leaves an orphaned claim', async () => {
+  const stateDir = mkdtempForTestSync('agent-device-daemon-command-');
+  mocks.readDaemonStopIdentity.mockReturnValue({ pid: 123, processStartTime: 'start-time' });
+  mocks.stopDaemon.mockResolvedValue(GRACEFUL_RESULT);
+  const claim = {
+    deviceKey: 'local:android:none:emulator-5554',
+    session: 'default',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+  };
+  mocks.readDaemonShutdownReport.mockReturnValue({
+    providerReleases: { released: [], pending: [] },
+    claims: { released: [], orphaned: [claim], superseded: [] },
+  });
+
+  try {
+    await daemonCommand({
+      positionals: ['stop'],
+      flags: { clean: false, help: false, json: false, stateDir, version: false },
+      client: {} as never,
+    });
+
+    const [, data, renderHuman] = mocks.writeCommandOutput.mock.calls.at(-1) ?? [];
+    expect(data).toEqual(
+      expect.objectContaining({
+        claimsOrphaned: [claim],
+        warnings: [expect.stringContaining('was not released cleanly')],
+      }),
+    );
+    const rendered = (renderHuman as () => string)();
+    expect(rendered).toContain('Ownership of emulator-5554 was not released cleanly');
+    expect(rendered).toContain('extend device release --stale');
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

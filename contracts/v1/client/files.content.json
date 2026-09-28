@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Authed::file_content",
   "consumer": "silicon-extend-client",
-  "consumer_version": "1.0.0",
+  "consumer_version": "1.1.0",
   "contract": 1,
   "given": [
     "file"

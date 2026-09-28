@@ -7,32 +7,42 @@ import { usePoll } from "../lib/poll";
 import { Link } from "../lib/router";
 import { devicesTick } from "../lib/refresh";
 import { OS_LABEL, POLL_MS } from "../config";
-import { duration, plural, relativeTime, removedWhy } from "../lib/format";
+import { awakeLabel, duration, plural, relativeTime, removedWhy } from "../lib/format";
 import { Button, DeviceIcon, Empty, ErrorNote, MemberTag, OnlineDot, Spinner } from "../components/ui";
 import Shader from "../components/Shader";
 import DevicePage from "./DevicePage";
 
-/** The list's tabs. "removed" is the Carbon's own devices that were removed (scope=mine&include_removed=true). */
-type Scope = "mine" | "team" | "removed" | "accessible";
+/**
+ * The list's tabs. "removed" is the Carbon's own devices that were removed (scope=mine&include_removed=true).
+ * Since 1.1 a device belongs to the Carbons who paired it, not to a Team: "mine" is every device the
+ * Carbon paired, whichever Team is selected, and nobody else sees it (the "Team devices" tab is gone).
+ */
+type Scope = "mine" | "removed" | "accessible";
 
 const EYEBROW: Record<Scope, string> = {
   mine: "Your paired devices",
-  team: "Your team's devices",
   removed: "Your removed devices",
   accessible: "Devices you can use",
 };
 
 const EMPTY: Record<Scope, string> = {
   mine: "Nothing paired yet.",
-  team: "No other Carbon in this team has made a device visible.",
-  removed: "Nothing removed in this team.",
-  accessible: "No Carbon has given you a device in this team yet.",
+  removed: "Nothing removed.",
+  accessible: "No Carbon has given you a device in this Team yet.",
 };
 
+/** What a row says about who is using the device: yours (named, with its Team), another side's, or a carried device's. */
+function rowInUse(d: Device): "own" | "other" | "carried" | null {
+  if (d.in_use) return "own";
+  if (d.in_use_by_other_carried) return "carried";
+  if (d.in_use_by_other) return "other";
+  return null;
+}
+
 /**
- * Devices, Interface-style: the list on the left (the Carbon's devices, or the team's), and the
- * selected device's page on the right. With nothing selected the right pane is a short overview.
- * At phone width only one of the two shows: the list, or the device.
+ * Devices, Interface-style: the list on the left (every device the Carbon paired, or the ones a
+ * Silicon may use), and the selected device's page on the right. With nothing selected the right
+ * pane is a short overview. At phone width only one of the two shows: the list, or the device.
  */
 export default function Devices(props: { selected?: string | null }) {
   const s = session();
@@ -85,8 +95,9 @@ export default function Devices(props: { selected?: string | null }) {
     }
   }
 
+  // A Carbon's list doesn't change with the Team menu (1.1); a Silicon's is its selected Team's.
   createEffect(
-    on([scope, s.team, s.world], () => {
+    on([scope, () => (isSilicon() ? s.team() : null), s.world], () => {
       setItems(null);
       setError(null);
       load(true);
@@ -102,7 +113,7 @@ export default function Devices(props: { selected?: string | null }) {
     const list = items() ?? [];
     if (!words.length) return list;
     return list.filter((d) => {
-      const text = `${d.name} ${d.device_id} ${OS_LABEL[d.os] ?? d.os} ${d.model ?? ""} ${d.in_use?.silicon_id ?? ""} ${d.owner.id}`.toLowerCase();
+      const text = `${d.name} ${d.device_id} ${OS_LABEL[d.os] ?? d.os} ${d.model ?? ""} ${d.in_use?.silicon_id ?? ""} ${d.in_use?.team ?? ""} ${d.owner.id}`.toLowerCase();
       return words.every((w) => text.includes(w));
     });
   });
@@ -143,9 +154,6 @@ export default function Devices(props: { selected?: string | null }) {
               <button role="tab" aria-selected={scope() === "mine"} class={scope() === "mine" ? "selected" : ""} onClick={() => setScope("mine")} data-testid="tab-mine">
                 My devices
               </button>
-              <button role="tab" aria-selected={scope() === "team"} class={scope() === "team" ? "selected" : ""} onClick={() => setScope("team")} data-testid="tab-team">
-                Team devices
-              </button>
               <button
                 role="tab"
                 aria-selected={scope() === "removed"}
@@ -160,9 +168,8 @@ export default function Devices(props: { selected?: string | null }) {
           </Show>
 
           <div class="list-label">
-            <span>
-              {scope() === "team" ? "Visible in " : scope() === "removed" ? "Removed in " : "In "}
-              {s.team()}
+            <span data-testid="list-label">
+              {scope() === "accessible" ? `Yours to use in ${s.team() ?? "this Team"}` : scope() === "removed" ? "Removed" : "Every Team"}
               <Show when={items()}> · {items()!.length}</Show>
             </span>
             <span class="list-label-tail">
@@ -217,32 +224,7 @@ export default function Devices(props: { selected?: string | null }) {
                         </For>
                       </nav>
                     </Show>
-                    <Show
-                      when={scope() !== "team"}
-                      fallback={
-                        <ul class="device-list team" data-testid="team-device-list">
-                          <For each={shown()}>
-                            {(d) => (
-                              <li class="device-row readonly" data-testid="device-row">
-                                <DeviceIcon device={d} />
-                                <span class="device-copy">
-                                  <span class="device-top">
-                                    <strong class="device-name">{d.name}</strong>
-                                  </span>
-                                  <span class="device-sub">
-                                    {OS_LABEL[d.os] ?? d.os} · paired by {d.owner.display_name ? `${d.owner.display_name} (${d.owner.id})` : d.owner.id}
-                                  </span>
-                                  <span class="device-state">
-                                    <OnlineDot online={d.online} />
-                                  </span>
-                                </span>
-                              </li>
-                            )}
-                          </For>
-                        </ul>
-                      }
-                    >
-                      <Show when={scope() !== "removed"}>
+                    <Show when={scope() !== "removed"}>
                       <nav class="device-list" aria-label="Your devices" data-testid="device-list">
                         <For each={shown()}>
                           {(d) => (
@@ -263,12 +245,28 @@ export default function Devices(props: { selected?: string | null }) {
                                   {OS_LABEL[d.os] ?? d.os}
                                   {d.os_version ? ` ${d.os_version}` : ""}
                                   <Show when={d.host_device_id}> · through {hostName(d.host_device_id)}</Show>
-                                  <Show when={d.visibility === "personal"}> · personal</Show>
                                 </span>
                                 <span class="device-state">
-                                  <OnlineDot online={d.online} inUse={!!d.in_use} paused={!!d.in_use?.paused} />
+                                  <OnlineDot online={d.online} inUse={rowInUse(d) === "own" || rowInUse(d) === "other"} paused={!!d.in_use?.paused} />
+                                  <Show when={awakeLabel(d)}>
+                                    {(a) => (
+                                      <span class={`awake ${a().state}`} data-testid="row-awake">
+                                        {a().text}
+                                      </span>
+                                    )}
+                                  </Show>
                                   <Show when={d.state === "setup"}>
                                     <span class="badge warn">Setup unfinished</span>
+                                  </Show>
+                                  <Show when={(d.open_wake_requests ?? 0) > 0}>
+                                    <span class="badge action" data-testid="row-wake-requested" title="A Silicon asks you to wake it">
+                                      Wake requested
+                                    </span>
+                                  </Show>
+                                  <Show when={d.paired_by_others}>
+                                    <span class="badge muted" data-testid="row-shared" title="Another Carbon paired this device too">
+                                      Shared
+                                    </span>
                                   </Show>
                                   <Show when={d.days_left !== undefined}>
                                     <span
@@ -284,16 +282,28 @@ export default function Devices(props: { selected?: string | null }) {
                                     <span class="in-use" data-testid="in-use">
                                       <MemberTag type="silicon" />
                                       <strong>{u().silicon_id}</strong>
+                                      <Show when={u().team}>
+                                        <span class="team-chip">{u().team}</span>
+                                      </Show>
                                       <span> · {duration(u().since, now())}</span>
                                     </span>
                                   )}
+                                </Show>
+                                <Show when={rowInUse(d) === "other"}>
+                                  <span class="in-use other" data-testid="in-use-other">
+                                    {isSilicon() ? "Another Silicon is using it" : "A Silicon another Carbon gave access to is using it"}
+                                  </span>
+                                </Show>
+                                <Show when={rowInUse(d) === "carried"}>
+                                  <span class="in-use other" data-testid="in-use-carried">
+                                    A device this computer carries is in use
+                                  </span>
                                 </Show>
                               </span>
                             </Link>
                           )}
                         </For>
                       </nav>
-                      </Show>
                     </Show>
                   </Show>
                   <Show when={next()}>
@@ -326,6 +336,7 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
   const s = session();
   const count = (f: (d: Device) => boolean) => (props.items ?? []).filter(f).length;
   const two = (n: number) => String(n).padStart(2, "0");
+  const where = () => (props.isSilicon ? (s.team() ?? "") : "every Team");
   return (
     <Show when={props.scope !== "removed"} fallback={<RemovedOverview items={props.items} />}>
     <Show when={props.items}>
@@ -336,16 +347,12 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
             <Show
               when={props.scope === "mine"}
               fallback={
-                <Empty eyebrow={s.team() ?? undefined} title={props.scope === "team" ? "No team devices to show." : "No devices yet."}>
-                  <p>
-                    {props.scope === "team"
-                      ? "Other Carbons in this team haven't made any of their devices visible to the team."
-                      : "No Carbon has given you access to a device in this team yet. Ask the Carbon who owns it."}
-                  </p>
+                <Empty eyebrow={s.team() ?? undefined} title="No devices yet.">
+                  <p>No Carbon has given you access to a device in this Team yet. Ask the Carbon who owns it.</p>
                 </Empty>
               }
             >
-              <Empty eyebrow={`Extend · ${s.team() ?? ""}`} title="No devices paired yet.">
+              <Empty eyebrow="Extend · your devices" title="No devices paired yet.">
                 <p>Pair a phone, computer or TV, then choose which Silicons can use it. It takes a few minutes.</p>
                 <Link href="/devices/new" class="button primary">
                   <Plus size={16} aria-hidden="true" /> Add your first device
@@ -355,9 +362,7 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
           }
         >
           <section class="overview" aria-label="At a glance">
-            <p class="eyebrow">
-              Extend · {s.team()}
-            </p>
+            <p class="eyebrow">Extend · {where()}</p>
             <h2 class="overview-title">Pick a device.</h2>
             <p class="overview-lead">
               {props.isSilicon
@@ -368,13 +373,13 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
               <div class="tally-print">
                 <Shader variant="ticket" seed={2.4} />
                 <span class="print-caption top">
-                  {props.scope === "team" ? "Team" : props.scope === "accessible" ? "Yours to use" : "Paired"} · {s.team()}
+                  {props.scope === "accessible" ? "Yours to use" : "Paired"} · {where()}
                 </span>
                 <span class="print-caption top right">Silicon Extend</span>
               </div>
               <dl class="tally-numbers">
                 <div>
-                  <dt>{props.scope === "team" ? "Visible" : props.scope === "accessible" ? "Yours to use" : "Paired"}</dt>
+                  <dt>{props.scope === "accessible" ? "Yours to use" : "Paired"}</dt>
                   <dd>{two(list().length)}</dd>
                 </div>
                 <div>
@@ -384,7 +389,7 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
                 <div>
                   <dt>In use</dt>
                   {/* Cobalt only when a Silicon is actually at work. */}
-                  <dd class={count((d) => !!d.in_use) ? "in-use-number" : "zero"}>{two(count((d) => !!d.in_use))}</dd>
+                  <dd class={count((d) => !!d.in_use || !!d.in_use_by_other) ? "in-use-number" : "zero"}>{two(count((d) => !!d.in_use || !!d.in_use_by_other))}</dd>
                 </div>
               </dl>
             </figure>
@@ -415,13 +420,13 @@ function RemovedOverview(props: { items: Device[] | null }) {
         <Show
           when={list().length}
           fallback={
-            <Empty eyebrow={`Extend · ${s.team() ?? ""}`} title="Nothing removed yet." testid="removed-empty">
+            <Empty eyebrow="Extend · your devices" title="Nothing removed yet." testid="removed-empty">
               <p>When you remove a device, or its pair ends, it moves here. You can still read its activity log.</p>
             </Empty>
           }
         >
           <section class="overview" aria-label="Removed devices" data-testid="removed-overview">
-            <p class="eyebrow">Extend · {s.team()}</p>
+            <p class="eyebrow">Extend · every Team</p>
             <h2 class="overview-title">Removed devices.</h2>
             <p class="overview-lead">
               Choose one on the left to read its activity log. A removed device can't be changed or used, and no Silicon can reach it. To use one again, pair it again.

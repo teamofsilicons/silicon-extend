@@ -17,12 +17,12 @@ use std::io::{IsTerminal as _, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use extend_protocol::capability::{self, COMMANDS};
+use extend_protocol::capability::{self, COMMANDS, DeviceKind};
 use extend_protocol::model::*;
-use extend_protocol::{DeviceId, ErrorCode};
+use extend_protocol::{DeviceId, DeviceOs, ErrorCode};
 use serde_json::{Value, json};
 use silicon_extend_client::attachments::{self as attach, AttachmentError, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS};
-use silicon_extend_client::{ActivityQuery, Client, DeviceQuery, ListQuery};
+use silicon_extend_client::{ActivityQuery, Client, DeviceQuery, ListQuery, StopOutcome};
 
 use args::{Args, Globals, VERBATIM_COMMANDS, missing_value, parse_globals};
 use error::{CliError, R};
@@ -43,6 +43,9 @@ struct Ctx {
     out: Out,
     /// The test secret came from `EXTEND_TEST_SECRET` and hasn't been checked against `--test`'s id.
     verify_env_secret: bool,
+    /// For commands in a session: the Team it runs in, from the session cache, used when no
+    /// `--team` is given (a Silicon's session belongs to the Team it was started in).
+    session_team: Option<String>,
 }
 
 fn ms(t: Instant) -> u128 {
@@ -169,8 +172,45 @@ impl Ctx {
         self.g
             .team
             .clone()
+            .or_else(|| self.session_team.clone())
             .or_else(|| self.auth.as_ref().and_then(|a| a.team.clone()))
             .or_else(|| self.cfg.get("team").cloned())
+    }
+
+    /// Commands in session `sid` run in the Team it was started in, unless `--team` says otherwise.
+    fn use_session_team(&mut self, sid: &str) {
+        if self.g.team.is_none()
+            && let Some(c) = store::load_session_cache(&self.plane, sid)
+        {
+            self.session_team = c.team;
+        }
+    }
+
+    /// `e` with every `extend …` command its hint suggests naming the Team, for a Silicon (see
+    /// [`Ctx::suggest`]); hints written without a context (local files, durations) go through here.
+    fn with_team(&self, mut e: CliError) -> CliError {
+        if let (true, Some(team), Some(hint)) = (self.is_silicon(), self.team(), e.hint.as_deref()) {
+            e.hint = Some(name_the_team(hint, &team));
+        }
+        e
+    }
+
+    fn is_silicon(&self) -> bool {
+        self.auth.as_ref().is_some_and(|a| a.member_kind == "silicon")
+    }
+
+    fn member_id(&self) -> Option<String> {
+        self.auth.as_ref().map(|a| a.member_id.clone())
+    }
+
+    /// `extend <rest>`, the way to suggest a command. A Silicon's always names its Team: what a
+    /// Silicon can see and use depends on the Team it acts in, so a suggestion without it could
+    /// run in another one.
+    fn suggest(&self, rest: &str) -> String {
+        match (self.is_silicon(), self.team()) {
+            (true, Some(t)) => format!("extend --team {t} {rest}"),
+            _ => format!("extend {rest}"),
+        }
     }
 
     fn require_auth(&self) -> R<Auth> {
@@ -257,14 +297,36 @@ impl Ctx {
             .or_else(|| std::env::var("EXTEND_SESSION").ok().filter(|s| !s.is_empty()))
             .or_else(|| store::current_session(&self.plane))
             .ok_or_else(|| {
-                CliError::new(ErrorCode::NoSession, "No session selected.")
-                    .hint("Run `extend session new <device_id> --connect`, or pass --session <session_id>.")
+                CliError::new(ErrorCode::NoSession, "No session selected.").hint(format!(
+                    "Run `{}`, or pass --session <session_id>.",
+                    self.suggest("session new <device_id> --connect")
+                ))
             })
     }
 
     fn emit(&self, data: Value, text: impl FnOnce() -> String) {
         self.out.emit(data, text);
     }
+}
+
+/// Puts `--team <team>` after every `extend` that starts a command in `text` and doesn't name a
+/// Team yet.
+fn name_the_team(text: &str, team: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("extend ") {
+        let starts_word = rest[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.'));
+        out.push_str(&rest[..i + "extend ".len()]);
+        rest = &rest[i + "extend ".len()..];
+        if starts_word && !rest.starts_with("--team") {
+            out.push_str(&format!("--team {team} "));
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn now_s() -> i64 {
@@ -320,6 +382,8 @@ fn table(rows: Vec<Vec<String>>) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join("  ")
+                .trim_end()
+                .to_owned()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -387,6 +451,7 @@ async fn run(argv: Vec<String>) -> i32 {
         test_name: None,
         out,
         verify_env_secret: false,
+        session_team: None,
     };
     if let Some(id) = ctx.g.test.clone()
         && let Err(e) = select_test(&mut ctx, &id)
@@ -527,6 +592,9 @@ const TELEMETRY_WORDS: &[&str] = &[
     "test",
     "use",
     "silicons",
+    "wake",
+    "wake-requests",
+    "on",
     "start",
     "mark",
     "clear",
@@ -678,6 +746,7 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
         "session" => session(ctx, &args).await,
         "takeover" => takeover(ctx, &args).await,
         "request" => request(ctx, &args).await,
+        "ting" => ting(ctx, &args).await,
         "file" => file(ctx, &args).await,
         "report" => report(ctx, &args).await,
         "env" => env_cmd(ctx, &args).await,
@@ -704,11 +773,11 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
             if let Some(repl) = capability::not_exposed(other) {
                 let e = CliError::new(
                     ErrorCode::UnknownCommand,
-                    format!("`{other}` is an agent-device command Extend doesn't relay."),
+                    format!("`{other}` is a device engine command Extend doesn't relay."),
                 );
                 return Err(match repl {
                     Some(r) => e.hint(format!("Use `{r}` instead.")),
-                    None => e.hint("Extend leaves out agent-device's tools for app developers (simulators, emulators, React Native, web)."),
+                    None => e.hint("Extend leaves out the device engine's tools for app developers (simulators, emulators, React Native, web)."),
                 });
             }
             let near: Vec<&str> = help::NODES
@@ -879,6 +948,18 @@ async fn login_status(ctx: &mut Ctx, args: &[String]) -> R<i32> {
 
 async fn logout(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     Args::parse(args, "logout")?.at_most(0)?;
+    ctx.require_auth()?;
+    let silicon = ctx.is_silicon();
+    // Signing out ends the Silicon's own sessions, or, for a Carbon, the sessions of the Silicons
+    // they gave access to (through their own pairs, in every Team; never another Carbon's). They
+    // are read first so the answer can name them; without that read it says so in general.
+    let running = running_sessions(ctx).await;
+    let names = if !silicon && running.as_ref().is_some_and(|r| !r.is_empty()) {
+        device_names(ctx).await
+    } else {
+        BTreeMap::new()
+    };
+    // Read again: a refresh while listing replaced the tokens.
     let auth = ctx.require_auth()?;
     let client = ctx.client().await?;
     let t = Instant::now();
@@ -887,10 +968,91 @@ async fn logout(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     store::save_auth(&ctx.plane, None)?;
     store::set_current_session(&ctx.plane, None)?;
     ctx.auth = None;
-    ctx.emit(json!({"authenticated": false, "signed_out": auth.member_id}), || {
-        format!("Signed out {}.", auth.member_id)
-    });
+    let ended: Option<Vec<String>> = running
+        .as_ref()
+        .map(|r| r.iter().map(|s| s.session_id.to_string()).collect());
+    ctx.emit(
+        json!({"authenticated": false, "signed_out": auth.member_id, "ended_sessions": ended}),
+        || {
+            let who = &auth.member_id;
+            match (&running, silicon) {
+                (None, true) => format!("Signed out {who}. Your running sessions have ended."),
+                (None, false) => {
+                    format!("Signed out {who}. The running sessions of the Silicons you gave access to have ended.")
+                }
+                (Some(r), true) if r.is_empty() => format!("Signed out {who}."),
+                (Some(r), true) => format!(
+                    "Signed out {who}. Ended session{} {}.",
+                    if r.len() == 1 { "" } else { "s" },
+                    and_list(&r.iter().map(|s| s.session_id.to_string()).collect::<Vec<_>>())
+                ),
+                (Some(r), false) if r.is_empty() => {
+                    format!("Signed out {who}. No Silicon you gave access to was using a device.")
+                }
+                (Some(r), false) => format!(
+                    "Signed out {who}. Ended the sessions of the Silicons you gave access to: {}.",
+                    r.iter()
+                        .map(|s| format!(
+                            "{} ({} on {})",
+                            s.silicon_id,
+                            s.session_id,
+                            names
+                                .get(&s.device_id.to_string())
+                                .cloned()
+                                .unwrap_or_else(|| s.device_id.to_string())
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        },
+    );
     Ok(0)
+}
+
+/// The sessions still running (active or paused) that the signed-in member sees: a Carbon's, on
+/// their devices in every Team; a Silicon's own, in each of its Teams. `None` when they couldn't be
+/// read.
+async fn running_sessions(ctx: &mut Ctx) -> Option<Vec<Session>> {
+    let teams: Vec<Option<String>> = if ctx.is_silicon() {
+        ctx.auth.as_ref()?.teams.iter().cloned().map(Some).collect()
+    } else {
+        vec![ctx.team()]
+    };
+    let mut running = Vec::new();
+    for team in teams {
+        let page = ctx
+            .call("GET /api/v1/sessions", |c, t, default| {
+                let team = team.clone().or(default);
+                async move {
+                    c.authed(&t, team.as_deref())
+                        .sessions(ListQuery {
+                            limit: Some(100),
+                            ..Default::default()
+                        })
+                        .await
+                }
+            })
+            .await
+            .ok()?;
+        running.extend(page.items.into_iter().filter(|s| s.state != SessionState::Ended));
+    }
+    Some(running)
+}
+
+/// The names of the Carbon's devices, by id, for messages (one page; empty when it can't be read).
+async fn device_names(ctx: &mut Ctx) -> BTreeMap<String, String> {
+    let q = DeviceQuery {
+        limit: Some(100),
+        ..Default::default()
+    };
+    ctx.call("GET /api/v1/devices", |c, t, team| {
+        let q = q.clone();
+        async move { c.authed(&t, team.as_deref()).devices(q).await }
+    })
+    .await
+    .map(|p| p.items.into_iter().map(|d| (d.device_id.to_string(), d.name)).collect())
+    .unwrap_or_default()
 }
 
 async fn iam(ctx: &mut Ctx, args: &[String]) -> R<i32> {
@@ -1020,6 +1182,15 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     .join("\n")
             });
         }
+        "silicons" if a.flag("--all-teams") => {
+            a.at_most(0)?;
+            let all = ctx
+                .call("GET /api/v1/team/silicons?team=any", |c, t, team| async move {
+                    c.authed(&t, team.as_deref()).team_silicons_all().await
+                })
+                .await?;
+            ctx.emit(to_json(&all), || team_silicons_text(&all));
+        }
         "silicons" => {
             a.at_most(0)?;
             let list = ctx
@@ -1061,6 +1232,39 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         }
     }
     Ok(0)
+}
+
+/// `extend team silicons --all-teams`: TEAM ID NAME, then each Team that couldn't be read, and why.
+fn team_silicons_text(all: &TeamSilicons) -> String {
+    let mut s = if all.items.is_empty() {
+        "No Silicons in the Teams your login reaches.".to_owned()
+    } else {
+        let mut rows = vec![vec!["TEAM".into(), "ID".into(), "NAME".into()]];
+        rows.extend(all.items.iter().map(|x| {
+            vec![
+                x.team.clone().unwrap_or_else(|| "—".into()),
+                x.id.clone(),
+                x.display_name.clone().unwrap_or_default(),
+            ]
+        }));
+        table(rows)
+    };
+    for r in all.teams.iter().filter(|r| !r.ok) {
+        let why = r.error.as_ref().map_or_else(
+            || "Extend couldn't read its directory.".to_owned(),
+            |e| {
+                format!(
+                    "{}{}",
+                    e.message,
+                    e.hint.as_deref().map(|h| format!(" {h}")).unwrap_or_default()
+                )
+            },
+        );
+        s.push_str(&format!("\nCouldn't read {}: {why}", r.team));
+    }
+    // Extend only knows the Teams the Carbon approved it for when signing in.
+    s.push_str("\nDon't see a Team? Sign in to Extend and select it.");
+    s
 }
 
 // ───────────────────────────── Settings ─────────────────────────────
@@ -1495,13 +1699,111 @@ async fn env_cmd(ctx: &mut Ctx, args: &[String]) -> R<i32> {
 
 // ───────────────────────────── Devices ─────────────────────────────
 
-fn device_line(d: &Device, removed_column: bool) -> Vec<String> {
-    let in_use = d.in_use.as_ref().map_or("—".to_owned(), |u| {
-        format!("{} ({}, {})", u.silicon_id, u.session_id, ago(&u.since))
-    });
+/// What a Carbon who paired a computer that other Carbons paired too should know. The terminal
+/// runs as the computer's own account, whichever Carbon gave access; only the Silicons of the Carbon
+/// who installed Extend on it get it (Carbon decision, 2026-09-27).
+const SHARED_COMPUTER_NOTE: &str = "Other Carbons paired this computer too. Only Silicons given access by the Carbon who installed Silicon Extend on it can use its terminal, which runs as the computer's own account: those Silicons can reach what that account can, including the other Carbons' pairs. Share a computer only with Carbons you trust.";
+
+/// How a device's kind reads in a sentence ("Extend can't tell when this iPhone wakes").
+fn os_noun(os: DeviceOs) -> &'static str {
+    match os {
+        DeviceOs::Android => "Android device",
+        DeviceOs::AndroidTv => "TV",
+        DeviceOs::Macos => "Mac",
+        DeviceOs::Windows => "Windows computer",
+        DeviceOs::Linux => "Linux computer",
+        DeviceOs::Ios => "iPhone",
+        DeviceOs::Ipados => "iPad",
+        DeviceOs::Tvos => "Apple TV",
+        DeviceOs::SamsungTv => "Samsung TV",
+        DeviceOs::LgTv => "LG TV",
+    }
+}
+
+/// "offline; last seen asleep".
+fn last_seen(s: SleepState) -> &'static str {
+    match s {
+        SleepState::ScreenOff => "with its screen off",
+        SleepState::Locked => "locked",
+        SleepState::Asleep => "asleep",
+        SleepState::Standby => "in standby",
+        SleepState::OtherSession => "on another account",
+        SleepState::Other => "not awake",
+    }
+}
+
+/// The AWAKE column: yes, no (why), or — when Extend can't tell.
+fn awake_cell(d: &Device) -> String {
+    if d.removed_at.is_some() {
+        return "—".into();
+    }
+    match d.awake {
+        Some(true) => "yes".into(),
+        Some(false) => match d.sleep_state {
+            Some(st) => format!("no ({})", st.label()),
+            None => "no".into(),
+        },
+        None => match d.last_sleep_state.filter(|_| !d.online) {
+            Some(s) => format!("— (offline; last seen {})", last_seen(s)),
+            None => "—".into(),
+        },
+    }
+}
+
+/// The IN USE column, as far as the viewer may know it: a Silicon only learns who is using a
+/// device when it is on its own side (its Team, its Carbon), and a Carbon only for their own
+/// Silicons.
+fn in_use_cell(d: &Device, silicon: bool, me: Option<&str>) -> String {
+    if let Some(u) = &d.in_use {
+        if Some(u.silicon_id.as_str()) == me {
+            return format!("you ({})", u.session_id);
+        }
+        if silicon {
+            return u.silicon_id.clone();
+        }
+        let about: Vec<String> = u.team.iter().cloned().chain([ago(&u.since)]).collect();
+        return format!("{} ({})", u.silicon_id, about.join(", "));
+    }
+    if d.in_use_by_other_carried && !silicon {
+        return "a carried device (stop it at the computer)".into();
+    }
+    if d.in_use_by_other {
+        return if silicon {
+            "in use".into()
+        } else {
+            "yes (another Carbon's Silicon)".into()
+        };
+    }
+    "—".into()
+}
+
+fn device_line(d: &Device, silicon: bool, removed_column: bool, me: Option<&str>) -> Vec<String> {
+    let mut name = d.name.clone();
+    let mut in_use = in_use_cell(d, silicon, me);
+    if silicon {
+        // What the Silicon should know besides who uses it: it has asked to wake it, and another
+        // Carbon's pair of the same physical device is also its to use (one Silicon at a time).
+        let mut notes = Vec::new();
+        if d.open_wake_requests.unwrap_or(0) > 0 {
+            notes.push("asked".to_owned());
+        }
+        if let Some(same) = d.same_device.as_ref().filter(|s| !s.is_empty()) {
+            let ids: Vec<String> = same.iter().map(ToString::to_string).collect();
+            notes.push(format!("(same device as {})", ids.join(", ")));
+        }
+        if !notes.is_empty() {
+            in_use = if in_use == "—" {
+                notes.join(" ")
+            } else {
+                format!("{in_use}, {}", notes.join(" "))
+            };
+        }
+    } else if d.paired_by_others == Some(true) {
+        name.push_str(" (shared)");
+    }
     let mut row = vec![
         d.device_id.to_string(),
-        d.name.clone(),
+        name,
         d.os.as_str().to_owned(),
         if d.removed_at.is_some() {
             "removed".into()
@@ -1510,19 +1812,49 @@ fn device_line(d: &Device, removed_column: bool) -> Vec<String> {
         } else {
             "no".into()
         },
+        awake_cell(d),
         in_use,
-        d.days_left.map_or("—".into(), |x| x.to_string()),
     ];
-    if removed_column {
-        row.push(d.removed_at.map_or("—".into(), |t| {
-            format!(
-                "{} ({})",
-                fmt_time(&t),
-                d.removed_reason.map_or("unknown", EndReason::as_str)
-            )
-        }));
+    if !silicon {
+        row.push(d.access_count.map_or("—".into(), |n| n.to_string()));
+        row.push(d.last_used_at.map_or("—".into(), |t| format!("{} ago", ago(&t))));
+        row.push(d.days_left.map_or("—".into(), |x| x.to_string()));
+        if removed_column {
+            row.push(d.removed_at.map_or("—".into(), |t| {
+                format!(
+                    "{} ({})",
+                    fmt_time(&t),
+                    d.removed_reason.map_or("unknown", EndReason::as_str)
+                )
+            }));
+        }
     }
     row
+}
+
+fn device_table(items: &[Device], silicon: bool, removed: bool, me: Option<&str>) -> String {
+    let head: &[&str] = if silicon {
+        &["ID", "NAME", "OS", "ONLINE", "AWAKE", "IN USE"]
+    } else {
+        &[
+            "ID",
+            "NAME",
+            "OS",
+            "ONLINE",
+            "AWAKE",
+            "IN USE",
+            "ACCESS",
+            "LAST USED",
+            "DAYS LEFT",
+        ]
+    };
+    let mut head: Vec<String> = head.iter().map(|h| (*h).to_owned()).collect();
+    if removed && !silicon {
+        head.push("REMOVED".into());
+    }
+    let mut rows = vec![head];
+    rows.extend(items.iter().map(|d| device_line(d, silicon, removed, me)));
+    table(rows)
 }
 
 fn parse_device_id(s: &str) -> R<DeviceId> {
@@ -1567,6 +1899,46 @@ async fn all_devices(ctx: &mut Ctx, mut q: DeviceQuery, removed: bool) -> R<(Vec
     Ok((items, q.cursor))
 }
 
+/// A device's name for messages, read once more after the call that needed it; the id when that
+/// read fails.
+async fn device_name(ctx: &mut Ctx, id: &str) -> String {
+    ctx.call(&format!("GET /api/v1/devices/{id}"), |c, t, team| {
+        let id = id.to_owned();
+        async move { c.authed(&t, team.as_deref()).device(&id).await }
+    })
+    .await
+    .map_or_else(|_| id.to_owned(), |d| d.name)
+}
+
+/// The command a Ting manager in the app's owning Team runs for each type `missing`
+/// names (full names, like `extend.device.wake_requested`).
+fn register_commands(missing: &[String]) -> Vec<String> {
+    let team = extend_protocol::ting::OWNER_TEAM_PLACEHOLDER;
+    missing
+        .iter()
+        .map(|name| {
+            let app = name.split_once('.').map_or("extend", |(app, _)| app);
+            match extend_protocol::ting::find(name) {
+                Some(ty) => extend_protocol::ting::register_command(team, app, ty),
+                None => format!("ting --org {team} types register --type {name}"),
+            }
+        })
+        .collect()
+}
+
+/// Says which of Extend's Ting types Ting doesn't know in `team`, and how they get registered.
+fn missing_types_text(team: &str, missing: &[String]) -> String {
+    format!(
+        "Ting reported missing app notification types while sending to {team} ({}). A Ting manager in the Team that owns Extend registers them once for every delivery Team. Replace <owning-team> with that Team:\n{}",
+        missing.join(", "),
+        register_commands(missing)
+            .iter()
+            .map(|c| format!("  {c}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
 async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     let (sub, rest) = sub_and_rest(args, "ls");
     let path = format!("device {sub}");
@@ -1577,16 +1949,21 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     match sub.as_str() {
         "ls" => {
             a.at_most(0)?;
-            let removed = a.flag("--removed");
-            if removed && a.flag("--team-visible") {
-                return Err(CliError::usage(
-                    "--removed lists your own removed devices, so it can't be combined with --team-visible",
-                    "Run them separately: `extend device ls --removed`, and `extend device ls --team-visible`.",
-                ));
+            if a.flag("--team-visible") {
+                // From 1.1 nobody sees another Carbon's devices, and the service answers
+                // `scope=team` with an empty page, so nothing is asked.
+                let note = "Devices are only ever visible to the Carbons who paired them, so --team-visible lists nothing. `extend device ls` lists every device you paired, in every Team.";
+                if ctx.out.json {
+                    ctx.emit(json!({"items": [], "next_cursor": null, "note": note}), String::new);
+                } else {
+                    ctx.out.note(note);
+                }
+                return Ok(0);
             }
+            let removed = a.flag("--removed");
             let online = a.flag("--online");
             let q = DeviceQuery {
-                scope: a.flag("--team-visible").then(|| "team".to_owned()),
+                scope: None,
                 online: online.then_some(true),
                 os: a.value("--os"),
                 limit: Some(100),
@@ -1597,28 +1974,21 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 // The filter is the service's; this keeps an older service's pages honest too.
                 items.retain(|d| d.online);
             }
+            let (silicon, me, team) = (ctx.is_silicon(), ctx.member_id(), ctx.team());
             ctx.emit(json!({"items": items, "next_cursor": stopped_at}), || {
                 if items.is_empty() {
                     return if online || a.value("--os").is_some() {
                         "No devices match. Drop --online or --os to see all of them.".into()
+                    } else if silicon {
+                        format!(
+                            "No devices you can use{}. A Carbon gives you access to their device; if one did in another of your Teams, pass --team <that team>.",
+                            team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default()
+                        )
                     } else {
-                        "No devices. A Carbon pairs one at extend.teamofsilicons.com or with `extend device pair <code> --name <name>`; a Silicon needs its Carbon to grant access.".into()
+                        "No devices. Pair one at extend.teamofsilicons.com or with `extend device pair <code> --name <name>`.".into()
                     };
                 }
-                let mut head = vec![
-                    "ID".into(),
-                    "NAME".into(),
-                    "OS".into(),
-                    "ONLINE".into(),
-                    "IN USE BY".into(),
-                    "DAYS LEFT".into(),
-                ];
-                if removed {
-                    head.push("REMOVED".into());
-                }
-                let mut rows = vec![head];
-                rows.extend(items.iter().map(|d| device_line(d, removed)));
-                let mut s = table(rows);
+                let mut s = device_table(&items, silicon, removed, me.as_deref());
                 if let Some(c) = &stopped_at {
                     s.push_str(&format!(
                         "\n\nThis list is incomplete: it shows the first {} devices, and Extend has more (the next page starts after {c}). Narrow it with --online or --os.",
@@ -1638,7 +2008,32 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     async move { c.authed(&t, team.as_deref()).device(&id).await }
                 })
                 .await?;
-            ctx.emit(to_json(&d), || device_text(&d));
+            if ctx.out.json {
+                ctx.emit(to_json(&d), String::new);
+                return Ok(0);
+            }
+            let silicon = ctx.is_silicon();
+            let me = ctx.member_id();
+            let owner = !silicon && me.as_deref() == Some(d.owner.id.as_str());
+            // The owner's view adds who has access and why setup isn't done; both are extra
+            // reads, so a failure only leaves that part out.
+            let (mut grants, mut setup) = (None, None);
+            if owner && d.removed_at.is_none() {
+                grants = read_access(ctx, &id).await.ok();
+                if d.state == DeviceState::Setup {
+                    setup = read_setup(ctx, &id).await.ok();
+                }
+            }
+            let view = ShowView {
+                owner,
+                silicon,
+                me,
+                grants,
+                setup,
+                extend: ctx.suggest("").trim_end().to_owned(),
+                colors: ctx.out.colors,
+            };
+            ctx.emit(Value::Null, || device_text(&d, &view));
         }
         "pair" => {
             a.at_most(1)?;
@@ -1649,17 +2044,11 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     "Name the device: extend device pair <pairing_code> --name \"Saket's Pixel\"",
                 )
             })?;
-            let visibility = match a.value("--visibility").as_deref() {
-                None => None,
-                Some("team") => Some(Visibility::Team),
-                Some("personal") => Some(Visibility::Personal),
-                Some(o) => {
-                    return Err(CliError::usage(
-                        format!("--visibility is team or personal, got {o:?}"),
-                        "team (the default) lets other Carbons in the team see it exists; personal hides it.",
-                    ));
-                }
-            };
+            if a.value("--visibility").is_some() {
+                ctx.out.note(
+                    "--visibility is ignored: from Silicon Extend 1.1 a device is only visible to the Carbons who paired it.",
+                );
+            }
             let ttl = a
                 .value("--ttl-days")
                 .map(|v| {
@@ -1674,7 +2063,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let claim = PairingClaim {
                 pairing_code: code,
                 name,
-                visibility,
+                visibility: None,
                 pair_ttl_days: ttl,
                 silicon_ids: a.values("--access"),
             };
@@ -1685,13 +2074,21 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 })
                 .await?;
             ctx.emit(to_json(&d), || {
-                format!(
-                    "Paired {} \"{}\" ({}). Next: finish the device's own setup — watch it with `extend device setup {} --watch`.",
-                    d.device_id,
-                    d.name,
-                    d.os.as_str(),
+                let mut s = format!("Paired {} \"{}\" ({}).", d.device_id, d.name, d.os.as_str());
+                if d.paired_by_others == Some(true) {
+                    s.push_str(
+                        " This device is also paired by another Carbon; your pair is separate (own name, access and lifetime).",
+                    );
+                    if d.os.kind() == DeviceKind::Computer {
+                        s.push(' ');
+                        s.push_str(SHARED_COMPUTER_NOTE);
+                    }
+                }
+                s.push_str(&format!(
+                    " Next: finish the device's own setup — watch it with `extend device setup {} --watch`.",
                     d.device_id
-                )
+                ));
+                s
             });
         }
         "attach" => {
@@ -1735,22 +2132,26 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         "setup" => {
             a.at_most(1)?;
             let id = a.req(0, "device id")?;
+            if a.flag("--retry") {
+                return setup_retry(ctx, &id, a.value("--step")).await;
+            }
+            if a.value("--step").is_some() {
+                return Err(CliError::usage(
+                    "--step names the step to run again, so it goes with --retry",
+                    format!("extend device setup {id} --retry --step <key>"),
+                ));
+            }
             loop {
-                let s = ctx
-                    .call(&format!("GET /api/v1/devices/{id}/setup"), |c, t, team| {
-                        let id = id.clone();
-                        async move { c.authed(&t, team.as_deref()).setup(&id).await }
-                    })
-                    .await?;
+                let s = read_setup(ctx, &id).await?;
                 let done = s.state == SetupState::Complete;
                 if !a.flag("--watch") || done || ctx.out.json {
                     let colors = ctx.out.colors;
-                    ctx.emit(to_json(&s), || setup_text(&s, colors));
+                    ctx.emit(to_json(&s), || setup_text(&s, colors, &id));
                     break;
                 }
                 out!(
                     "\x1b[2J\x1b[H{}\n(watching; Ctrl-C to stop)\n",
-                    setup_text(&s, ctx.out.colors)
+                    setup_text(&s, ctx.out.colors, &id)
                 );
                 let _ = std::io::stdout().flush();
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1767,31 +2168,54 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 })
                 .await?;
             let colors = ctx.out.colors;
-            ctx.emit(to_json(&s), || format!("Code sent.\n{}", setup_text(&s, colors)));
+            ctx.emit(to_json(&s), || format!("Code sent.\n{}", setup_text(&s, colors, &id)));
         }
-        "rename" | "visibility" | "ttl" => {
+        "visibility" => {
+            return Err(CliError::usage(
+                "Visibility is gone in Extend 1.1: a device is only visible to the Carbons who paired it.",
+                "Nothing changed. Choose which Silicons can use it with `extend device access grant <device_id> <silicon_id>`.",
+            ));
+        }
+        "banner" => {
+            a.at_most(2)?;
+            let id = a.req(0, "device id")?;
+            parse_device_id(&id)?;
+            let value = a.req(1, "on or off")?;
+            let indicator = match value.as_str() {
+                "on" => InUseIndicator::Shown,
+                "off" => InUseIndicator::Hidden,
+                _ => {
+                    return Err(CliError::usage(
+                        "banner takes on or off",
+                        format!("extend device banner {id} off"),
+                    ));
+                }
+            };
+            let d = ctx
+                .call(&format!("PATCH /api/v1/devices/{id}"), |c, t, team| {
+                    let id = id.clone();
+                    async move { c.authed(&t, team.as_deref()).set_in_use_indicator(&id, indicator).await }
+                })
+                .await?;
+            ctx.emit(to_json(&d), || {
+                format!(
+                    "Saved in-use banner {} for {}. This applies to every Carbon's pair of this device. The device app, or the computer it pairs through, needs Silicon Extend 1.1 or later; offline devices apply it when they reconnect.",
+                    d.in_use_indicator.on_off(),
+                    d.name,
+                )
+            });
+        }
+        "rename" | "ttl" => {
             a.at_most(2)?;
             let id = a.req(0, "device id")?;
             let v = a.req(1, if sub == "rename" { "name" } else { "value" })?;
-            let patch = match sub.as_str() {
-                "rename" => DevicePatch {
+            let patch = if sub == "rename" {
+                DevicePatch {
                     name: Some(v),
                     ..Default::default()
-                },
-                "visibility" => DevicePatch {
-                    visibility: Some(match v.as_str() {
-                        "team" => Visibility::Team,
-                        "personal" => Visibility::Personal,
-                        o => {
-                            return Err(CliError::usage(
-                                format!("visibility is team or personal, got {o:?}"),
-                                format!("extend device visibility {id} team"),
-                            ));
-                        }
-                    }),
-                    ..Default::default()
-                },
-                _ => DevicePatch {
+                }
+            } else {
+                DevicePatch {
                     pair_ttl_days: Some(v.parse().map_err(|_| {
                         CliError::usage(
                             format!("ttl takes a number of days, 1–30, got {v:?}"),
@@ -1799,7 +2223,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                         )
                     })?),
                     ..Default::default()
-                },
+                }
             };
             let d = ctx
                 .call(&format!("PATCH /api/v1/devices/{id}"), |c, t, team| {
@@ -1814,22 +2238,41 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     d.pair_expires_at.map(|t| fmt_time(&t)).unwrap_or_default(),
                     d.pair_ttl_days.unwrap_or_default()
                 ),
-                "visibility" => format!("{} is now {}.", d.name, d.visibility.as_str()),
                 _ => format!("Renamed to \"{}\".", d.name),
             });
         }
         "stop" => {
             a.at_most(1)?;
             let id = a.req(0, "device id")?;
-            let s = ctx
+            let outcome = ctx
                 .call(&format!("POST /api/v1/devices/{id}/stop"), |c, t, team| {
                     let id = id.clone();
-                    async move { c.authed(&t, team.as_deref()).stop_device(&id).await }
+                    async move { c.authed(&t, team.as_deref()).stop(&id).await }
                 })
                 .await?;
-            ctx.emit(to_json(&s), || {
-                format!("Stopped {} (session {}).", s.silicon_id, s.session_id)
-            });
+            match outcome {
+                StopOutcome::Session(s) => {
+                    ctx.emit(to_json(&s), || {
+                        format!(
+                            "Stopped {} (session {}){}.",
+                            s.silicon_id,
+                            s.session_id,
+                            s.device.as_ref().map(|d| format!(" on {}", d.name)).unwrap_or_default()
+                        )
+                    });
+                }
+                StopOutcome::Other(stopped) => {
+                    let name = if ctx.out.json {
+                        id.clone()
+                    } else {
+                        device_name(ctx, &id).await
+                    };
+                    ctx.emit(to_json(&stopped), || {
+                        format!("Stopped the Silicon using {name} (another Carbon gave it access).")
+                    });
+                }
+                _ => ctx.emit(json!({"device_id": id}), || format!("Stopped the Silicon using {id}.")),
+            }
         }
         "rm" => {
             a.at_most(1)?;
@@ -1841,19 +2284,23 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 })
                 .await?;
             if !a.flag("--yes") {
-                return Err(CliError::new(
-                    ErrorCode::ConfirmationRequired,
-                    format!(
-                        "This removes \"{}\" ({id}): it ends {}, removes access for {} Silicon(s), and unpairs it.",
-                        d.name,
-                        d.in_use.as_ref().map_or("no running session".to_owned(), |u| format!(
-                            "{}'s session {}",
-                            u.silicon_id, u.session_id
-                        )),
-                        d.access_count.unwrap_or(0)
-                    ),
-                )
-                .hint(format!("Run `extend device rm {id} --yes` to confirm.")));
+                let session = match (&d.in_use, d.in_use_by_other) {
+                    (Some(u), _) => format!("{}'s session {}", u.silicon_id, u.session_id),
+                    (None, true) => {
+                        "the session of the Silicon using it through your pair, if it is one of yours".into()
+                    }
+                    _ => "no running session".into(),
+                };
+                let mut message = format!(
+                    "This removes \"{}\" ({id}): it ends {session}, removes access for {} Silicon(s), and unpairs it.",
+                    d.name,
+                    d.access_count.unwrap_or(0)
+                );
+                if d.paired_by_others == Some(true) {
+                    message.push_str(" Only your pair ends: the other Carbons who paired it keep theirs.");
+                }
+                return Err(CliError::new(ErrorCode::ConfirmationRequired, message)
+                    .hint(format!("Run `extend device rm {id} --yes` to confirm.")));
             }
             let version = d.version;
             ctx.call(&format!("DELETE /api/v1/devices/{id}"), |c, t, team| {
@@ -1868,84 +2315,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 )
             });
         }
-        "access" => {
-            let op = a.pos.first().cloned().unwrap_or_else(|| "ls".into());
-            if !["ls", "grant", "revoke"].contains(&op.as_str()) {
-                return Err(CliError::usage(
-                    format!("unknown `extend device access {op}`"),
-                    "Usage: extend device access ls <device_id> | grant <device_id> <silicon_id>... | revoke <device_id> <silicon_id>...",
-                ));
-            }
-            let id = a.req(1, "device id")?;
-            if op == "ls" {
-                a.at_most(2)?;
-                let list = ctx
-                    .call(&format!("GET /api/v1/devices/{id}/access"), |c, t, team| {
-                        let id = id.clone();
-                        async move { c.authed(&t, team.as_deref()).access(&id).await }
-                    })
-                    .await?;
-                ctx.emit(json!({"items": list}), || {
-                    if list.is_empty() {
-                        return format!(
-                            "No Silicon has access yet. Grant it with `extend device access grant {id} <silicon_id>`."
-                        );
-                    }
-                    let mut rows = vec![vec![
-                        "SILICON".into(),
-                        "GRANTED BY".into(),
-                        "GRANTED".into(),
-                        "LAST USED".into(),
-                    ]];
-                    rows.extend(list.iter().map(|g| {
-                        vec![
-                            g.silicon_id.clone(),
-                            g.granted_by.clone(),
-                            fmt_time(&g.granted_at),
-                            g.last_used_at.map(|t| fmt_time(&t)).unwrap_or_else(|| "—".into()),
-                        ]
-                    }));
-                    table(rows)
-                });
-            } else {
-                let silicons: Vec<String> = a.pos[2..].to_vec();
-                if silicons.is_empty() {
-                    return Err(CliError::usage(
-                        "name at least one Silicon",
-                        format!("extend device access {op} {id} si:chef (see `extend team silicons`)"),
-                    ));
-                }
-                for s in &silicons {
-                    let label = format!(
-                        "{} /api/v1/devices/{id}/access/{s}",
-                        if op == "grant" { "PUT" } else { "DELETE" }
-                    );
-                    if op == "grant" {
-                        ctx.call(&label, |c, t, team| {
-                            let (id, s) = (id.clone(), s.clone());
-                            async move { c.authed(&t, team.as_deref()).grant(&id, &s).await }
-                        })
-                        .await?;
-                    } else {
-                        ctx.call(&label, |c, t, team| {
-                            let (id, s) = (id.clone(), s.clone());
-                            async move { c.authed(&t, team.as_deref()).revoke(&id, &s).await }
-                        })
-                        .await?;
-                    }
-                }
-                ctx.emit(json!({"device_id": id, op.clone(): silicons}), || {
-                    if op == "grant" {
-                        format!("Granted {} access to {id}.", silicons.join(", "))
-                    } else {
-                        format!(
-                            "Revoked access for {} on {id}; any running session of theirs there has ended.",
-                            silicons.join(", ")
-                        )
-                    }
-                });
-            }
-        }
+        "access" => device_access(ctx, &a).await?,
         "activity" => {
             a.at_most(1)?;
             let id = a.req(0, "device id")?;
@@ -1976,6 +2346,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             ctx.emit(to_json(&page), || {
                 let mut rows = vec![vec![
                     "TIME".into(),
+                    "TEAM".into(),
                     "WHO".into(),
                     "SESSION".into(),
                     "ACTION".into(),
@@ -1990,6 +2361,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     };
                     vec![
                         fmt_time(&e.at),
+                        e.team.clone().unwrap_or_else(|| "—".into()),
                         e.actor.id.clone(),
                         e.session_id.as_ref().map_or("—".into(), ToString::to_string),
                         action,
@@ -2000,6 +2372,8 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 table(rows)
             });
         }
+        "wake" => device_wake(ctx, &a).await?,
+        "wake-requests" => device_wake_requests(ctx, &a).await?,
         _ => {
             a.at_most(1)?;
             let id = a.req(0, "device id")?;
@@ -2013,10 +2387,452 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     }
                 })
                 .await?;
-            ctx.emit(to_json(&page), || requests_table(&page.items));
+            let me = ctx.member_id();
+            ctx.emit(to_json(&page), || requests_table(&page.items, me.as_deref()));
         }
     }
     Ok(0)
+}
+
+/// `extend device access ls|grant|revoke`.
+async fn device_access(ctx: &mut Ctx, a: &Args) -> R<()> {
+    let op = a.pos.first().cloned().unwrap_or_else(|| "ls".into());
+    if !["ls", "grant", "revoke"].contains(&op.as_str()) {
+        return Err(CliError::usage(
+            format!("unknown `extend device access {op}`"),
+            "Usage: extend device access ls <device_id> | grant <device_id> <silicon_id>... | revoke <device_id> <silicon_id>...",
+        ));
+    }
+    let id = a.req(1, "device id")?;
+    if op == "ls" {
+        a.at_most(2)?;
+        let list = read_access(ctx, &id).await?;
+        // Grants in a Team this login doesn't reach still work, but listing that Team's Silicons,
+        // adding more and getting Tings there need a login for it.
+        let reached = ctx.auth.as_ref().map(|a| a.teams.clone()).unwrap_or_default();
+        ctx.emit(json!({"items": list}), || {
+            if list.is_empty() {
+                return format!(
+                    "No Silicon has access yet. Grant it with `extend --team <team> device access grant {id} <silicon_id>`."
+                );
+            }
+            let mut rows = vec![vec![
+                "TEAM".into(),
+                "SILICON".into(),
+                "GRANTED".into(),
+                "LAST USED".into(),
+                "WAKE REQUESTS".into(),
+            ]];
+            rows.extend(list.iter().map(|g| {
+                let team = match &g.team {
+                    Some(t) if !reached.contains(t) => format!("{t} (sign in to Extend for {t})"),
+                    Some(t) => t.clone(),
+                    None => "—".into(),
+                };
+                vec![
+                    team,
+                    g.silicon_id.clone(),
+                    fmt_time(&g.granted_at),
+                    g.last_used_at.map(|t| fmt_time(&t)).unwrap_or_else(|| "—".into()),
+                    if g.wake_muted == Some(true) { "off" } else { "on" }.into(),
+                ]
+            }));
+            table(rows)
+        });
+        return Ok(());
+    }
+    let silicons: Vec<String> = a.pos[2..].to_vec();
+    if silicons.is_empty() {
+        return Err(CliError::usage(
+            "name at least one Silicon",
+            format!("extend device access {op} {id} si:chef (see `extend team silicons --all-teams`)"),
+        ));
+    }
+    if op == "grant" {
+        // A grant is for one Team: the Silicon's, which is --team's, else the default team.
+        let team = ctx.team();
+        for s in &silicons {
+            ctx.call(&format!("PUT /api/v1/devices/{id}/access/{s}"), |c, t, team| {
+                let (id, s) = (id.clone(), s.clone());
+                async move { c.authed(&t, team.as_deref()).grant(&id, &s).await }
+            })
+            .await
+            .map_err(|e| grant_refused(e, team.as_deref()))?;
+        }
+        // Wake requests and requests for devices in use reach the Carbon through Ting, which
+        // needs Extend's app types registered; show observed missing types on this Team's sends.
+        let ting = match &team {
+            Some(t) => {
+                let t = t.clone();
+                ctx.call("GET /api/v1/ting-registration", |c, tok, _| {
+                    let t = t.clone();
+                    async move { c.authed(&tok, Some(&t)).ting_registration(&t).await }
+                })
+                .await
+                .ok()
+            }
+            None => None,
+        };
+        let missing = ting.as_ref().map(|r| r.missing_types.clone()).unwrap_or_default();
+        if let (Some(t), false) = (&team, missing.is_empty()) {
+            ctx.out.warn(&missing_types_text(t, &missing));
+        }
+        ctx.emit(
+            json!({"device_id": id, "grant": silicons, "team": team, "ting_missing_types": missing}),
+            || {
+                format!(
+                    "Granted {} access to {id}{}.",
+                    silicons.join(", "),
+                    team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default()
+                )
+            },
+        );
+        return Ok(());
+    }
+    // revoke: with --team, that Team's grant only; without it, every Team's.
+    if let Some(team) = ctx.g.team.clone() {
+        for s in &silicons {
+            ctx.call(
+                &format!("DELETE /api/v1/devices/{id}/access/{s}?team={team}"),
+                |c, t, h| {
+                    let (id, s, team) = (id.clone(), s.clone(), team.clone());
+                    async move { c.authed(&t, h.as_deref()).revoke_in_team(&id, &s, &team).await }
+                },
+            )
+            .await?;
+        }
+        ctx.emit(json!({"device_id": id, "revoke": silicons, "team": team}), || {
+            format!(
+                "Revoked access for {} on {id} in {team}; any running session of theirs there has ended.",
+                silicons.join(", ")
+            )
+        });
+        return Ok(());
+    }
+    // Listed first so the answer can say which Teams' grants went; a failed read only leaves that out.
+    let before = read_access(ctx, &id).await.ok();
+    for s in &silicons {
+        ctx.call(&format!("DELETE /api/v1/devices/{id}/access/{s}"), |c, t, team| {
+            let (id, s) = (id.clone(), s.clone());
+            async move { c.authed(&t, team.as_deref()).revoke(&id, &s).await }
+        })
+        .await?;
+    }
+    let teams: BTreeMap<String, Vec<String>> = silicons
+        .iter()
+        .map(|s| {
+            let ts = before
+                .iter()
+                .flatten()
+                .filter(|g| &g.silicon_id == s)
+                .filter_map(|g| g.team.clone())
+                .collect();
+            (s.clone(), ts)
+        })
+        .collect();
+    ctx.emit(json!({"device_id": id, "revoke": silicons, "teams": teams}), || {
+        let who: Vec<String> = silicons
+            .iter()
+            .map(|s| match teams.get(s).filter(|t| !t.is_empty()) {
+                Some(t) => format!("{s} (in {})", and_list(t)),
+                None if before.is_some() => format!("{s} (it had no access)"),
+                None => s.clone(),
+            })
+            .collect();
+        format!(
+            "Revoked access on {id} for {}, in every Team; any running session of theirs there has ended.",
+            who.join(", ")
+        )
+    });
+    Ok(())
+}
+
+async fn read_access(ctx: &mut Ctx, id: &str) -> R<Vec<AccessGrant>> {
+    ctx.call(&format!("GET /api/v1/devices/{id}/access"), |c, t, team| {
+        let id = id.to_owned();
+        async move { c.authed(&t, team.as_deref()).access(&id).await }
+    })
+    .await
+}
+
+/// A refused grant, with where to sign in when the Carbon's login doesn't reach the Silicon's Team.
+fn grant_refused(mut e: CliError, team: Option<&str>) -> CliError {
+    if e.code == ErrorCode::NotATeamMember
+        && let Some(t) = team
+        && !e.hint.as_deref().is_some_and(|h| h.to_lowercase().contains("sign in"))
+    {
+        let sign_in = format!(
+            "To give access in {t}, sign in to Extend again with {t} selected (approve Extend for {t} in Silicon IAM), then retry."
+        );
+        e.hint = Some(match e.hint.take() {
+            Some(h) => format!("{h} {sign_in}"),
+            None => sign_in,
+        });
+    }
+    e
+}
+
+/// "a", "a and b", "a, b and c".
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// A Carbon's view of an Extend time: the time of day when it is today (UTC), else the date too.
+fn short_time(t: &time::OffsetDateTime) -> String {
+    let t = t.to_offset(time::UtcOffset::UTC);
+    if t.date() == time::OffsetDateTime::now_utc().date() {
+        t.format(&time::macros::format_description!("[hour]:[minute]Z"))
+            .unwrap_or_default()
+    } else {
+        fmt_time(&t)
+    }
+}
+
+/// Everything `extend device show` prints besides the device.
+struct ShowView {
+    /// The viewer is the Carbon who paired this device (this pair).
+    owner: bool,
+    silicon: bool,
+    me: Option<String>,
+    grants: Option<Vec<AccessGrant>>,
+    setup: Option<Setup>,
+    /// `extend`, or `extend --team <team>` for a Silicon, to start the commands it suggests.
+    extend: String,
+    colors: Colors,
+}
+
+fn awake_line(d: &Device) -> String {
+    let since = d.awake_changed_at.map(|t| format!(" since {}", short_time(&t)));
+    match d.awake {
+        Some(true) => format!(
+            "yes{}",
+            since.map(|s| format!(" ({})", s.trim_start())).unwrap_or_default()
+        ),
+        Some(false) => {
+            let why: Vec<String> = d
+                .sleep_state
+                .map(|st| st.label().to_owned())
+                .into_iter()
+                .chain(since.map(|x| x.trim_start().to_owned()))
+                .collect();
+            if why.is_empty() {
+                "no".into()
+            } else {
+                format!("no ({})", why.join(" "))
+            }
+        }
+        None if !d.online => awake_cell(d),
+        None => "— (Extend can't tell)".into(),
+    }
+}
+
+fn wake_request_line(w: &WakeRequest) -> String {
+    let notice = match w.device_notice {
+        DeviceNotice::Sent => "sent to the device".to_owned(),
+        DeviceNotice::Shown => "the device showed it".to_owned(),
+        DeviceNotice::NotShown => format!(
+            "the device couldn't show it{}",
+            w.device_notice_note
+                .as_deref()
+                .map(|n| format!(" ({})", n.trim_end_matches('.')))
+                .unwrap_or_default()
+        ),
+        DeviceNotice::Offline => "the device was offline".to_owned(),
+        DeviceNotice::Unsupported => "the device can't show it".to_owned(),
+        DeviceNotice::Other => "unknown".to_owned(),
+    };
+    let ting = match w.ting {
+        Some(t) => format!("; Ting: {t}"),
+        None if w.ting_covered_by.is_some() => "; Ting: covered by an earlier one".to_owned(),
+        None => String::new(),
+    };
+    format!(
+        "{} ({}), asked {}{}: \"{}\" — expires {}; {notice}{ting}",
+        w.from,
+        w.team,
+        short_time(&w.last_asked_at),
+        if w.asks > 1 {
+            format!(" (ask {})", w.asks)
+        } else {
+            String::new()
+        },
+        w.reason,
+        short_time(&w.expires_at)
+    )
+}
+
+fn device_text(d: &Device, v: &ShowView) -> String {
+    let id = &d.device_id;
+    let x = &v.extend;
+    let mut s = format!(
+        "{} ({})\n  OS:        {}{}\n  Owner:     {}\n",
+        d.name,
+        id,
+        d.os.as_str(),
+        d.os_version.as_ref().map(|v| format!(" {v}")).unwrap_or_default(),
+        d.owner.id,
+    );
+    if v.silicon
+        && let Some(t) = &d.team
+    {
+        s.push_str(&format!("  Team:      {t} (you use it as a member of {t})\n"));
+    }
+    if let Some(same) = d.same_device.as_ref().filter(|x| !x.is_empty()) {
+        let ids: Vec<String> = same.iter().map(ToString::to_string).collect();
+        s.push_str(&format!(
+            "  Same device as {}: another Carbon's pair of it, also yours to use (one Silicon at a time on all of them)\n",
+            and_list(&ids)
+        ));
+    }
+    if let Some(at) = &d.removed_at {
+        s.push_str(&format!(
+            "  Removed:   {} — {}. Nothing works on it any more; its activity stays readable with `extend device activity {}`.\n",
+            fmt_time(at),
+            d.removed_reason.map_or("reason unknown", EndReason::explain),
+            id
+        ));
+    } else {
+        s.push_str(&format!(
+            "  Online:    {}\n  Awake:     {}\n",
+            if d.online { "yes" } else { "no" },
+            awake_line(d)
+        ));
+        if d.wake_detectable == Some(false) {
+            s.push_str(&format!(
+                "  Waking:    Extend can't tell when this {} wakes; {}\n",
+                os_noun(d.os),
+                if v.owner {
+                    format!("when you wake it, say so: extend device wake-requests answer {id} woken")
+                } else {
+                    "its Carbon says so when they answer a wake request".to_owned()
+                }
+            ));
+        }
+        let in_use = match &d.in_use {
+            Some(u) => format!(
+                "{} in session {} since {}{}{}",
+                if Some(u.silicon_id.as_str()) == v.me.as_deref() {
+                    "you".to_owned()
+                } else {
+                    u.silicon_id.clone()
+                },
+                u.session_id,
+                fmt_time(&u.since),
+                u.team.as_deref().map(|t| format!(", in {t}")).unwrap_or_default(),
+                if u.paused { " (paused for takeover)" } else { "" }
+            ),
+            None if d.in_use_by_other_carried && !v.silicon => {
+                "a device this computer carries is in use; stop it from the computer's Silicon Extend app".to_owned()
+            }
+            None if d.in_use_by_other && !v.silicon => {
+                format!("yes, by a Silicon another Carbon gave access to. Stop it: extend device stop {id}")
+            }
+            None if d.in_use_by_other => {
+                format!("yes. Ask for it: {x} request send {id} --reason \"...\"")
+            }
+            None => "no".to_owned(),
+        };
+        s.push_str(&format!("  In use:    {in_use}\n"));
+        s.push_str(&format!("  Banner:    {}\n", d.in_use_indicator.on_off()));
+        if let Some(days) = d.days_left {
+            s.push_str(&format!(
+                "  Pairing:   {days} day(s) left of {}\n",
+                d.pair_ttl_days.unwrap_or(0)
+            ));
+        }
+    }
+    if let Some(h) = &d.host_device_id {
+        s.push_str(&format!("  Through:   {h}\n"));
+    }
+    if v.owner {
+        if d.paired_by_others == Some(true) {
+            s.push_str("  Shared:    Also paired by another Carbon. Your pair is separate: its name, access, lifetime and activity are yours.\n");
+        }
+        if let Some(muted) = d.wake_muted {
+            s.push_str(&format!(
+                "  Wake requests: {}\n",
+                if muted {
+                    format!("off (turn them on: extend device wake-requests unmute {id})")
+                } else {
+                    "on".to_owned()
+                }
+            ));
+        }
+    }
+    if let Some(grants) = &v.grants {
+        if grants.is_empty() {
+            s.push_str(&format!(
+                "\nAccess: no Silicon yet. Grant it: extend --team <team> device access grant {id} <silicon_id>\n"
+            ));
+        } else {
+            let mut by_team: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for g in grants {
+                let who = if g.wake_muted == Some(true) {
+                    format!("{} (wake requests off)", g.silicon_id)
+                } else {
+                    g.silicon_id.clone()
+                };
+                by_team
+                    .entry(g.team.clone().unwrap_or_else(|| "—".into()))
+                    .or_default()
+                    .push(who);
+            }
+            let width = by_team.keys().map(|t| t.chars().count()).max().unwrap_or(0);
+            s.push_str("\nAccess, by Team:\n");
+            for (team, who) in &by_team {
+                s.push_str(&format!("  {team:<width$}  {}\n", who.join(", ")));
+            }
+        }
+    }
+    let open: Vec<&WakeRequest> = d
+        .wake_requests
+        .iter()
+        .flatten()
+        .filter(|w| w.state == WakeState::Open)
+        .collect();
+    if !open.is_empty() {
+        if v.silicon {
+            s.push_str("\nYour wake request:\n");
+            for w in &open {
+                s.push_str(&format!("  {}\n", wake_request_line(w)));
+            }
+            s.push_str(&format!("  Withdraw it: {x} device wake {id} --cancel\n"));
+        } else {
+            s.push_str("\nOpen wake requests:\n");
+            for w in &open {
+                s.push_str(&format!("  {}\n", wake_request_line(w)));
+            }
+            if v.owner {
+                s.push_str(&format!(
+                    "  Answer: extend device wake-requests answer {id} woken (it's awake) or declined\n"
+                ));
+            }
+        }
+    }
+    if v.owner && d.paired_by_others == Some(true) && d.os.kind() == DeviceKind::Computer {
+        s.push_str(&format!("\nShared computer: {SHARED_COMPUTER_NOTE}\n"));
+    }
+    if let Some(setup) = v.setup.as_ref().filter(|st| st.state != SetupState::Complete) {
+        s.push('\n');
+        s.push_str(&setup_text(setup, v.colors, id.as_str()));
+    }
+    if let Some(cmds) = d.commands.as_ref().filter(|c| !c.is_empty()) {
+        s.push_str("\nYou can:\n");
+        for c in COMMANDS.iter().filter(|c| cmds.iter().any(|x| x == c.name)) {
+            s.push_str(&format!("  {:<14} {}\n", c.name, c.summary));
+        }
+    }
+    if let Some(m) = d.missing.as_ref().filter(|m| !m.is_empty()) {
+        s.push_str("\nMissing:\n");
+        for x in m {
+            s.push_str(&format!("  {:<14} {}\n", x.capability.as_str(), x.reason));
+        }
+    }
+    s
 }
 
 fn relative_time(s: &str) -> R<String> {
@@ -2045,56 +2861,15 @@ fn relative_time(s: &str) -> R<String> {
     Ok(s.to_owned())
 }
 
-fn device_text(d: &Device) -> String {
-    let mut s = format!(
-        "{} ({})\n  OS:        {}{}\n  Owner:     {}\n",
-        d.name,
-        d.device_id,
-        d.os.as_str(),
-        d.os_version.as_ref().map(|v| format!(" {v}")).unwrap_or_default(),
-        d.owner.id,
-    );
-    if let Some(at) = &d.removed_at {
-        s.push_str(&format!(
-            "  Removed:   {} — {}. Nothing works on it any more; its activity stays readable with `extend device activity {}`.\n",
-            fmt_time(at),
-            d.removed_reason.map_or("reason unknown", EndReason::explain),
-            d.device_id
-        ));
-    } else {
-        s.push_str(&format!(
-            "  Online:    {}\n  In use:    {}\n  Pairing:   {} day(s) left of {}\n",
-            if d.online { "yes" } else { "no" },
-            d.in_use.as_ref().map_or("no".to_owned(), |u| format!(
-                "{} in session {} since {}{}",
-                u.silicon_id,
-                u.session_id,
-                fmt_time(&u.since),
-                if u.paused { " (paused for takeover)" } else { "" }
-            )),
-            d.days_left.unwrap_or(0),
-            d.pair_ttl_days.unwrap_or(0),
-        ));
-    }
-    if let Some(h) = &d.host_device_id {
-        s.push_str(&format!("  Through:   {h}\n"));
-    }
-    if let Some(cmds) = d.commands.as_ref().filter(|c| !c.is_empty()) {
-        s.push_str("\nYou can:\n");
-        for c in COMMANDS.iter().filter(|c| cmds.iter().any(|x| x == c.name)) {
-            s.push_str(&format!("  {:<14} {}\n", c.name, c.summary));
-        }
-    }
-    if let Some(m) = d.missing.as_ref().filter(|m| !m.is_empty()) {
-        s.push_str("\nMissing:\n");
-        for x in m {
-            s.push_str(&format!("  {:<14} {}\n", x.capability.as_str(), x.reason));
-        }
-    }
-    s
+async fn read_setup(ctx: &mut Ctx, id: &str) -> R<Setup> {
+    ctx.call(&format!("GET /api/v1/devices/{id}/setup"), |c, t, team| {
+        let id = id.to_owned();
+        async move { c.authed(&t, team.as_deref()).setup(&id).await }
+    })
+    .await
 }
 
-fn setup_text(s: &Setup, colors: Colors) -> String {
+fn setup_text(s: &Setup, colors: Colors, id: &str) -> String {
     let mut out = format!(
         "Setup: {}\n",
         match s.state {
@@ -2124,16 +2899,491 @@ fn setup_text(s: &Setup, colors: Colors) -> String {
             }
         }
         out.push('\n');
+        if st.status == StepStatus::Failed {
+            out.push_str(&format!(
+                "      Retry: extend device setup {id} --retry --step {}\n",
+                st.key
+            ));
+        }
     }
     out
 }
 
-fn requests_table(items: &[RequestInfo]) -> String {
+/// How long `--retry` waits for a retried step that still reads failed to show a new try, before
+/// it stops following (the device may not have reported yet).
+const RETRY_QUIET_S: u64 = 20;
+
+/// `extend device setup <id> --retry [--step <key>]`: asks the device to run the failed steps
+/// again, then follows them until each finishes or fails.
+async fn setup_retry(ctx: &mut Ctx, id: &str, step: Option<String>) -> R<i32> {
+    let before = read_setup(ctx, id).await?;
+    let r = ctx
+        .call(&format!("POST /api/v1/devices/{id}/setup/retry"), |c, t, team| {
+            let (id, step) = (id.to_owned(), step.clone());
+            async move { c.authed(&t, team.as_deref()).retry_setup(&id, step.as_deref()).await }
+        })
+        .await?;
+    // With --json it follows quietly and prints one document once the steps finish or fail.
+    let json = ctx.out.json;
+    let name = if json {
+        id.to_owned()
+    } else {
+        device_name(ctx, id).await
+    };
+    let title = |k: &str| before.step(k).map_or_else(|| k.to_owned(), |s| s.title.clone());
+    let titles: Vec<String> = r.retrying.iter().map(|k| title(k)).collect();
+    let head = format!("Retrying {} on {name}.", and_list(&titles));
+    if !json {
+        outln!("{head}");
+        let _ = std::io::stdout().flush();
+    }
+    // A retried step can read failed until the device reports its new try, and fail again before
+    // the next read: it counts as retried once it read anything else, or its error changed.
+    let mut moved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let started = Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let s = read_setup(ctx, id).await?;
+        for k in &r.retrying {
+            if let Some(st) = s.step(k)
+                && (st.status != StepStatus::Failed || st.error != before.step(k).and_then(|b| b.error.clone()))
+            {
+                moved.insert(k.clone());
+            }
+        }
+        let quiet = started.elapsed() >= Duration::from_secs(RETRY_QUIET_S);
+        let finished = r.retrying.iter().all(|k| match s.step(k) {
+            None => true,
+            Some(st) => {
+                st.status == StepStatus::Done || (st.status == StepStatus::Failed && (moved.contains(k) || quiet))
+            }
+        });
+        if !finished {
+            if !json {
+                out!(
+                    "\x1b[2J\x1b[H{head}\n{}\n(following the retry; Ctrl-C to stop)\n",
+                    setup_text(&s, ctx.out.colors, id)
+                );
+                let _ = std::io::stdout().flush();
+            }
+            continue;
+        }
+        if json {
+            ctx.emit(
+                json!({"device_id": id, "retrying": r.retrying, "setup": s}),
+                String::new,
+            );
+            return Ok(0);
+        }
+        let mut lines = vec![setup_text(&s, ctx.out.colors, id).trim_end().to_owned()];
+        let done: Vec<String> = r
+            .retrying
+            .iter()
+            .filter(|k| s.step(k).is_none_or(|st| st.status == StepStatus::Done))
+            .map(|k| title(k))
+            .collect();
+        if !done.is_empty() {
+            lines.push(format!("Done: {}.", and_list(&done)));
+        }
+        for k in &r.retrying {
+            let Some(st) = s.step(k).filter(|st| st.status == StepStatus::Failed) else {
+                continue;
+            };
+            if moved.contains(k) {
+                lines.push(format!(
+                    "{} failed again: {}",
+                    st.title,
+                    st.error.as_deref().unwrap_or("the device gave no reason.")
+                ));
+            } else {
+                lines.push(format!(
+                    "{} hasn't reported a new try yet. Check again with `extend device setup {id} --watch`.",
+                    st.title
+                ));
+            }
+        }
+        outln!("{}", lines.join("\n"));
+        return Ok(0);
+    }
+}
+
+/// `extend device wake <id> --reason "..."` and `--cancel`.
+async fn device_wake(ctx: &mut Ctx, a: &Args) -> R<()> {
+    a.at_most(1)?;
+    let id = a.req(0, "device id")?;
+    parse_device_id(&id)?;
+    if a.flag("--cancel") {
+        if a.value("--reason").is_some() {
+            return Err(CliError::usage(
+                "--cancel withdraws your wake request, so it takes no --reason",
+                format!("{} to withdraw it.", ctx.suggest(&format!("device wake {id} --cancel"))),
+            ));
+        }
+        let open = ctx
+            .call(&format!("GET /api/v1/devices/{id}/wake-requests"), |c, t, team| {
+                let id = id.clone();
+                async move {
+                    c.authed(&t, team.as_deref())
+                        .wake_requests(
+                            &id,
+                            ListQuery {
+                                state: Some("open".into()),
+                                limit: Some(50),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                }
+            })
+            .await?;
+        let me = ctx.member_id();
+        let Some(w) = open
+            .items
+            .into_iter()
+            .find(|w| w.state == WakeState::Open && me.as_deref().is_none_or(|m| w.from == m))
+        else {
+            return Err(CliError::new(
+                ErrorCode::RequestNotFound,
+                format!(
+                    "You have no open request to wake {id}{}.",
+                    ctx.team().map(|t| format!(" in {t}")).unwrap_or_default()
+                ),
+            )
+            .hint(format!(
+                "Ask with `{}`.",
+                ctx.suggest(&format!("device wake {id} --reason \"...\""))
+            )));
+        };
+        let wake_id = w.wake_id;
+        ctx.call(
+            &format!("DELETE /api/v1/devices/{id}/wake-requests/{wake_id}"),
+            |c, t, team| {
+                let id = id.clone();
+                async move { c.authed(&t, team.as_deref()).cancel_wake(&id, wake_id).await }
+            },
+        )
+        .await?;
+        ctx.emit(json!({"device_id": id, "cancelled": wake_id}), || {
+            format!("Withdrew your request to wake {id}.")
+        });
+        return Ok(());
+    }
+    let reason = a.value("--reason").ok_or_else(|| {
+        CliError::usage(
+            "--reason is required (1–300 characters)",
+            format!(
+                "Say why you need it awake: {}",
+                ctx.suggest(&format!(
+                    "device wake {id} --reason \"Need the TV on to check the new menu\""
+                ))
+            ),
+        )
+    })?;
+    let n = reason.trim().chars().count();
+    if n == 0 || n > extend_protocol::REASON_MAX_CHARS {
+        return Err(CliError::usage(
+            format!("--reason must be 1–300 characters; it is {n}."),
+            "Its Carbon reads it as written, on the device and in Ting; keep it to one or two sentences.",
+        ));
+    }
+    // A fresh login first: when the device wakes, Extend may send this Silicon's "it's awake" Ting
+    // with the login it holds for it. A failed refresh leaves the call to report the login.
+    if let Ok(client) = ctx.client().await {
+        let _ = ctx.refresh(&client).await;
+    }
+    let w = ctx
+        .call(&format!("POST /api/v1/devices/{id}/wake-requests"), |c, t, team| {
+            let (id, reason) = (id.clone(), reason.clone());
+            async move { c.authed(&t, team.as_deref()).wake(&id, &reason).await }
+        })
+        .await?;
+    if ctx.out.json {
+        ctx.emit(to_json(&w), String::new);
+        return Ok(());
+    }
+    let name = device_name(ctx, &id).await;
+    let next = ctx.suggest(&format!("session new {id}"));
+    ctx.emit(Value::Null, || wake_text(&w, &name, &next));
+    Ok(())
+}
+
+/// What `extend device wake` says about a request it made or refreshed.
+fn wake_text(w: &WakeRequest, name: &str, session_new: &str) -> String {
+    let id = &w.device_id;
+    let mut lines = Vec::new();
+    if w.asks > 1 {
+        lines.push(format!(
+            "Asked again (ask {}); the request now expires at {}.",
+            w.asks,
+            short_time(&w.expires_at)
+        ));
+    } else {
+        lines.push(format!(
+            "Asked {} to wake {name} ({id}); the request expires at {}.",
+            w.to,
+            short_time(&w.expires_at)
+        ));
+        match w.device_notice {
+            DeviceNotice::Sent | DeviceNotice::Shown => {
+                lines.push(format!("{name} shows your name and reason where it can."));
+            }
+            DeviceNotice::NotShown => lines.push(format!(
+                "{name} couldn't show it{}.",
+                w.device_notice_note
+                    .as_deref()
+                    .map(|n| format!(": {}", n.trim_end_matches('.')))
+                    .unwrap_or_default()
+            )),
+            DeviceNotice::Offline => {
+                lines.push(format!("{name} is offline; it gets the request when it reconnects."));
+            }
+            DeviceNotice::Unsupported => {
+                lines.push(format!(
+                    "{name} can't show wake requests itself; its Carbon gets it through Ting."
+                ));
+            }
+            DeviceNotice::Other => {}
+        }
+        if let Some(h) = &w.host {
+            lines.push(format!(
+                "{} ({}), which it pairs through, must be awake too{}.",
+                h.name,
+                h.device_id,
+                if h.online { "" } else { "; it is offline now" }
+            ));
+        }
+    }
+    if !w.wake_detectable {
+        lines.push(format!("Extend can't tell when {name} wakes; its Carbon will say so."));
+    }
+    match (w.ting, w.ting_covered_by) {
+        (Some(TingDelivery::Delivered), _) => lines.push("Its Carbon was told through Ting.".into()),
+        (Some(TingDelivery::Pending | TingDelivery::Deferred), _) => {
+            lines.push("Its Carbon will be told through Ting shortly.".into());
+        }
+        (Some(TingDelivery::Covered), _) | (None, Some(_)) => {
+            lines.push("Its Carbon was already told through Ting about this device in the last 15 minutes.".into())
+        }
+        (Some(TingDelivery::Failed), _) => lines.push("Ting couldn't tell its Carbon.".into()),
+        _ => {}
+    }
+    if let Some(e) = &w.ting_last_error {
+        lines.push(e.clone());
+    }
+    lines.push(format!("When it's awake you get a Ting; then run: {session_new}"));
+    lines.join("\n")
+}
+
+/// `extend device wake-requests ls|answer|mute|unmute`.
+async fn device_wake_requests(ctx: &mut Ctx, a: &Args) -> R<()> {
+    const USAGE: &str = "Usage: extend device wake-requests ls <device_id> [--open] | answer <device_id> woken|declined [--wake-id <id>]... | mute <device_id> [--silicon <id> [--only-team <team>]] | unmute <device_id> [--silicon <id> [--only-team <team>]]";
+    let op = a.pos.first().cloned().unwrap_or_else(|| "ls".into());
+    if !["ls", "answer", "mute", "unmute"].contains(&op.as_str()) {
+        return Err(CliError::usage(
+            format!("unknown `extend device wake-requests {op}`"),
+            USAGE,
+        ));
+    }
+    let takes = |allowed: &[&str]| -> R<()> {
+        match a.flags.iter().find(|(f, _)| !allowed.contains(&f.as_str())) {
+            Some((f, _)) => Err(CliError::usage(
+                format!("`extend device wake-requests {op}` doesn't take {f}"),
+                USAGE,
+            )),
+            None => Ok(()),
+        }
+    };
+    let id = a.req(1, "device id")?;
+    parse_device_id(&id)?;
+    match op.as_str() {
+        "ls" => {
+            takes(&["--open"])?;
+            a.at_most(2)?;
+            let state = if a.flag("--open") { "open" } else { "all" };
+            let page = ctx
+                .call(&format!("GET /api/v1/devices/{id}/wake-requests"), |c, t, team| {
+                    let id = id.clone();
+                    async move {
+                        c.authed(&t, team.as_deref())
+                            .wake_requests(
+                                &id,
+                                ListQuery {
+                                    state: Some(state.into()),
+                                    limit: Some(100),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                    }
+                })
+                .await?;
+            ctx.emit(to_json(&page), || {
+                if page.items.is_empty() {
+                    return format!(
+                        "No {}requests to wake {id}.",
+                        if state == "open" { "open " } else { "" }
+                    );
+                }
+                let mut rows = vec![vec![
+                    "TIME".into(),
+                    "TEAM".into(),
+                    "SILICON".into(),
+                    "STATE".into(),
+                    "EXPIRES".into(),
+                    "SHOWN".into(),
+                    "TING".into(),
+                    "REASON".into(),
+                ]];
+                rows.extend(page.items.iter().map(|w| {
+                    vec![
+                        fmt_time(&w.last_asked_at),
+                        w.team.clone(),
+                        w.from.clone(),
+                        match w.end_reason {
+                            Some(r) => format!("{} ({r})", w.state),
+                            None => w.state.to_string(),
+                        },
+                        fmt_time(&w.expires_at),
+                        w.device_notice.to_string(),
+                        w.ting.map_or("—".into(), |t| t.to_string()),
+                        w.reason.clone(),
+                    ]
+                }));
+                let mut s = table(rows);
+                for w in page.items.iter().filter(|w| w.ting_last_error.is_some()) {
+                    s.push_str(&format!(
+                        "\n{} from {}: {}",
+                        w.wake_id,
+                        w.from,
+                        w.ting_last_error.as_deref().unwrap_or_default()
+                    ));
+                }
+                s
+            });
+        }
+        "answer" => {
+            takes(&["--wake-id"])?;
+            a.at_most(3)?;
+            let kind = a.req(2, "answer (woken or declined)")?;
+            let ids = a
+                .values("--wake-id")
+                .iter()
+                .map(|w| {
+                    uuid::Uuid::parse_str(w).map_err(|_| {
+                        CliError::usage(
+                            format!("{w:?} is not a wake request id"),
+                            format!("The ids are in `extend device wake-requests ls {id} --open`."),
+                        )
+                    })
+                })
+                .collect::<R<Vec<_>>>()?;
+            let answer = match kind.as_str() {
+                "woken" if !ids.is_empty() => {
+                    return Err(CliError::usage(
+                        "woken says the whole device is awake, so it takes no --wake-id",
+                        format!(
+                            "extend device wake-requests answer {id} woken, or decline some: answer {id} declined --wake-id <id>"
+                        ),
+                    ));
+                }
+                "woken" => WakeAnswer::woken(),
+                "declined" if ids.is_empty() => WakeAnswer::declined(),
+                "declined" => WakeAnswer::declined().wake_ids(ids),
+                other => {
+                    return Err(CliError::usage(
+                        format!("the answer is woken or declined, got {other:?}"),
+                        format!("extend device wake-requests answer {id} woken (it's awake now), or declined"),
+                    ));
+                }
+            };
+            let woken = kind == "woken";
+            let r = ctx
+                .call(
+                    &format!("POST /api/v1/devices/{id}/wake-requests/answer"),
+                    |c, t, team| {
+                        let (id, answer) = (id.clone(), answer.clone());
+                        async move { c.authed(&t, team.as_deref()).answer_wake(&id, &answer).await }
+                    },
+                )
+                .await?;
+            ctx.emit(to_json(&r), || {
+                let who: Vec<String> = r.ended.iter().map(|w| format!("{} ({})", w.from, w.team)).collect();
+                if woken {
+                    format!(
+                        "{id} is awake: every open request to wake it has ended, whichever Carbon's Silicons asked, and each Silicon that asked gets a Ting.{}",
+                        if who.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" Yours: {}.", who.join(", "))
+                        }
+                    )
+                } else {
+                    format!(
+                        "Declined {} request(s) to wake {id}{}. Each Silicon that asked gets a Ting.",
+                        r.ended.len(),
+                        if who.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {}", who.join(", "))
+                        }
+                    )
+                }
+            });
+        }
+        _ => {
+            takes(&["--silicon", "--only-team"])?;
+            a.at_most(2)?;
+            let muted = op == "mute";
+            let silicon = a.value("--silicon");
+            let only_team = a.value("--only-team");
+            if only_team.is_some() && silicon.is_none() {
+                return Err(CliError::usage(
+                    "--only-team narrows --silicon to one Team, so it needs --silicon",
+                    format!("extend device wake-requests {op} {id} --silicon si:chef --only-team labs"),
+                ));
+            }
+            let mut settings = WakeSettings::new(muted);
+            if let Some(s) = &silicon {
+                settings = settings.silicon(s.clone());
+            }
+            if let Some(t) = &only_team {
+                settings = settings.team(t.clone());
+            }
+            let view = ctx
+                .call(&format!("PUT /api/v1/devices/{id}/wake-settings"), |c, t, team| {
+                    let (id, settings) = (id.clone(), settings.clone());
+                    async move { c.authed(&t, team.as_deref()).set_wake_settings(&id, &settings).await }
+                })
+                .await?;
+            ctx.emit(to_json(&view), || {
+                let whose = match &silicon {
+                    Some(s) => format!(
+                        "Wake requests from {s} for {id}{}",
+                        only_team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default()
+                    ),
+                    None => format!("Wake requests for {id}"),
+                };
+                if muted {
+                    format!(
+                        "{whose} are off; the open ones were withdrawn. Turn them on again: extend device wake-requests unmute {id}{}",
+                        silicon.as_deref().map(|s| format!(" --silicon {s}")).unwrap_or_default()
+                    )
+                } else {
+                    format!("{whose} are on.")
+                }
+            });
+        }
+    }
+    Ok(())
+}
+
+fn requests_table(items: &[RequestInfo], me: Option<&str>) -> String {
     if items.is_empty() {
         return "No requests.".into();
     }
     let mut rows = vec![vec![
         "TIME".into(),
+        "TEAM".into(),
         "FROM".into(),
         "TO".into(),
         "DEVICE".into(),
@@ -2143,8 +3393,15 @@ fn requests_table(items: &[RequestInfo]) -> String {
     rows.extend(items.iter().map(|r| {
         vec![
             fmt_time(&r.created_at),
+            r.team.clone().unwrap_or_else(|| "—".into()),
             r.from.clone(),
-            r.to.clone(),
+            // A request routed to this Carbon, because the Silicon using their device isn't on the
+            // asker's side.
+            if Some(r.to.as_str()) == me {
+                "you".into()
+            } else {
+                r.to.clone()
+            },
             r.device_id.to_string(),
             format!("{:?}", r.delivery).to_lowercase(),
             r.reason.clone(),
@@ -2160,6 +3417,130 @@ fn requests_table(items: &[RequestInfo]) -> String {
         ));
     }
     s
+}
+
+// ───────────────────────────── Ting ─────────────────────────────
+
+/// `extend ting status|on`: a table of the Teams, then what to run where something is missing.
+fn ting_text(items: &[TingRegistration], failed: &[(String, CliError)], failed_to: &str) -> String {
+    let mut rows = vec![vec!["TEAM".into(), "STATUS".into(), "MISSING TYPES".into()]];
+    rows.extend(items.iter().map(|r| {
+        let mut missing = if r.missing_types.is_empty() {
+            "—".to_owned()
+        } else {
+            r.missing_types.join(", ")
+        };
+        if let Some(e) = &r.last_error {
+            missing.push_str(&format!(" ({})", e.trim_end_matches('.')));
+        }
+        vec![r.team.clone(), r.status.to_string(), missing]
+    }));
+    let mut s = if items.is_empty() { String::new() } else { table(rows) };
+    for r in items.iter().filter(|r| !r.missing_types.is_empty()) {
+        s.push_str(&format!(
+            "\n\nMissing on sends to {}. A Ting manager in the Team that owns Extend registers these types once for every delivery Team. Replace <owning-team> with that Team:\n{}",
+            r.team,
+            register_commands(&r.missing_types)
+                .iter()
+                .map(|c| format!("  {c}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    let off: Vec<&TingRegistration> = items.iter().filter(|r| r.status != TingStatus::On).collect();
+    if !off.is_empty() {
+        s.push('\n');
+    }
+    for r in off {
+        s.push_str(&format!(
+            "\n{}: {} Turn them on: extend --team {} ting on",
+            r.team,
+            if r.status == TingStatus::Off {
+                "you turned Extend's Tings off in Ting."
+            } else {
+                "Extend hasn't registered you with Ting there yet."
+            },
+            r.team
+        ));
+    }
+    for (t, e) in failed {
+        s.push_str(&format!("\n{t}: couldn't be {failed_to}: {}", e.message));
+    }
+    s.trim_start_matches('\n').to_owned()
+}
+
+async fn ting(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    let (sub, rest) = sub_and_rest(args, "status");
+    let path = format!("ting {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("ting", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
+    a.at_most(0)?;
+    let auth = ctx.require_auth()?;
+    let all = a.flag("--all-teams");
+    let teams = if all {
+        auth.teams.clone()
+    } else {
+        vec![ctx.team().ok_or_else(|| {
+            CliError::usage(
+                "no Team selected",
+                "Pass --team <handle>, or choose a default with `extend team use <handle>`.",
+            )
+        })?]
+    };
+    // A Carbon's `team=any` also lists the Teams of their grants that the login no longer reaches.
+    if sub == "status" && all && !ctx.is_silicon() {
+        let items = ctx
+            .call("GET /api/v1/ting-registration?team=any", |c, t, team| async move {
+                c.authed(&t, team.as_deref()).ting_registrations().await
+            })
+            .await?;
+        ctx.emit(json!({"items": items}), || {
+            if items.is_empty() {
+                "No Teams.".into()
+            } else {
+                ting_text(&items, &[], "read")
+            }
+        });
+        return Ok(0);
+    }
+    let on = sub == "on";
+    let mut items = Vec::new();
+    let mut failed: Vec<(String, CliError)> = Vec::new();
+    for t in &teams {
+        let label = format!("{} /api/v1/ting-registration?team={t}", if on { "PUT" } else { "GET" });
+        let r = ctx
+            .call(&label, |c, tok, _| {
+                let t = t.clone();
+                async move {
+                    let a = c.authed(&tok, Some(&t));
+                    if on {
+                        a.ting_turn_on(&t).await
+                    } else {
+                        a.ting_registration(&t).await
+                    }
+                }
+            })
+            .await;
+        match r {
+            Ok(r) => items.push(r),
+            // One Team is the command itself, so its failure is the command's.
+            Err(e) if !all => return Err(e),
+            Err(e) => failed.push((t.clone(), e)),
+        }
+    }
+    let mut data = json!({"items": items});
+    if !failed.is_empty() {
+        data["failed"] = failed
+            .iter()
+            .map(|(t, e)| json!({"team": t, "error": e.to_json()["error"]}))
+            .collect();
+    }
+    ctx.emit(data, || {
+        ting_text(&items, &failed, if on { "turned on" } else { "read" })
+    });
+    Ok(failed.first().map_or(0, |(_, e)| e.exit()))
 }
 
 // ───────────────────────────── Sessions ─────────────────────────────
@@ -2205,6 +3586,7 @@ fn remember_session(ctx: &Ctx, s: &Session, connect: bool) -> R<()> {
             })
             .collect(),
         refreshed_at: now_s(),
+        team: s.team.clone().or_else(|| ctx.team()),
     };
     store::save_session_cache(&ctx.plane, &cache)?;
     if connect {
@@ -2245,7 +3627,10 @@ async fn connect_session(ctx: &mut Ctx, id: &str) -> R<Session> {
                 s.end_reason.map_or("unknown reason", EndReason::explain)
             ),
         )
-        .hint(format!("Start a new one: extend session new {}", s.device_id)));
+        .hint(format!(
+            "Start a new one: {}",
+            ctx.suggest(&format!("session new {}", s.device_id))
+        )));
     }
     remember_session(ctx, &s, true)?;
     Ok(s)
@@ -2258,6 +3643,11 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         return Err(unknown_sub("session", &sub));
     }
     let a = Args::parse(rest, &path)?;
+    if matches!(sub.as_str(), "status" | "end")
+        && let Ok(sid) = a.pos.first().cloned().map_or_else(|| ctx.session_id(), Ok)
+    {
+        ctx.use_session_team(&sid);
+    }
     match sub.as_str() {
         "new" => {
             a.at_most(1)?;
@@ -2270,21 +3660,44 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 })
                 .await?;
             let sid = s.session_id.to_string();
-            if a.flag("--connect") {
-                connect_session(ctx, &sid).await?;
-            }
+            let connected = if a.flag("--connect") {
+                Some(connect_session(ctx, &sid).await?)
+            } else {
+                None
+            };
             if ctx.out.json {
                 ctx.emit(to_json(&s), String::new);
             } else {
                 outln!("{sid}");
                 errln!(
-                    "Started session {sid} on {id}.{} It ends after 5 minutes without a command; end it with `extend session end {sid}`.",
+                    "Started session {sid} on {id}.{} It ends after 5 minutes without a command; end it with `{}`.",
                     if a.flag("--connect") {
-                        " Connected — try `extend snapshot -i`.".to_owned()
+                        format!(" Connected — try `{}`.", ctx.suggest("snapshot -i"))
                     } else {
-                        format!(" Next: extend session connect {sid}.")
-                    }
+                        format!(" Next: {}.", ctx.suggest(&format!("session connect {sid}")))
+                    },
+                    ctx.suggest(&format!("session end {sid}"))
                 );
+                // Not being awake refuses nothing (the terminal and Android debugging work as
+                // usual), so the session starts; the note says what won't work yet, and how to ask.
+                let device = match s.device.clone().or_else(|| connected.and_then(|c| c.device)) {
+                    Some(d) => Some(*d),
+                    None => ctx
+                        .call(&format!("GET /api/v1/devices/{id}"), |c, t, team| {
+                            let id = id.clone();
+                            async move { c.authed(&t, team.as_deref()).device(&id).await }
+                        })
+                        .await
+                        .ok(),
+                };
+                if let Some(d) = device.filter(|d| d.awake == Some(false)) {
+                    ctx.out.note(&format!(
+                        "{} isn't awake{}; commands that need its screen will fail until its Carbon turns it on. Ask: {}",
+                        d.name,
+                        d.sleep_state.map(|st| format!(" ({})", st.label())).unwrap_or_default(),
+                        ctx.suggest(&format!("device wake {id} --reason \"...\""))
+                    ));
+                }
             }
         }
         "connect" => {
@@ -2292,9 +3705,10 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let id = a.req(0, "session id")?;
             let s = connect_session(ctx, &id).await?;
             let d = s.device.clone();
+            let try_it = ctx.suggest("snapshot -i");
             ctx.emit(to_json(&s), || {
                 format!(
-                    "Connected to {id} on {} ({}). `extend --help` now lists only what works there. Try: extend snapshot -i",
+                    "Connected to {id} on {} ({}). `extend --help` now lists only what works there. Try: {try_it}",
                     d.as_ref().map(|d| d.name.clone()).unwrap_or_default(),
                     d.as_ref().map(|d| d.os.as_str()).unwrap_or_default()
                 )
@@ -2355,29 +3769,30 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     async move { c.authed(&t, team.as_deref()).sessions(q).await }
                 })
                 .await?;
+            // A Carbon sees the sessions on their devices in every Team; a Silicon only its own Team's.
+            let teams = !ctx.is_silicon();
             ctx.emit(to_json(&page), || {
                 if page.items.is_empty() {
                     return "No sessions.".into();
                 }
-                let mut rows = vec![vec![
-                    "SESSION".into(),
-                    "DEVICE".into(),
-                    "SILICON".into(),
-                    "STATE".into(),
-                    "STARTED".into(),
-                    "COMMANDS".into(),
-                    "ENDED BECAUSE".into(),
-                ]];
+                let mut head: Vec<String> = vec!["SESSION".into(), "DEVICE".into(), "SILICON".into()];
+                if teams {
+                    head.push("TEAM".into());
+                }
+                head.extend(["STATE", "STARTED", "COMMANDS", "ENDED BECAUSE"].map(String::from));
+                let mut rows = vec![head];
                 rows.extend(page.items.iter().map(|s| {
-                    vec![
-                        s.session_id.to_string(),
-                        s.device_id.to_string(),
-                        s.silicon_id.clone(),
+                    let mut row = vec![s.session_id.to_string(), s.device_id.to_string(), s.silicon_id.clone()];
+                    if teams {
+                        row.push(s.team.clone().unwrap_or_else(|| "—".into()));
+                    }
+                    row.extend([
                         format!("{:?}", s.state).to_lowercase(),
                         fmt_time(&s.started_at),
                         s.command_count.to_string(),
                         s.end_reason.map_or("—".into(), |r| r.as_str().to_owned()),
-                    ]
+                    ]);
+                    row
                 }));
                 table(rows)
             });
@@ -2407,12 +3822,16 @@ async fn takeover(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     let a = Args::parse(args, "takeover")?;
     a.at_most(1)?;
     let sid = ctx.session_id()?;
+    ctx.use_session_team(&sid);
     match a.pos.first().map(String::as_str) {
         None => {
             let reason = a.value("--reason").ok_or_else(|| {
                 CliError::usage(
                     "--reason is required",
-                    "Tell the Carbon what to do: extend takeover --reason \"Please approve the Face ID prompt\"",
+                    format!(
+                        "Tell the Carbon what to do: {}",
+                        ctx.suggest("takeover --reason \"Please approve the Face ID prompt\"")
+                    ),
                 )
             })?;
             let t = ctx
@@ -2478,7 +3897,10 @@ async fn request(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let reason = a.value("--reason").ok_or_else(|| {
                 CliError::usage(
                     "--reason is required (1–300 characters)",
-                    format!("Say why you need it: extend request send {id} --reason \"Need 2 minutes to read an OTP\""),
+                    format!(
+                        "Say why you need it: {}",
+                        ctx.suggest(&format!("request send {id} --reason \"Need 2 minutes to read an OTP\""))
+                    ),
                 )
             })?;
             let n = reason.trim().chars().count();
@@ -2495,16 +3917,24 @@ async fn request(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 })
                 .await?;
             ctx.emit(to_json(&r), || {
-                let mut s = format!(
-                    "Sent to {} (using {}{}). Delivery: {}.",
-                    r.to,
-                    r.device_id,
-                    r.session_id
-                        .as_ref()
-                        .map(|s| format!(" in session {s}"))
-                        .unwrap_or_default(),
-                    format!("{:?}", r.delivery).to_lowercase()
-                );
+                let delivery = format!("{:?}", r.delivery).to_lowercase();
+                // Routed to the Carbon who gave the Silicon using the device access: that Silicon
+                // isn't on the asker's side (another Team, or another Carbon's), so it isn't named.
+                let mut s = if r.to_hidden || r.routed_to == Some(RequestRoute::Carbon) {
+                    format!(
+                        "Sent to the Carbon who gave access to the Silicon using it; it's in use by a Silicon you can't see. Delivery: {delivery}."
+                    )
+                } else {
+                    format!(
+                        "Sent to {} (using {}{}). Delivery: {delivery}.",
+                        r.to,
+                        r.device_id,
+                        r.session_id
+                            .as_ref()
+                            .map(|s| format!(" in session {s}"))
+                            .unwrap_or_default(),
+                    )
+                };
                 if let Some(e) = &r.last_error {
                     s.push_str(&format!(" {e}"));
                 }
@@ -2536,7 +3966,8 @@ async fn request(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     async move { c.authed(&t, team.as_deref()).requests(q).await }
                 })
                 .await?;
-            ctx.emit(to_json(&page), || requests_table(&page.items));
+            let me = ctx.member_id();
+            ctx.emit(to_json(&page), || requests_table(&page.items, me.as_deref()));
         }
     }
     Ok(0)
@@ -2568,25 +3999,29 @@ async fn file(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     async move { c.authed(&t, team.as_deref()).files(q).await }
                 })
                 .await?;
+            // A Carbon sees the files made on their devices in every Team; a Silicon its own Team's.
+            let teams = !ctx.is_silicon();
             ctx.emit(to_json(&page), || {
                 if page.items.is_empty() {
                     return "No files.".into();
                 }
-                let mut rows = vec![vec![
-                    "FILE".into(),
-                    "KIND".into(),
-                    "SIZE".into(),
-                    "SELF-DESTRUCTS".into(),
-                    "LINK".into(),
-                ]];
+                let mut head: Vec<String> = vec!["FILE".into(), "KIND".into()];
+                if teams {
+                    head.push("TEAM".into());
+                }
+                head.extend(["SIZE", "SELF-DESTRUCTS", "LINK"].map(String::from));
+                let mut rows = vec![head];
                 rows.extend(page.items.iter().map(|f| {
-                    vec![
-                        f.file_id.to_string(),
-                        f.kind.as_str().into(),
+                    let mut row = vec![f.file_id.to_string(), f.kind.as_str().into()];
+                    if teams {
+                        row.push(f.team.clone().unwrap_or_else(|| "—".into()));
+                    }
+                    row.extend([
                         readable_size(f.size_bytes),
                         f.self_destruct_at.map_or("never".into(), |t| fmt_time(&t)),
                         f.url.clone(),
-                    ]
+                    ]);
+                    row
                 }));
                 table(rows)
             });
@@ -3140,12 +4575,13 @@ fn too_big_error(name: &str, args: &[String], local: &str, size: u64, already: u
 
 async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
     let sid = ctx.session_id()?;
+    ctx.use_session_team(&sid);
     let DeviceArgs {
         mut args,
         mut ttl,
         keep,
         out,
-    } = split_device_args(name, raw)?;
+    } = split_device_args(name, raw).map_err(|e| ctx.with_team(e))?;
     if ttl.is_none()
         && let Some(d) = ctx.cfg.get("self_destruct")
     {
@@ -3160,7 +4596,7 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
         args.splice(flags_end..flags_end, ["--scale".to_owned(), s.clone()]);
     }
     // Scripts and media are read here, on the caller's machine, and sent along.
-    let attachments = attach_local_files(name, &mut args)?;
+    let attachments = attach_local_files(name, &mut args).map_err(|e| ctx.with_team(e))?;
     let req = CommandRequest {
         command: name.to_owned(),
         args,
@@ -3867,6 +5303,7 @@ mod tests {
             created_by: None,
             shared_with: None,
             created_at: None,
+            team: None,
         };
         assert_eq!(safe_name(&f("shot.png")), "shot.png");
         assert_eq!(safe_name(&f("../../etc/passwd")), "passwd");

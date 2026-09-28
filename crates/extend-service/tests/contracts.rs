@@ -29,7 +29,7 @@ use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode};
 use extend_service::versions::{self, Clock, Lifecycle, Policy, Registry};
 use futures::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
-use silicon_extend_client::Client;
+use silicon_extend_client::{Authed, Client};
 use sqlx::Connection as _;
 use time::OffsetDateTime;
 use tokio::net::TcpStream;
@@ -82,11 +82,13 @@ fn config(database_url: String, addr: SocketAddr, device_app_min: &str) -> Confi
         device_app_min_version: device_app_min.into(),
         local_members: vec![
             ("c:alice".into(), vec!["acme".into()]),
+            ("c:bob".into(), vec!["acme".into()]),
             ("si:chef".into(), vec!["acme".into()]),
             ("si:sous".into(), vec!["acme".into()]),
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     }
 }
 
@@ -228,7 +230,7 @@ async fn the_matrix_is_built_from_state_and_configuration() {
         os_version: None,
         model: None,
         app_version: v.into(),
-        agent_device_version: None,
+        engine_version: None,
     };
     assert_eq!(
         client.enroll(&enroll("1.3.9")).await.unwrap_err().code(),
@@ -529,8 +531,32 @@ async fn two_majors_are_served_side_by_side_each_path_checking_its_own_pin() {
 
 // ───────────── Versioning 4: replaying consumer fixtures ─────────────
 
+/// The repository's `contracts/`, or `EXTEND_CONTRACTS_DIR` (to replay fixtures kept elsewhere,
+/// such as a release's from git).
 fn contracts_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts")
+    match std::env::var_os("EXTEND_CONTRACTS_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts"),
+    }
+}
+
+/// The frozen fixtures of released client versions under a major (`v1/client-1.0.0`): what a
+/// published client still sends, kept after the live fixtures are regenerated.
+fn frozen_client_dirs(root: &Path, major: u32) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(root.join(format!("v{major}")))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.is_dir()
+                        && p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.starts_with("client-"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
 }
 
 fn load(dir: &Path) -> Vec<(String, Value)> {
@@ -576,16 +602,21 @@ const STATES: &[(&str, &[&str])] = &[
             "command_id",
             "upload_id",
             "attached_id",
+            "wake_id",
         ],
     ),
+    ("failed_setup", &["device_id", "device_credential"]),
+    ("shared_device", &["shared_device_id"]),
+    ("shared_computer", &["shared_host_id"]),
+    ("wake_request", &["wake_id"]),
 ];
 
 /// States a state sets up first.
 fn implies(state: &str) -> &'static [&'static str] {
     match state {
-        "session" | "upload" => &["device"],
+        "session" | "upload" | "shared_device" | "wake_request" => &["device"],
         "takeover" | "file" => &["session"],
-        "attached" => &["host"],
+        "attached" | "shared_computer" => &["host"],
         _ => &[],
     }
 }
@@ -593,6 +624,7 @@ fn implies(state: &str) -> &'static [&'static str] {
 /// Placeholders every fixture can use.
 const ALWAYS: &[&str] = &[
     "carbon_token",
+    "other_carbon_token",
     "silicon_token",
     "other_silicon_token",
     "carbon_slt",
@@ -638,6 +670,9 @@ fn every_fixture_is_well_formed() {
         );
         dirs.push((Some(major), root.join(format!("v{major}/client"))));
         dirs.push((Some(major), root.join(format!("v{major}/device"))));
+        for frozen in frozen_client_dirs(&root, major) {
+            dirs.push((Some(major), frozen));
+        }
     }
     let known_states: BTreeSet<&str> = STATES.iter().map(|(s, _)| *s).collect();
     let mut problems = Vec::new();
@@ -747,17 +782,102 @@ async fn send_json(ws: &mut Ws, v: &Value) {
 }
 
 fn hello(os: DeviceOs) -> Value {
+    hello_as(os, "1.0.0", Setup::complete())
+}
+
+/// A hello from an app of `app_version`; a 1.1 app lists `setup_retry` in its features.
+fn hello_as(os: DeviceOs, app_version: &str, setup: Setup) -> Value {
+    let v11 = app_version.starts_with("1.1");
     serde_json::to_value(DeviceFrame::Hello(extend_protocol::frames::Hello {
-        app_version: "1.0.0".into(),
+        app_version: app_version.into(),
         os,
         os_version: Some("15".into()),
         model: Some("Contract".into()),
-        agent_device_version: None,
+        engine_version: v11.then(|| "0.21.15".into()),
         capabilities: os.full_capabilities().to_vec(),
         missing: vec![],
-        setup: Setup::complete(),
+        setup,
+        features: if v11 {
+            vec![extend_protocol::feature::SETUP_RETRY.into()]
+        } else {
+            vec![]
+        },
     }))
     .unwrap()
+}
+
+/// A raw API call (for the 1.1 routes), answering the status and the parsed body.
+async fn call(
+    base: &str,
+    method: reqwest::Method,
+    path: &str,
+    authorization: &str,
+    team: Option<&str>,
+    body: Option<Value>,
+) -> (u16, Value) {
+    let mut r = reqwest::Client::new()
+        .request(method, format!("{base}{path}"))
+        .header("authorization", authorization);
+    if let Some(t) = team {
+        r = r.header("x-org-id", t);
+    }
+    if let Some(b) = body {
+        r = r.json(&b);
+    }
+    let resp = r.send().await.unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+/// "Pair with another Carbon": the device with `credential` shows a code, c:bob (`bob_token`)
+/// claims it, and the new pair's id and credential come back.
+async fn pair_another(
+    client: &Client,
+    base: &str,
+    credential: &str,
+    bob_token: &str,
+    name: &str,
+) -> Result<Device, String> {
+    let (status, e) = call(
+        base,
+        reqwest::Method::POST,
+        "/api/v1/device/enrollments",
+        &format!("Extend-Device {credential}"),
+        None,
+        None,
+    )
+    .await;
+    if status != 201 {
+        return Err(format!("POST /api/v1/device/enrollments answered {status}: {e}"));
+    }
+    let data = &e["data"];
+    let claimed = client
+        .authed(bob_token, Some("acme"))
+        .pair(&PairingClaim {
+            pairing_code: data["pairing_code"].as_str().unwrap_or_default().into(),
+            name: name.into(),
+            visibility: None,
+            pair_ttl_days: None,
+            silicon_ids: vec!["si:chef".into()],
+        })
+        .await
+        .map_err(|e| format!("c:bob claiming the second pair: {e}"))?;
+    let id: Uuid = data["enrollment_id"]
+        .as_str()
+        .unwrap_or_default()
+        .parse()
+        .map_err(|e| format!("{e}"))?;
+    match client
+        .enrollment(id, data["enrollment_secret"].as_str().unwrap_or_default())
+        .await
+        .map_err(|e| format!("reading the second pair's enrollment: {e}"))?
+    {
+        EnrollmentState::Paired { device_credential, .. } => Ok(Device {
+            id: claimed.device_id.to_string(),
+            credential: device_credential,
+        }),
+        other => Err(format!("the second pair's enrollment isn't paired: {other:?}")),
+    }
 }
 
 const ARTIFACT: &[u8] = b"\x89PNG device contract fixture";
@@ -788,7 +908,7 @@ async fn pair(client: &Client, carbon_token: &str, os: DeviceOs, silicons: &[&st
             os_version: Some("15".into()),
             model: Some("Contract".into()),
             app_version: "1.0.0".into(),
-            agent_device_version: None,
+            engine_version: None,
         })
         .await
         .unwrap();
@@ -828,19 +948,37 @@ async fn pair(client: &Client, carbon_token: &str, os: DeviceOs, silicons: &[&st
 }
 
 impl Device {
-    /// Connects, says hello, and answers pings and commands in the background.
-    async fn serve(&self, base: &str, client: &Client, os: DeviceOs) -> tokio::task::JoinHandle<()> {
+    /// Connects, says `hello`, and answers pings and commands in the background; the sender
+    /// injects more frames (an `awake`).
+    async fn serve_with(
+        &self,
+        base: &str,
+        client: &Client,
+        owner: Authed<'_>,
+        hello: Value,
+    ) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::UnboundedSender<Value>) {
         let mut ws = ws_connect(
             &client.ws_url("/api/v1/device/connect"),
             &[("authorization".into(), format!("Extend-Device {}", self.credential))],
         )
         .await;
-        send_json(&mut ws, &hello(os)).await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        send_json(&mut ws, &hello).await;
+        // A successful WebSocket send only queues hello. Wait until the real API exposes its
+        // persisted setup before a fixture can start a session or retry a failed step.
+        wait_for_device_report(owner, &self.id, &hello).await.unwrap();
         let base = base.to_owned();
         let credential = self.credential.clone();
-        tokio::spawn(async move {
-            while let Some(Ok(m)) = ws.next().await {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let task = tokio::spawn(async move {
+            loop {
+                let m = tokio::select! {
+                    out = rx.recv() => {
+                        if let Some(v) = out { send_json(&mut ws, &v).await; }
+                        continue;
+                    }
+                    m = ws.next() => m,
+                };
+                let Some(Ok(m)) = m else { break };
                 let Message::Text(t) = m else { continue };
                 let Ok(f) = serde_json::from_str::<ServiceFrame>(&t) else {
                     continue;
@@ -865,7 +1003,8 @@ impl Device {
                     _ => {}
                 }
             }
-        })
+        });
+        (task, tx)
     }
 }
 
@@ -876,6 +1015,8 @@ struct Provider<'a> {
     vars: HashMap<String, String>,
     done: BTreeSet<String>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Frames to send on a served device's socket, by device id.
+    inject: HashMap<String, tokio::sync::mpsc::UnboundedSender<Value>>,
 }
 
 impl Drop for Provider<'_> {
@@ -892,6 +1033,7 @@ impl<'a> Provider<'a> {
         let mut vars = HashMap::new();
         for (var, who) in [
             ("carbon_token", "c:alice"),
+            ("other_carbon_token", "c:bob"),
             ("silicon_token", "si:chef"),
             ("other_silicon_token", "si:sous"),
         ] {
@@ -912,6 +1054,7 @@ impl<'a> Provider<'a> {
             vars,
             done: BTreeSet::new(),
             tasks: Vec::new(),
+            inject: HashMap::new(),
         }
     }
 
@@ -950,7 +1093,7 @@ impl<'a> Provider<'a> {
                             os_version: None,
                             model: None,
                             app_version: "1.0.0".into(),
-                            agent_device_version: None,
+                            engine_version: None,
                         })
                         .await
                         .unwrap();
@@ -966,7 +1109,11 @@ impl<'a> Provider<'a> {
                         &["si:chef", "si:sous"],
                     )
                     .await;
-                    self.tasks.push(d.serve(&base, &self.client, DeviceOs::Android).await);
+                    let (task, inject) = d
+                        .serve_with(&base, &self.client, self.carbon(), hello(DeviceOs::Android))
+                        .await;
+                    self.tasks.push(task);
+                    self.inject.insert(d.id.clone(), inject);
                     let v = self.device_version(&d.id).await;
                     self.vars.insert("device_id".into(), d.id);
                     self.vars.insert("device_credential".into(), d.credential);
@@ -1027,8 +1174,109 @@ impl<'a> Provider<'a> {
                 }
                 "host" => {
                     let d = pair(&self.client, &self.var("carbon_token"), DeviceOs::Macos, &["si:chef"]).await;
-                    self.tasks.push(d.serve(&base, &self.client, DeviceOs::Macos).await);
+                    let (task, inject) = d
+                        .serve_with(&base, &self.client, self.carbon(), hello(DeviceOs::Macos))
+                        .await;
+                    self.tasks.push(task);
+                    self.inject.insert(d.id.clone(), inject);
+                    self.vars.insert("host_credential".into(), d.credential.clone());
                     self.vars.insert("host_id".into(), d.id);
+                }
+                "shared_device" => {
+                    self.given("device").await;
+                    let bob = pair_another(
+                        &self.client,
+                        &base,
+                        &self.var("device_credential"),
+                        &self.var("other_carbon_token"),
+                        "Contract, bob's",
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("shared_device: {e}"));
+                    self.vars.insert("shared_device_id".into(), bob.id);
+                }
+                "shared_computer" => {
+                    self.given("host").await;
+                    let host_id = self.var("host_id");
+                    // Both pairs connected by 1.1 apps.
+                    if let Some(inject) = self.inject.get(&host_id) {
+                        let _ = inject.send(hello_as(DeviceOs::Macos, "1.1.0", Setup::complete()));
+                    }
+                    let bob = pair_another(
+                        &self.client,
+                        &base,
+                        &self.var("host_credential"),
+                        &self.var("other_carbon_token"),
+                        "Contract Mac, bob's",
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("shared_computer: {e}"));
+                    let (task, inject) = bob
+                        .serve_with(
+                            &base,
+                            &self.client,
+                            self.client.authed(&self.vars["other_carbon_token"], Some("acme")),
+                            hello_as(DeviceOs::Macos, "1.1.0", Setup::complete()),
+                        )
+                        .await;
+                    self.tasks.push(task);
+                    self.inject.insert(bob.id.clone(), inject);
+                    self.vars.insert("shared_host_id".into(), bob.id);
+                }
+                "wake_request" => {
+                    self.given("device").await;
+                    let id = self.var("device_id");
+                    // The phone reports its screen off; si:chef asks its Carbon to wake it.
+                    if let Some(inject) = self.inject.get(&id) {
+                        let _ = inject.send(json!({"type": "awake", "awake": false, "sleep_state": "screen_off",
+                                                   "run": Uuid::new_v4(), "seq": 1}));
+                    }
+                    let owner = self.carbon();
+                    let idr = id.as_str();
+                    eventually("the phone reading not awake", move || async move {
+                        owner.device(idr).await.is_ok_and(|d| d.awake == Some(false))
+                    })
+                    .await
+                    .unwrap_or_else(|e| panic!("wake_request: {e}"));
+                    let (status, w) = call(
+                        &base,
+                        reqwest::Method::POST,
+                        &format!("/api/v1/devices/{id}/wake-requests"),
+                        &format!("Bearer {}", self.var("silicon_token")),
+                        Some("acme"),
+                        Some(json!({"type": "wake_request", "data": {"reason": "Contract: the order screen"}})),
+                    )
+                    .await;
+                    assert_eq!(status, 201, "asking to wake the phone: {w}");
+                    self.vars.insert(
+                        "wake_id".into(),
+                        w["data"]["wake_id"].as_str().unwrap_or_default().into(),
+                    );
+                }
+                "failed_setup" => {
+                    let d = pair(&self.client, &self.var("carbon_token"), DeviceOs::Android, &["si:chef"]).await;
+                    let failed = Setup::from_steps(vec![SetupStep {
+                        key: "wireless_debugging".into(),
+                        title: "Turn on wireless debugging".into(),
+                        status: StepStatus::Failed,
+                        help: None,
+                        error: Some(
+                            "The phone turned down the pairing. Open Wireless debugging on it, then tap Retry.".into(),
+                        ),
+                        input: None,
+                    }]);
+                    let (task, inject) = d
+                        .serve_with(
+                            &base,
+                            &self.client,
+                            self.carbon(),
+                            hello_as(DeviceOs::Android, "1.1.0", failed),
+                        )
+                        .await;
+                    self.tasks.push(task);
+                    self.inject.insert(d.id.clone(), inject);
+                    self.vars.insert("device_id".into(), d.id);
+                    self.vars.insert("device_credential".into(), d.credential);
                 }
                 "attached" => {
                     self.given("host").await;
@@ -1238,7 +1486,82 @@ async fn replay_http(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
             String::from_utf8_lossy(&bytes)
         ));
     }
-    check_response(&f["response"], &bytes, sent.as_ref()).map_err(|e| format!("{method} {path} answered, but {e}"))
+    check_response(&f["response"], &bytes, sent.as_ref()).map_err(|e| format!("{method} {path} answered, but {e}"))?;
+    match f["effect"].as_str() {
+        None => Ok(()),
+        Some("device_enrollment") => device_enrollment_effect(p, &bytes).await,
+        Some(other) => Err(format!("unknown effect {other:?}")),
+    }
+}
+
+/// "Pair with another Carbon": c:bob claims the code the answer gave, and the new pair is a second
+/// pair of the same physical device, with its own id.
+async fn device_enrollment_effect(p: &mut Provider<'_>, bytes: &[u8]) -> Result<(), String> {
+    let v: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let data = &v["data"];
+    let base = p.svc.base.clone();
+    let claimed = p
+        .client
+        .authed(&p.var("other_carbon_token"), Some("acme"))
+        .pair(&PairingClaim {
+            pairing_code: data["pairing_code"].as_str().unwrap_or_default().into(),
+            name: "Contract, bob's".into(),
+            visibility: None,
+            pair_ttl_days: None,
+            silicon_ids: vec![],
+        })
+        .await
+        .map_err(|e| format!("c:bob claiming the code: {e}"))?;
+    let id: Uuid = data["enrollment_id"]
+        .as_str()
+        .unwrap_or_default()
+        .parse()
+        .map_err(|e| format!("{e}"))?;
+    let bob_credential = match p
+        .client
+        .enrollment(id, data["enrollment_secret"].as_str().unwrap_or_default())
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        EnrollmentState::Paired { device_credential, .. } => device_credential,
+        other => return Err(format!("the enrollment isn't paired after the claim: {other:?}")),
+    };
+    let instance = |cred: String| {
+        let base = base.clone();
+        async move {
+            let (status, me) = call(
+                &base,
+                reqwest::Method::GET,
+                "/api/v1/device",
+                &format!("Extend-Device {cred}"),
+                None,
+                None,
+            )
+            .await;
+            (
+                status,
+                me["data"]["instance_id"].clone(),
+                me["data"]["device_id"].clone(),
+            )
+        }
+    };
+    let (s1, i1, d1) = instance(p.var("device_credential")).await;
+    let (s2, i2, d2) = instance(bob_credential).await;
+    if s1 != 200 || s2 != 200 || i1.is_null() || i1 != i2 {
+        return Err(format!("the two pairs should be one device: {s1} {i1} / {s2} {i2}"));
+    }
+    if d1 == d2 || d2 != json!(claimed.device_id.to_string()) {
+        return Err(format!("the second pair should have its own id: {d1} / {d2}"));
+    }
+    let alice = p
+        .carbon()
+        .device(&p.var("device_id"))
+        .await
+        .map_err(|e| e.to_string())?;
+    if alice.paired_by_others != Some(true) {
+        return Err("c:alice's view should say paired_by_others".into());
+    }
+    Ok(())
 }
 
 /// The frames the service sent, checked against what the consumer reads from each type.
@@ -1327,6 +1650,124 @@ where
     Err(format!("{what} never happened"))
 }
 
+/// The service may prepend its own carried-device recognition step; every step the app
+/// reported must nevertheless be visible, including changed errors/statuses within one state.
+async fn reported_setup_is_visible(owner: Authed<'_>, id: &str, frame: &Value) -> bool {
+    let expected: Setup = serde_json::from_value(frame["setup"].clone()).expect("reported setup");
+    owner.setup(id).await.is_ok_and(|actual| {
+        actual.state == expected.state && expected.steps.iter().all(|step| actual.steps.contains(step))
+    })
+}
+
+/// Online can become true before hello is stored; an offline attachment is already offline
+/// before its first report. Neither is a barrier for the setup HTTP requests that follow.
+async fn wait_for_device_report(owner: Authed<'_>, id: &str, frame: &Value) -> Result<(), String> {
+    eventually("the complete device report becoming visible", move || async move {
+        let Ok(device) = owner.device(id).await else {
+            return false;
+        };
+        let online = frame["online"].as_bool().unwrap_or(true);
+        if device.online != online
+            || frame["awake"].as_bool().is_some_and(|v| device.awake != Some(v))
+            || frame["model"]
+                .as_str()
+                .is_some_and(|v| device.model.as_deref() != Some(v))
+            || frame["os_version"]
+                .as_str()
+                .is_some_and(|v| device.os_version.as_deref() != Some(v))
+            || frame["app_version"]
+                .as_str()
+                .is_some_and(|v| device.app_version.as_deref() != Some(v))
+            || frame["engine_version"]
+                .as_str()
+                .is_some_and(|v| device.engine_version.as_deref() != Some(v))
+        {
+            return false;
+        }
+        if frame["type"] == "hello" {
+            let setup: Setup = serde_json::from_value(frame["setup"].clone()).expect("hello setup");
+            let expected = if setup.state == SetupState::Complete || setup.steps.is_empty() {
+                DeviceState::Ready
+            } else {
+                DeviceState::Setup
+            };
+            if device.state != expected {
+                return false;
+            }
+        }
+        reported_setup_is_visible(owner, id, frame).await
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_provider_waits_for_hello_persistence_before_starting_a_session() {
+    let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
+    let mut p = Provider::new(&svc).await;
+    let d = pair(&p.client, &p.var("carbon_token"), DeviceOs::Android, &["si:chef"]).await;
+    // Force persistence to take longer than the old 150 ms sleep. WebSocket connection and
+    // writes still succeed, and ordinary API reads still see the previous committed row.
+    let mut lock = svc.pool.begin().await.unwrap();
+    sqlx::query("SELECT device_id FROM extend.devices WHERE device_id = $1 FOR UPDATE")
+        .bind(&d.id)
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    let (task, _inject) = {
+        let serving = d.serve_with(&svc.base, &p.client, p.carbon(), hello(DeviceOs::Android));
+        tokio::pin!(serving);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(350), serving.as_mut())
+                .await
+                .is_err(),
+            "the provider returned before the device's hello could be stored"
+        );
+        assert_eq!(p.carbon().device(&d.id).await.unwrap().state, DeviceState::Setup);
+        lock.rollback().await.unwrap();
+        serving.await
+    };
+    p.tasks.push(task);
+    assert_eq!(p.carbon().device(&d.id).await.unwrap().state, DeviceState::Ready);
+    let session = p.silicon().start_session(&d.id.parse().unwrap()).await.unwrap();
+    p.silicon().end_session(session.session_id.as_ref()).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_offline_attachment_waits_for_reported_steps_within_the_same_setup_state() {
+    let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
+    let mut p = Provider::new(&svc).await;
+    p.given("attached").await;
+    let id = p.var("attached_id");
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../contracts/v1/device/agent.device.socket.setup_retry.json"
+    ))
+    .unwrap();
+    // The first report is offline, as the new attachment already is. The second changes its
+    // steps but stays needs_carbon and offline, so neither broad status is an acknowledgement.
+    for step in [&fixture["sends"][1], &fixture["sends"][2]] {
+        let mut frame = p.fill_json(&step["frame"]).unwrap();
+        frame["online"] = json!(false);
+        let mut lock = svc.pool.begin().await.unwrap();
+        sqlx::query("SELECT device_id FROM extend.devices WHERE device_id = $1 FOR UPDATE")
+            .bind(&id)
+            .fetch_one(&mut *lock)
+            .await
+            .unwrap();
+        p.inject[&p.var("host_id")].send(frame.clone()).unwrap();
+        let reported = wait_for_device_report(p.carbon(), &id, &frame);
+        tokio::pin!(reported);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(350), reported.as_mut())
+                .await
+                .is_err(),
+            "the report wait accepted old offline/setup state before its steps were stored"
+        );
+        lock.rollback().await.unwrap();
+        reported.await.unwrap();
+        assert!(reported_setup_is_visible(p.carbon(), &id, &frame).await);
+    }
+}
+
 async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     let os: DeviceOs = serde_json::from_value(f["os"].clone()).map_err(|e| format!("os: {e}"))?;
     let base = p.svc.base.clone();
@@ -1346,6 +1787,7 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
         seen: vec![],
     };
     let mut session: Option<String> = None;
+    let mut retry_target: Option<String> = None;
     for step in f["sends"].as_array().into_iter().flatten() {
         let effect = step["effect"].as_str().unwrap_or("none");
         let raw = &step["frame"];
@@ -1416,6 +1858,96 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                 sock.until("attach").await;
                 p.vars.insert("attached_id".into(), a.device_id.to_string());
             }
+            "wake_request_shown" => {
+                // si:chef asks to wake the device, and the device gets the request.
+                let (status, w) = call(
+                    &base,
+                    reqwest::Method::POST,
+                    &format!("/api/v1/devices/{}/wake-requests", d.id),
+                    &format!("Bearer {}", p.var("silicon_token")),
+                    Some("acme"),
+                    Some(json!({"type": "wake_request", "data": {"reason": "Contract: the order screen"}})),
+                )
+                .await;
+                if status != 201 {
+                    return Err(format!("asking to wake the device answered {status}: {w}"));
+                }
+                let frame = sock.until("wake_request").await;
+                p.vars
+                    .insert("wake_id".into(), frame["wake_id"].as_str().unwrap_or_default().into());
+            }
+            "credential_saved" => {
+                // A computer two Carbons paired: c:bob pairs it too, with a 1.1 app connected.
+                let bob = pair_another(
+                    &p.client,
+                    &base,
+                    &d.credential,
+                    &p.var("other_carbon_token"),
+                    "Contract Mac, bob's",
+                )
+                .await?;
+                let (task, _) = bob
+                    .serve_with(
+                        &base,
+                        &p.client,
+                        p.client.authed(&p.vars["other_carbon_token"], Some("acme")),
+                        hello_as(os, "1.1.0", Setup::complete()),
+                    )
+                    .await;
+                p.tasks.push(task);
+                // A session through the fixture's pair ends, and each pair gets a new credential.
+                let s = p
+                    .silicon()
+                    .start_session(&d.id.parse().unwrap())
+                    .await
+                    .map_err(|e| format!("starting a session for the rotation: {e}"))?;
+                sock.until("session_started").await;
+                p.silicon()
+                    .end_session(s.session_id.as_ref())
+                    .await
+                    .map_err(|e| format!("ending the session: {e}"))?;
+                let cred = sock.until("credential").await;
+                p.vars.insert(
+                    "new_credential".into(),
+                    cred["device_credential"].as_str().unwrap_or_default().into(),
+                );
+            }
+            "setup_retry" => {
+                // c:alice retries the first failed step of the device (or of the carried device the
+                // frame names), and the device is told.
+                let target = if raw["type"] == "attached" {
+                    p.var("attached_id")
+                } else {
+                    d.id.clone()
+                };
+                let setup = p
+                    .carbon()
+                    .setup(&target)
+                    .await
+                    .map_err(|e| format!("reading the setup: {e}"))?;
+                let key = setup
+                    .failed()
+                    .next()
+                    .map(|s| s.key.clone())
+                    .ok_or_else(|| format!("{target} has no failed step to retry"))?;
+                let (status, r) = call(
+                    &base,
+                    reqwest::Method::POST,
+                    &format!("/api/v1/devices/{target}/setup/retry"),
+                    &format!("Bearer {}", p.var("carbon_token")),
+                    Some("acme"),
+                    Some(json!({"step": key})),
+                )
+                .await;
+                if status != 202 || r["data"]["retrying"] != json!([key]) {
+                    return Err(format!("the setup retry answered {status}: {r}"));
+                }
+                let frame = sock.until("setup_retry").await;
+                if frame["step"] != json!(key) {
+                    return Err(format!("the setup_retry frame names another step: {frame}"));
+                }
+                retry_target = Some(target);
+            }
             "stop_target" => {
                 let attached = p.var("attached_id");
                 p.carbon()
@@ -1441,28 +1973,126 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
         let device_id = d.id.as_str();
         let frame = &frame;
         match effect {
-            "hello" => {
-                // Pairing used another model, so a match means the service stored this hello.
-                eventually(
-                    "the device showing online with what the hello says",
-                    move || async move {
-                        owner.device(device_id).await.is_ok_and(|x| {
-                            x.online
-                                && x.app_version.as_deref() == frame["app_version"].as_str()
-                                && x.model.as_deref() == frame["model"].as_str()
-                                && x.os_version.as_deref() == frame["os_version"].as_str()
+            "hello" => wait_for_device_report(owner, device_id, frame).await?,
+            "awake" => {
+                let want = frame["awake"].as_bool();
+                let sleep = frame["sleep_state"].as_str().map(str::to_owned);
+                let sleep = &sleep;
+                eventually("the device reading awake as reported", move || async move {
+                    owner.device(device_id).await.is_ok_and(|x| {
+                        x.awake == want
+                            && sleep
+                                .as_deref()
+                                .is_none_or(|s| x.sleep_state.map(|v| v.as_str()) == Some(s))
+                    })
+                })
+                .await?;
+                if want == Some(true)
+                    && frame["input_seen"] != json!(false)
+                    && let Some(wake_id) = p.vars.get("wake_id").cloned()
+                {
+                    let ended = sock.until("wake_request_ended").await;
+                    if ended["wake_id"] != json!(wake_id) {
+                        return Err(format!("expected wake request {wake_id} to end, got {ended}"));
+                    }
+                    let base = p.svc.base.clone();
+                    let token = p.var("carbon_token");
+                    let wid = wake_id.as_str();
+                    let (base, token) = (&base, &token);
+                    eventually("the wake request reading woken", move || async move {
+                        let (_, list) = call(
+                            base,
+                            reqwest::Method::GET,
+                            &format!("/api/v1/devices/{device_id}/wake-requests?state=all"),
+                            &format!("Bearer {token}"),
+                            None,
+                            None,
+                        )
+                        .await;
+                        list["data"]["items"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|w| w["wake_id"] == wid && w["state"] == "woken"))
+                    })
+                    .await?;
+                }
+            }
+            "wake_request_shown" => {
+                let base = p.svc.base.clone();
+                let token = p.var("carbon_token");
+                let wid = p.var("wake_id");
+                let want = if frame["shown"] == json!(true) {
+                    "shown"
+                } else {
+                    "not_shown"
+                };
+                let note = frame["note"].clone();
+                let (base, token, wid, note) = (&base, &token, &wid, &note);
+                eventually("the wake request's device_notice", move || async move {
+                    let (_, list) = call(
+                        base,
+                        reqwest::Method::GET,
+                        &format!("/api/v1/devices/{device_id}/wake-requests?state=all"),
+                        &format!("Bearer {token}"),
+                        None,
+                        None,
+                    )
+                    .await;
+                    list["data"]["items"].as_array().is_some_and(|a| {
+                        a.iter().any(|w| {
+                            w["wake_id"] == json!(wid)
+                                && w["device_notice"] == want
+                                && (note.is_null() || w["device_notice_note"] == *note)
                         })
-                    },
+                    })
+                })
+                .await?
+            }
+            "credential_saved" => {
+                let base = p.svc.base.clone();
+                let new = p.var("new_credential");
+                let old = d.credential.clone();
+                let (base, new) = (&base, &new);
+                eventually("the new credential working", move || async move {
+                    call(
+                        base,
+                        reqwest::Method::GET,
+                        "/api/v1/device",
+                        &format!("Extend-Device {new}"),
+                        None,
+                        None,
+                    )
+                    .await
+                    .0 == 200
+                })
+                .await?;
+                let (status, _) = call(
+                    base,
+                    reqwest::Method::GET,
+                    "/api/v1/device",
+                    &format!("Extend-Device {old}"),
+                    None,
+                    None,
                 )
+                .await;
+                if status != 401 {
+                    return Err(format!(
+                        "the old credential still answers {status} after credential_saved"
+                    ));
+                }
+            }
+            "setup_retry" => {
+                let target = retry_target.clone().unwrap_or_else(|| device_id.to_owned());
+                let target = target.as_str();
+                // Two retry reports can both be needs_carbon while different steps failed or
+                // finished. The state alone does not show that this frame was processed.
+                eventually("the setup reported after the retry", move || {
+                    reported_setup_is_visible(owner, target, frame)
+                })
                 .await?
             }
             "setup_progress" => {
-                let want = &frame["setup"]["state"];
-                eventually("the setup state changing", move || async move {
-                    owner
-                        .setup(device_id)
-                        .await
-                        .is_ok_and(|s| serde_json::to_value(s.state).ok().as_ref() == Some(want))
+                eventually("the reported setup progress", move || {
+                    reported_setup_is_visible(owner, device_id, frame)
                 })
                 .await?
             }
@@ -1502,13 +2132,7 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                 .await?
             }
             "attached" => {
-                let id = p.var("attached_id");
-                let id = id.as_str();
-                let online = frame["online"].as_bool();
-                eventually("the attached device reporting its state", move || async move {
-                    owner.device(id).await.is_ok_and(|x| Some(x.online) == online)
-                })
-                .await?
+                wait_for_device_report(owner, &p.var("attached_id"), frame).await?;
             }
             "stop_target" => {
                 let sid = p.var("target_session");
@@ -1585,6 +2209,13 @@ async fn replay(kind: &str) {
 #[tokio::test]
 async fn client_fixtures_still_replay() {
     replay("client").await;
+}
+
+/// The released 1.0.0 client still works against this service: its fixtures, frozen before the
+/// live ones were regenerated for 1.1 (UNDERSTANDING.md "Versioning": the API only gains).
+#[tokio::test]
+async fn client_1_0_0_fixtures_still_replay() {
+    replay("client-1.0.0").await;
 }
 
 #[tokio::test]

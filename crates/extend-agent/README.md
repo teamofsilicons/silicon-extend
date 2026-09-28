@@ -1,19 +1,24 @@
 # extend-agent: Silicon Extend for Mac, Windows and Linux
 
 One Rust binary is the Extend app on all three desktops. It shows a pairing code until a Carbon
-claims it. Then it keeps the computer connected to Extend, runs the commands Silicons send, and
-shows which Silicon is using the computer, with a **Stop** button. The wire contract is
+claims it. Then it keeps the computer connected to Extend (one connection for each Carbon who
+paired it), runs the commands Silicons send, and shows which Silicon is using the computer, with a
+**Stop** button. The wire contract is
 [`docs/device-protocol.md`](../../docs/device-protocol.md), and the frame types come from
 `extend-protocol`.
 
 ```
              ┌────────────── extend-agent ──────────────────────────────────────────────┐
- Extend  ◄───┤ enroll.rs    POST /enrollments + enrollment socket (code, rotations, paired) │
- service ◄───┤ agent.rs     device socket: hello, frames, ping/pong, backoff, close codes   │
+ Extend  ◄───┤ enroll.rs    pairing codes: first pairing and "Pair with another Carbon"     │
+ service ◄───┤ agent.rs     one device socket per pair: hello, awake, frames, backoff      │
          ◄───┤ dispatch.rs  per-device queues, deadline/cancel, attachments, uploads       │
+             │ credential.rs one secret per pair, rotation with a fallback                │
+             │ awake.rs     locked/asleep/awake → `awake` frames (run, seq, input_seen)     │
+             │ notify.rs    wake requests: one notification, redacted for other sides      │
+             │ display.rs   keeps the display on during this computer's own session       │
              │ hosted.rs    attach → extend_hosted::driver_for → routes `target` commands   │
              │ drivers/     local.rs = platform driver + terminal.rs                        │
-             │   agent_device.rs  Mac/Linux: node vendor/agent-device … --json             │
+             │   agent_device.rs  Mac/Linux: node vendor/extend-engine … --json            │
              │   probe_macos.rs / probe_linux.rs   what works right now, and why not        │
              │   windows/         Extend's own Windows driver (UI Automation, SendInput)   │
              │ status.rs    one status value → tray, window, banner, headless, `status`     │
@@ -30,7 +35,8 @@ extend-agent run [--autostart | --no-autostart]   # also turn start at login on 
 extend-agent status [--json]      # what the running app is doing (reads {state}/status.json)
 extend-agent probe [--json]       # what this computer can do right now (the `hello` it would send)
 extend-agent stop                 # Stop the Silicon using this computer (POST /api/v1/device/stop)
-extend-agent revoke [--yes]       # Revoke pair, after a typed confirmation (DELETE /api/v1/device)
+extend-agent revoke [--device ID] [--yes]  # Revoke one Carbon's pair, after a typed confirmation
+                                  # (DELETE /api/v1/device); --device when several Carbons paired it
 extend-agent install-autostart [--headless] [--systemd]   # start at login (remembered)
 extend-agent uninstall-autostart                          # stop starting at login (remembered)
 extend-agent exec [--session a3f] [--timeout-ms N] [--out DIR] [--end-session] <command> [args…]
@@ -45,35 +51,41 @@ Global flags are `--service-url`, `--credential-store auto|keyring|file`, `--hom
 | Service URL | `--service-url`, `EXTEND_API_URL`, `config.json` `service_url` | `https://backend.extend.teamofsilicons.com` |
 | Home | `--home`, `SILICON_HOME` | the OS home |
 | Credential store | `--credential-store`, `EXTEND_AGENT_CREDENTIAL_STORE`, `config.json` | `auto` |
-| agent-device | `EXTEND_AGENT_DEVICE` (path to `bin/agent-device.mjs` or an executable), `config.json` `agent_device` (argv), the copy bundled with the app, then `vendor/agent-device` in a source checkout | — |
+| Device engine | `EXTEND_ENGINE` (1.0's `EXTEND_AGENT_DEVICE` still works; path to `bin/extend-engine.mjs` or an executable), `config.json` `engine` (argv; 1.0's key `agent_device` is still read), the copy bundled with the app (`engine/`), then `vendor/extend-engine` in a source checkout. When none is found the probe says "Silicon Extend's device engine is missing. Reinstall Silicon Extend." | — |
 | Node | `EXTEND_NODE`, the bundled copy, `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` | — |
 | Terminal shell | `EXTEND_TERMINAL_SHELL` (argv before the command) | `$SHELL -l -c` (bash, zsh, fish, ksh), else `/bin/sh -c`; `cmd.exe /D /S /C` on Windows |
 | Update download page | `--download-url`, `EXTEND_DOWNLOAD_URL`, `config.json` `download_url` (http or https) | `https://extend.teamofsilicons.com/download/mac`, `/windows` or `/linux` |
 
 The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file in it is 0600:
 
-- `credential.json`: the device credential, only when the file store is in use. With `auto`, the
-  credential goes to the OS secret store first: the macOS Keychain, Windows Credential Manager, or
-  the Secret Service on Linux. The `keyring` crate keeps it under the service `Silicon Extend`,
-  account `device-credential@<service host>`. The file is the fallback when there's no secret
-  store, as on a headless Linux server.
-- `status.json`: the live status, read by `extend-agent status`.
+- `credential.json`: the device credentials (a JSON array, one per pair), only when the file store
+  is in use. With `auto`, each goes to the OS secret store first: the macOS Keychain, Windows
+  Credential Manager, or the Secret Service on Linux. The `keyring` crate keeps each pair under the
+  service `Silicon Extend`, account `<service url>#<device id>`, and the list of pairs under
+  `<service url>#pairs`. The file is the fallback when there's no secret store, as on a headless
+  Linux server. 1.0 kept one credential (account `device-credential@<service host>`, or one object
+  in the file); the first start of 1.1 moves it to the new layout.
+- `status.json`: the live status, read by `extend-agent status`. It never holds wake requests,
+  their reasons, or which Silicon holds a carried device: on a computer several Carbons paired, a
+  Silicon's terminal can read it. The tray and the window keep those in memory.
 - `agent.lock`: the single-instance lock, so two copies never fight over one credential.
 - `attached.json`, `hosted/<device_id>/`: devices this computer carries.
 - `start-at-login.json`: the start-at-login choice (`{"start_at_login": bool, "by": "default"|"carbon"}`).
-- `agent-device/`: agent-device's own daemon state (`AGENT_DEVICE_STATE_DIR`).
+- `engine/`: the device engine's own daemon state (`EXTEND_ENGINE_STATE_DIR`). 1.0 kept it in
+  `agent-device/`; the first start of 1.1 renames that directory to `engine/` once.
 - `sessions/<session_id>/`: recordings and armed replay scripts that outlive a single command;
   `live-session` while the running app has that session in use, and `cleanup-pending.json` while a
   failed cleanup waits to be retried.
-- `agent-device/extend-runtime-root.json`: the install path of the runtime that started the
-  agent-device daemon (written by the packaged entry, `apps/desktop/runtime-entry.mjs`).
-- `work/<command_id>/`: each command's scratch directory, removed once its result is sent.
+- `engine/extend-runtime-root.json`: the install path of the runtime that started the
+  engine's daemon (written by the packaged entry, `apps/desktop/runtime-entry.mjs`).
+- `work/<session_id>/<command_id>/`: each command's scratch directory, removed once its result is
+  sent; the session's directory goes when the session has been cleaned up.
 - `logs/extend-agent.log`: the log, rotated at 10 MB.
 
 ## The protocol, as implemented
 
 - **Enrollment.** The agent sends `POST /api/v1/enrollments` with the OS, OS version, model, app
-  version and agent-device version, then opens the enrollment socket with `Extend-Enrollment`. It
+  version and device engine version, then opens the enrollment socket with `Extend-Enrollment`. It
   follows `code` rotations and answers `ping` with `pong`. On `paired` it stores the credential and
   moves to the device socket. If the socket drops, it reconnects with backoff and first polls
   `GET /enrollments/{id}`, which catches a pairing that happened while it was down. A 401 or 404
@@ -85,9 +97,9 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
   - It reconnects with exponential backoff from 1 s to 60 s with full jitter. The backoff resets
     after a connection stays up for 60 s.
   - It treats 60 s without anything from the service as a dead connection.
-  - Close codes: `4401` (or a 401/403/404 on upgrade) forgets the credential and goes back to
-    pairing. `4409`/`superseded` stops reconnecting until the Carbon chooses "Connect this copy
-    instead". `4426` shows "update needed" and retries hourly.
+  - Close codes: `4401` (or a 401/403/404 on upgrade) forgets that pair's credential (after the
+    last pair, the app goes back to pairing). `4409`/`superseded` stops reconnecting that pair
+    until the Carbon chooses Reconnect for it. `4426` shows "update needed" and retries hourly.
 - **Probing.** The agent probes again every 30 s, and every 5 s while a setup step still needs the
   Carbon. It sends a new `hello` when capabilities or `missing` change, and `setup_progress` when
   only the setup changed.
@@ -125,13 +137,13 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
   every session, then clean each session up on its device's queue; Quit waits up to 10 s.
   `unpaired` then forgets the credential.
 - **Cleanup on Mac and Linux.** Ending a session stops a recording and a log capture that are
-  still running, then closes the agent-device session (`SESSION_NOT_FOUND` counts as closed, and a
-  session where agent-device never ran is not closed at all). If `close` fails twice, the running
-  app forces a release: `agent-device daemon stop`, then `device release --stale --platform <p>`
-  (claims live per user in `~/.agent-device/device-claims`; `--stale` releases only claims whose
+  still running, then closes the engine's session (`SESSION_NOT_FOUND` counts as closed, and a
+  session where the engine never ran is not closed at all). If `close` fails twice, the running
+  app forces a release: `extend-engine daemon stop`, then `device release --stale --platform <p>`
+  (claims live per user in `~/.silicon-extend/engine/device-claims`; `--stale` releases only claims whose
   owner is provably gone). If that fails too, the session is kept in
   `sessions/<id>/cleanup-pending.json` and the computer is **held**: setup stays complete and the
-  service keeps it `ready`, but every capability only agent-device provides moves to `missing` with
+  service keeps it `ready`, but every capability only the engine provides moves to `missing` with
   one reason (what happened, why, that the release is retried, and that restarting the computer
   clears it). `terminal` and `takeover` keep working, and a new session can start. Background
   retries run after 15 s, 30 s, 1 min, 2 min, then every 5 min, up to 12 per run of the app; they
@@ -148,11 +160,82 @@ The state lives in `{home}/.extend-agent/`. The directory is 0700 and every file
   attach with `removed: true` drops the device. `setup_code` goes to the driver's
   `setup_code`, and a failure shows up as a failed step. The list survives restarts.
 
+## Several Carbons, waking, and setup retries (1.1)
+
+- **One connection per pair.** Each Carbon who paired this computer has a pair of their own (device
+  id, name, credential). The agent keeps one device socket per pair, all sharing one command
+  queue per device, one probe and one screen watch. What arrives on a pair's socket is answered on
+  it, and its files are uploaded with its credential. Stop and Done go on any connected pair (the
+  service applies them to the whole computer); Stop for a carried device goes on the pair it is
+  carried for. Revoke pair, `unpaired`, and a taken-over connection (Reconnect) are per pair, and
+  never touch the others.
+- **Pair with another Carbon.** After the window's shared-computer warning, the agent asks for a
+  code with any live pair's credential (`POST /api/v1/device/enrollments`) and shows it in its own
+  card while the computer stays paired. A 1.0 service answers 404: "Extend on the service is too
+  old for this". A claimed code adds a pair and connects it.
+- **Carried devices under several Carbons.** Each pair's greeting attaches only that Carbon's
+  carried devices, and a reconnect reconciles only those. Drivers report a stable hardware id;
+  `attached` carries `hardware_key = hex(HMAC-SHA256(hardware_salt, driver:id))` with the world's
+  salt from `GET /api/v1/device`, never the raw id, and two ids with one key share one driver here.
+- **Credential rotation.** A `credential` frame is stored (the old one kept as a fallback) before
+  `credential_saved` goes back. The next connection uses the new one; if the service never took it,
+  the app falls back to the old one.
+- **Awake.** Right after every `hello`, and on every change, each connection sends `awake` (one
+  random `run` per app process, `seq` rising across connections): locked, another account, or a
+  Mac's display asleep is not awake; an admin prompt is (the Carbon is at it); a computer the watch
+  can't read is always awake. An unlock counts as input; a display that woke by itself is sent
+  with `input_seen: false`, and again with `true` at the first input.
+- **Wake requests.** `wake_request` shows one system notification listing every open request
+  (UNUserNotificationCenter inside the Mac app; a WinRT toast under the app's AUMID; D-Bus Notify
+  with `replaces_id`, else `notify-send`), and `wake_request_shown` answers once per request. While
+  a session runs, other sides' requests are shown without the Silicon or reason, on screen and in
+  the notification, before the session's first command runs. A request for a carried device only
+  has that device checked every 5 s until it ends.
+- **Keeping the display on.** While this computer's own session runs, no takeover is paused on the
+  Carbon, and it is awake, the agent holds an IOKit `PreventUserIdleDisplaySleep` assertion (Mac),
+  `SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED)` on its own thread (Windows), or
+  `org.freedesktop.ScreenSaver.Inhibit` on a session-long D-Bus connection, falling back to the
+  desktop portal (Linux). It never turns a screen on.
+- **Setup retry.** `hello` lists `features: ["setup_retry"]`. `setup_retry` reruns the named failed
+  step (every failed step without one) at once: this computer's, or with `target` a carried
+  device's, whose `attached` goes again straight after. Every setup error is one or two sentences
+  saying what is wrong and what to do; the technical detail goes to the log.
+
+### Manual checks for 1.1 (not run yet)
+
+The automated tests use a fake service, a fake notifier and a fake display keeper; the platform
+pieces below need a real desktop. Each row is still to be run before release.
+
+| Check | macOS 15 | macOS 26 | Windows 10 | Windows 11 | Ubuntu GNOME | KDE |
+|---|---|---|---|---|---|---|
+| The display stays on through a 10-minute idle session, and turns off again after it ends | not run | not run | not run | not run | not run | not run |
+| Locking during a session releases the display hold; unlocking takes it again | not run | not run | not run | not run | not run | not run |
+| A wake request shows one notification; a second Silicon's collapses into it ("… and 1 more") | not run | not run | not run | not run | not run | not run |
+| Another side's session starts: the notification (and its history entry) no longer names anyone | not run | not run | not run | not run | not run | not run |
+| Unlocking sends `awake` with `input_seen: true`; a display that wakes by itself sends `false` first | not run | not run | not run | not run | n/a | n/a |
+| A UAC prompt reads as awake (screen still withheld) | n/a | n/a | not run | not run | n/a | n/a |
+| `setsid sleep 600 &` (Unix) / `start /b` (Windows) from a session is gone after the session ends | not run | not run | not run | not run | not run | not run |
+| Updating from 1.0 moves the credential and keeps the pair connected | not run | not run | not run | not run | not run | not run |
+
+The containment row is also covered by `cargo test` (`what_a_session_left_running_ends_with_it`),
+which passes on the build Mac (Darwin 27) and in the Debian container of `apps/desktop/linux-e2e`.
+
 ## Drivers and what each computer reports
 
 **Terminal (all three).** `terminal run <command> [--cwd <dir>] [--env K=V]…` runs through the
 Carbon's login shell with plain pipes, so stdout and stderr stay separate. It returns
 `{stdout, stderr, exit_code, duration_ms}`.
+- Nothing a session's terminal started outlives the session. Every command of a session runs with
+  `EXTEND_SESSION_MARK=<random hex>`; at the session's end every process of this account carrying
+  it is killed with its process group (`/proc/<pid>/environ` on Linux, `KERN_PROCARGS2` on a Mac,
+  where Apple's own programs hide their environment, so each command's process group and the
+  processes forked from it are also ended). Windows puts a session's commands in one Job Object
+  (kill on close, no breakaway), started suspended so nothing escapes before it joins. What the OS
+  starts for a command (launchd, `schtasks`, `systemd-run`, `cron`, `at`) isn't contained.
+- On a computer several Carbons paired, only Silicons given access through the pair made by the
+  app's first enrollment (the Carbon who installed Silicon Extend here) get the terminal: the other
+  pairs' `hello` reports it missing with a reason that names no Carbon, and a `terminal` command
+  arriving through them is refused.
 - A non-zero exit returns `ok:false`, `command_failed`, with `details.exit_code`.
 - The command runs in its own process group, and the whole group is killed on a timeout or cancel
   (`taskkill /T` on Windows).
@@ -160,14 +243,14 @@ Carbon's login shell with plain pipes, so stdout and stderr stay separate. It re
 - One command token is used exactly as given (`terminal run "ls | wc -l"`); several are joined with
   spaces.
 
-**Mac and Linux: agent-device.** Each command becomes
-`agent-device.mjs <command> <args> --platform macos|linux --session extend-<session_id> --json`,
-run by node. When agent-device is a node script (always, as packaged) node gets the arguments as
+**Mac and Linux: the device engine.** Each command becomes
+`extend-engine.mjs <command> <args> --platform macos|linux --session extend-<session_id> --json`,
+run by node. When the engine is a node script (always, as packaged) node gets the arguments as
 JSON over stdin through a small loader, so `ps` shows only
-`node --input-type=module -e <loader> -- …/agent-device.mjs` and typed text is in no process's
-command line. If `EXTEND_AGENT_DEVICE` or `config.json` names a plain executable instead, its
-arguments are on its command line. It runs with `AGENT_DEVICE_STATE_DIR`, and with
-`AGENT_DEVICE_JSON_TEXT=1`, a fork addition (see `vendor/agent-device/FORK.md`) so one run returns
+`node --input-type=module -e <loader> -- …/extend-engine.mjs` and typed text is in no process's
+command line. If `EXTEND_ENGINE` or `config.json` names a plain executable instead, its
+arguments are on its command line. It runs with `EXTEND_ENGINE_STATE_DIR`, and with
+`EXTEND_ENGINE_JSON_TEXT=1`, a fork addition (see `vendor/extend-engine/FORK.md`) so one run returns
 both the JSON and the text the CLI would print.
 - **Output paths are always chosen here**, inside the work directory, and come back as files:
   - `screenshot [name]` writes a PNG as a `screenshot`.
@@ -179,32 +262,32 @@ both the JSON and the text the CLI would print.
     directory.
 - Input files (replay scripts, baselines, step files) must come as attachments. A path on the
   Silicon's machine is refused with a precise message.
-- agent-device's error codes map to Extend's: `INVALID_ARGS` becomes `invalid_args`, and
+- The engine's error codes map to Extend's: `INVALID_ARGS` becomes `invalid_args`, and
   `UNSUPPORTED_*` becomes `unsupported_on_device`. Every other code is lowercased. The original
   code and hint stay in `details`.
 - **Mac app names.** `open <app>` and `close <app>` find the app by its bundle file name, as
-  `open -a` does, ignoring case, a trailing `.app` and invisible marks, and pass agent-device its
+  `open -a` does, ignoring case, a trailing `.app` and invisible marks, and pass the engine its
   absolute `.app` path (so result text may show `/Applications/Visual Studio Code.app`). Search
   order: `/Applications` (3 levels), `~/Applications` (3), `/System/Applications` (2), then
   `/System/Cryptexes/App/System/Applications`, `/System/Library/CoreServices/Applications` and
-  `/System/Library/CoreServices` (1 each). If agent-device still answers `APP_NOT_INSTALLED`,
+  `/System/Library/CoreServices` (1 each). If the engine still answers `APP_NOT_INSTALLED`,
   Spotlight (`mdfind`) is asked and the command retried. Names are resolved after the command is
   planned, so `--save-script` in any position keeps the app. Bundle ids, `settings`, links and
   paths are passed unchanged. Limit: an app whose display name differs from its file name
-  (`OBS Studio`, `Code`, `iTerm2`) relies on agent-device's own display-name match.
-- **Recording quality.** `record start --quality normal|high` (`cli.yaml`) is passed as agent-device's
+  (`OBS Studio`, `Code`, `iTerm2`) relies on the engine's own display-name match.
+- **Recording quality.** `record start --quality normal|high` (`cli.yaml`) is passed as the engine's
   `medium|high` (`medium` is accepted too; anything else is `invalid_args` naming both values). On
   a Mac it picks the export quality; on Linux the fork encodes at 8 Mbit/s (medium) or 20 Mbit/s
   (high), as Android's screenrecord does. The same mapping applies to iPhones and iPads a Mac
   carries (`extend-hosted`).
 - **`--`.** Flags the agent adds (`--platform`, `--session`, `--json`) go before a `--` in the
-  Silicon's arguments, since agent-device reads every token after it as text (`type -- --json`).
+  Silicon's arguments, since the engine reads every token after it as text (`type -- --json`).
 
 **macOS probe.**
 - It checks Accessibility (`AXIsProcessTrusted`) and Screen Recording
   (`CGPreflightScreenCaptureAccess`) without prompting. Those two are the setup steps, and the
   window's **Open** buttons take the Carbon to the right System Settings page.
-- Every session uses agent-device's native helper, whatever the state of Xcode or UI Automation
+- Every session uses the engine's native helper, whatever the state of Xcode or UI Automation
   (there is no XCTest runner gate any more). A session starts on the frontmost app
   (`open --surface frontmost-app`); `open <link>` opens with the system (`/usr/bin/open`) and then
   follows the frontmost app.
@@ -212,7 +295,7 @@ both the JSON and the text the CLI would print.
   The helper checks field ownership and focus before each key event; a focus failure stops the
   command. Text is passed over stdin rather than command-line arguments.
 - Recording uses the helper's ScreenCaptureKit recorder: `screen.record` is reported whenever
-  Screen Recording is granted and agent-device supports `record`. Neither Xcode nor UI Automation
+  Screen Recording is granted and the engine supports `record`. Neither Xcode nor UI Automation
   is needed. (`gather()` still runs `automationmodetool` and `xcode-select`, although nothing uses
   their results any more.)
 - Permissions belong to the app that launched the agent: Silicon Extend.app when installed, or the
@@ -230,7 +313,7 @@ both the JSON and the text the CLI would print.
   `XDG_SESSION_ID` or the user's display session) reports everything that needs the screen as
   missing with "This computer is locked…", as on a Mac.
 - With a screen, it checks:
-  - the AT-SPI bus (the same Python/GI calls agent-device's dumper makes), for `screen.read`
+  - the AT-SPI bus (the same Python/GI calls the engine's dumper makes), for `screen.read`
   - xdotool (X11) or ydotool (Wayland), for input
   - gnome-screenshot, scrot or `import` (grim on Wayland), for capture
   - xclip or xsel (wl-clipboard), for the clipboard
@@ -244,7 +327,7 @@ both the JSON and the text the CLI would print.
 
 **Windows.** This is Extend's own driver, in `drivers/windows/`.
 - UI Automation builds the element tree, with the same snapshot text and JSON shape and the same
-  `@eN` refs as agent-device's desktop snapshots. `SendInput` drives the mouse and keyboard, GDI
+  `@eN` refs as the engine's desktop snapshots. `SendInput` drives the mouse and keyboard, GDI
   takes screenshots, and Win32 handles the clipboard.
 - `open`, `close` and `apps` use the Start menu (`Get-StartApps`) and the shell.
 - `record`, `logs`, `alert` and `replay`/`test`/`batch` are reported as `missing`.

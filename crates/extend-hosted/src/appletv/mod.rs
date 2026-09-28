@@ -21,8 +21,12 @@ use serde_json::json;
 use crate::HostedDevice;
 use crate::common::{
     self, Button, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json, sleep_or_cancel,
-    step, step_error, step_help, unsupported, unsupported_command,
+    step, step_failure, step_help, unsupported, unsupported_command,
 };
+
+/// The network step's error when the Apple TV can't be reached.
+const UNREACHABLE: &str =
+    "The Apple TV can't be reached. Turn it on with its remote and connect it to the same network as this Mac.";
 use crate::script;
 
 mod airplay;
@@ -70,7 +74,25 @@ struct Saved {
     model: Option<String>,
     #[serde(default)]
     os_version: Option<String>,
+    /// The Apple TV's own id from its network announcement (AirPlay `deviceid`, else the
+    /// Companion link's `rpMRtID`): the same whichever Mac or Carbon looks, so one Apple TV
+    /// carried for two Carbons is known as one device.
+    #[serde(default)]
+    hardware_id: Option<String>,
 }
+
+/// What FetchAttentionState answers, as awake and why not: 1 is asleep (the TV is off), 2 the
+/// screensaver, 3 awake, 4 idle. 0 (or no answer: old tvOS) can't be told.
+fn awake_from_attention(state: Option<u64>) -> (Option<bool>, Option<extend_protocol::model::SleepState>) {
+    match state {
+        Some(1) => (Some(false), Some(extend_protocol::model::SleepState::Standby)),
+        Some(2..=4) => (Some(true), None),
+        _ => (None, None),
+    }
+}
+
+/// Said when the power button is pressed on a sleeping Apple TV: Extend never wakes a device.
+const ASLEEP: &str = "The Apple TV is asleep; only its Carbon can wake it (extend device wake).";
 
 /// Fixed ports instead of mDNS (tests, or an address given as `ip:port`).
 #[derive(Debug, Clone, Default)]
@@ -212,12 +234,16 @@ impl Inner {
                     host = l.best_address().map(|a| a.to_string());
                 }
                 let model = l.txt.get("rpMd").cloned();
+                let link_id = l.txt.get("rpMRtID").cloned();
                 let addr = host.clone();
                 self.update(|s| {
                     s.companion_port = Some(l.port);
                     s.address = addr;
                     if model.is_some() {
                         s.model = model;
+                    }
+                    if s.hardware_id.is_none() {
+                        s.hardware_id = link_id;
                     }
                 });
             }
@@ -227,10 +253,14 @@ impl Inner {
             });
             if let Some(a) = ap {
                 let os = a.txt.get("osvers").map(|v| format!("tvOS {v}"));
+                let device_id = a.txt.get("deviceid").map(|d| d.to_ascii_uppercase());
                 self.update(|s| {
                     s.airplay_port = Some(a.port);
                     if os.is_some() {
                         s.os_version = os;
+                    }
+                    if device_id.is_some() {
+                        s.hardware_id = device_id;
                     }
                 });
             }
@@ -328,20 +358,24 @@ impl Inner {
                 return unsupported("The Apple TV's remote protocol has no mute button");
             }
             Button::Power => {
+                // Power only ever puts an awake Apple TV to sleep. A sleeping one is left alone:
+                // waking a device is its Carbon's to do.
                 let r = self
                     .with(|c| {
                         Box::pin(async move {
                             let asleep = c.attention_state().await.map(|s| s == 1).unwrap_or(false);
-                            let code = if asleep { hid::WAKE } else { hid::SLEEP };
-                            c.hid(code, false).await?;
-                            Ok(if asleep { "wake" } else { "sleep" })
+                            if !asleep {
+                                c.hid(hid::SLEEP, false).await?;
+                            }
+                            Ok(asleep)
                         })
                     })
                     .await;
                 return match r {
-                    Ok(what) => Output::ok(
-                        json!({"button": "power", "action": what}),
-                        format!("Sent {what} to the Apple TV"),
+                    Ok(true) => not_ready(ASLEEP),
+                    Ok(false) => Output::ok(
+                        json!({"button": "power", "action": "sleep"}),
+                        "Sent sleep to the Apple TV",
                     ),
                     Err(e) => companion_error(e),
                 };
@@ -508,24 +542,24 @@ impl Driver for AppleTvDriver {
         let network_title = "The Apple TV is on and on the same network as this Mac";
         let code_title = "Enter the code the Apple TV shows";
         let mut online = false;
+        let mut attention: Option<u64> = None;
         let (network, code): (SetupStep, SetupStep) = match me.endpoints().await {
             Err(e) => (
-                step_error(
-                    "network",
-                    network_title,
-                    StepStatus::NeedsCarbon,
-                    Some("Turn the Apple TV on and connect it to the same Wi-Fi or network as this Mac."),
-                    e,
-                ),
+                step_failure("network", network_title, StepStatus::NeedsCarbon, UNREACHABLE, e),
                 step("code", code_title, StepStatus::Todo),
             ),
             Ok(_) if me.saved().credentials.is_some() => {
-                match me
-                    .with(|c| Box::pin(async move { c.attention_state().await.map(|_| ()) }))
-                    .await
-                {
+                match me.with(|c| Box::pin(async move { c.attention_state().await })).await {
                     // Old tvOS versions don't answer FetchAttentionState; a refusal still proves the session works.
-                    Ok(()) | Err(CompanionError::Refused(_)) => {
+                    Ok(state) => {
+                        online = true;
+                        attention = Some(state);
+                        (
+                            step("network", network_title, StepStatus::Done),
+                            step("code", code_title, StepStatus::Done),
+                        )
+                    }
+                    Err(CompanionError::Refused(_)) => {
                         online = true;
                         (
                             step("network", network_title, StepStatus::Done),
@@ -540,14 +574,12 @@ impl Driver for AppleTvDriver {
                         )
                     }
                     Err(e) => (
-                        step_error(
+                        step_failure(
                             "network",
                             network_title,
                             StepStatus::NeedsCarbon,
-                            Some(
-                                "Check the Apple TV is on (not asleep on a different network) and on the same Wi-Fi as this Mac.",
-                            ),
-                            e.to_string(),
+                            "The Apple TV didn't answer this Mac. Check it is on the same Wi-Fi or network as this Mac.",
+                            e,
                         ),
                         step("code", code_title, StepStatus::Done),
                     ),
@@ -571,13 +603,7 @@ impl Driver for AppleTvDriver {
                         )
                     }
                     Err(e) if e.contains("Can't reach") => (
-                        step_error(
-                            "network",
-                            network_title,
-                            StepStatus::NeedsCarbon,
-                            Some("Turn the Apple TV on and connect it to the same network as this Mac."),
-                            e,
-                        ),
+                        step_failure("network", network_title, StepStatus::NeedsCarbon, UNREACHABLE, e),
                         step("code", code_title, StepStatus::Todo),
                     ),
                     Err(e) => {
@@ -593,6 +619,7 @@ impl Driver for AppleTvDriver {
         let paired = me.saved().credentials.is_some();
         let ready = online && paired;
         let saved = me.saved();
+        let (awake, sleep_state) = awake_from_attention(attention);
         let reason = if !online {
             "The Apple TV can't be reached"
         } else {
@@ -614,8 +641,11 @@ impl Driver for AppleTvDriver {
                     .collect()
             },
             setup: Setup::from_steps(vec![network, code]),
-            agent_device_version: None,
+            engine_version: None,
             online,
+            awake,
+            sleep_state,
+            hardware_id: saved.hardware_id.clone(),
         }
     }
 
@@ -710,6 +740,17 @@ impl Driver for AppleTvDriver {
         }
     }
 
+    /// Retry: look for the Apple TV on the network again, and put up a fresh code if it is
+    /// waiting for one (the probe that follows does both at once).
+    async fn retry_setup(&self, _step: Option<&str>) {
+        let me = &self.inner;
+        *me.looked_up.lock().unwrap() = None;
+        *me.conn.lock().await = None;
+        if me.saved().credentials.is_none() {
+            *me.pending.lock().await = None;
+        }
+    }
+
     async fn setup_code(&self, code: &str) -> Result<(), String> {
         let me = &self.inner;
         let digits: String = code.chars().filter(char::is_ascii_digit).collect();
@@ -742,7 +783,12 @@ impl Driver for AppleTvDriver {
                 // The Apple TV ends a pairing attempt after an error; ask for a fresh code.
                 match me.start_pairing().await {
                     Ok(()) => Err(format!("{why} The Apple TV now shows a new code; enter that one")),
-                    Err(again) => Err(format!("{why} ({again})")),
+                    Err(again) => {
+                        tracing::info!("couldn't ask the Apple TV for a new code: {again}");
+                        Err(format!(
+                            "{why} The Apple TV didn't put up a new code; keep it awake on its home screen and tap Retry."
+                        ))
+                    }
                 }
             }
         }
@@ -751,11 +797,11 @@ impl Driver for AppleTvDriver {
 
 fn code_step(title: &str, error: Option<String>) -> SetupStep {
     let mut s = match error {
-        Some(e) => step_error(
+        Some(e) => step_failure(
             "code",
             title,
             StepStatus::NeedsCarbon,
-            Some("The code appears on the Apple TV screen. If it isn't there, wait a moment; Extend asks again."),
+            "The Apple TV didn't put up a code. Keep it awake on its home screen; Extend asks again shortly, or tap Retry.",
             e,
         ),
         None => step_help(
@@ -830,6 +876,7 @@ mod tests {
         assert_eq!(p.setup.state, extend_protocol::model::SetupState::Complete, "{p:?}");
         assert_eq!(p.capabilities, DeviceOs::Tvos.full_capabilities().to_vec());
         assert_eq!(p.model.as_deref(), Some("AppleTV14,1"));
+        assert_eq!((p.awake, p.sleep_state), (Some(true), None));
 
         let w = dir.path();
         let ok = |o: Output| assert!(o.ok, "{o:?}");
@@ -872,6 +919,20 @@ mod tests {
             "invalid_args"
         );
         ok(d.run(inv("close", &[], w, &[])).await);
+
+        // Asleep: it says so, and power is refused (nothing ever wakes it) while every other
+        // command still goes to it as usual.
+        *tv.attention.lock().unwrap() = 1;
+        let p = d.probe().await;
+        assert!(p.online);
+        assert_eq!(
+            (p.awake, p.sleep_state),
+            (Some(false), Some(extend_protocol::model::SleepState::Standby))
+        );
+        let power = d.run(inv("tv-remote", &args(&["press", "power"]), w, &[])).await;
+        assert!(!power.ok);
+        assert_eq!(power.error.as_ref().unwrap().message, ASLEEP);
+        *tv.attention.lock().unwrap() = 3;
 
         let clip = w.join("clip.mp4");
         std::fs::write(&clip, vec![1u8; 2048]).unwrap();

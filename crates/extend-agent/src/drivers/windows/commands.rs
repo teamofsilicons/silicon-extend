@@ -1,6 +1,6 @@
 //! Parsing a relayed command into what the Windows driver will do.
 //!
-//! The grammar follows agent-device's CLI (`understanding/cli.yaml`, `device_commands`), so the same
+//! The grammar follows the device engine's CLI (`understanding/cli.yaml`, `device_commands`), so the same
 //! `extend click @e2` works on every computer. Anything Windows can't do is refused here with
 //! `unsupported_on_device` and a message saying what to use instead.
 
@@ -188,7 +188,7 @@ pub enum Action {
 /// Default for `wait` and `find … wait` when no timeout is given.
 pub const DEFAULT_WAIT_MS: u64 = 10_000;
 
-/// Flags every command accepts and the Windows driver ignores (they tune agent-device's own daemon).
+/// Flags every command accepts and the Windows driver ignores (they tune the device engine's own daemon).
 const IGNORED_SWITCHES: &[&str] = &[
     "--settle",
     "--force-full",
@@ -617,7 +617,7 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
             check_flags(&p, command, &["--surface", "--relaunch", "--activity", "--save-script"])?;
             if p.has("--save-script") {
                 return Err(unsupported(
-                    "--save-script isn't available on Windows: replay scripts need agent-device, which doesn't run on Windows.",
+                    "--save-script isn't available on Windows: replay scripts need the device engine, which doesn't run on Windows.",
                 ));
             }
             let surface = match p.value("--surface") {
@@ -656,7 +656,7 @@ pub fn parse(command: &str, raw_args: &[String]) -> Result<Action, Refusal> {
             check_flags(&p, command, &["--save-script", "--shutdown"])?;
             if p.has("--save-script") {
                 return Err(unsupported(
-                    "--save-script isn't available on Windows: replay scripts need agent-device, which doesn't run on Windows.",
+                    "--save-script isn't available on Windows: replay scripts need the device engine, which doesn't run on Windows.",
                 ));
             }
             Ok(Action::Close {
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(parse("snapshot", &s(&["--bogus"])).unwrap_err().code, "invalid_args");
         assert!(
             parse("snapshot", &s(&["--settle"])).is_ok(),
-            "harmless agent-device flags are ignored"
+            "harmless device-engine flags are ignored"
         );
     }
 

@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Interface's light paper, so the window behind Compose (and the launch preview) matches it. -->
-    <style name="Theme.Extend" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- Light navigation bar icons are Android 8.1+: values-v27/themes.xml adds them. -->
+    <style name="Theme.Extend.Base" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/extend_paper</item>
         <item name="android:colorAccent">@color/extend_cobalt</item>
         <item name="android:statusBarColor">@color/extend_paper</item>
         <item name="android:navigationBarColor">@color/extend_paper</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
     </style>
+
+    <style name="Theme.Extend" parent="Theme.Extend.Base" />
 
     <style name="Theme.Extend.Fullscreen" parent="android:Theme.Material.NoActionBar.Fullscreen">
         <item name="android:windowBackground">@android:color/black</item>

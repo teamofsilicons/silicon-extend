@@ -1,6 +1,6 @@
 # A Linux desktop for exercising Silicon Extend's Linux agent for real: Xvfb, a light window
 # manager, the AT-SPI accessibility bus, xdotool, screenshot and clipboard tools, a GTK app
-# (GNOME Calculator), Node 22 for agent-device, and the Rust toolchain to build extend-agent.
+# (GNOME Calculator), Node 22 for the device engine, and the Rust toolchain to build extend-agent.
 #
 # The repository is mounted at /src at run time (see run.sh); nothing is baked in, so one image
 # serves every run and cargo's caches live in named volumes.
@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       gnome-calculator fonts-dejavu-core procps jq ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Node 22 LTS (agent-device needs 22.12 or newer; Debian ships 20).
+# Node 22 LTS (the device engine needs 22.12 or newer; Debian ships 20).
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; case "$arch" in amd64) n=x64;; arm64) n=arm64;; *) echo "unsupported $arch"; exit 1;; esac; \
     file="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/" | grep -o "node-v${NODE_MAJOR}[.0-9]*-linux-${n}.tar.xz" | head -1)"; \

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// Real daemon restart test using isolated copies of an agent-device runtime and an empty session
+// Real daemon restart test using isolated copies of a device engine runtime and an empty session
 // store. No devices.
 //
-//   node apps/desktop/runtime-update-e2e.mjs <agent-device runtime> [--macos-helper <path>]
+//   node apps/desktop/runtime-update-e2e.mjs <engine runtime> [--macos-helper <path>]
 //
-// Pass a packaged runtime to test what ships: "…/Silicon Extend.app/Contents/Resources/agent-device"
-// or "…/lib/silicon-extend/agent-device" from the Linux tarball. When a Node is bundled beside it
+// Pass a packaged runtime to test what ships: "…/Silicon Extend.app/Contents/Resources/engine"
+// or "…/lib/silicon-extend/engine" from the Linux tarball. When a Node is bundled beside it
 // (../node/bin/node), the test reruns itself under that Node, so every CLI run, daemon and stamp
 // uses the shipped Node. The app's macOS helper is found the same way. Each run is made the way
 // extend-agent makes it: the environment it sets, and the arguments over stdin. A runtime that
-// isn't packaged (vendor/agent-device) gets Extend's entry (runtime-entry.mjs) installed the way
+// isn't packaged (vendor/extend-engine) gets Extend's entry (runtime-entry.mjs) installed the way
 // packaging installs it.
 //
 // It covers an idle daemon across an in-place update, an identical reinstall, a moved install, a
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { stampRuntime } from './stamp-runtime.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const usage = 'Usage: node runtime-update-e2e.mjs <agent-device runtime> [--macos-helper <path>]';
+const usage = 'Usage: node runtime-update-e2e.mjs <engine runtime> [--macos-helper <path>]';
 const args = process.argv.slice(2);
 const helperFlag = args.indexOf('--macos-helper');
 let helper;
@@ -36,7 +36,7 @@ const [runtimeArg] = args;
 if (!runtimeArg || args.length > 1) throw new Error(usage);
 const runtime = path.resolve(runtimeArg);
 if (!existsSync(path.join(runtime, 'package.json'))) {
-  throw new Error(`${runtime} has no package.json, so it isn't an agent-device runtime. ${usage}`);
+  throw new Error(`${runtime} has no package.json, so it isn't a device engine runtime. ${usage}`);
 }
 
 const bundledNode = path.join(runtime, '..', 'node', 'bin', 'node');
@@ -45,9 +45,9 @@ if (existsSync(bundledNode) && realpathSync(bundledNode) !== realpathSync(proces
   if (rerun.error) throw new Error(`Couldn't run the bundled Node ${bundledNode}: ${rerun.error.message}`);
   process.exit(rerun.status ?? 1);
 }
-const appHelper = path.join(runtime, '..', '..', 'MacOS', 'agent-device-macos-helper');
+const appHelper = path.join(runtime, '..', '..', 'MacOS', 'Silicon Extend Helper');
 if (!helper && process.platform === 'darwin' && existsSync(appHelper)) helper = appHelper;
-const packagedEntry = existsSync(path.join(runtime, 'bin', 'agent-device-cli.mjs'));
+const packagedEntry = existsSync(path.join(runtime, 'bin', 'extend-engine-cli.mjs'));
 
 console.log(`node: ${process.execPath} ${process.version}${existsSync(bundledNode) ? ' (bundled with the runtime)' : ' (not a bundled Node: pass a packaged runtime to test what ships)'}`);
 console.log(`runtime: ${runtime}`);
@@ -57,19 +57,17 @@ if (helper) console.log(`macOS helper: ${helper}`);
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'extend-runtime-update-'));
 const state = path.join(scratch, 'state');
 const marker = path.join(scratch, 'started-build');
-// What extend-agent's run_process sets (crates/extend-agent/src/drivers/agent_device.rs).
-const env = {
-  ...process.env,
-  AGENT_DEVICE_STATE_DIR: state,
-  AGENT_DEVICE_NO_UPDATE_NOTIFIER: '1',
-  AGENT_DEVICE_JSON_TEXT: '1',
+// What extend-agent's run_process sets (crates/extend-agent/src/drivers/agent_device.rs), under the
+// engine's EXTEND_ENGINE_* names; no engine setting from this shell, under either name, leaks in.
+const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENT_DEVICE_') && !key.startsWith('EXTEND_ENGINE_')));
+Object.assign(env, {
+  EXTEND_ENGINE_STATE_DIR: state,
+  EXTEND_ENGINE_NO_UPDATE_NOTIFIER: '1',
+  EXTEND_ENGINE_JSON_TEXT: '1',
   NO_COLOR: '1',
   EXTEND_ARTIFACT_MARKER_PATH: marker,
-};
-if (helper) env.AGENT_DEVICE_MACOS_HELPER_BIN = path.resolve(helper);
-else delete env.AGENT_DEVICE_MACOS_HELPER_BIN;
-delete env.AGENT_DEVICE_DAEMON_BASE_URL;
-delete env.AGENT_DEVICE_DAEMON_AUTH_TOKEN;
+});
+if (helper) env.EXTEND_ENGINE_MACOS_HELPER_BIN = path.resolve(helper);
 // extend-agent's ARGS_FROM_STDIN, in the same file.
 const ARGS_FROM_STDIN = "import{pathToFileURL}from'node:url';let s='';process.stdin.setEncoding('utf8');for await(const c of process.stdin)s+=c;process.argv.push(...JSON.parse(s));await import(pathToFileURL(process.argv[1]).href);";
 
@@ -83,8 +81,8 @@ function copyRuntime(from, to) {
     cpSync(path.join(from, name), path.join(to, name), { recursive: true, filter: (source) => !skipped.has(path.basename(source)) });
   }
   if (!packagedEntry) {
-    renameSync(path.join(to, 'bin/agent-device.mjs'), path.join(to, 'bin/agent-device-cli.mjs'));
-    cpSync(path.join(here, 'runtime-entry.mjs'), path.join(to, 'bin/agent-device.mjs'));
+    renameSync(path.join(to, 'bin/extend-engine.mjs'), path.join(to, 'bin/extend-engine-cli.mjs'));
+    cpSync(path.join(here, 'runtime-entry.mjs'), path.join(to, 'bin/extend-engine.mjs'));
   }
 }
 
@@ -102,12 +100,12 @@ function stage(label, to) {
 }
 
 let active;
-function cli(root, cliArgs, { entry = 'bin/agent-device.mjs' } = {}) {
+function cli(root, cliArgs, { entry = 'bin/extend-engine.mjs' } = {}) {
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', ARGS_FROM_STDIN, '--', path.join(root, entry)], {
     env, cwd: scratch, encoding: 'utf8', timeout: 60_000, input: JSON.stringify([...cliArgs, '--json']),
   });
   assert.equal(result.status, 0, result.error?.message ?? result.stderr + result.stdout);
-  // agent-device may print a "Replacing daemon" line before its JSON reply, as extend-agent allows.
+  // The engine may print a "Replacing daemon" line before its JSON reply, as extend-agent allows.
   const response = JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
   assert.equal(response.success, true, result.stdout);
   active = root;
@@ -163,7 +161,7 @@ try {
   const moved = path.join(scratch, 'Applications', 'moved');
   mkdirSync(path.dirname(moved));
   renameSync(install, moved);
-  cli(moved, ['session', 'list'], { entry: 'bin/agent-device-cli.mjs' });
+  cli(moved, ['session', 'list'], { entry: 'bin/extend-engine-cli.mjs' });
   assert.equal(info().pid, updated.pid);
   assert.equal(existsSync(path.dirname(started().entry)), false, 'the reused daemon was started from a location that is gone');
   console.log("REPRODUCED: without Extend's entry, the moved install reused a daemon whose location is gone");

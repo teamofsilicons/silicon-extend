@@ -1,5 +1,6 @@
 //! Background work: idle sessions, offline devices, pair expiry, pairing-code rotation, file
-//! self-destruct, request delivery retries and stale enrollments.
+//! self-destruct, Ting retries for requests and wake requests, wake request expiry, carried pairs
+//! that were never recognised, the membership sweep, and stale enrollments.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -10,18 +11,22 @@ use extend_protocol::model::{EndReason, Member, MemberKind};
 use uuid::Uuid;
 
 use crate::db::World;
+use crate::delivery::Actor;
 use crate::domain;
 use crate::iam::{Principal, TestingSelection};
 use crate::state::{AppState, Shared};
 
-/// How many times Extend tries to hand a request to Ting before marking it failed.
+/// How many counted attempts Extend makes to hand a request to Ting before marking it failed.
 pub const REQUEST_ATTEMPTS: i32 = 6;
+/// How long a request may wait for Ting before it is marked failed, whatever its attempts.
+pub const REQUEST_GIVE_UP: time::Duration = time::Duration::hours(24);
 
 pub fn spawn(state: Shared) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(2));
         let mut n: u64 = 0;
         let mut deletions = Backoff::default();
+        let mut swept: HashMap<String, Instant> = HashMap::new();
         loop {
             tick.tick().await;
             n += 1;
@@ -43,6 +48,14 @@ pub fn spawn(state: Shared) {
                     }
                     if let Err(e) = slow(&state, &world, &mut deletions).await {
                         tracing::warn!(world = %world.schema, error = %e, "device upkeep failed");
+                    }
+                    let every = Duration::from_secs(state.cfg.tuning.membership_sweep_hours * 3600);
+                    let last = *swept.entry(world.schema.clone()).or_insert_with(Instant::now);
+                    if last.elapsed() >= every {
+                        swept.insert(world.schema.clone(), Instant::now());
+                        if let Err(e) = crate::membership::sweep(&state, &world, domain::now()).await {
+                            tracing::warn!(world = %world.schema, error = %e, "membership sweep failed");
+                        }
                     }
                 }
             }
@@ -148,6 +161,8 @@ async fn slow(state: &AppState, world: &World, deletions: &mut Backoff) -> crate
     }
     self_destruct(state, world, deletions).await?;
     retry_requests(state, world).await?;
+    wake_upkeep(state, world).await?;
+    remove_unlinked(state, world).await?;
     // Uploads nobody claimed.
     let stale: Vec<(Uuid,)> = sqlx::query_as(sql!(
         "DELETE FROM {} WHERE expires_at < now() - interval '10 minutes' RETURNING upload_id",
@@ -336,88 +351,318 @@ pub async fn self_destruct(state: &AppState, world: &World, backoff: &mut Backof
     Ok(deleted)
 }
 
-/// Hands requests Ting hasn't accepted yet to Ting again, as the requesting Silicon with the latest
-/// login Extend holds for it (it need not have a running session). Each pass is one attempt; after
-/// [`REQUEST_ATTEMPTS`] the request is marked failed, with `last_error` saying why.
+/// Hands requests Ting hasn't accepted yet to Ting again, each with its frozen first body (rows
+/// 1.0.0 sent first, which have none, in 1.0.0's exact shape). A request routed to the Silicon
+/// using the device goes as the requester; one routed to a Carbon as the requester when its login
+/// reaches the Ting's Team, else as that Carbon to themselves. Never as the Silicon using the
+/// device. Retries back off (30 s, then 1, 2, 4 and 8 minutes, then every 8 minutes); an attempt
+/// with no login for any actor doesn't count. A request is marked failed after
+/// [`REQUEST_ATTEMPTS`] counted attempts or [`REQUEST_GIVE_UP`], with `last_error` saying why.
 pub async fn retry_requests(state: &AppState, world: &World) -> crate::error::AppResult<()> {
-    let pending: Vec<(Uuid, String, String, String, String, String, Option<String>, String, i32)> = sqlx::query_as(sql!(
-        "SELECT r.request_id, r.device_id, d.name, r.team, r.from_id, r.to_id, r.session_id, r.reason, r.attempts FROM {} r JOIN {} d USING (device_id)
-         WHERE r.delivery = 'pending' AND r.attempts < $1 ORDER BY r.created_at LIMIT 200",
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        request_id: Uuid,
+        device_id: String,
+        name: String,
+        team: String,
+        from_id: String,
+        to_id: String,
+        session_id: Option<String>,
+        reason: String,
+        attempts: i32,
+        created_at: time::OffsetDateTime,
+        routed_to: String,
+        routed_to_id: Option<String>,
+        ting_team: Option<String>,
+        ting_body: Option<serde_json::Value>,
+    }
+    let pending: Vec<Row> = sqlx::query_as(sql!(
+        "SELECT r.request_id, r.device_id, d.name, r.team, r.from_id, r.to_id, r.session_id, r.reason, r.attempts, r.created_at,
+                r.routed_to, r.routed_to_id, r.ting_team, r.ting_body
+         FROM {} r JOIN {} d USING (device_id)
+         WHERE r.delivery = 'pending'
+           AND (r.ting_next_at IS NULL OR r.ting_next_at <= now() OR r.created_at < now() - interval '24 hours')
+         ORDER BY r.created_at LIMIT 200",
         world.t("requests"),
         world.t("devices")
     ))
-    .bind(REQUEST_ATTEMPTS)
     .fetch_all(&state.pool)
     .await?;
-    for (id, device_id, name, team, from, to, session, reason, attempts) in pending {
-        // Ting delivers only to recipients that registered with their own login; register the
-        // recipient again when Extend holds its login (a no-op once registered).
-        if let Some((recipient, rsel)) = latest_principal(state, world, Some(&to), &team, |_| true).await
-            && let Err(e) = state.notifier.register_recipient(&recipient, rsel.as_ref()).await
+    for r in pending {
+        let team = r.ting_team.clone().unwrap_or_else(|| r.team.clone());
+        let carbon = r.routed_to == "carbon";
+        let recipient = if carbon {
+            r.routed_to_id.clone().unwrap_or_default()
+        } else {
+            r.to_id.clone()
+        };
+        // Ting delivers only to recipients registered with their own login: a Silicon is
+        // registered again while Extend holds its login (a no-op once registered). A Carbon never
+        // is on a retry, so a Carbon's "off" in Ting sticks.
+        if !carbon
+            && let Some((p, rsel)) = latest_principal(state, world, Some(&recipient), &team, |_| true).await
+            && let Err(e) = crate::delivery::register(state, world, &p, rsel.as_ref(), false).await
         {
-            tracing::debug!(request_id = %id, recipient = to, error = %e.0.message, "registering the recipient with Ting failed");
+            tracing::debug!(request_id = %r.request_id, recipient, error = %e.0.message, "registering the recipient with Ting failed");
         }
-        let ting = crate::ting::DeviceRequestTing {
-            request_id: id,
-            device_id: &device_id,
-            device_name: &name,
-            from: &from,
-            to: &to,
-            session_id: session.as_deref(),
-            reason: &reason,
-        };
-        let result = match latest_principal(state, world, Some(&from), &team, |_| true).await {
-            Some((p, sel)) => state
-                .notifier
-                .device_request(&p, &ting, sel.as_ref())
-                .await
-                .map_err(|e| match &e.0.hint {
-                    Some(h) => format!("{} {h}", e.0.message),
-                    None => e.0.message.clone(),
-                }),
-            None => Err(format!(
-                "Extend holds no signed-in login for {from} to send this request through Ting with; it is sent when {from} next uses Extend."
-            )),
-        };
-        let last = attempts + 1 >= REQUEST_ATTEMPTS;
-        let (delivery, error) = match result {
-            Ok(()) => ("delivered", None),
-            Err(why) if last => (
+        let body = r.ting_body.clone().unwrap_or_else(|| {
+            let ting = crate::ting::DeviceRequestTing {
+                request_id: r.request_id,
+                device_id: &r.device_id,
+                device_name: &r.name,
+                from: &r.from_id,
+                to: &r.to_id,
+                session_id: r.session_id.as_deref(),
+                reason: &r.reason,
+                routed_to: None,
+                team: None,
+                link: None,
+                from_hidden: false,
+            };
+            crate::ting::request_body(state.notifier.app_id(), &team, &ting)
+        });
+        let mut chain = vec![Actor::Member(r.from_id.clone())];
+        if carbon && !recipient.is_empty() {
+            chain.push(Actor::Member(recipient.clone()));
+        }
+        let attempt = crate::delivery::send(state, world, &chain, &body).await;
+        let counted = r.attempts + i32::from(attempt.tried);
+        let expired = domain::now() - r.created_at >= REQUEST_GIVE_UP;
+        let (delivery, error) = if attempt.delivered {
+            ("delivered", None)
+        } else if counted >= REQUEST_ATTEMPTS || expired {
+            let why = attempt.error.clone().unwrap_or_default();
+            (
                 "failed",
                 Some(format!(
-                    "{why} Extend gave up after {REQUEST_ATTEMPTS} attempts; send the request again with `extend request send {device_id} --reason \"...\"`."
+                    "{why} Extend gave up after {counted} attempts{}; send the request again with `extend request send {} --reason \"...\"`.",
+                    if expired { " and 24 hours" } else { "" },
+                    r.device_id
                 )),
-            ),
-            Err(why) => ("pending", Some(why)),
+            )
+        } else {
+            ("pending", attempt.error.clone())
+        };
+        let next = if delivery != "pending" {
+            None
+        } else if attempt.not_registered {
+            // Stopped until the recipient registers (or turns Extend's Tings on).
+            Some("infinity")
+        } else {
+            None
+        };
+        let wait = if attempt.missing_type {
+            crate::delivery::MISSING_TYPE_RETRY
+        } else {
+            crate::delivery::backoff(counted.max(1))
         };
         sqlx::query(sql!(
-            "UPDATE {} SET delivery = $2, attempts = attempts + 1, last_error = $3 WHERE request_id = $1",
+            "UPDATE {} SET delivery = $2, attempts = $3, last_error = $4, ting_body = COALESCE(ting_body, $5),
+                    ting_next_at = CASE WHEN $2 <> 'pending' THEN NULL
+                                        WHEN $6::text = 'infinity' THEN 'infinity'::timestamptz
+                                        ELSE now() + $7 END
+             WHERE request_id = $1",
             world.t("requests")
         ))
-        .bind(id)
+        .bind(r.request_id)
         .bind(delivery)
+        .bind(counted)
         .bind(&error)
+        .bind(r.ting_body.is_none().then_some(&body))
+        .bind(next)
+        .bind(wait)
         .execute(&state.pool)
         .await?;
         match delivery {
             "delivered" => {
-                tracing::info!(world = %world.schema, request_id = %id, "request delivered through Ting on retry")
+                tracing::info!(world = %world.schema, request_id = %r.request_id, "request delivered through Ting on retry")
             }
             "failed" => {
-                tracing::warn!(world = %world.schema, request_id = %id, error = ?error, "request could not be delivered through Ting; marked failed");
-                domain::log(
+                tracing::warn!(world = %world.schema, request_id = %r.request_id, error = ?error, "request could not be delivered through Ting; marked failed");
+                // Logged on the requester's pair, as the requester may see it.
+                domain::log_in(
                     state,
                     world,
-                    &device_id,
+                    &r.device_id,
                     &domain::system_member(),
                     "request_failed",
-                    session.as_deref(),
-                    serde_json::json!({"request_id": id, "from": from, "to": to, "error": error}),
+                    (!carbon).then_some(r.session_id.as_deref()).flatten(),
+                    Some(&r.team),
+                    serde_json::json!({"request_id": r.request_id, "from": r.from_id, "to": r.to_id, "error": error}),
                 )
                 .await;
             }
-            _ => tracing::debug!(world = %world.schema, request_id = %id, error = ?error, "request still pending"),
+            _ => {
+                tracing::debug!(world = %world.schema, request_id = %r.request_id, error = ?error, "request still pending")
+            }
         }
     }
     Ok(())
+}
+
+/// Wake requests: expire them, send Carbon Tings held back by the hourly limit once its window
+/// frees (oldest first, if still open and not covered by then), and retry Carbon and answer Tings.
+pub async fn wake_upkeep(state: &AppState, world: &World) -> crate::error::AppResult<()> {
+    crate::wake::expire(state, world).await?;
+    // Deferred Carbon Tings, oldest first.
+    let deferred: Vec<crate::wake::WakeRow> = sqlx::query_as(sql!(
+        "SELECT {} FROM {} WHERE state = 'open' AND ting_delivery = 'deferred' ORDER BY last_asked_at LIMIT 100",
+        crate::wake::WAKE_COLUMNS,
+        world.t("wake_requests")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
+    for w in deferred {
+        if crate::routes::wake::carbon_tings_last_hour(state, world, &w.to_id).await?
+            >= extend_protocol::WAKE_TINGS_PER_CARBON_PER_HOUR
+        {
+            continue;
+        }
+        if let Some(cover) = crate::routes::wake::covering(state, world, &w.device_id, &w.team, Some(w.wake_id)).await?
+        {
+            sqlx::query(sql!(
+                "UPDATE {} SET ting_delivery = NULL, ting_covered_by = $2 WHERE wake_id = $1",
+                world.t("wake_requests")
+            ))
+            .bind(w.wake_id)
+            .bind(cover)
+            .execute(&state.pool)
+            .await?;
+            continue;
+        }
+        crate::routes::wake::send_carbon_ting(state, world, &w, None).await;
+    }
+    // Carbon Tings to retry.
+    let due: Vec<crate::wake::WakeRow> = sqlx::query_as(sql!(
+        "SELECT {} FROM {} WHERE state = 'open' AND ting_delivery = 'pending' AND (ting_next_at IS NULL OR ting_next_at <= now())
+         ORDER BY last_asked_at LIMIT 100",
+        crate::wake::WAKE_COLUMNS,
+        world.t("wake_requests")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
+    for w in due {
+        crate::routes::wake::send_carbon_ting(state, world, &w, None).await;
+    }
+    // Answer Tings (woken, declined) to retry; they give up 30 minutes after the request ended.
+    let answers: Vec<crate::wake::WakeRow> = sqlx::query_as(sql!(
+        "SELECT {} FROM {} WHERE answer_ting = 'pending' AND (answer_ting_next_at IS NULL OR answer_ting_next_at <= now())
+         ORDER BY ended_at LIMIT 100",
+        crate::wake::WAKE_COLUMNS,
+        world.t("wake_requests")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
+    for w in answers {
+        let body = match w.answer_ting_body.clone() {
+            Some(b) => b,
+            None if w.state == "declined" => crate::wake::declined_body(state, world, &w, &w.to_id).await,
+            None => {
+                let by = if w.end_reason.as_deref() == Some("confirmed_by_carbon") {
+                    extend_protocol::ting::WokenBy::Carbon
+                } else {
+                    extend_protocol::ting::WokenBy::Device
+                };
+                crate::wake::woken_body(state, world, &w, by).await
+            }
+        };
+        let chain = [Actor::Member(w.to_id.clone()), Actor::Member(w.from_id.clone())];
+        let attempt = crate::delivery::send(state, world, &chain, &body).await;
+        crate::wake::record_answer(state, world, &w, &body, &attempt).await;
+    }
+    Ok(())
+}
+
+/// In a test environment, a carried pair accepted over the device limit because it looked like a
+/// device already paired there, which its computer never recognised as that device: removed with
+/// the limit's message.
+pub async fn remove_unlinked(state: &AppState, world: &World) -> crate::error::AppResult<()> {
+    let due: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT device_id FROM {} WHERE removed_at IS NULL AND provisional_until IS NOT NULL AND provisional_until <= now()",
+        world.t("devices")
+    ))
+    .fetch_all(&state.pool)
+    .await?;
+    for (id,) in due {
+        tracing::info!(world = %world.schema, device_id = id, "a carried device over the test limit was never recognised; removed");
+        domain::unpair_with(
+            state,
+            world,
+            &id,
+            EndReason::DeviceRemoved,
+            &domain::system_member(),
+            serde_json::json!({"reason": "test_device_limit", "message": extend_protocol::TEST_DEVICE_LIMIT_MESSAGE}),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The test environment's selection (with its secret) that Extend holds, for work done in a
+/// test world on a member's behalf. `None` for production, and for a test world nobody selected
+/// since the start (work that needs one waits).
+pub async fn selection_of(state: &AppState, world: &World) -> Option<TestingSelection> {
+    let env = world.environment_id?;
+    state
+        .selections
+        .read()
+        .await
+        .values()
+        .map(|(_, s)| s)
+        .find(|s| s.environment_id == env)
+        .cloned()
+}
+
+/// Rebuilds, for one world, the set of members whose next call sends a waiting Ting: the possible
+/// senders of every pending Ting (at start, and when a test world opens).
+pub async fn rebuild_waiting(state: &AppState, world: &World) {
+    let members: Vec<(String,)> = sqlx::query_as(sql!(
+        "SELECT from_id FROM {r} WHERE delivery = 'pending'
+         UNION SELECT routed_to_id FROM {r} WHERE delivery = 'pending' AND routed_to = 'carbon' AND routed_to_id IS NOT NULL
+         UNION SELECT from_id FROM {w} WHERE ting_delivery IN ('pending', 'deferred') AND state = 'open'
+         UNION SELECT to_id FROM {w} WHERE answer_ting = 'pending'
+         UNION SELECT from_id FROM {w} WHERE answer_ting = 'pending'",
+        r = world.t("requests"),
+        w = world.t("wake_requests")
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+    let members: Vec<String> = members.into_iter().map(|(m,)| m).collect();
+    state.ting_waiting(world, &members).await;
+}
+
+/// A member Extend now holds a login for called: the Tings waiting for one of their logins go now.
+pub async fn deliver_for(state: &AppState, world: &World, member: &str) {
+    let _ = sqlx::query(sql!(
+        "UPDATE {} SET ting_next_at = now()
+         WHERE delivery = 'pending' AND (from_id = $1 OR (routed_to = 'carbon' AND routed_to_id = $1))
+           AND ting_next_at IS DISTINCT FROM 'infinity'::timestamptz",
+        world.t("requests")
+    ))
+    .bind(member)
+    .execute(&state.pool)
+    .await;
+    let _ = sqlx::query(sql!(
+        "UPDATE {} SET ting_next_at = now() WHERE state = 'open' AND ting_delivery = 'pending' AND from_id = $1
+           AND ting_next_at IS DISTINCT FROM 'infinity'::timestamptz",
+        world.t("wake_requests")
+    ))
+    .bind(member)
+    .execute(&state.pool)
+    .await;
+    let _ = sqlx::query(sql!(
+        "UPDATE {} SET answer_ting_next_at = now() WHERE answer_ting = 'pending' AND (to_id = $1 OR from_id = $1)
+           AND answer_ting_next_at IS DISTINCT FROM 'infinity'::timestamptz",
+        world.t("wake_requests")
+    ))
+    .bind(member)
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = retry_requests(state, world).await {
+        tracing::warn!(world = %world.schema, error = %e, "sending the requests waiting for a login failed");
+    }
+    if let Err(e) = wake_upkeep(state, world).await {
+        tracing::warn!(world = %world.schema, error = %e, "sending the wake Tings waiting for a login failed");
+    }
 }

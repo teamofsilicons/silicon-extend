@@ -237,6 +237,36 @@ fun ExtendButton(
     }
 }
 
+/**
+ * One choice in a list: a cobalt title with a muted line under it, the whole row one button (at
+ * least 56 dp, 64 dp on TV) with Interface's focus ring and a cobalt wash while focused, so a TV
+ * remote can walk the list and a phone can tap it.
+ */
+@Composable
+fun ChoiceButton(title: String, detail: String?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val s = LocalScale.current
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Button(
+        onClick = onClick,
+        shape = Radius,
+        border = BorderStroke(if (focused) 1.5.dp else 1.dp, if (focused) Tokens.Cobalt else Tokens.LineStrong),
+        interactionSource = interaction,
+        colors = ButtonDefaults.buttonColors(containerColor = if (focused) Tokens.CobaltWash else Tokens.Paper, contentColor = Tokens.Ink),
+        elevation = null,
+        contentPadding = PaddingValues(horizontal = if (s.tv) 20.dp else 16.dp, vertical = 10.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = if (s.tv) 64.dp else 56.dp)
+            .focusRing(focused),
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Text(title, style = Type.label(s).copy(color = Tokens.Cobalt), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (detail != null) Text(detail, style = Type.muted(s), maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
 /** A calm card on paper with Interface's hairline. [highlight] marks the one thing happening now. */
 @Composable
 fun Panel(

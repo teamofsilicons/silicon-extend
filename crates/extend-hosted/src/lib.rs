@@ -1,4 +1,4 @@
-//! Drivers for devices a computer carries: iPhone and iPad (through agent-device on a Mac), Apple TV,
+//! Drivers for devices a computer carries: iPhone and iPad (through the device engine on a Mac), Apple TV,
 //! Samsung (Tizen) and LG (webOS) TVs.
 //!
 //! The desktop agent (`extend-agent`) calls [`driver_for`] when the service sends an `attach` frame
@@ -8,7 +8,7 @@
 //!
 //! | Device | How | Host |
 //! |---|---|---|
-//! | iPhone, iPad | agent-device's physical-iOS driver (XCTest runner on the device) | Mac |
+//! | iPhone, iPad | the device engine's physical-iOS driver (XCTest runner on the device) | Mac |
 //! | Apple TV | Companion protocol (HAP pairing, OPACK) for buttons and apps; AirPlay for pictures and videos | Mac |
 //! | Samsung TV | Tizen remote-control WebSocket (8002 TLS, 8001 plain) and REST (8001) | Mac, Windows, Linux |
 //! | LG TV | webOS SSAP WebSocket (3000 plain, 3001 TLS) and its pointer socket | Mac, Windows, Linux |
@@ -41,14 +41,15 @@ pub struct HostedDevice {
     pub address: Option<String>,
     /// A directory this driver may keep state in (pairing keys, client tokens).
     pub state_dir: PathBuf,
-    /// Command that runs agent-device (`node …/bin.js` split into argv), for iPhone and iPad.
+    /// Command that runs the device engine (`node …/bin.js` split into argv), for iPhone and iPad.
     pub agent_device: Vec<String>,
 }
 
 /// Builds the driver for a hosted device. Errors say exactly why (wrong host OS, missing helper).
 ///
 /// Construction does no I/O and needs no async runtime; drivers connect lazily on the first
-/// `probe` or `run`.
+/// `probe` or `run`. Built inside a tokio runtime, an iPhone's or iPad's driver also starts looking
+/// after its device's XCTest runner every 20 s until it is dropped.
 pub fn driver_for(device: HostedDevice) -> Result<Box<dyn Driver>, String> {
     match device.os {
         DeviceOs::Ios | DeviceOs::Ipados => ios::driver(device),
@@ -73,7 +74,7 @@ mod tests {
             name: "Living room".into(),
             address: Some("192.0.2.10".into()),
             state_dir: std::env::temp_dir().join("extend-hosted-test"),
-            agent_device: vec!["agent-device".into()],
+            agent_device: vec!["extend-engine".into()],
         }
     }
 

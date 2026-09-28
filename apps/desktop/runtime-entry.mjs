@@ -1,29 +1,45 @@
 #!/usr/bin/env node
-// Silicon Extend's entry for the agent-device runtime it ships. Packaging (macos/build-app.sh,
-// linux/build-package.sh) installs this file as bin/agent-device.mjs and keeps agent-device's own
-// entry beside it as bin/agent-device-cli.mjs, which runs after one check.
+// Silicon Extend's entry for the device engine runtime it ships. Packaging (macos/build-app.sh,
+// linux/build-package.sh) installs this file as bin/extend-engine.mjs and keeps the engine's own
+// entry beside it as bin/extend-engine-cli.mjs, which runs after one check.
 //
-// agent-device reuses a running daemon whose version equals its own, and the version stamped on a
+// The engine reuses a running daemon whose version equals its own, and the version stamped on a
 // packaged runtime (stamp-runtime.mjs) names its content, not where it is installed. A daemon keeps
 // loading code, and the macOS helper, from the location it was started from. Reused from an
 // identical copy somewhere else, it fails with "Cannot find module" once that first location is
 // moved or deleted: an app dragged from Downloads to Applications, a translocated app, an unpacked
-// tarball that was removed. So before agent-device runs, a daemon of this same version that was
-// started from another location is stopped (with agent-device's own `daemon stop`), and
-// agent-device starts a fresh one from here. extend-runtime-root.json in the daemon's state
-// directory records which location the daemon there belongs to.
+// tarball that was removed. So before the engine runs, a daemon of this same version that was
+// started from another location is stopped (with the engine's own `daemon stop`), and the engine
+// starts a fresh one from here. extend-runtime-root.json in the daemon's state directory records
+// which location the daemon there belongs to.
 //
-// A daemon of another version is left to agent-device, which replaces an older one and leaves a
+// A daemon of another version is left to the engine, which replaces an older one and leaves a
 // newer one running. Help, --version, `daemon …` and runs against a remote daemon aren't checked.
 //
 // The record names, for each version, the location its daemon was started from
-// ({"root": <latest>, "roots": {"<version>": <location>}}), and it is written before agent-device
+// ({"root": <latest>, "roots": {"<version>": <location>}}), and it is written before the engine
 // runs: a command killed before it exits (a timeout, SIGKILL) must still leave it, or the next
 // command would stop the daemon this location has just started. Keyed by version, a location's
-// claim never covers a daemon of another version that agent-device keeps (a newer one).
+// claim never covers a daemon of another version that the engine keeps (a newer one).
 //
-// Flags are read the way agent-device's parser reads them (src/cli/parser/args.ts): only before a
+// Flags are read the way the engine's parser reads them (src/cli/parser/args.ts): only before a
 // `--`, after which every token is text (`type -- --state-dir=~/notes` types those words).
+//
+// The engine's settings are named EXTEND_ENGINE_<X>, and the engine reads each as its fork-internal
+// AGENT_DEVICE_<X>. The first import below (src/extend-env.ts in the engine) copies every set
+// EXTEND_ENGINE_<X> onto AGENT_DEVICE_<X> before anything here reads the environment, so the new
+// names win and this file reads the internal ones.
+//
+// It also sets two defaults for a daemon the engine starts from here (a value already in the
+// environment, under either name, wins), so an iPhone or iPad doesn't keep showing "Automation
+// Running" once nothing uses it: a runner kept warm after a Simulator session closes stops after
+// 30 seconds instead of 5 minutes (EXTEND_ENGINE_IOS_RUNNER_IDLE_STOP_MS), and a daemon that exits
+// stops its runners instead of handing them to the next daemon, where a physical device's runner
+// would keep running for up to a day (EXTEND_ENGINE_IOS_RUNNER_DETACH=0). Extend's iOS driver
+// (crates/extend-hosted/src/ios.rs, DAEMON_ENV_DEFAULTS) gives the engine the same two. And it turns
+// off the engine's update check (EXTEND_ENGINE_NO_UPDATE_NOTIFIER=1), which looks for the upstream
+// package: Silicon Extend updates its engine itself, so that notice would only mislead.
+import { applyExtendEngineEnv } from '../dist/src/internal/extend-env.js';
 import { spawnSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import os from 'node:os';
@@ -31,12 +47,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RECORD = 'extend-runtime-root.json';
+// Defaults for the engine and a daemon started from here, by setting (EXTEND_ENGINE_<X>, read as
+// AGENT_DEVICE_<X>); see the note above.
+const ENGINE_ENV_DEFAULTS = Object.freeze({
+  IOS_RUNNER_IDLE_STOP_MS: '30000',
+  IOS_RUNNER_DETACH: '0',
+  NO_UPDATE_NOTIFIER: '1',
+});
 // What extend-agent allows `daemon stop` (crates/extend-agent/src/drivers/agent_device.rs).
 const STOP_TIMEOUT_MS = 45_000;
 // A lock older than this belongs to a command that died while holding it.
 const LOCK_STALE_MS = STOP_TIMEOUT_MS + 15_000;
 const bin = path.dirname(fileURLToPath(import.meta.url));
-const cli = path.join(bin, 'agent-device-cli.mjs');
+const cli = path.join(bin, 'extend-engine-cli.mjs');
 
 function readJson(file) {
   try {
@@ -50,13 +73,13 @@ function describe(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The tokens agent-device reads as flags: those before the first `--` (its parser, args.ts:64).
+// The tokens the engine reads as flags: those before the first `--` (its parser, args.ts:64).
 function flagTokens(args) {
   const end = args.indexOf('--');
   return end === -1 ? args : args.slice(0, end);
 }
 
-// The last `--name value` or `--name=value`, as agent-device's parser reads it.
+// The last `--name value` or `--name=value`, as the engine's parser reads it.
 function flag(args, name) {
   const tokens = flagTokens(args);
   let value;
@@ -69,13 +92,14 @@ function flag(args, name) {
   return value;
 }
 
-// agent-device's rule (src/daemon-resolution.ts): --state-dir, then AGENT_DEVICE_STATE_DIR, then
-// ~/.agent-device for an installed runtime; `~` is the home directory, and a relative path starts
-// from the working directory.
+// The engine's rule (src/daemon-resolution.ts): --state-dir, then EXTEND_ENGINE_STATE_DIR (read as
+// AGENT_DEVICE_STATE_DIR, see above), then ~/.silicon-extend/engine for an installed runtime (the
+// engine's home, packages/kernel/src/extend-names.ts); `~` is the home directory, and a relative
+// path starts from the working directory.
 function stateDir(args, env) {
   const raw = (flag(args, '--state-dir') ?? env.AGENT_DEVICE_STATE_DIR ?? '').trim();
   const home = env.HOME?.trim() || os.homedir();
-  if (!raw) return path.join(home, '.agent-device');
+  if (!raw) return path.join(home, '.silicon-extend', 'engine');
   if (raw === '~') return home;
   return path.resolve(raw.startsWith('~/') ? path.join(home, raw.slice(2)) : raw);
 }
@@ -111,7 +135,7 @@ function record(dir, root, version, saved, running) {
     writeFileSync(temporary, `${JSON.stringify({ root, roots })}\n`, { mode: 0o600 });
     renameSync(temporary, path.join(dir, RECORD));
   } catch (error) {
-    process.stderr.write(`Silicon Extend couldn't record in ${dir} that agent-device's daemon runs from ${root} (${describe(error)}), so the next command may restart the daemon and end its sessions. Make sure ${dir} is writable.\n`);
+    process.stderr.write(`Silicon Extend couldn't record in ${dir} that the device engine's daemon runs from ${root} (${describe(error)}), so the next command may restart the daemon and end its sessions. Make sure ${dir} is writable.\n`);
   }
 }
 
@@ -127,7 +151,7 @@ function stopDaemon(dir, info, recorded, root) {
   const reason = run.error?.message ?? reply?.error?.message
     ?? (`${run.stderr ?? ''}\n${run.stdout ?? ''}`.trim().split('\n').pop() || `exit status ${run.status}`);
   const pid = Number.isInteger(info.pid) ? ` (pid ${info.pid})` : '';
-  process.stderr.write(`Silicon Extend: agent-device's daemon${pid} was started from ${recorded ?? 'another location'}, not from ${root}, and stopping it failed: ${reason}. This command reuses it, and it fails with "Cannot find module" if that location was moved or deleted. Stop it with: "${process.execPath}" "${cli}" daemon stop --state-dir "${dir}", then try again.\n`);
+  process.stderr.write(`Silicon Extend: the device engine's daemon${pid} was started from ${recorded ?? 'another location'}, not from ${root}, and stopping it failed: ${reason}. This command reuses it, and it fails with "Cannot find module" if that location was moved or deleted. Stop it with: "${process.execPath}" "${cli}" daemon stop --state-dir "${dir}", then try again.\n`);
   return false;
 }
 
@@ -184,7 +208,7 @@ function prepare(args, env) {
   if (!usesLocalDaemon(args, env)) return;
   const root = realpathSync(path.dirname(bin));
   const version = readJson(path.join(root, 'package.json'))?.version;
-  if (typeof version !== 'string') return; // agent-device reports its own damaged manifest
+  if (typeof version !== 'string') return; // the engine reports its own damaged manifest
   const dir = stateDir(args, env);
   const infoPath = path.join(dir, 'daemon.json');
   const recordPath = path.join(dir, RECORD);
@@ -205,19 +229,28 @@ function prepare(args, env) {
       record(dir, root, version, latest, current?.version);
     });
   } else if (ownerOf(saved, version) !== root) {
-    // No daemon, another build of this release, or another release: agent-device starts one from
+    // No daemon, another build of this release, or another release: the engine starts one from
     // here or replaces the one running, unless that is a newer release it can reach, which it
     // keeps (and whose entry the record keeps). Either way the next daemon of this version here
-    // is this location's, so that is recorded now, before agent-device runs.
+    // is this location's, so that is recorded now, before the engine runs.
     record(dir, root, version, saved, running);
   }
 }
+
+for (const [setting, value] of Object.entries(ENGINE_ENV_DEFAULTS)) {
+  // A set EXTEND_ENGINE_<X> is already on AGENT_DEVICE_<X> (the import above), so this one check
+  // covers both names.
+  if (process.env[`AGENT_DEVICE_${setting}`] === undefined) process.env[`EXTEND_ENGINE_${setting}`] = value;
+}
+// The import ran once, before these defaults; the engine's own import of it is the same module and
+// doesn't run again.
+applyExtendEngineEnv();
 
 try {
   prepare(process.argv.slice(2), process.env);
 } catch (error) {
   let dir = '<state directory>';
   try { dir = stateDir(process.argv.slice(2), process.env); } catch { /* keep the placeholder */ }
-  process.stderr.write(`Silicon Extend couldn't check where agent-device's daemon was started from (${describe(error)}), so this command may reuse a daemon from a moved or deleted copy of Silicon Extend. If it fails with "Cannot find module", stop the daemon with: "${process.execPath}" "${cli}" daemon stop --state-dir "${dir}", then try again.\n`);
+  process.stderr.write(`Silicon Extend couldn't check where the device engine's daemon was started from (${describe(error)}), so this command may reuse a daemon from a moved or deleted copy of Silicon Extend. If it fails with "Cannot find module", stop the daemon with: "${process.execPath}" "${cli}" daemon stop --state-dir "${dir}", then try again.\n`);
 }
-await import('./agent-device-cli.mjs');
+await import('./extend-engine-cli.mjs');

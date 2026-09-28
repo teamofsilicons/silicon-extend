@@ -11,7 +11,7 @@ test.describe("signing in", () => {
     await page.getByTestId("slt-input").fill("oac_saket");
     await page.getByTestId("slt-submit").click();
     const rows = page.getByTestId("device-list").getByTestId("device-row");
-    await expect(rows).toHaveCount(4);
+    await expect(rows).toHaveCount(7);
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
     const pixel = page.locator(`[data-device-id="${DEVICE_PIXEL}"]`);
     await expect(pixel).toContainText("Saket's Pixel");
@@ -23,18 +23,16 @@ test.describe("signing in", () => {
     await expect(page.locator('[data-device-id="51ab93c0"]')).toContainText("through MacBook Pro");
     await shoot(page, "02-devices");
 
-    // Team devices of other Carbons: read-only.
-    await page.getByTestId("tab-team").click();
-    await expect(page.getByTestId("team-device-list").getByTestId("device-row")).toHaveCount(1);
-    await expect(page.getByTestId("team-device-list")).toContainText("Alice's iPad");
-    await expect(page.getByTestId("team-device-list")).not.toContainText("Alice's Windows PC");
-    await shoot(page, "03-team-devices");
-
-    // Another team.
+    // 1.1: devices belong to the Carbon, not to a Team. No "Team devices" tab, and no other Carbon's device.
+    await expect(page.getByTestId("tab-team")).toHaveCount(0);
+    await expect(page.getByTestId("device-list")).not.toContainText("Alice's");
+    await expect(page.getByTestId("list-label")).toContainText("Every Team · 7");
+    // The Team menu doesn't change the list: the labs device shows in acme, and acme's in labs.
+    await expect(page.getByTestId("device-list")).toContainText("Lab Linux box");
     await page.getByTestId("team-picker").selectOption("labs");
-    await page.getByTestId("tab-mine").click();
-    await expect(page.getByTestId("device-row")).toHaveCount(1);
-    await expect(page.getByTestId("device-row")).toContainText("Lab Linux box");
+    await expect(rows).toHaveCount(7);
+    await expect(page.getByTestId("device-list")).toContainText("Saket's Pixel");
+    await expect(page.getByTestId("device-list")).toContainText("Lab Linux box");
   });
 
   test("shows the service's message and hint for a bad token", async ({ page, mock }) => {
@@ -153,6 +151,8 @@ test.describe("adding a device", () => {
     await page.getByTestId("device-name-input").fill("Test Pixel");
     await shoot(page, "07-wizard-name");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
 
     await expect(page.getByTestId("setup-steps")).toBeVisible();
     await expect(page.getByTestId("setup-step").first()).toBeVisible();
@@ -166,7 +166,7 @@ test.describe("adding a device", () => {
     // The team's Silicons come from GET /api/v1/team/silicons.
     const roster = page.locator('[data-roster="team"]');
     await expect(roster).toContainText("Silicons in acme");
-    await expect(roster.getByTestId("grant-suggestion")).toHaveCount(3);
+    await expect(roster.getByTestId("grant-suggestion")).toHaveCount(5);
     await roster.getByTestId("grant-suggestion").filter({ hasText: "si:chef" }).click();
     await expect(page.getByTestId("grant-input")).toHaveValue("si:chef");
     await page.getByTestId("grant-submit").click();
@@ -201,6 +201,8 @@ test.describe("adding a device", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Desk PC");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await page.getByTestId("setup-next").click();
     await page.getByTestId("grant-input").fill("si:juniper c:alice");
     await page.getByTestId("grant-submit").click();
@@ -219,12 +221,15 @@ test.describe("adding a device", () => {
     await page.getByTestId("kind-apple_tv").click();
     await page.getByTestId("wizard-next").click();
     await expect(page.getByTestId("host-step")).toBeVisible();
-    await expect(page.getByTestId("host-option")).toHaveCount(1);
+    // Every Mac Saket paired, whichever Team is selected: his MacBook and his pair of the Studio Mac.
+    await expect(page.getByTestId("host-option")).toHaveCount(2);
     await shoot(page, "10-wizard-host");
-    await page.getByTestId("host-option").click();
+    await page.getByTestId("host-option").filter({ hasText: "MacBook Pro" }).click();
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Bedroom Apple TV");
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByTestId("banner-step")).toBeVisible();
+    await page.getByTestId("banner-next").click();
     await expect(page.getByTestId("setup-code-input")).toBeVisible({ timeout: 10_000 });
     await shoot(page, "11-wizard-apple-tv-code");
     await page.getByTestId("setup-code-input").fill("4821");
@@ -265,15 +270,15 @@ test.describe("a device's page", () => {
     await expect(page.getByTestId("pair-expires")).toContainText("in 7 days");
     expect(ifMatch).toEqual(['"3"', '"4"']);
 
-    // Visibility.
-    await page.getByTestId("visibility-personal").check();
-    await expect(page.getByTestId("toast").last()).toContainText("Visible only to you");
+    // No visibility: since 1.1 a device is only ever visible to the Carbons who paired it.
+    await expect(page.getByTestId("visibility-personal")).toHaveCount(0);
+    await expect(page.getByTestId("visibility-team")).toHaveCount(0);
+    await expect(page.getByTestId("device-eyebrow")).toHaveText("Phone · Only you see it");
 
     // The activity log reads those changes back in plain words.
     const summaries = page.getByTestId("activity-summary");
     await expect(summaries.filter({ hasText: "Renamed from \u201cSaket's Pixel\u201d to \u201cPixel 9\u201d" })).toHaveCount(1);
     await expect(summaries.filter({ hasText: "Stays paired 7 days without activity" })).toHaveCount(1);
-    await expect(summaries.filter({ hasText: "Visible only to its owner" })).toHaveCount(1);
 
     // Take access away from a Silicon that isn't using it.
     await page.locator('[data-testid="grant"][data-silicon="si:scout"]').getByTestId("revoke").click();
@@ -340,8 +345,8 @@ test.describe("a device's page", () => {
     await signInWithSlt(page);
     await page.goto(`/devices/${DEVICE_MAC}`);
     await page.getByText("Give another Silicon access").click();
-    // si:atlas already has access, so only chef and scout are offered.
-    await expect(page.locator('[data-roster="team"]').getByTestId("grant-suggestion")).toHaveCount(2);
+    // si:atlas already has access in acme, so chef, scout, sous and pilot are offered.
+    await expect(page.locator('[data-roster="team"]').getByTestId("grant-suggestion")).toHaveCount(4);
     await page.getByTestId("grant-suggestion").filter({ hasText: "si:scout" }).click();
     await page.getByTestId("grant-submit").click();
     await expect(page.locator('[data-testid="grant"][data-silicon="si:scout"]')).toBeVisible();
@@ -384,7 +389,7 @@ test.describe("a device's page", () => {
     await shoot(page, "13-remove-dialog");
     await page.getByTestId("remove-confirm").click();
     await expect(page).toHaveURL(/\/devices$/);
-    await expect(page.getByTestId("device-row")).toHaveCount(3);
+    await expect(page.getByTestId("device-row")).toHaveCount(6);
     await expect(page.getByTestId("device-list")).not.toContainText("Living room TV");
     await expect(page.getByTestId("toast").last()).toContainText("Its activity log is under Removed");
 
@@ -455,7 +460,7 @@ test.describe("a device's page", () => {
     await expect(page.getByTestId("remove-unpair")).toHaveText("The Extend app on it unpairs now and shows a new pairing code.");
     await page.getByTestId("remove-confirm-input").fill("MacBook Pro");
     await page.getByTestId("remove-confirm").click();
-    await expect(page.getByTestId("device-row")).toHaveCount(2);
+    await expect(page.getByTestId("device-row")).toHaveCount(5);
     // The iPhone went with its Mac, for the same reason.
     await page.goto(`/devices/${DEVICE_IPHONE}`);
     await expect(page.getByTestId("removed-why")).toContainText("You removed it, or the computer it paired through.");
@@ -471,7 +476,7 @@ test.describe("a device's page", () => {
     await page.getByRole("button", { name: "Cancel" }).click();
     await page.goto(`/devices/${DEVICE_PIXEL}`);
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-access")).toHaveText("2 Silicons lose access.");
+    await expect(page.getByTestId("remove-access")).toHaveText("4 Silicons lose access.");
     await expect(page.getByTestId("remove-consequences")).toContainText("si:chef is using it now; its session ends immediately.");
     await shoot(page, "13b-remove-dialog-pixel");
   });
@@ -482,6 +487,7 @@ test.describe("test environments", () => {
     // Production login first, so exiting has somewhere to return to.
     await signInWithSlt(page);
     await page.getByTestId("sign-out").click();
+    await page.getByTestId("sign-out-confirm").click();
     await expect(page.getByTestId("sign-in")).toBeVisible();
     await page.getByTestId("slt-input").fill("oac_saket");
     await page.getByTestId("slt-submit").click();
@@ -550,7 +556,7 @@ test.describe("test environments", () => {
     await expect(page.getByTestId("testing-banner")).toHaveCount(0);
     await expect(page.getByTestId("devices-page")).toBeVisible();
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
-    await expect(page.getByTestId("device-row")).toHaveCount(4);
+    await expect(page.getByTestId("device-row")).toHaveCount(7);
   });
 
   test("exiting with no production login asks to sign in", async ({ page, mock }) => {
@@ -590,7 +596,7 @@ test.describe("settings and docs", () => {
     const seen: (string | undefined)[] = [];
     page.on("request", (r) => r.url().includes("/api/v1/") && seen.push(r.headers()["x-extend-telemetry"]));
     await page.goto("/devices");
-    await expect(page.getByTestId("device-row")).toHaveCount(4);
+    await expect(page.getByTestId("device-row")).toHaveCount(7);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((h) => h === "off")).toBe(true);
     await page.goto("/settings");

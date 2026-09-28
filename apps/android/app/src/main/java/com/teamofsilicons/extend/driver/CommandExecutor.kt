@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -48,7 +49,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -63,9 +63,10 @@ import kotlin.math.sin
 data class Outcome(val output: JsonElement, val text: String)
 
 /**
- * Runs agent-device commands on this device through [ExtendAccessibilityService]. Commands run one
- * at a time (as agent-device's daemon serialises a session); refs from `snapshot` are kept per
- * session until the next snapshot.
+ * Runs the device engine's commands (`extend snapshot`, `extend click`, …) on this device through
+ * [ExtendAccessibilityService]. Commands run one at a time (as the engine's daemon serialises a
+ * session); refs from `snapshot` are kept per session until the next snapshot. Each command answers
+ * on the connection of the pair it came through, and uploads its files with that pair's credential.
  */
 class CommandExecutor(
     private val extend: Extend,
@@ -77,7 +78,7 @@ class CommandExecutor(
         var baseline: Snapshot? = null
     }
 
-    private class Run(val frame: ServiceFrame.Command, val session: Session, val deadline: Long) {
+    private class Run(val frame: ServiceFrame.Command, val session: Session, val deadline: Long, val pairId: String) {
         /** Attachments written to the command's scratch directory, by attachment name. */
         val localFiles = LinkedHashMap<String, File>()
         var scratch: File? = null
@@ -88,6 +89,8 @@ class CommandExecutor(
     }
 
     private val sessions = ConcurrentHashMap<String, Session>()
+    /** The pair each session runs through (kept while the session is retained offline). */
+    private val sessionPairs = ConcurrentHashMap<String, String>()
     private val jobs = CommandJobs(extend.scope)
     private val stoppedSessions = ConcurrentHashMap.newKeySet<String>()
     private val retention = SessionRetention(retentionGraceMs)
@@ -95,12 +98,20 @@ class CommandExecutor(
     private val lock = Mutex()
     private val context get() = extend.context
 
-    /** Extend announced a session (new, or again after a reconnect: it continues with its state). */
-    fun beginSession(sessionId: String) {
+    /**
+     * Extend announced a session through the pair [pairId] (new, or again after a reconnect: it
+     * continues with its state).
+     */
+    fun beginSession(sessionId: String, pairId: String = "") {
         stoppedSessions.remove(sessionId)
         retention.confirmed(sessionId)
+        sessionPairs[sessionId] = pairId
         sessions.getOrPut(sessionId) { Session() }
     }
+
+    /** The sessions (with state, or retained while offline) that run through [pairId]. */
+    private fun sessionsOf(pairId: String): Set<String> =
+        (sessions.keys + retention.pending() + extend.adbExecutor.sessionIds()).filter { sessionPairs[it] == pairId }.toSet()
 
     /**
      * The session ended (Extend said so, or the Carbon pressed Stop): its running and queued
@@ -117,6 +128,7 @@ class CommandExecutor(
         )
         jobs.cancelSession(sessionId, reason)
         sessions.remove(sessionId)
+        sessionPairs.remove(sessionId)
         extend.scope.launch { extend.adbExecutor.endSession(sessionId, lostReason) }
     }
 
@@ -126,19 +138,32 @@ class CommandExecutor(
     }
 
     /**
-     * The device socket dropped. Running commands can't answer any more, so they stop. Sessions
-     * keep their state: Extend keeps them alive while the device is briefly offline and announces
-     * them again on reconnect ([SessionRetention]).
+     * The pair [pairId]'s connection dropped. Its running commands can't answer any more, so they
+     * stop; the other pairs' commands carry on. Its sessions keep their state: Extend keeps them
+     * alive while the device is briefly offline and announces them again on reconnect
+     * ([SessionRetention]).
      */
-    fun connectionLost() {
-        jobs.cancelAll()
-        retention.disconnected(sessions.keys + extend.adbExecutor.sessionIds(), SystemClock.elapsedRealtime())
+    fun connectionLost(pairId: String) {
+        jobs.cancelPair(pairId)
+        retention.disconnected(sessionsOf(pairId), SystemClock.elapsedRealtime())
         scheduleRetention()
     }
 
-    /** After a reconnect, Extend's current session is [active]: sessions it no longer announces have ended. */
-    fun reconcile(active: String?) {
-        retention.reconcile(active).forEach(::endSession)
+    /**
+     * After the pair [pairId] reconnected, Extend's current session through it is [active]: the
+     * pair's other sessions have ended.
+     */
+    fun reconcile(active: String?, pairId: String) {
+        retention.reconcile(active, sessionsOf(pairId)).forEach(::endSession)
+    }
+
+    /** The pair [pairId] ended (revoked, or unpaired by Extend): its sessions end with it. */
+    fun forgetPair(pairId: String) {
+        jobs.cancelPair(pairId)
+        for (id in sessionsOf(pairId)) {
+            retention.forget(id)
+            endSession(id)
+        }
     }
 
     @Synchronized private fun scheduleRetention() {
@@ -158,6 +183,7 @@ class CommandExecutor(
         retentionJob?.cancel()
         for (id in sessions.keys + retention.pending()) retention.forget(id)
         sessions.clear()
+        sessionPairs.clear()
         extend.scope.launch { extend.adbExecutor.endAll() }
     }
 
@@ -170,17 +196,19 @@ class CommandExecutor(
         jobs.cancelCommands(ADB_COMMANDS, reason)
     }
 
-    fun submit(frame: ServiceFrame.Command, send: (DeviceFrame.Result) -> Unit) =
-        jobs.submit(frame, { lock.withLock { run(frame) } }, send)
+    /** Runs [frame], which came on the pair [pairId]'s connection; [send] answers on that connection. */
+    fun submit(frame: ServiceFrame.Command, pairId: String, send: (DeviceFrame.Result) -> Unit) =
+        jobs.submit(frame, { lock.withLock { run(frame, pairId) } }, send, pairId)
 
     /** Runs one command frame to its `result`. */
-    suspend fun run(frame: ServiceFrame.Command): DeviceFrame.Result {
+    suspend fun run(frame: ServiceFrame.Command, pairId: String = ""): DeviceFrame.Result {
         if (frame.sessionId in stoppedSessions) return DeviceFrame.Result(
             frame.id, false, JsonNull, "This session has ended.", CommandError(CommandFailure.SESSION_ENDED, "This session has ended. Start a new session to continue."), emptyList(),
         )
         val session = sessions.getOrPut(frame.sessionId) { Session() }
+        sessionPairs.putIfAbsent(frame.sessionId, pairId)
         val budget = (frame.timeoutMs - 750).coerceAtLeast(1_000)
-        val run = Run(frame, session, SystemClock.elapsedRealtime() + budget)
+        val run = Run(frame, session, SystemClock.elapsedRealtime() + budget, pairId)
         return try {
             if (frame.target != null) {
                 throw CommandFailure.unsupported("This Android device doesn't carry other devices; the command was addressed to ${frame.target}.")
@@ -205,6 +233,18 @@ class CommandExecutor(
                 CommandError("internal_error", "The Android app hit an unexpected error running ${frame.command}: $e"),
                 run.files,
             )
+        } catch (e: LinkageError) {
+            // A call this Android version (or this maker's build of it) doesn't have. Uncaught, it
+            // would end the whole app, accessibility service and connection included; answered, it
+            // costs only this command.
+            Extend.log("command ${frame.command} used an API this Android doesn't have", e)
+            val message = "The Android app used something Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) " +
+                "doesn't have while running ${frame.command} ($e). This is a bug in the Extend app; other commands still work."
+            DeviceFrame.Result(frame.id, false, JsonNull, message, CommandError("internal_error", message), run.files)
+        } catch (e: OutOfMemoryError) {
+            Extend.log("command ${frame.command} ran out of memory", e)
+            val message = "The device ran out of memory running ${frame.command}: the picture or file was too large for this device. Other commands still work."
+            DeviceFrame.Result(frame.id, false, JsonNull, message, CommandError(CommandFailure.ACTION_FAILED, message), run.files)
         } finally {
             run.scratch?.deleteRecursively()
         }
@@ -250,7 +290,7 @@ class CommandExecutor(
     }
 
     private fun checkCapability(command: String) {
-        val needed = Capabilities.COMMAND_CAPABILITIES[command] ?: return
+        val needed = Capabilities.forCommand(command, extend.isTv) ?: return
         val report = SetupReport.compute(context, extend.config)
         if (needed.any { it in report.capabilities }) return
         val reason = report.missing.firstOrNull { it.capability in needed }?.reason
@@ -371,8 +411,8 @@ class CommandExecutor(
         val id = run.frame.uploadIds.getOrNull(run.uploadCursor)
             ?: throw CommandFailure(CommandFailure.UPLOAD_FAILED, "The command came with ${run.frame.uploadIds.size} upload slots, all used, so ${file.name} wasn't sent. $again")
         run.uploadCursor++
-        val cred = extend.secrets.readCredential()
-            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired, so ${file.name} can't be uploaded. Pair it again in the Extend app.")
+        val cred = extend.connection.credentialFor(run.pairId)
+            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired through this session's Carbon, so ${file.name} can't be uploaded. Start a new session.")
         val budget = run.remainingMs() - 250
         val sent = try {
             if (budget <= 0) null else withTimeoutOrNull(budget) { extend.api.uploadFile(cred, id, file, artifact.contentType) }
@@ -713,9 +753,15 @@ class CommandExecutor(
         val a = a11y()
         if (r.node != null && cmd.count == 1 && cmd.holdMs == null) {
             val target = r.node.nearestClickable()
-            if (target != null && info(target)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
-                return Outcome(targetJson(r, "accessibility_click"), "Tapped ${r.desc}")
+            if (target != null) {
+                val before = a.changes
+                val clicked = info(target)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                if (clicked && a.awaitChange(before, ClickFallback.SETTLE_MS)) {
+                    return Outcome(targetJson(r, "accessibility_click"), "Tapped ${r.desc}")
+                }
+                Extend.log("click ${r.desc}: the accessibility click ${if (clicked) "changed nothing on screen" else "was refused"}; trying the fallback")
             }
+            return clickFallback(r, a)
         }
         repeat(cmd.count) { i ->
             if (!a.tap(r.x.toFloat(), r.y.toFloat(), cmd.holdMs ?: 50)) {
@@ -725,6 +771,38 @@ class CommandExecutor(
         }
         val times = if (cmd.count > 1) " ${cmd.count} times" else ""
         return Outcome(targetJson(r, "tap"), "Tapped ${r.desc}$times")
+    }
+
+    /**
+     * The click the accessibility click couldn't do ([ClickFallback]): focus the element on a TV,
+     * then press select or tap through Android debugging, accessibility's select key, or a gesture.
+     */
+    private suspend fun clickFallback(r: Resolved, a: ExtendAccessibilityService): Outcome {
+        val tv = extend.isTv
+        val focusTarget = r.node?.let { n -> generateSequence(n) { it.parent }.firstOrNull { it.focusable } }
+        val focused = tv && focusTarget != null && (focusTarget.focused || info(focusTarget)?.performAction(AccessibilityNodeInfo.ACTION_FOCUS) == true)
+        for (method in ClickFallback.order(tv, extend.adb.connected, focused, ExtendAccessibilityService.dpadSupported)) {
+            when (method) {
+                ClickFallback.Method.ADB_SELECT, ClickFallback.Method.ADB_TAP -> try {
+                    val res = extend.adb.shell(ClickFallback.adbCommand(method, r.x, r.y, android.os.Build.VERSION.SDK_INT), check = false)
+                    if (res.exitCode == 0) return Outcome(targetJson(r, method.wire), "${if (method == ClickFallback.Method.ADB_SELECT) "Selected" else "Tapped"} ${r.desc}")
+                    Extend.log("click ${r.desc}: ${method.wire} exited ${res.exitCode}: ${res.text.take(300)}")
+                } catch (e: java.io.IOException) {
+                    Extend.log("click ${r.desc}: ${method.wire} through Android debugging failed", e)
+                }
+                ClickFallback.Method.ACCESSIBILITY_SELECT ->
+                    if (ExtendAccessibilityService.dpadSupported && a.global(dpadAction("select"))) {
+                        return Outcome(targetJson(r, method.wire), "Selected ${r.desc}")
+                    }
+                ClickFallback.Method.GESTURE_TAP -> {
+                    if (!a.tap(r.x.toFloat(), r.y.toFloat())) {
+                        throw CommandFailure(CommandFailure.ACTION_FAILED, "Android cancelled the tap at (${r.x}, ${r.y}), usually because the screen changed or another gesture started.")
+                    }
+                    return Outcome(targetJson(r, method.wire), "Tapped ${r.desc}")
+                }
+            }
+        }
+        throw CommandFailure(CommandFailure.ACTION_FAILED, "Nothing could click ${r.desc}.")
     }
 
     private suspend fun longPress(cmd: Cmd.LongPress, run: Run): Outcome {
@@ -1081,13 +1159,6 @@ class CommandExecutor(
             (adbProblem?.let { "Android debugging failed while pressing $b ($it), and " } ?: "") +
                 "Silicon Extend's accessibility service isn't running. The Carbon turns it on in Settings › Accessibility › ${com.teamofsilicons.extend.config.DeviceInfo.systemLabel(extend.context)}, or connects Android debugging in the Extend app.",
         )
-        val dpad = mapOf(
-            "up" to AccessibilityService.GLOBAL_ACTION_DPAD_UP,
-            "down" to AccessibilityService.GLOBAL_ACTION_DPAD_DOWN,
-            "left" to AccessibilityService.GLOBAL_ACTION_DPAD_LEFT,
-            "right" to AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT,
-            "select" to AccessibilityService.GLOBAL_ACTION_DPAD_CENTER,
-        )
         fun done(method: String) = Outcome(
             buildJsonObject { put("button", b); put("longpress", cmd.longPress); put("method", method) },
             "${if (cmd.longPress) "Long-pressed" else "Pressed"} $b",
@@ -1105,13 +1176,13 @@ class CommandExecutor(
             )
         }
         when (b) {
-            in dpad -> {
+            in DPAD_BUTTONS -> {
                 if (!ExtendAccessibilityService.dpadSupported) {
                     throw CommandFailure.unsupported(
                         "D-pad buttons need Android debugging on this TV (Android ${android.os.Build.VERSION.RELEASE}; accessibility has D-pad actions only from Android 13). Connect Android debugging in the Extend app's setup.",
                     )
                 }
-                if (!a.global(dpad.getValue(b))) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the $b button.")
+                if (!a.global(dpadAction(b))) throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the $b button.")
                 return done("global_action")
             }
             "back" -> return global(AccessibilityService.GLOBAL_ACTION_BACK, "back").let { done("global_action") }
@@ -1138,6 +1209,16 @@ class CommandExecutor(
             )
         }
         throw CommandFailure.invalid("Unknown remote button $b")
+    }
+
+    /** The accessibility D-pad action for a remote button (Android 13+ only). */
+    @androidx.annotation.RequiresApi(33)
+    private fun dpadAction(button: String): Int = when (button) {
+        "up" -> AccessibilityService.GLOBAL_ACTION_DPAD_UP
+        "down" -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN
+        "left" -> AccessibilityService.GLOBAL_ACTION_DPAD_LEFT
+        "right" -> AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT
+        else -> AccessibilityService.GLOBAL_ACTION_DPAD_CENTER
     }
 
     private suspend fun keyboard(cmd: Cmd.Keyboard): Outcome {
@@ -1183,7 +1264,9 @@ class CommandExecutor(
     }
 
     private suspend fun clipboard(cmd: Cmd.Clipboard): Outcome {
-        val cm = context.getSystemService(ClipboardManager::class.java)
+        // Fetched on the main thread: before Android 9 ClipboardManager's constructor creates a
+        // Handler on the calling thread, which fails on a command thread without a Looper.
+        val cm = withContext(Dispatchers.Main) { context.getSystemService(ClipboardManager::class.java) }
         val write = cmd.write
         if (write != null) {
             withContext(Dispatchers.Main) {
@@ -1191,8 +1274,17 @@ class CommandExecutor(
             }
             return Outcome(buildJsonObject { put("chars", write.length) }, "Clipboard set [redacted ${write.length} chars]")
         }
-        // Android 10+ only lets the focused app read the clipboard: take focus for a moment.
-        val text = ClipboardActivity.read(a11y())
+        // Android 10+ only lets the focused app read the clipboard: take focus for a moment. Before
+        // that any app may read it, so it is read directly (starting an activity from the
+        // background there can wait up to 5 s after Home is pressed).
+        val text = if (ClipboardActivity.needsFocus(android.os.Build.VERSION.SDK_INT)) ClipboardActivity.read(a11y())
+        else withContext(Dispatchers.Main) {
+            try {
+                cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+            } catch (e: Exception) {
+                throw CommandFailure(CommandFailure.ACTION_FAILED, "Android refused the clipboard read: $e")
+            }
+        }
         return Outcome(buildJsonObject { put("text", text?.let { JsonPrimitive(it) } ?: JsonNull) }, text ?: "(clipboard is empty)")
     }
 
@@ -1271,10 +1363,11 @@ class CommandExecutor(
         } catch (e: android.content.ActivityNotFoundException) {
             throw CommandFailure(CommandFailure.APP_NOT_FOUND, "No app on this device can open $url.")
         }
-        // Wait until something new is in front.
+        // Wait until something new is in front (up to Android 11, past the app-switch window after Home).
         val expected = pkg
         var fg: String? = null
-        val until = SystemClock.elapsedRealtime() + 5_000
+        val wait = ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 5_000)
+        val until = SystemClock.elapsedRealtime() + wait
         while (SystemClock.elapsedRealtime() < until) {
             delay(250)
             fg = a.currentForeground()
@@ -1290,7 +1383,7 @@ class CommandExecutor(
         val note = when {
             expected == null || fg == expected -> ""
             fg != before -> " (Android brought back its task, which is showing $fg)"
-            else -> " (asked Android to open it, but $fg is still in front after 5 s)"
+            else -> " (asked Android to open it, but $fg is still in front after ${ForegroundWait.seconds(wait)})"
         }
         return Outcome(out, "Opened $what$note")
     }
@@ -1447,6 +1540,9 @@ class CommandExecutor(
         val intent = Intent(context, DisplayActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
         intent.putExtra(DisplayActivity.EXTRA_KIND, show.kind)
+        // Many TV boxes and projectors on Android 8–10 ship without Android System WebView; a
+        // page can't be shown there, and creating a WebView would throw.
+        if (show.kind == "url" && !DisplayActivity.webViewAvailable()) throw CommandFailure.unsupported(DisplayActivity.NO_WEBVIEW)
         when (show.kind) {
             "url", "text" -> intent.putExtra(DisplayActivity.EXTRA_VALUE, show.value)
             "image", "video" -> {
@@ -1473,81 +1569,160 @@ class CommandExecutor(
                 }
             }
         }
-        val since = SystemClock.elapsedRealtime()
-        withContext(Dispatchers.Main) { a.startActivity(intent) }
-        val shown = DisplayActivity.awaitShown(4_000, since)
-        val out = buildJsonObject { put("kind", show.kind); put("shown", shown) }
-        if (!shown) throw CommandFailure(CommandFailure.ACTION_FAILED, "Asked Android to show the display, but it didn't come to the front within 4 s.")
-        delay(500) // let the first frame draw before the next command looks at the screen
-        return Outcome(out, "Showing ${show.kind} full screen; it stays until display clear or Back on the remote.")
+        val requestId = run.frame.id.toString()
+        intent.putExtra(DisplayActivity.EXTRA_REQUEST_ID, requestId)
+        DisplayActivity.beginRequest(requestId)
+        try {
+            withContext(Dispatchers.Main) { a.startActivity(intent) }
+            // Media readiness includes decoding/buffering; foreground alone does not prove it loaded.
+            val wait = (if (show.kind in setOf("image", "video")) 30_000L
+                else ForegroundWait.ms(android.os.Build.VERSION.SDK_INT, 4_000))
+                .coerceAtMost(run.remainingMs().coerceAtLeast(1))
+            val shown = DisplayActivity.awaitShown(wait, requestId)
+            DisplayActivity.failureFor(requestId)?.let {
+                if (show.kind == "url") throw CommandFailure.unsupported(it)
+                throw CommandFailure(CommandFailure.ACTION_FAILED, it)
+            }
+            if (!shown) throw CommandFailure(CommandFailure.ACTION_FAILED,
+                "The display didn't finish loading ${show.kind} in the foreground within ${ForegroundWait.seconds(wait)}.")
+            delay(500) // let the first frame draw before the next command looks at the screen
+            return Outcome(buildJsonObject { put("kind", show.kind); put("shown", true) },
+                "Showing ${show.kind} full screen; it stays until display clear or Back on the remote.")
+        } catch (e: Exception) {
+            DisplayActivity.cancelRequest(requestId)
+            throw e
+        }
     }
 
     // ───────────── screenshots ─────────────
 
     private suspend fun screenshot(cmd: Cmd.Screenshot, run: Run): Outcome {
-        val a = a11y()
-        var bmp = a.screenshot()
-        if (cmd.cropOn != null) {
-            val cap = capture()
-            val n = Selectors.resolveAll(cmd.cropOn, cap.allNodes, cap.screen).firstOrNull()
-                ?: throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on ${cmd.cropOn.raw} matches nothing on screen.")
-            val b = n.bounds.intersect(Bounds(0, 0, bmp.width, bmp.height))
-            if (b.isEmpty) throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on element is off screen.")
-            bmp = Bitmap.createBitmap(bmp, b.left, b.top, b.width, b.height)
-        }
-        if (cmd.overlayRefs) {
-            val snap = run.session.last ?: SnapshotEngine.build(capture(), SnapshotOptions(interactive = true)).also { run.session.last = it }
-            bmp = bmp.copy(Bitmap.Config.ARGB_8888, true)
-            val canvas = Canvas(bmp)
-            val stroke = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.rgb(255, 64, 129) }
-            val fill = Paint().apply { color = Color.rgb(255, 64, 129) }
-            val text = Paint().apply { color = Color.WHITE; textSize = 30f; isAntiAlias = true }
-            for (n in snap.nodes) {
-                val r = n.node.bounds
-                if (r.isEmpty) continue
-                canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), stroke)
-                val label = "@" + n.ref
-                val w = text.measureText(label) + 12
-                canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.left + w, r.top + 36f, fill)
-                canvas.drawText(label, r.left + 6f, r.top + 28f, text)
-            }
-        }
-        if (cmd.scale != null && cmd.scale < 1f) {
-            bmp = Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * cmd.scale).roundToInt()), max(1, (bmp.height * cmd.scale).roundToInt()), true)
-        }
-        val bytes = ByteArrayOutputStream().use { out ->
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.toByteArray()
-        }
+        val a = ExtendAccessibilityService.instance
+        val path = ScreenshotPath.choose(android.os.Build.VERSION.SDK_INT, a != null, extend.adb.connected)
+        if (path == ScreenshotPath.NONE) throw CommandFailure.unsupported(
+            SetupReport.compute(context, extend.config).missing.firstOrNull { it.capability == Capabilities.SCREEN_CAPTURE }?.reason
+                ?: "Nothing can capture the screen right now: connect Android debugging or turn on accessibility in the Extend app's setup.",
+        )
         val name = (cmd.name?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "screenshot").let {
             if (it.lowercase().endsWith(".png")) it else "$it.png"
         }
-        val file = upload(run, bytes, name, "image/png", "screenshot")
-        val out = buildJsonObject {
-            put("files", JsonArray(listOf(JsonPrimitive(file.uploadId))))
-            put("name", name)
-            put("width", bmp.width)
-            put("height", bmp.height)
-            put("size_bytes", bytes.size)
-        }
-        return Outcome(out, "Screenshot $name (${bmp.width}x${bmp.height}, ${bytes.size / 1024} KB)")
+        val dir = File(context.cacheDir, "screenshot-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+        try {
+            val source = if (path == ScreenshotPath.ADB) adbScreenshotFile(dir) else null
+            val file = File(dir, name)
+            val width: Int
+            val height: Int
+            if (source != null && cmd.cropOn == null && !cmd.overlayRefs && (cmd.scale == null || cmd.scale == 1f)) {
+                // screencap already produced a PNG. Read its dimensions without allocating pixels,
+                // and stream the original image rather than decode/re-encode a full TV frame.
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(source.absolutePath, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw invalidScreenshot(source.length())
+                width = bounds.outWidth
+                height = bounds.outHeight
+                source.copyTo(file, overwrite = true)
+            } else {
+                var bmp = if (source == null) a!!.screenshot()
+                    else BitmapFactory.decodeFile(source.absolutePath) ?: throw invalidScreenshot(source.length())
+                fun replace(next: Bitmap) {
+                    if (next !== bmp) { bmp.recycle(); bmp = next }
+                }
+                try {
+                    var originX = 0
+                    var originY = 0
+                    if (cmd.cropOn != null) {
+                        val cap = capture()
+                        val n = Selectors.resolveAll(cmd.cropOn, cap.allNodes, cap.screen).firstOrNull()
+                            ?: throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on ${cmd.cropOn.raw} matches nothing on screen.")
+                        val b = n.bounds.intersect(Bounds(0, 0, bmp.width, bmp.height))
+                        if (b.isEmpty) throw CommandFailure(CommandFailure.NOT_FOUND, "--crop-on element is off screen.")
+                        replace(Bitmap.createBitmap(bmp, b.left, b.top, b.width, b.height))
+                        originX = b.left
+                        originY = b.top
+                    }
+                    if (cmd.overlayRefs) {
+                        val snap = run.session.last ?: SnapshotEngine.build(capture(), SnapshotOptions(interactive = true)).also { run.session.last = it }
+                        if (!bmp.isMutable) replace(bmp.copy(Bitmap.Config.ARGB_8888, true))
+                        val canvas = Canvas(bmp)
+                        val stroke = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.rgb(255, 64, 129) }
+                        val fill = Paint().apply { color = Color.rgb(255, 64, 129) }
+                        val text = Paint().apply { color = Color.WHITE; textSize = 30f; isAntiAlias = true }
+                        for (n in snap.nodes) {
+                            val bounds = n.node.bounds
+                            val r = Bounds(bounds.left - originX, bounds.top - originY, bounds.right - originX, bounds.bottom - originY)
+                            if (r.isEmpty) continue
+                            canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), stroke)
+                            val label = "@" + n.ref
+                            val w = text.measureText(label) + 12
+                            canvas.drawRect(r.left.toFloat(), r.top.toFloat(), r.left + w, r.top + 36f, fill)
+                            canvas.drawText(label, r.left + 6f, r.top + 28f, text)
+                        }
+                    }
+                    if (cmd.scale != null && cmd.scale < 1f) {
+                        replace(Bitmap.createScaledBitmap(bmp, max(1, (bmp.width * cmd.scale).roundToInt()), max(1, (bmp.height * cmd.scale).roundToInt()), true))
+                    }
+                    width = bmp.width
+                    height = bmp.height
+                    file.outputStream().buffered().use { output ->
+                        if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                            throw CommandFailure(CommandFailure.ACTION_FAILED, "Android couldn't encode the screenshot as PNG.")
+                        }
+                    }
+                } finally { bmp.recycle() }
+            }
+            // Bitmap storage is released before networking, including a slow or cancelled upload.
+            val produced = uploadScreenshot(run, file)
+            val size = file.length()
+            val out = buildJsonObject {
+                put("files", JsonArray(listOf(JsonPrimitive(produced.uploadId))))
+                put("name", name)
+                put("width", width)
+                put("height", height)
+                put("size_bytes", size)
+            }
+            return Outcome(out, "Screenshot $name (${width}x${height}, ${size / 1024} KB)")
+        } finally { dir.deleteRecursively() }
     }
 
-    private suspend fun upload(run: Run, bytes: ByteArray, name: String, contentType: String, kind: String): ProducedFile {
+    /** Capture to disk; AdbWire bounds inline data at 256 KiB and spills larger PNGs. */
+    private suspend fun adbScreenshotFile(dir: File): File {
+        val captured = try {
+            extend.adb.shellCapture("screencap -p") { name -> File(dir, name) }
+        } catch (e: java.io.IOException) {
+            throw CommandFailure(
+                CommandFailure.ACTION_FAILED,
+                "Android debugging failed while taking the screenshot: ${e.message ?: e.javaClass.simpleName}. If it disconnected, ask the Carbon to reconnect it in the Extend app.",
+            )
+        }
+        if (captured.exitCode != 0) throw CommandFailure(
+            CommandFailure.ACTION_FAILED,
+            "Android's screencap failed (exit ${captured.exitCode}: ${captured.stderr.text.trim().take(500).ifEmpty { "no output" }}).",
+        )
+        return captured.stdout.file ?: File(dir, "capture.raw").apply { writeBytes(captured.stdout.inline) }
+    }
+
+    private fun invalidScreenshot(size: Long) = CommandFailure(
+        CommandFailure.ACTION_FAILED,
+        "Android's screencap returned $size bytes that aren't a PNG image. The app on screen may block screenshots (a secure window).",
+    )
+
+    private suspend fun uploadScreenshot(run: Run, file: File): ProducedFile {
+        val name = file.name
         val id = run.frame.uploadIds.getOrNull(run.uploadCursor) ?: throw CommandFailure(
             CommandFailure.UPLOAD_FAILED,
             "The command came with ${run.frame.uploadIds.size} upload id(s), all used, so $name can't be uploaded.",
         )
         run.uploadCursor++
-        val cred = extend.secrets.readCredential() ?: throw CommandFailure(CommandFailure.NOT_READY, "This device isn't paired.")
+        val cred = extend.connection.credentialFor(run.pairId)
+            ?: throw CommandFailure(CommandFailure.NOT_READY, "This device is no longer paired through this session's Carbon, so $name can't be uploaded. Start a new session.")
         try {
-            extend.api.upload(cred, id, bytes, contentType, name)
+            extend.api.uploadFile(cred, id, file, "image/png")
         } catch (e: ApiException) {
             throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Uploading $name failed: HTTP ${e.status} ${e.message}")
         } catch (e: java.io.IOException) {
             throw CommandFailure(CommandFailure.UPLOAD_FAILED, "Uploading $name failed: ${e.message}")
         }
-        return ProducedFile(id, name, contentType, kind, bytes.size.toLong()).also { run.files += it }
+        return ProducedFile(id, name, "image/png", "screenshot", file.length()).also { run.files += it }
     }
 
     // ───────────── several steps ─────────────
@@ -1632,6 +1807,9 @@ class CommandExecutor(
     internal companion object {
         /** Commands that run through Android debugging. */
         private val ADB_COMMANDS = setOf("adb", "install", "reinstall", "record", "logs")
+
+        /** Remote buttons accessibility presses with its D-pad actions (Android 13+). */
+        private val DPAD_BUTTONS = setOf("up", "down", "left", "right", "select")
 
         /** Why a session's captures were discarded when the device gave up on it while offline. */
         val OFFLINE_TOO_LONG = "this device lost contact with Extend for more than ${SessionRetention.GRACE_MS / 60_000} minutes " +

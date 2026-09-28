@@ -71,19 +71,20 @@ pub async fn report(
             "--pr must be a link to the pull request, like https://github.com/teamofsilicons/silicon-extend/pull/12.",
         ));
     }
-    state
-        .rate_limit(
-            format!("report:{}", auth.p.id()),
-            10,
-            Duration::from_secs(3600),
-            "bug reports",
-        )
-        .await?;
     let hash = hash_json(&input);
     let st = state.clone();
     let world = auth.world.clone();
     let member = auth.p.id().to_owned();
     idempotent(&state, &auth.world, auth.p.id(), "reports", &headers, &hash, || async move {
+        // A replay is not a new report and must not consume the hourly quota.
+        st
+            .rate_limit(
+                format!("report:{}", member),
+                10,
+                Duration::from_secs(3600),
+                "bug reports",
+            )
+            .await?;
         let id = Uuid::now_v7();
         let notification = if world.is_test() {
             "simulated"

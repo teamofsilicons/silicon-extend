@@ -1,11 +1,12 @@
 import { createEffect, createSignal, For, Match, on, onMount, Show, Switch, type JSX } from "solid-js";
-import { BookOpen, ChevronDown, FlaskConical, LogIn, LogOut, Plus, Search, Settings as SettingsIcon, Smartphone } from "lucide-solid";
+import { BookOpen, ChevronDown, FlaskConical, LogIn, Plus, Search, Settings as SettingsIcon, Smartphone } from "lucide-solid";
 import { Link, match, navigate, useLocation } from "./lib/router";
 import { session } from "./lib/session";
 import { toApiError, type ApiError } from "./lib/api";
 import { ErrorNote, MemberTag, Toasts } from "./components/ui";
 import { ExtendMark } from "./components/ExtendMark";
 import { CommandMenu, openCommandMenu } from "./components/CommandMenu";
+import { SignOutButton } from "./components/SignOut";
 import SignIn from "./pages/SignIn";
 import Callback from "./pages/Callback";
 import Devices from "./pages/Devices";
@@ -193,19 +194,7 @@ export default function App() {
               <kbd>⌘ K</kbd>
             </button>
             <Show when={signedIn()}>
-              <button
-                class="icon-button"
-                aria-label="Sign out"
-                title="Sign out"
-                data-testid="sign-out"
-                onClick={async () => {
-                  // Go to "/" first so the sign-in form appears once, not twice.
-                  navigate("/", { replace: true });
-                  await s.signOut().catch(() => undefined);
-                }}
-              >
-                <LogOut size={16} />
-              </button>
+              <SignOutButton icon />
             </Show>
           </div>
         </header>
@@ -258,10 +247,17 @@ function RailLink(props: { href: string; label: string; short: string; active: b
   );
 }
 
+/**
+ * The Team menu. Since 1.1 it doesn't filter a Carbon's devices (they belong to the Carbon): it is the
+ * default Team for new grants, and a Silicon's Team.
+ */
 function TeamPicker() {
   const s = session();
   return (
-    <label class={`team-picker ${s.teams().length < 2 ? "single" : ""}`}>
+    <label
+      class={`team-picker ${s.teams().length < 2 ? "single" : ""}`}
+      title={s.member()?.type === "silicon" ? "The Team you use devices in" : "Your default Team for giving Silicons access. Your device list shows every device you paired, whichever Team is selected."}
+    >
       <span class="visually-hidden">Team</span>
       <select value={s.team() ?? ""} data-testid="team-picker" disabled={s.teams().length < 2} onChange={(e) => s.setTeam(e.currentTarget.value)}>
         {s.teams().map((t) => (

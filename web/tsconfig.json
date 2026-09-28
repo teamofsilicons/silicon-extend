@@ -14,5 +14,5 @@
     "esModuleInterop": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["src", "mock", "tests", "e2e", "vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "mock", "tests", "e2e", "e2e-compat", "vite.config.ts", "playwright.config.ts", "playwright.compat.config.ts"]
 }

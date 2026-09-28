@@ -10,6 +10,8 @@ homepage = "https://extend.teamofsilicons.com"
 readme = "README.md"
 keywords = ["silicon", "extend", "protocol"]
 categories = ["api-bindings"]
+# The 1.0.0 sources the 1.0/1.1 compatibility tests decode with; test data, not shipped.
+exclude = ["tests/compat_1_0/"]
 
 [dependencies]
 base64.workspace = true

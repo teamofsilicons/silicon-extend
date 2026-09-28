@@ -5,15 +5,17 @@ TV, iPhone, iPad, Mac, Windows, Linux, Apple TV and Samsung/LG TVs — the way t
 The Carbon pairs each device and decides which Silicons may use it. One Silicon uses a device at a
 time, the device always shows who is using it, and the Carbon can stop it with one tap.
 
-Extend is built on [our fork of agent-device](vendor/agent-device/FORK.md), which reads a screen as
-a list of things to act on (buttons, fields, lists) and acts on them.
+Extend is built on its device engine ([`vendor/extend-engine`](vendor/extend-engine/FORK.md)), which
+reads a screen as a list of things to act on (buttons, fields, lists) and acts on them.
 
 **Start here:** product intent is [`understanding/UNDERSTANDING.md`](understanding/UNDERSTANDING.md)
 (Carbon-edited). The wire contracts are [`api.yaml`](understanding/api.yaml) and
 [`cli.yaml`](understanding/cli.yaml); formats and flows are in
 [`TECHNICAL.md`](understanding/TECHNICAL.md).
 
-**Status:** 1.0.0. The service runs at `backend.extend.teamofsilicons.com`, the website at
+**Status:** 1.0.0 is live; 1.1.0 is being built (devices that belong to the Carbons who paired them,
+several Carbons per device, waking a device, setup retry). The service runs at
+`backend.extend.teamofsilicons.com`, the website at
 [extend.teamofsilicons.com](https://extend.teamofsilicons.com), and the device apps are on the
 [releases page](https://github.com/teamofsilicons/silicon-extend/releases). Windows is a preview.
 What is still open, and what needs a Carbon's decision, is in
@@ -29,6 +31,7 @@ extend login <slt>                      # a short-lived token from Silicon IAM; 
 extend device ls                        # Silicon: devices you can use. Carbon: devices you paired
 extend device show 7c1e09ab             # what you can do on it right now
 extend session new 7c1e09ab --connect   # one Silicon at a time; prints the session id (a3f)
+extend device wake 0d44e1f2 --reason "…"  # 1.1: ask its Carbon to wake a device that isn't awake
 extend snapshot -i                      # read the screen as elements with @refs
 extend click @e2
 extend screenshot --ttl 7d              # stored in Briefcase, link printed
@@ -53,8 +56,8 @@ documentation; every node explains itself. More: [docs/cli.md](docs/cli.md).
 | `apps/android` | The Extend app for Android phones, tablets, Android TV, Google TV and Fire OS |
 | `apps/desktop` | Packaging for the desktop app |
 | `web` | The configuration website (SolidJS) |
-| `vendor/agent-device` | Our fork of agent-device ([what changed](vendor/agent-device/FORK.md)) |
-| `docs` | [Device protocol](docs/device-protocol.md), [CLI](docs/cli.md), [client](docs/client.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [verification record](docs/verification.md), [open gates](docs/completion-work.md) |
+| `vendor/extend-engine` | The device engine, our fork of an MIT-licensed project ([what changed](vendor/extend-engine/FORK.md)) |
+| `docs` | [Device protocol](docs/device-protocol.md), [CLI](docs/cli.md), [client](docs/client.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [verification record](docs/verification.md), [open gates](docs/completion-work.md), [requests to other services](docs/requests/ting-app-level-types.md) |
 | `contracts` | Consumer contract fixtures the service's CI replays ([format](contracts/README.md)) |
 | `deploy/aws` | A single-host production stack for the service (not deployed) |
 | `e2e` | End-to-end suites and fixtures |
@@ -78,6 +81,6 @@ pull request here, and report it with the PR attached.
 
 ## Licence
 
-MIT, see [`LICENSE`](LICENSE). Third-party components and their licences (the agent-device fork,
-libadb-android, spake2-android, Node.js, the fonts, Rust and JavaScript dependencies) are listed in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+MIT, see [`LICENSE`](LICENSE). Third-party components and their licences (the device engine, which is
+a fork of an MIT-licensed project, libadb-android, spake2-android, Node.js, the fonts, Rust and
+JavaScript dependencies) are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

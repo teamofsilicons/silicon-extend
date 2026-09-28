@@ -4,20 +4,20 @@
 #
 # Layout (the same inside the tarball and under /usr in the .deb):
 #   bin/extend-agent
-#   lib/silicon-extend/agent-device/{bin,dist,linux,package.json}   Extend's agent-device fork, behind
-#                                                                  Extend's entry (runtime-entry.mjs)
-#   lib/silicon-extend/node/bin/node                               Node 22 for agent-device
+#   lib/silicon-extend/engine/{bin,dist,linux,package.json}   the device engine, behind Extend's
+#                                                            entry (runtime-entry.mjs)
+#   lib/silicon-extend/node/bin/node                         Node 22 for the engine
 #   share/applications/silicon-extend.desktop
 #   share/doc/silicon-extend/{README,LICENSE,THIRD_PARTY_NOTICES.md,THIRD_PARTY_LICENSES.txt}
-# extend-agent finds agent-device and node through ../lib/silicon-extend next to its own binary.
+# extend-agent finds the engine and node through ../lib/silicon-extend next to its own binary.
 #
 #   PROFILE=debug …        use a debug build
 #   EXTEND_AGENT_BIN=…     package this binary instead of building one
 #   NODE_TARBALL=…         use this Node tarball instead of downloading (checksum still verified)
 #
-# With pnpm on PATH it rebuilds the agent-device fork first, like the macOS build. Without pnpm
+# With pnpm on PATH it rebuilds the device engine first, like the macOS build. Without pnpm
 # (the linux-e2e container, where build-in-docker.sh has just built it on the host) it packages
-# vendor/agent-device/dist only if it was built from the source that is there now: every file
+# vendor/extend-engine/dist only if it was built from the source that is there now: every file
 # the build reads is compared with the record made after the build (apps/desktop/dist-manifest.mjs),
 # so an edited, added or deleted source file each counts.
 set -euo pipefail
@@ -26,25 +26,25 @@ PROFILE="${PROFILE:-release}"
 NODE_VERSION="22.23.3"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT="${OUT:-$TARGET_DIR/desktop/linux}"
-AD="$ROOT/vendor/agent-device"
+ENGINE="$ROOT/vendor/extend-engine"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 die() { printf '%s\n' "$*" >&2; exit 1; }
 # shellcheck source=../packaging.sh
 source "$ROOT/apps/desktop/packaging.sh"
 case "$(uname -m)" in x86_64) ARCH=x64; DEB_ARCH=amd64;; aarch64|arm64) ARCH=arm64; DEB_ARCH=arm64;; *) die "Silicon Extend packages Linux for x86_64 and aarch64 only, and this machine is $(uname -m). Build on one of those.";; esac
 
-# Packaging a stale dist would ship old behaviour under a valid build identity, so the fork is
+# Packaging a stale dist would ship old behaviour under a valid build identity, so the engine is
 # rebuilt here, or its dist must have been built from exactly the source that is there now.
-BUILT="$AD/dist/src/internal/bin.js"
-REBUILD_HINT="(cd vendor/agent-device && pnpm install --frozen-lockfile && pnpm build) && node apps/desktop/dist-manifest.mjs record vendor/agent-device"
+BUILT="$ENGINE/dist/src/internal/bin.js"
+REBUILD_HINT="(cd vendor/extend-engine && pnpm install --frozen-lockfile && pnpm build) && node apps/desktop/dist-manifest.mjs record vendor/extend-engine"
 if command -v pnpm >/dev/null; then
-  echo "== agent-device fork (pnpm install && pnpm build)"
-  (cd "$AD" && pnpm install --frozen-lockfile && pnpm build)
-  node "$ROOT/apps/desktop/dist-manifest.mjs" record "$AD"
+  echo "== device engine (pnpm install && pnpm build)"
+  (cd "$ENGINE" && pnpm install --frozen-lockfile && pnpm build)
+  node "$ROOT/apps/desktop/dist-manifest.mjs" record "$ENGINE"
 elif [[ ! -f "$BUILT" ]]; then
-  die "vendor/agent-device isn't built and pnpm isn't installed to build it, so there is no agent-device to package. Install pnpm, or build it where pnpm is: $REBUILD_HINT, then package again."
+  die "vendor/extend-engine isn't built and pnpm isn't installed to build it, so there is no device engine to package. Install pnpm, or build it where pnpm is: $REBUILD_HINT, then package again."
 else
-  require_fresh_dist "$AD"
+  require_fresh_dist "$ENGINE"
 fi
 
 if [[ -z "${EXTEND_AGENT_BIN:-}" ]]; then
@@ -86,17 +86,17 @@ fi
 NAME="silicon-extend-$VERSION-linux-$ARCH"
 STAGE="$OUT/$NAME"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/lib/silicon-extend/agent-device" "$STAGE/lib/silicon-extend/node" "$STAGE/share/applications" "$STAGE/share/doc/silicon-extend"
+mkdir -p "$STAGE/bin" "$STAGE/lib/silicon-extend/engine" "$STAGE/lib/silicon-extend/node" "$STAGE/share/applications" "$STAGE/share/doc/silicon-extend"
 install -m 0755 "$EXTEND_AGENT_BIN" "$STAGE/bin/extend-agent"
-tar -C "$AD" -cf - bin dist linux package.json LICENSE | tar -C "$STAGE/lib/silicon-extend/agent-device" -xf -
+tar -C "$ENGINE" -cf - bin dist linux package.json LICENSE | tar -C "$STAGE/lib/silicon-extend/engine" -xf -
 tar -xJf "$NODE_TARBALL" -C "$STAGE/lib/silicon-extend/node" --strip-components=1 --wildcards '*/bin/node' '*/LICENSE'
 BUNDLED_NODE="$STAGE/lib/silicon-extend/node/bin/node"
-RUNTIME="$STAGE/lib/silicon-extend/agent-device"
-# Extend's entry (runtime-entry.mjs) runs in front of agent-device's own: it replaces a daemon that
+RUNTIME="$STAGE/lib/silicon-extend/engine"
+# Extend's entry (runtime-entry.mjs) runs in front of the engine's own: it replaces a daemon that
 # a copy of Silicon Extend at another location started (an unpacked tarball, say), which fails once
 # that copy is moved or deleted.
-mv "$RUNTIME/bin/agent-device.mjs" "$RUNTIME/bin/agent-device-cli.mjs"
-install -m 0755 "$ROOT/apps/desktop/runtime-entry.mjs" "$RUNTIME/bin/agent-device.mjs"
+mv "$RUNTIME/bin/extend-engine.mjs" "$RUNTIME/bin/extend-engine-cli.mjs"
+install -m 0755 "$ROOT/apps/desktop/runtime-entry.mjs" "$RUNTIME/bin/extend-engine.mjs"
 # The stamp must be printed and in the staged manifest: an unstamped runtime would keep reusing an
 # older daemon of the same upstream version after an update. stamp_runtime sets STAMPED, or stops
 # the build saying why (even when the stamp is killed by a signal and prints nothing).
@@ -106,9 +106,9 @@ MANIFEST_VERSION="$("$BUNDLED_NODE" -p 'JSON.parse(require("fs").readFileSync(pr
 MANIFEST_DIGEST="$("$BUNDLED_NODE" -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).extendRuntime?.sha256 ?? ""' "$RUNTIME/package.json")"
 STAMP_PATTERN='^[^[:space:]]+[+.]extend\.[0-9a-f]{64}$'
 if [[ ! "$STAMPED" =~ $STAMP_PATTERN || "$MANIFEST_VERSION" != "$STAMPED" || "$STAMPED" != *"extend.$MANIFEST_DIGEST" ]]; then
-  die "agent-device in $RUNTIME wasn't stamped with a build identity (stamp-runtime.mjs printed '$STAMPED'; package.json has '$MANIFEST_VERSION'). Unstamped, the package would reuse an older agent-device daemon after an update. Fix the cause stamp-runtime.mjs reported above, if any, and package again."
+  die "The device engine in $RUNTIME wasn't stamped with a build identity (stamp-runtime.mjs printed '$STAMPED'; package.json has '$MANIFEST_VERSION'). Unstamped, the package would reuse an older engine daemon after an update. Fix the cause stamp-runtime.mjs reported above, if any, and package again."
 fi
-echo "agent-device runtime $STAMPED"
+echo "device engine runtime $STAMPED"
 cat > "$STAGE/share/applications/silicon-extend.desktop" <<EOF
 [Desktop Entry]
 Type=Application

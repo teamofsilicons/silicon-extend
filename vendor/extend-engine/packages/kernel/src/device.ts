@@ -1,0 +1,616 @@
+import { AppError } from './errors.ts';
+
+export {
+  deviceIdentity,
+  deviceIdentityKey,
+  deviceShape,
+  sameDeviceIdentity,
+  sameDeviceShape,
+  type DeviceIdentity,
+} from './device-identity.ts';
+
+// Legacy Apple leaf platforms. Retained ONLY as accepted `--platform` / read-path
+// input aliases (approach b back-compat) and as the PUBLIC leaf strings the daemon
+// still emits; the internal `Platform` no longer carries them — every Apple OS
+// collapses to the single `apple` platform (ADR-0009 / issue #979).
+export type ApplePlatform = 'ios' | 'macos';
+// Explicit, stored Apple operating system. All six literals are reserved so the
+// type is stable as platform support grows, but discovery only ever populates
+// the four currently supported ones ('ios' | 'ipados' | 'tvos' | 'macos').
+const APPLE_OS_VALUES = ['ios', 'ipados', 'tvos', 'watchos', 'visionos', 'macos'] as const;
+export type AppleOS = (typeof APPLE_OS_VALUES)[number];
+// Internal device platforms. Apple OSes collapse to a single `apple` platform; the
+// `appleOs` field on DeviceInfo is the sole OS discriminant.
+export const PLATFORMS = ['apple', 'android', 'harmonyos', 'vega', 'linux', 'web'] as const;
+export type Platform = (typeof PLATFORMS)[number];
+// The PUBLIC leaf platform strings the daemon emits and clients parse (approach b:
+// output never changes). Equals the pre-collapse `Platform` set.
+export const PUBLIC_PLATFORMS = [
+  'ios',
+  'macos',
+  'android',
+  'harmonyos',
+  'vega',
+  'linux',
+  'web',
+] as const;
+export type PublicPlatform = (typeof PUBLIC_PLATFORMS)[number];
+// Accepted `--platform` selectors: the internal platforms plus the legacy Apple leaf
+// aliases `ios`/`macos`, which still resolve to `apple` devices (read-path back-compat).
+export const PLATFORM_SELECTORS = [...PLATFORMS, 'ios', 'macos'] as const;
+export type PlatformSelector = (typeof PLATFORM_SELECTORS)[number];
+const DEVICE_KINDS = ['simulator', 'emulator', 'device'] as const;
+export type DeviceKind = (typeof DEVICE_KINDS)[number];
+export const DEVICE_TARGETS = ['mobile', 'tv', 'desktop'] as const;
+export type DeviceTarget = (typeof DEVICE_TARGETS)[number];
+
+export type DeviceInfo = {
+  platform: Platform;
+  id: string;
+  name: string;
+  kind: DeviceKind;
+  target?: DeviceTarget;
+  // Explicit Apple OS discriminant populated at discovery for Apple devices.
+  // Optional so legacy records (and non-Apple platforms) remain valid.
+  appleOs?: AppleOS;
+  booted?: boolean;
+  simulatorSetPath?: string;
+  // Internal physical-iOS execution backend selected during discovery.
+  // Public device projections strip this field.
+  iosPhysicalDeviceBackend?: 'coredevice' | 'xctest';
+};
+
+export type DeviceSelector = {
+  platform?: PlatformSelector;
+  target?: DeviceTarget;
+  deviceName?: string;
+  udid?: string;
+  serial?: string;
+};
+
+/** Device identity is narrower than platform/target filtering for precedence decisions. */
+export function hasExplicitDeviceIdentitySelector(
+  selector: Pick<DeviceSelector, 'deviceName' | 'udid' | 'serial'>,
+): boolean {
+  return [selector.deviceName, selector.udid, selector.serial].some(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
+}
+
+type DeviceSelectionContext = {
+  simulatorSetPath?: string;
+};
+
+export function isApplePlatform(
+  platform: Platform | PlatformSelector | undefined,
+): platform is ApplePlatform | 'apple' {
+  return platform === 'apple' || platform === 'ios' || platform === 'macos';
+}
+
+/**
+ * The macOS Apple-OS leaf: the AppKit desktop host. The post-collapse replacement for
+ * the former `platform === 'macos'` leaf compare — discovery always stamps
+ * `appleOs: 'macos'` on the host device (buildHostMacDevice), so the OS discriminant
+ * is authoritative.
+ */
+export function isMacOs(device: Pick<DeviceInfo, 'platform' | 'appleOs'>): boolean {
+  // The `appleOs` discriminant is authoritative for discovered devices; the legacy
+  // leaf `platform: 'macos'` (persisted pre-collapse records, or synthetic
+  // leaf-string devices) is still honored via the cast for back-compat.
+  return device.appleOs === 'macos' || (device.platform as string) === 'macos';
+}
+
+/**
+ * The touch iOS family: every Apple OS except the macOS desktop host
+ * (iOS / iPadOS / tvOS / visionOS). This is the EXACT post-collapse equivalent of the
+ * pre-collapse `platform === 'ios'` leaf compare — that leaf covered all four of these
+ * OSes — so `isIosFamily(device)` swaps in for `device.platform === 'ios'`
+ * behavior-for-behavior (false for macOS and every non-Apple platform).
+ */
+export function isIosFamily(device: Pick<DeviceInfo, 'platform' | 'appleOs'>): boolean {
+  return isApplePlatform(device.platform) && !isMacOs(device);
+}
+
+/**
+ * The iPhone/iPad simulator leaf: a simulator of an Apple handheld OS. `simctl` surfaces that a
+ * phone or tablet simulator exposes and a television or headset one does not — content size is one
+ * — are confined to this leaf, which is strictly narrower than {@link isIosFamily} (that also covers
+ * tvOS and visionOS simulators) and excludes both the macOS host and every physical device.
+ */
+export function isHandheldAppleSimulator(
+  device: Pick<DeviceInfo, 'platform' | 'target' | 'appleOs' | 'kind'>,
+): boolean {
+  if (device.kind !== 'simulator') return false;
+  const appleOs = resolveDeviceAppleOs(device);
+  return appleOs === 'ios' || appleOs === 'ipados';
+}
+
+export function isMobilePlatform(device: Pick<DeviceInfo, 'platform' | 'appleOs'>): boolean {
+  // Phone/tablet device family: Android plus every Apple OS except the macOS desktop
+  // host. Preserves the pre-collapse `platform === 'ios' || platform === 'android'`
+  // set exactly (the old `ios` platform covered iOS/iPadOS/tvOS/visionOS).
+  return (
+    device.platform === 'android' ||
+    device.platform === 'harmonyos' ||
+    (isApplePlatform(device.platform) && !isMacOs(device))
+  );
+}
+
+/**
+ * The PUBLIC leaf platform string emitted to machine consumers (approach b: output
+ * keeps emitting `ios`/`macos`, never the internal `apple`). Apple devices project to
+ * their leaf via `appleOs`; non-Apple platforms pass through unchanged.
+ */
+export function publicPlatformString(
+  device: Pick<DeviceInfo, 'platform' | 'appleOs'>,
+): PublicPlatform {
+  if (!isApplePlatform(device.platform)) return device.platform;
+  return isMacOs(device) ? 'macos' : 'ios';
+}
+
+/**
+ * The inverse of {@link publicPlatformString}: reconstruct the internal `platform` (+
+ * `appleOs` where the leaf is unambiguous) from a PUBLIC leaf string. Used where the
+ * client rebuilds an internal DeviceInfo from a parsed daemon response. The `ios` leaf
+ * leaves `appleOs` unset so the target-based inference still distinguishes tvOS.
+ */
+export function deviceFieldsFromPublicPlatform(platform: PublicPlatform): {
+  platform: Platform;
+  appleOs?: AppleOS;
+} {
+  if (platform === 'macos') return { platform: 'apple', appleOs: 'macos' };
+  if (platform === 'ios') return { platform: 'apple' };
+  return { platform };
+}
+
+/**
+ * The tvOS Apple-OS leaf predicate. tvOS is modeled as the `ios` platform with a
+ * `tv` form-factor target (ADR-0009 defers the `Platform` collapse; discovery also
+ * stores `appleOs: 'tvos'`). Naming the leaf keeps its focus-only interaction
+ * contract — XCUIRemote focus navigation, and NO coordinate tap/gesture — gated by
+ * one explicit predicate instead of a `target === 'tv'` string compare smeared
+ * across the Apple interaction paths.
+ *
+ * Apple-only by design: Android TV also uses `target: 'tv'` but is a DISTINCT leaf,
+ * so the `isApplePlatform` gate is load-bearing (do not widen it to any TV target).
+ */
+export function isTvOsDevice(device: Pick<DeviceInfo, 'platform' | 'target'>): boolean {
+  return isApplePlatform(device.platform) && device.target === 'tv';
+}
+
+/**
+ * The Apple leaves whose runner synthesizes tap input (`RunnerTests+SynthesizedInteraction.swift`
+ * gates two-finger HID synthesis behind `#if os(iOS)`, which covers iOS and iPadOS only): every
+ * `isIosFamily` leaf except tvOS (no touchscreen) and visionOS (the runner's `#else` branch, no
+ * synthesis path). Every producer of `synthesized: true` gates on this predicate so none of them
+ * pays for a synthesis attempt the runner cannot perform.
+ */
+export function runnerSynthesizesTap(
+  device: Pick<DeviceInfo, 'platform' | 'appleOs' | 'target'>,
+): boolean {
+  return isIosFamily(device) && !isTvOsDevice(device) && device.appleOs !== 'visionos';
+}
+
+/** Resolve the stored Apple OS, preserving legacy target/leaf inference for old device records. */
+export function resolveDeviceAppleOs(
+  device: Pick<DeviceInfo, 'platform' | 'target' | 'appleOs'>,
+): AppleOS {
+  if (device.appleOs) return device.appleOs;
+  if ((device.platform as string) === 'macos') return 'macos';
+  if (isTvOsDevice(device)) return 'tvos';
+  return 'ios';
+}
+
+/**
+ * The Apple leaves that carry a physical Action Button: iPhone and iPad, in a simulator or on
+ * hardware. tvOS and visionOS have no such control. Which *model* inside an admitted leaf has one
+ * is not something `DeviceInfo` records — discovery fills platform, kind, and Apple OS, never a
+ * model identifier — so a runner answers that with `XCUIDevice.hasHardwareButton(.action)`.
+ */
+export function hasAppleActionButton(
+  device: Pick<DeviceInfo, 'platform' | 'target' | 'appleOs'>,
+): boolean {
+  const appleOs = resolveDeviceAppleOs(device);
+  return appleOs === 'ios' || appleOs === 'ipados';
+}
+
+/**
+ * @internal Type guard exposed for unit tests.
+ */
+export function isPlatform(value: unknown): value is Platform {
+  // Internal device-platform membership derived from the canonical PLATFORMS tuple.
+  return (PLATFORMS as readonly unknown[]).includes(value);
+}
+
+export function isPublicPlatform(value: unknown): value is PublicPlatform {
+  // The PUBLIC leaf strings a daemon response carries (approach b). Used by the client
+  // normalizers, which parse leaf platforms (`ios`/`macos`), not the internal `apple`.
+  return (PUBLIC_PLATFORMS as readonly unknown[]).includes(value);
+}
+
+export function isAppleOs(value: unknown): value is AppleOS {
+  // The stored Apple-OS discriminant carried additively on the PUBLIC device output
+  // (iPhone/iPad/tvOS/visionOS/macOS). Used by the client normalizers to validate the
+  // optional `appleOs` field parsed from a daemon response. Its values never include the
+  // internal `apple` platform token, so surfacing it does not affect the apple-leak guard.
+  return (APPLE_OS_VALUES as readonly unknown[]).includes(value);
+}
+
+export function matchesPlatformSelector(
+  device: Pick<DeviceInfo, 'platform' | 'appleOs'>,
+  selector: PlatformSelector | undefined,
+): boolean {
+  if (!selector) return true;
+  if (selector === 'apple') return isApplePlatform(device.platform);
+  // Legacy leaf selectors resolve within the collapsed `apple` platform via `appleOs`,
+  // preserving the pre-collapse `--platform ios|macos` device sets exactly.
+  if (selector === 'ios') return isApplePlatform(device.platform) && !isMacOs(device);
+  if (selector === 'macos') return isApplePlatform(device.platform) && isMacOs(device);
+  return device.platform === selector;
+}
+
+export function resolveApplePlatformName(
+  platformOrTarget: ApplePlatform | DeviceTarget | undefined,
+  appleOs?: AppleOS,
+): 'iOS' | 'tvOS' | 'macOS' | 'visionOS' {
+  // Prefer the explicit, stored Apple OS when present; legacy records without
+  // it keep resolving through the existing target-based inference below.
+  if (appleOs) return resolveRunnerPlatformNameForAppleOs(appleOs);
+  if (platformOrTarget === 'macos' || platformOrTarget === 'desktop') return 'macOS';
+  if (platformOrTarget === 'tv') return 'tvOS';
+  return 'iOS';
+}
+
+function resolveRunnerPlatformNameForAppleOs(
+  appleOs: AppleOS,
+): 'iOS' | 'tvOS' | 'macOS' | 'visionOS' {
+  switch (appleOs) {
+    case 'tvos':
+      return 'tvOS';
+    case 'macos':
+      return 'macOS';
+    case 'visionos':
+      return 'visionOS';
+    // iOS and iPadOS share the single iOS runner profile/SDK. watchOS remains
+    // reserved in the type but is never produced by discovery; defaulting it to
+    // iOS keeps any future record on a valid runner profile without introducing
+    // watchOS support.
+    default:
+      return 'iOS';
+  }
+}
+
+export function resolveAppleSimulatorSetPathForSelector(params: {
+  simulatorSetPath?: string;
+  platform?: PlatformSelector;
+  target?: DeviceTarget;
+}): string | undefined {
+  const { simulatorSetPath, platform, target } = params;
+  if (!simulatorSetPath) return undefined;
+  if (platform === 'macos' || target === 'desktop') {
+    return undefined;
+  }
+  return simulatorSetPath;
+}
+
+export function sortAppleDevicesForSelection<TDevice extends DeviceInfo>(
+  devices: TDevice[],
+): TDevice[] {
+  return devices
+    .map((device, index) => ({ device, index }))
+    .sort((left, right) => compareAppleDevicesForSelection(left, right))
+    .map(({ device }) => device);
+}
+
+function supportsAppleSimulatorSelection(platform: PlatformSelector | undefined): boolean {
+  return !platform || platform === 'apple' || platform === 'ios';
+}
+
+export async function resolveDevice(
+  devices: DeviceInfo[],
+  selector: DeviceSelector,
+  context: DeviceSelectionContext = {},
+): Promise<DeviceInfo> {
+  let candidates = devices.filter((device) => matchesDeviceSelector(device, selector));
+
+  const explicitlySelected = resolveExplicitDevice(candidates, selector);
+  if (explicitlySelected) return explicitlySelected;
+
+  const namedDevice = resolveDeviceByName(candidates, selector.deviceName);
+  if (namedDevice) return namedDevice;
+
+  if (isAppleDeviceCandidateSet(candidates)) {
+    candidates = sortAppleDevicesForSelection(candidates);
+  }
+
+  return selectDefaultDevice(candidates, selector, context);
+}
+
+function resolveExplicitDevice(
+  candidates: DeviceInfo[],
+  selector: DeviceSelector,
+): DeviceInfo | undefined {
+  assertSelectorFlagMatchesPlatform(selector);
+  if (selector.udid) return resolveAppleDeviceByUdid(candidates, selector.udid);
+  if (selector.serial) return resolveDeviceBySerial(candidates, selector);
+  return undefined;
+}
+
+/**
+ * `--udid` addresses Apple devices and `--serial` addresses serial-addressable ones (Android,
+ * HarmonyOS). Passing the wrong pair used to reach resolution and fail as "No Apple device with
+ * UDID emulator-5580" on an explicitly `--platform android` request — an answer about the wrong
+ * platform, which reads as a missing device rather than a mistyped flag.
+ */
+function assertSelectorFlagMatchesPlatform(selector: DeviceSelector): void {
+  const platform = selector.platform;
+  if (!platform) return;
+  if (selector.udid && isSerialAddressablePlatform(platform)) {
+    throw new AppError(
+      'INVALID_ARGS',
+      `--udid selects Apple devices, but this request selected --platform ${platform}.`,
+      { hint: `Use --serial ${selector.udid} for ${platform} devices.` },
+    );
+  }
+  if (selector.serial && isApplePlatform(platform)) {
+    throw new AppError(
+      'INVALID_ARGS',
+      `--serial selects Android and HarmonyOS devices, but this request selected --platform ${platform}.`,
+      { hint: `Use --udid ${selector.serial} for Apple devices.` },
+    );
+  }
+}
+
+function resolveAppleDeviceByUdid(candidates: DeviceInfo[], udid: string): DeviceInfo {
+  const match = candidates.find((device) => device.id === udid && isApplePlatform(device.platform));
+  if (!match) throw new AppError('DEVICE_NOT_FOUND', `No Apple device with UDID ${udid}`);
+  return match;
+}
+
+function resolveDeviceBySerial(candidates: DeviceInfo[], selector: DeviceSelector): DeviceInfo {
+  const match = candidates.find(
+    (device) => device.id === selector.serial && isSerialAddressablePlatform(device.platform),
+  );
+  if (!match) throw new AppError('DEVICE_NOT_FOUND', serialDeviceNotFoundMessage(selector));
+  return match;
+}
+
+function resolveDeviceByName(
+  candidates: DeviceInfo[],
+  deviceName: string | undefined,
+): DeviceInfo | undefined {
+  if (!deviceName) return undefined;
+  const normalizedName = normalizeDeviceName(deviceName);
+  const match = candidates.find((device) => normalizeDeviceName(device.name) === normalizedName);
+  if (!match) {
+    const hint = deviceIdentityMistakenForNameHint(candidates, deviceName);
+    throw new AppError(
+      'DEVICE_NOT_FOUND',
+      `No device named ${deviceName}`,
+      hint === undefined ? undefined : { hint },
+    );
+  }
+  return match;
+}
+
+/**
+ * `--device` takes a device NAME, and `--udid`/`--serial` take a device IDENTITY. Passing an
+ * identity to `--device` reached name resolution and answered "No device named
+ * 204BFFD9-9644-4830-B2C1-1B946597A07C" (#2064) — literally true, and unactionable: it names
+ * neither the flag that does take that value nor the fact that one exists. It is the same class of
+ * mistake `assertSelectorFlagMatchesPlatform` already answers for a mismatched identity flag, so
+ * answer it the same way: name the flag the value belongs to. Only an observed identity earns the
+ * hint — the candidates' own ids, with the flag derived from that device's platform; guessing from
+ * the value's shape would have to reimplement every platform's identity syntax here. A platform
+ * with no identity flag at all (web, linux) earns no hint either: `--udid` resolves only Apple
+ * devices, so naming it would send the user to a flag that provably cannot work.
+ */
+function deviceIdentityMistakenForNameHint(
+  candidates: DeviceInfo[],
+  deviceName: string,
+): string | undefined {
+  const identityMatch = candidates.find((device) => device.id === deviceName);
+  if (!identityMatch) return undefined;
+  const flag = deviceIdentityFlag(identityMatch.platform);
+  if (!flag) return undefined;
+  return (
+    `${deviceName} is the id of ${JSON.stringify(identityMatch.name)}, not its name. ` +
+    `Did you mean ${flag} ${deviceName}?`
+  );
+}
+
+/** The identity flag that can actually resolve a device on this platform, if one exists. */
+function deviceIdentityFlag(platform: Platform): '--udid' | '--serial' | undefined {
+  if (isApplePlatform(platform)) return '--udid';
+  if (isSerialAddressablePlatform(platform)) return '--serial';
+  return undefined;
+}
+
+/**
+ * SINGULAR RESOLUTION. Every caller of `resolveDevice` needs exactly one concrete device, so when
+ * the request carries no device identity and more than one candidate survives the preference tiers,
+ * this refuses with the candidates rather than picking one. A quietly chosen device produces a
+ * successful response describing the WRONG device — indistinguishable from the right one — and
+ * reads are no safer than writes: three successful snapshots of the wrong emulator are still three
+ * wrong answers. Multi-device operations (`devices`) never enter this path.
+ */
+function selectDefaultDevice(
+  candidates: DeviceInfo[],
+  selector: DeviceSelector,
+  context: DeviceSelectionContext,
+): DeviceInfo {
+  const onlyCandidate = candidates[0];
+  if (onlyCandidate !== undefined && candidates.length === 1) return onlyCandidate;
+
+  if (candidates.length === 0) {
+    throwNoDevicesFound(selector, context);
+  }
+
+  const preferred = preferredDeviceCandidates(candidates);
+  if (preferred.length > 1) throwAmbiguousDeviceSelection(preferred);
+  const selected = preferred[0];
+  if (!selected) throwNoDevicesFound(selector, context);
+  return selected;
+}
+
+const AMBIGUOUS_DEVICE_CANDIDATE_LIMIT = 10;
+
+function throwAmbiguousDeviceSelection(candidates: DeviceInfo[]): never {
+  const listed = candidates.slice(0, AMBIGUOUS_DEVICE_CANDIDATE_LIMIT);
+  throw new AppError(
+    'AMBIGUOUS_MATCH',
+    `${candidates.length} devices match this request equally; select one explicitly.`,
+    {
+      // The declared device-candidate details domain (@agent-device/kernel/errors), so the CLI
+      // and MCP renderers print these candidates without a new shape to learn.
+      devices: listed.map((device) => ({ id: device.id, name: device.name })),
+      matches: candidates.length,
+      hint: buildAmbiguousDeviceHint(listed),
+    },
+  );
+}
+
+function buildAmbiguousDeviceHint(candidates: DeviceInfo[]): string {
+  const first = candidates[0];
+  const identitySelector =
+    first && isSerialAddressablePlatform(first.platform)
+      ? `--serial ${first.id}`
+      : `--udid ${first?.id ?? '<id>'}`;
+  return (
+    `Select the intended device explicitly, for example ${identitySelector} ` +
+    `or --device ${JSON.stringify(first?.name ?? '<name>')}. ` +
+    `Run extend devices to list them.`
+  );
+}
+
+/**
+ * The candidates left after every ESTABLISHED preference — virtual over physical (Apple ranks its
+ * kinds/targets instead), then booted over offline. Whatever survives is equally preferred: the
+ * comparator's remaining tie-breaks are name order and discovery order, which encode nothing about
+ * intent.
+ */
+function preferredDeviceCandidates(candidates: DeviceInfo[]): DeviceInfo[] {
+  const ranked = isAppleDeviceCandidateSet(candidates)
+    ? candidatesWithBestAppleRank(candidates)
+    : preferVirtualCandidates(candidates);
+  const booted = ranked.filter((device) => device.booted);
+  return booted.length > 0 ? booted : ranked;
+}
+
+function preferVirtualCandidates(candidates: DeviceInfo[]): DeviceInfo[] {
+  const virtual = candidates.filter((device) => device.kind !== 'device');
+  return virtual.length > 0 ? virtual : candidates;
+}
+
+function candidatesWithBestAppleRank(candidates: DeviceInfo[]): DeviceInfo[] {
+  const bestRank = Math.min(...candidates.map((device) => appleDeviceSelectionRank(device)));
+  return candidates.filter((device) => appleDeviceSelectionRank(device) === bestRank);
+}
+
+export function matchesDeviceSelector(
+  device: DeviceInfo,
+  selector: DeviceSelector,
+  options: { includeExplicitSelectors?: boolean } = {},
+): boolean {
+  return (
+    matchesPlatformSelector(device, selector.platform) &&
+    (!selector.target || (device.target ?? 'mobile') === selector.target) &&
+    (!options.includeExplicitSelectors || matchesExplicitDeviceSelector(device, selector))
+  );
+}
+
+function matchesExplicitDeviceSelector(device: DeviceInfo, selector: DeviceSelector): boolean {
+  if (selector.udid && !(device.id === selector.udid && isApplePlatform(device.platform))) {
+    return false;
+  }
+  if (
+    selector.serial &&
+    !(device.id === selector.serial && isSerialAddressablePlatform(device.platform))
+  ) {
+    return false;
+  }
+  if (
+    selector.deviceName &&
+    normalizeDeviceName(device.name) !== normalizeDeviceName(selector.deviceName)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function isSerialAddressablePlatform(
+  platform: Platform | PublicPlatform,
+): platform is 'android' | 'harmonyos' | 'vega' {
+  return platform === 'android' || platform === 'harmonyos' || platform === 'vega';
+}
+
+function serialDeviceNotFoundMessage(selector: DeviceSelector): string {
+  if (selector.platform === 'android') {
+    return `No Android device with serial ${selector.serial}`;
+  }
+  if (selector.platform === 'vega') {
+    return `No Vega VVD with serial ${selector.serial}`;
+  }
+  if (selector.platform === 'harmonyos') {
+    return `No HarmonyOS device with serial ${selector.serial}`;
+  }
+  return `No Android, HarmonyOS device, or Vega VVD with serial ${selector.serial}`;
+}
+
+function throwNoDevicesFound(selector: DeviceSelector, context: DeviceSelectionContext): never {
+  const simulatorSetPath = context.simulatorSetPath;
+  if (simulatorSetPath && supportsAppleSimulatorSelection(selector.platform)) {
+    throw new AppError('DEVICE_NOT_FOUND', 'No devices found in the scoped simulator set', {
+      simulatorSetPath,
+      hint: `The simulator set at "${simulatorSetPath}" appears to be empty. Create a compatible simulator first with xcrun simctl --set "${simulatorSetPath}" create, or remove the scoped simulator set.`,
+      selector,
+    });
+  }
+  throw new AppError('DEVICE_NOT_FOUND', 'No devices found', { selector });
+}
+
+function normalizeDeviceName(value: string): string {
+  return value.toLowerCase().replaceAll('_', ' ').replaceAll(/\s+/g, ' ').trim();
+}
+
+function compareAppleDevicesForSelection<TDevice extends DeviceInfo>(
+  left: { device: TDevice; index: number },
+  right: { device: TDevice; index: number },
+): number {
+  return (
+    appleDeviceSelectionRank(left.device) - appleDeviceSelectionRank(right.device) ||
+    Number(right.device.booted === true) - Number(left.device.booted === true) ||
+    left.device.name.localeCompare(right.device.name) ||
+    left.index - right.index
+  );
+}
+
+function appleDeviceSelectionRank(device: DeviceInfo): number {
+  if (device.kind === 'simulator') return appleTargetSelectionRank(device, 0, 1, 2, 3);
+  if (device.kind === 'device' && isApplePlatform(device.platform) && !isMacOs(device))
+    return appleTargetSelectionRank(device, 10, 11, 12, 13);
+  return 14;
+}
+
+function appleTargetSelectionRank(
+  device: DeviceInfo,
+  phoneRank: number,
+  ipadRank: number,
+  tvRank: number,
+  fallbackRank: number,
+): number {
+  const targetRanks: Record<DeviceTarget, number> = {
+    mobile: isIpadDeviceName(device.name) ? ipadRank : phoneRank,
+    tv: tvRank,
+    desktop: fallbackRank,
+  };
+  return targetRanks[device.target ?? 'mobile'];
+}
+
+function isAppleDeviceCandidateSet(devices: DeviceInfo[]): boolean {
+  return devices.length > 0 && devices.every((device) => isApplePlatform(device.platform));
+}
+
+function isIpadDeviceName(name: string): boolean {
+  return /\bipad\b/i.test(name);
+}

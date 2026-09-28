@@ -2,7 +2,7 @@
 # This file is only meant to be changed by carbons (humans), if you are an agent DONT EDIT THIS FILE.  
 
 
-So we are building silicon extend which would be built on top of the fork of https://agent-device.dev/ - (https://github.com/callstack/agent-device). 
+So we are building silicon extend, with its own device engine that operates phones, tablets, computers and TVs. 
 
 The concept of silicon extend is to let silicon access the devices it has been given access to. These would be the personal devices. 
 
@@ -38,9 +38,9 @@ Extend has four parts:
 
 A paired device connects to Extend over the internet, so the Silicon and the device never need to be on the same network.
 
-### Built on agent-device
+### The device engine
 
-agent-device is what actually operates a device. It reads what is on the screen as a list of things the Silicon can act on (buttons, text fields, lists) instead of making it guess from a picture, and then acts on them. From agent-device we use:
+Silicon Extend's device engine is what actually operates a device. It reads what is on the screen as a list of things the Silicon can act on (buttons, text fields, lists) instead of making it guess from a picture, and then acts on them. It covers:
 
 - **Seeing the screen:** the list of what is on screen, and screenshots.
 - **Acting:** tapping and clicking, typing, scrolling, swiping, pressing back and home, TV remote buttons, the keyboard and the clipboard.
@@ -49,17 +49,17 @@ agent-device is what actually operates a device. It reads what is on the screen 
 - **Evidence:** screen recordings, and device logs where the device allows it.
 - **Replay:** saving a set of steps once and running it again later.
 - **Taking over:** pausing a Silicon while someone else uses the device.
-- **Remote use:** running agent-device against a device on another machine.
+- **Remote use:** running the engine against a device on another machine.
 
 We don't use the parts made for app developers: simulators and emulators, React Native tools, and web automation.
 
-We add what agent-device doesn't have: pairing, access, the connection over the internet, one Silicon at a time, the always-visible indicator, the activity log, and support for Windows, physical Fire TVs and other smart TVs.
+Around the engine, Extend adds pairing, access, the connection over the internet, one Silicon at a time, the always-visible indicator, the activity log, and support for Windows, physical Fire TVs and other smart TVs.
 
 ### The configuration website
 
-The Carbon signs in at `extend.teamofsilicons.com` with Silicon IAm and picks the org. A Carbon only sees the devices they have paired. The paired devices can either be personal (only the carbon who set it up can see, or it can be organisation wide anyone from the organisation can view this device has been configured - by default each device would be organisation wide.)
+The Carbon signs in at `extend.teamofsilicons.com` with Silicon IAm. Devices belong to the Carbon, not to an org: a Carbon sees every device they have paired, whichever org they picked, and nobody else sees them. When several Carbons have paired the same device, each sees it as their own device.
 
-**Devices:** a list of every device the Carbon has paired, with its name, its OS, whether it is online, which Silicon is using it right now, when it was last used, and how many days are left before the pair ends.
+**Devices:** a list of every device the Carbon has paired, with its name, its OS, whether it is online, whether it is awake, which Silicon is using it right now, when it was last used, and how many days are left before the pair ends.
 
 **Add a device:** the Carbon picks the kind of device and gets a step by step guide for it:
 
@@ -67,17 +67,19 @@ The Carbon signs in at `extend.teamofsilicons.com` with Silicon IAm and picks th
 2. Open the app, which shows a pairing code.
 3. Enter the pairing code on the website.
 4. Name the device.
-5. Finish the device's own setup (turning on debugging, allowing permissions), with each step explained.
-6. Choose which Silicons get access. This can be skipped and done later.
+5. Choose whether the device shows a banner while a Silicon is using it. It is on by default, can be turned off here, and can be changed later.
+6. Finish the device's own setup (turning on debugging, allowing permissions), with each step explained.
+7. Choose which Silicons get access. This can be skipped and done later.
 
 **A device's page:**
 
 - rename the device
-- see which Silicons have access, give access to more, or take it away
+- see which Silicons have access, give access to more (from any org the Carbon is a member of), or take it away
 - see which Silicon is using it right now and since when, and stop it
+- show or hide what the device itself shows while a Silicon is using it (badge, banner, notification or icon)
 - set how long the device stays paired without activity, from 1 to 30 days (14 by default)
 - see the activity log: every action, which Silicon did it, and when
-- see the requests Silicons have sent each other for this device, with their reasons
+- see the requests Silicons have sent each other for this device, and the requests to wake it, with their reasons
 - remove the device (dangerous action - prompt for confirmation)
 
 ### The Extend app
@@ -85,10 +87,12 @@ The Carbon signs in at `extend.teamofsilicons.com` with Silicon IAm and picks th
 Every Extend app works the same way, whatever the device:
 
 1. **Before pairing** it shows a pairing code, and never asks the Carbon to log in.
-2. **During setup** it walks the Carbon through what that device needs, one step at a time.
-3. **Once paired** it shows the device's name, the Carbon it is paired to, and whether a Silicon is using it right now.
-4. **While a Silicon is using the device** it shows which Silicon it is, with a button to stop it.
-5. **Revoke pair** is the only other option. It removes the device from the Carbon's account and ends every Silicon's access to it. (Danger action, prompt for confirmation)
+2. **During setup** it walks the Carbon through what that device needs, one step at a time, and asks whether to show a banner while a Silicon is using the device (on by default).
+3. **Once paired** it shows the device's name, the Carbons it is paired to, and whether a Silicon is using it right now.
+4. **While a Silicon is using the device** it shows which Silicon it is, with a button to stop it, and a switch to hide everything else the device shows while a Silicon uses it.
+5. **When a Silicon asks to wake the device** it shows a notification with the Silicon's name and reason, wherever the device can show one.
+6. **Pair with another Carbon** shows a new pairing code, so another Carbon can pair the same device to their own account.
+7. **Revoke pair** is the only other option. It is chosen for one Carbon at a time: it removes the device from that Carbon's account and ends access for that Carbon's Silicons. (Danger action, prompt for confirmation)
 
 The app starts on its own when the device starts, and keeps the device connected to Extend.
 
@@ -102,19 +106,27 @@ The pairing code is what ties a device to a Carbon. It is short, it works once, 
 - the Carbon removes the device on the website, or
 - the device goes without activity for as long as the Carbon has set (14 days by default, anywhere from 1 to 30 days).
 
+A device can be paired to more than one Carbon, like a family TV. Each Carbon pairs it with their own pairing code, and each pair is separate: every Carbon names the device, gives access to their own Silicons, and ends their own pair, without affecting the others.
+
 ### Access
 
-A device belongs to the Carbon who paired it. The Carbon gives access to one or more Silicons and can take it away at any time. Removing access, removing the device, revoking the pair, logging out, or leaving the org ends it immediately, even in the middle of a session.
+A device belongs to the Carbons who paired it, not to an org. Each Carbon decides which Silicons get access through their own pair, and can pick Silicons from any org they are a member of. The Carbon can take access away at any time. Removing access, removing the device, revoking the pair, the Silicon logging out, the Carbon logging out (which ends it for the Silicons that Carbon gave access to), or the Silicon or the Carbon leaving the Silicon's org ends it immediately, even in the middle of a session. The device itself stays with the Carbon.
+
+A Silicon uses the device as a member of its own org, and what it does stays in that org. The Carbon sees everything their own Silicons do on their devices. Silicons from different orgs don't see each other: if a Silicon from another org is using the device, the others only see that the device is in use.
+
+When several Carbons have paired the same device, each Carbon only sees their own side: their own Silicons, their activity, their files and their requests. If a Silicon given access by another Carbon is using the device, they only see that it is in use.
+
+On a computer that several Carbons have paired, the terminal runs as the computer's own account, so only Silicons given access by the Carbon who installed Extend on it can use the terminal. Silicons given access by the other Carbons use the screen, the keyboard and the apps.
 
 ### How a Silicon uses a device
 
-A Silicon uses Extend through the `extend` CLI. `extend` wraps agent-device: every agent-device command is a valid `extend` command.
+A Silicon uses Extend through the `extend` CLI. Every command of the device engine is an `extend` command.
 
 1. `extend device ls` lists every device the Silicon has access to, with its OS, whether it is online, and which Silicon is using it.
 2. `extend device show {deviceid}` shows what the Silicon can do on that device, based on its OS.
 3. `extend session new {deviceid}` starts using the device and prints a session id.
 4. `extend session connect {sessionid}` connects the Silicon to that session.
-5. Once connected, the Silicon runs agent-device commands directly, like `extend snapshot` or `extend click @e2`.
+5. Once connected, the Silicon runs device commands directly, like `extend snapshot` or `extend click @e2`.
 6. `extend session end {sessionid}` finishes, and frees the device for other Silicons.
 
 A session id is 3 hexadecimal characters, like `a3f`. Once every 3 character id has been used, session ids grow to 4 characters, and so on.
@@ -125,19 +137,37 @@ A session also ends on its own after 5 minutes without any action, so a Silicon 
 
 ### One Silicon at a time
 
-Only one Silicon can use a device at a time. When a device is in use, any other Silicon with access sees which Silicon is using it, and can send that Silicon a request to use the device with `extend request send {deviceid} --reason "..."`.
+Only one Silicon can use a device at a time, whichever org it is from and whichever Carbon gave it access. When a device is in use, any other Silicon with access sees that it is in use, and can send a request to use the device with `extend request send {deviceid} --reason "..."`.
 
-The request carries the reason for use, up to 300 characters. Extend delivers it to the Silicon using the device as a notification through Ting ([Ting docs](https://ting.teamofsilicons.com/#docs)), with the reason exactly as it was sent.
+The request carries the reason for use, up to 300 characters. If the Silicon using the device is in the same org and was given access by the same Carbon, the requesting Silicon sees which Silicon it is, and Extend delivers the request to that Silicon as a notification through Ting ([Ting docs](https://ting.teamofsilicons.com/#docs)), with the reason exactly as it was sent. Otherwise the request goes to the Carbon who gave access to the Silicon using the device, with the requesting Silicon's name and reason, and that Carbon can stop the session.
+
+### Waking a device
+
+A device can be paired and online but not awake: a phone with its screen off or locked, a computer that is asleep or locked, a TV in standby. `extend device ls` and `extend device show {deviceid}` say whether a device is awake.
+
+When a Silicon needs a device that isn't awake, it asks the Carbon to wake it with `extend device wake {deviceid} --reason "..."`. The reason is up to 300 characters.
+
+- The device shows a notification with the Silicon's name and reason wherever it can, like on a phone's lock screen or a computer's notifications.
+- The Carbon who gave the Silicon access also gets the request as a notification through Ting, because a TV in standby or a sleeping computer can't show anything.
+- When the Carbon turns the device on or unlocks it, every Silicon that asked gets a notification through Ting that the device is awake, and can start its session.
+
+Extend never wakes a device for a Silicon; the Carbon does. The terminal and Android debugging keep working while a device isn't awake, because they run as the Carbon's own account. A Silicon can ask again for the same device only after 5 minutes, and a request expires if the device isn't woken within 30 minutes.
+
+While a Silicon is using a device that is awake, the device doesn't turn its screen off on its own, so the Silicon doesn't lose it in the middle of a task. The Carbon can still lock it at any time.
+
+Devices that can't run the Extend app (iPhone, iPad, Apple TV and other smart TVs) don't show the notification themselves; the Carbon gets it through Ting.
 
 ### Always visible
 
-While a Silicon is using a device, the device shows which Silicon it is, and the Carbon can stop it with one tap, on the device or on the website. Stopping ends the session straight away.
+While a Silicon is using a device, the device shows which Silicon it is, and the Carbon can stop it with one tap, on the device or on the website. Stopping ends the session straight away. When several Carbons have paired the device, any of them can stop the Silicon using it, because it is their device too.
 
-Every action is logged, and the Carbon can see the log for their own devices on the website.
+On the device this is a small badge, banner, notification or icon, kept out of the way. On every kind of device it shows for 10 seconds when a Silicon starts using the device, then hides by itself; only a small icon change, where the device has one, stays for the whole session. When a Silicon is waiting for the Carbon, it stays until the Carbon answers. Any Carbon who paired a device can hide it entirely, on every kind of device, in the device's Extend app or on the website, and show it again the same way. Hidden, the device shows nothing while a Silicon uses it: no badge, banner, in-use notification or icon change. The Extend app and the website still show which Silicon is using the device, with Stop. Two things stay because the device's maker requires them: on Android phones, the quiet notification Android shows for any app that keeps running (it doesn't name the Silicon), and on iPhones and iPads, Apple's "Automation Running" banner while the Silicon is working.
+
+Every action is logged, and each Carbon can see the log of their own Silicons on their devices on the website.
 
 ### Files
 
-Every file a session makes, like screenshots, recordings and saved logs, is stored in Briefcase ([Briefcase docs](https://docs.briefcase.teamofsilicons.com/)), in the private folder of the Silicon that made it. Extend stores it on the Silicon's behalf through Briefcase's OBO endpoint, and automatically shares it with the Carbon who owns the device with create, read and update access (not delete), so the Carbon can see and work with every file made on their devices.
+Every file a session makes, like screenshots, recordings and saved logs, is stored in Briefcase ([Briefcase docs](https://docs.briefcase.teamofsilicons.com/)), in the private folder of the Silicon that made it. Extend stores it on the Silicon's behalf through Briefcase's OBO endpoint, and automatically shares it with the Carbon who gave the Silicon access to the device, with create, read and update access (not delete), so the Carbon can see and work with every file their Silicons make on their devices.
 
 Every file self destructs 1 day after it is stored. If the Silicon wants a file to last longer, it can set a longer self destruct when the file is made (up to 30 days), or make the file permanent before it self destructs.
 
@@ -156,9 +186,9 @@ The `extend` CLI gives the Silicon the Briefcase link to each file it makes.
 3. Turn on wireless debugging, and let the app pair with it.
 4. Allow the app to show notifications and to stay running in the background.
 
-**How it works:** the app keeps the device connected to Extend. When a Silicon sends a command, the app carries it out on the device through Android debugging. The first time a Silicon uses the device, agent-device's small helper apps for reading the screen and typing are installed on it.
+**How it works:** the app keeps the device connected to Extend. When a Silicon sends a command, the app carries it out on the device through Android debugging. The first time a Silicon uses the device, Silicon Extend's small helper apps for reading the screen and typing are installed on it.
 
-**While in use:** a notification says which Silicon is using the device, with a Stop button.
+**While in use:** a notification says which Silicon is using the device, with a Stop button, for 10 seconds, unless a Carbon hid it.
 
 **A Silicon can:** open any app, see the screen, tap, type, scroll, swipe, press back, home and recent apps, read notifications, install apps, take screenshots and recordings, read device logs, and use Android debugging.
 
@@ -180,7 +210,7 @@ This also covers Fire TVs that run Fire OS.
 
 **Showing things on the TV:** the app has a full screen display. A Silicon can put a link, an image, a video or text on it. It stays on screen until the Silicon clears it or someone presses back on the remote.
 
-**While in use:** a small badge in the corner of the screen says which Silicon is using the TV. It can be stopped from the Extend TV app or from the website.
+**While in use:** a small badge at the bottom centre of the screen says which Silicon is using the TV, unless a Carbon hid it. Like on every device, it shows for 10 seconds, then hides by itself. The Silicon can be stopped from the Extend TV app or from the website.
 
 **A Silicon can:** open any app, press any remote button, see the screen, install apps, take screenshots, read device logs, use Android debugging, and show anything on the screen.
 
@@ -195,7 +225,7 @@ This also covers Fire TVs that run Fire OS.
 
 **How it works:** the app keeps the Mac connected to Extend and carries out a Silicon's commands on the Mac.
 
-**While in use:** the menu bar icon changes and a banner says which Silicon is using the Mac, with a Stop button in the menu.
+**While in use:** a banner says which Silicon is using the Mac for 10 seconds, and the menu bar icon stays changed for the whole session, with a Stop button in the menu. A Carbon can hide both.
 
 **A Silicon can:** open any app, see and use any window, menus and the menu bar, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.
 
@@ -203,7 +233,7 @@ This also covers Fire TVs that run Fire OS.
 
 ### Windows
 
-**The app:** Silicon Extend for Windows, which lives in the system tray. agent-device doesn't support Windows, so Extend builds this itself.
+**The app:** Silicon Extend for Windows, which lives in the system tray.
 
 **Setup:**
 
@@ -212,7 +242,7 @@ This also covers Fire TVs that run Fire OS.
 
 **How it works:** the same as the Mac.
 
-**While in use:** the tray icon changes and a banner says which Silicon is using the computer, with a Stop button.
+**While in use:** a banner says which Silicon is using the computer for 10 seconds, and the tray icon stays changed for the whole session, with a Stop button. A Carbon can hide both.
 
 **A Silicon can:** open any app, see and use any window, click, type, scroll, use the clipboard, take screenshots and recordings, and use the terminal.
 
@@ -229,7 +259,7 @@ This also covers Fire TVs that run Fire OS.
 
 **How it works:** the same as the Mac.
 
-**While in use:** a banner says which Silicon is using the computer, with a Stop button.
+**While in use:** a banner says which Silicon is using the computer for 10 seconds, unless a Carbon hid it, with a Stop button in the app.
 
 **A Silicon can:** open any app, see and use any window, click, type, scroll, take screenshots and recordings, and use the terminal.
 
@@ -314,7 +344,7 @@ If an administrative or god view is provided, it should be separate and clearly 
 
 ### Devices in a Test Environment
 
-A device is paired into a test environment the same way as in production: the Carbon enters the device's pairing code on the website while in that test environment. A device paired into a test environment exists only there. A device can be paired to only one environment at a time, production or test.
+A device is paired into a test environment the same way as in production: the Carbon enters the device's pairing code on the website while in that test environment. A device paired into a test environment exists only there. A device can be paired to only one environment at a time, production or test; when several Carbons have paired it, all their pairs are in that same environment.
 
 While a device is paired into a test environment, its Extend app always shows a banner saying so, with the environment's name.
 

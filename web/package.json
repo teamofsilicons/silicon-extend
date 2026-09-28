@@ -1,6 +1,6 @@
 {
   "name": "@teamofsilicons/extend-web",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Silicon Extend configuration website (extend.teamofsilicons.com): pair devices and decide which Silicons can use them.",
@@ -12,10 +12,12 @@
     "build": "pnpm docs:gen && node scripts/gen-licences.mjs && tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm docs:gen && playwright test",
-    "test:e2e:real": "pnpm docs:gen && playwright test -c playwright.real.config.ts"
+    "test:e2e:real": "pnpm docs:gen && playwright test -c playwright.real.config.ts",
+    "test:e2e:compat": "node scripts/build-web-1.0.mjs && playwright test -c playwright.compat.config.ts"
   },
   "engines": {
     "node": ">=22"

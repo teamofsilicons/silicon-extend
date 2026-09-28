@@ -84,7 +84,9 @@ pub struct Spec {
     pub flags: &'static [(&'static str, bool)],
 }
 
-/// Every Extend command and the flags it takes (besides the global flags).
+/// Every Extend command and the flags it takes (besides the global flags). Deprecated flags stay
+/// accepted so 1.0 scripts keep running: `device ls --team-visible` and `device pair --visibility`
+/// (a device is only visible to the Carbons who paired it from 1.1).
 pub const SPECS: &[Spec] = &[
     Spec {
         path: "login",
@@ -108,7 +110,7 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "team silicons",
-        flags: &[],
+        flags: &[("--all-teams", false)],
     },
     Spec {
         path: "team use",
@@ -174,7 +176,7 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "device setup",
-        flags: &[("--watch", false)],
+        flags: &[("--watch", false), ("--retry", false), ("--step", true)],
     },
     Spec {
         path: "device setup-code",
@@ -182,6 +184,10 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "device rename",
+        flags: &[],
+    },
+    Spec {
+        path: "device banner",
         flags: &[],
     },
     Spec {
@@ -218,6 +224,19 @@ pub const SPECS: &[Spec] = &[
         flags: &[],
     },
     Spec {
+        path: "device wake",
+        flags: &[("--reason", true), ("--cancel", false)],
+    },
+    Spec {
+        path: "device wake-requests",
+        flags: &[
+            ("--open", false),
+            ("--wake-id", true),
+            ("--silicon", true),
+            ("--only-team", true),
+        ],
+    },
+    Spec {
         path: "session new",
         flags: &[("--connect", false)],
     },
@@ -252,6 +271,14 @@ pub const SPECS: &[Spec] = &[
     Spec {
         path: "request ls",
         flags: &[("--sent", false), ("--received", false), ("--device", true)],
+    },
+    Spec {
+        path: "ting status",
+        flags: &[("--all-teams", false)],
+    },
+    Spec {
+        path: "ting on",
+        flags: &[("--all-teams", false)],
     },
     Spec {
         path: "file ls",

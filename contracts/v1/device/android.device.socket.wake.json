@@ -1,0 +1,156 @@
+{
+  "api_version": 1,
+  "consumer": "extend-android",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "paired"
+  ],
+  "kind": "device_socket",
+  "operation": "device.socket.wake",
+  "os": "android",
+  "reads": {
+    "cancel": [
+      "id"
+    ],
+    "command": [
+      "id",
+      "session_id",
+      "command"
+    ],
+    "environment": [],
+    "ping": [
+      "nonce"
+    ],
+    "refresh": [],
+    "session_ended": [
+      "session_id",
+      "reason"
+    ],
+    "session_started": [
+      "session_id",
+      "silicon_id",
+      "since",
+      "side"
+    ],
+    "superseded": [],
+    "takeover": [
+      "session_id",
+      "reason",
+      "expires_at"
+    ],
+    "takeover_ended": [
+      "session_id"
+    ],
+    "unpaired": [
+      "reason"
+    ],
+    "wake_request": [
+      "wake_id",
+      "created_at",
+      "expires_at",
+      "alert",
+      "side"
+    ],
+    "wake_request_ended": [
+      "wake_id",
+      "reason"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Device {device_credential}"
+    },
+    "method": "GET",
+    "path": "/api/v1/device/connect"
+  },
+  "sends": [
+    {
+      "effect": "hello",
+      "frame": {
+        "app_version": "1.1.0",
+        "capabilities": [
+          "screen.read",
+          "screen.capture",
+          "input.touch",
+          "input.text",
+          "nav.system",
+          "apps.launch",
+          "apps.list",
+          "takeover",
+          "notifications",
+          "links",
+          "adb",
+          "apps.install",
+          "logs",
+          "screen.record"
+        ],
+        "features": [
+          "setup_retry"
+        ],
+        "missing": [],
+        "model": "Pixel 9",
+        "os": "android",
+        "os_version": "15",
+        "setup": {
+          "state": "complete",
+          "steps": [
+            {
+              "key": "accessibility",
+              "status": "done",
+              "title": "Allow Silicon Extend to control the screen"
+            },
+            {
+              "key": "wireless_debugging",
+              "status": "done",
+              "title": "Turn on wireless debugging"
+            }
+          ]
+        },
+        "type": "hello"
+      }
+    },
+    {
+      "effect": "awake",
+      "frame": {
+        "awake": false,
+        "run": "0192f3a4-5b6c-7d8e-9f00-112233445566",
+        "seq": 1,
+        "sleep_state": "screen_off",
+        "type": "awake"
+      }
+    },
+    {
+      "effect": "wake_request_shown",
+      "frame": {
+        "shown": true,
+        "type": "wake_request_shown",
+        "wake_id": "{wake_id}"
+      }
+    },
+    {
+      "effect": "none",
+      "frame": {
+        "nonce": 17,
+        "type": "pong"
+      }
+    },
+    {
+      "effect": "awake",
+      "frame": {
+        "awake": true,
+        "input_seen": true,
+        "run": "0192f3a4-5b6c-7d8e-9f00-112233445566",
+        "seq": 2,
+        "type": "awake"
+      }
+    },
+    {
+      "effect": "stop",
+      "frame": {
+        "type": "stop"
+      }
+    }
+  ],
+  "source": "docs/device-protocol.md (1.1); apps/android/app/src/main/java/com/teamofsilicons/extend/protocol/Frames.kt and core/ConnectionManager.kt (1.1), core/Wakefulness.kt and service/ExtendForegroundService.kt"
+}

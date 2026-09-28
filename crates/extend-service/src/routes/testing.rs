@@ -430,6 +430,20 @@ pub async fn apply(
     tx.commit().await?;
 
     let outcome = execute(&state, &op, row.as_ref(), &target).await;
+    if matches!(
+        op.action.as_str(),
+        "clean" | "restore" | "purge" | "retire-applications"
+    ) {
+        // A Ting test clean removes grants and types too, so Silicons are registered again at
+        // their next session; and IAM's answers cached for this world no longer hold.
+        state.notifier.clear_environment(Some(env)).await;
+        crate::membership::forget_world(&state, &World::test(env)).await;
+        state
+            .ting_checked
+            .lock()
+            .await
+            .retain(|(schema, _)| *schema != World::test(env).schema);
+    }
     let (receipt, result) = match outcome {
         Ok(()) => {
             let r = make_receipt(&op, "completed", &target, None);

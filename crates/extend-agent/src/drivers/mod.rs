@@ -1,7 +1,7 @@
 //! Drivers that operate this computer.
 //!
-//! * [`agent_device`] runs Extend's fork of agent-device on macOS and Linux.
-//! * [`windows`] is Extend's own Windows driver (agent-device doesn't support Windows).
+//! * [`agent_device`] runs Extend's fork of the device engine on macOS and Linux.
+//! * [`windows`] is Extend's own Windows driver (the device engine doesn't support Windows).
 //! * [`terminal`] runs shell commands on all three.
 //!
 //! [`local::LocalDriver`] puts the right ones together for the computer the agent runs on.

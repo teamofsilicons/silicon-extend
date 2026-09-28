@@ -38,6 +38,7 @@ use tokio::net::{TcpListener, TcpStream};
 const CARBON_TOKEN: &str = "sentinel-carbon-access-token";
 const SILICON_TOKEN: &str = "sentinel-silicon-access-token";
 const OTHER_SILICON_TOKEN: &str = "sentinel-other-silicon-access-token";
+const OTHER_CARBON_TOKEN: &str = "sentinel-other-carbon-access-token";
 const REFRESH_TOKEN: &str = "sentinel-refresh-token";
 const CARBON_SLT: &str = "sentinel-carbon-slt";
 const TEAM: &str = "sentinel-team";
@@ -45,12 +46,15 @@ const SILICON_ID: &str = "si:sentinel-silicon";
 const DEVICE_ID: &str = "d0d0d0d0";
 const HOST_ID: &str = "b0b0b0b0";
 const ATTACHED_ID: &str = "c0c0c0c0";
+/// Another Carbon's pair of the same device (`shared_device`).
+const SHARED_DEVICE_ID: &str = "e0e0e0e0";
 const SESSION_ID: &str = "a5a";
 const DEVICE_CREDENTIAL: &str = "edc_sentinel-device-credential";
 const ENROLLMENT_SECRET: &str = "ees_sentinel-enrollment-secret";
 const ENROLLMENT_ID: &str = "11111111-1111-4111-8111-111111111111";
 const UPLOAD_ID: &str = "22222222-2222-4222-8222-222222222222";
 const FILE_ID: &str = "33333333-3333-4333-8333-333333333333";
+const WAKE_ID: &str = "55555555-5555-4555-8555-555555555555";
 const PAIRING_CODE: &str = "A1B2C3";
 const TESTING_SECRET: &str = "ask_sentinel-testing-secret";
 const ISI: &str = "sentinel-isi";
@@ -59,6 +63,7 @@ const DEVICE_VERSION: i64 = 4242;
 /// Longest first, so no sentinel is replaced inside another.
 const PLACEHOLDERS: &[(&str, &str)] = &[
     (OTHER_SILICON_TOKEN, "{other_silicon_token}"),
+    (OTHER_CARBON_TOKEN, "{other_carbon_token}"),
     (CARBON_TOKEN, "{carbon_token}"),
     (SILICON_TOKEN, "{silicon_token}"),
     (REFRESH_TOKEN, "{refresh_token}"),
@@ -69,12 +74,14 @@ const PLACEHOLDERS: &[(&str, &str)] = &[
     (ENROLLMENT_ID, "{enrollment_id}"),
     (UPLOAD_ID, "{upload_id}"),
     (FILE_ID, "{file_id}"),
+    (WAKE_ID, "{wake_id}"),
     (SILICON_ID, "{silicon_id}"),
     (TEAM, "{team}"),
     (ISI, "{isi}"),
     (DEVICE_ID, "{device_id}"),
     (HOST_ID, "{host_id}"),
     (ATTACHED_ID, "{attached_id}"),
+    (SHARED_DEVICE_ID, "{shared_device_id}"),
     (PAIRING_CODE, "{pairing_code}"),
 ];
 
@@ -282,6 +289,10 @@ impl Ctx {
     fn other_silicon(&self) -> silicon_extend_client::Authed<'_> {
         self.client.authed(OTHER_SILICON_TOKEN, Some(TEAM))
     }
+    /// c:bob, who paired the same device as c:alice (`shared_device`).
+    fn other_carbon(&self) -> silicon_extend_client::Authed<'_> {
+        self.client.authed(OTHER_CARBON_TOKEN, Some(TEAM))
+    }
 }
 
 struct Op {
@@ -334,16 +345,45 @@ fn setup() -> Value {
 }
 
 fn device() -> Value {
-    json!({
+    let mut d = json!({
         "device_id": DEVICE_ID, "name": "Pixel", "os": "android", "os_version": "15", "model": "Pixel 9",
         "kind": "phone", "owner": member("carbon", "c:alice"), "team": TEAM, "visibility": "team",
         "host_device_id": HOST_ID, "state": "ready", "online": true, "last_seen_at": TS,
-        "in_use": {"silicon_id": SILICON_ID, "session_id": SESSION_ID, "since": TS, "paused": false},
+        "in_use": {"silicon_id": SILICON_ID, "session_id": SESSION_ID, "since": TS, "paused": false, "team": TEAM},
         "last_used_at": TS, "paired_at": TS, "pair_ttl_days": 14, "pair_expires_at": LATER, "days_left": 13,
         "access_count": 2, "app_version": "1.0.0", "version": DEVICE_VERSION,
         "capabilities": ["screen.read"], "missing": [{"capability": "adb", "reason": "Wireless debugging is off."}],
         "commands": ["snapshot"], "removed_at": TS, "removed_reason": "device_removed"
+    });
+    let v1_1 = json!({
+        "engine_version": "1.1.0", "agent_device_version": "1.1.0", "awake": false, "sleep_state": "standby",
+        "last_sleep_state": "asleep", "awake_changed_at": TS, "wake_detectable": true, "in_use_by_other": true,
+        "in_use_by_other_carried": true, "open_wake_requests": 1, "wake_requests": [wake_request()],
+        "wake_muted": false, "paired_by_others": true, "same_device": [HOST_ID]
+    });
+    d.as_object_mut().unwrap().extend(v1_1.as_object().unwrap().clone());
+    d
+}
+
+fn wake_request() -> Value {
+    json!({
+        "wake_id": WAKE_ID, "device_id": DEVICE_ID, "team": TEAM, "from": SILICON_ID, "to": "c:alice",
+        "reason": "Need the TV awake to check the menu", "created_at": TS, "last_asked_at": TS, "asks": 2,
+        "expires_at": LATER, "state": "open", "ended_at": LATER, "end_reason": "woken_on_device",
+        "wake_detectable": false, "device_notice": "not_shown", "device_notice_note": "Notifications are off.",
+        "ting": "delivered", "ting_covered_by": WAKE_ID, "ting_last_error": "sentinel", "answer_ting": "pending",
+        "answer_ting_last_error": "sentinel", "host": {"device_id": HOST_ID, "name": "Studio Mac", "online": true}
     })
+}
+
+fn ting_registration() -> Value {
+    json!({"team": TEAM, "member": "c:alice", "status": "pending", "registered_at": TS, "refused_at": TS,
+           "last_error": "Sign in to Extend for sentinel-team", "missing_types": ["extend.device.wake_requested"]})
+}
+
+fn enrollment_created() -> Value {
+    json!({"enrollment_id": ENROLLMENT_ID, "enrollment_secret": ENROLLMENT_SECRET, "pairing_code": PAIRING_CODE,
+           "code_expires_at": LATER, "rotates_every_s": 300})
 }
 
 fn session() -> Value {
@@ -351,7 +391,7 @@ fn session() -> Value {
         "session_id": SESSION_ID, "device_id": DEVICE_ID, "silicon_id": SILICON_ID, "state": "active",
         "started_at": TS, "last_command_at": TS, "idle_ends_at": LATER, "ended_at": LATER,
         "end_reason": "ended_by_silicon", "command_count": 3, "device": device(),
-        "capabilities": ["screen.read"], "commands": ["snapshot"]
+        "capabilities": ["screen.read"], "commands": ["snapshot"], "team": TEAM
     })
 }
 
@@ -360,7 +400,7 @@ fn file() -> Value {
         "file_id": FILE_ID, "name": "screenshot.png", "kind": "screenshot", "content_type": "image/png",
         "size_bytes": 1024, "url": "https://briefcase.example/f/1", "self_destruct_at": LATER, "permanent": false,
         "session_id": SESSION_ID, "device_id": DEVICE_ID, "command_id": UPLOAD_ID, "created_by": SILICON_ID,
-        "shared_with": "c:alice", "created_at": TS
+        "shared_with": "c:alice", "created_at": TS, "team": TEAM
     })
 }
 
@@ -372,12 +412,13 @@ fn takeover() -> Value {
 fn request_info() -> Value {
     json!({"request_id": UPLOAD_ID, "device_id": DEVICE_ID, "from": "si:sous", "to": SILICON_ID,
            "session_id": SESSION_ID, "reason": "Need it for an OTP", "created_at": TS, "delivery": "delivered",
-           "last_error": "Ting was unavailable"})
+           "last_error": "Ting was unavailable", "team": TEAM, "routed_to": "carbon", "to_hidden": true,
+           "from_hidden": true})
 }
 
 fn grant() -> Value {
     json!({"device_id": DEVICE_ID, "silicon_id": SILICON_ID, "granted_by": "c:alice", "granted_at": TS,
-           "last_used_at": TS})
+           "last_used_at": TS, "team": TEAM, "wake_muted": true})
 }
 
 fn auth_session() -> Value {
@@ -476,17 +517,23 @@ fn ops() -> Vec<Op> {
             [],
             201,
             "enrollment",
-            Some(
-                json!({"enrollment_id": ENROLLMENT_ID, "enrollment_secret": ENROLLMENT_SECRET, "pairing_code": PAIRING_CODE,
-                        "code_expires_at": LATER, "rotates_every_s": 300})
-            ),
+            Some(enrollment_created()),
             |c| c.client.enroll(&EnrollmentCreate {
                 os: DeviceOs::Android,
                 os_version: Some("15".into()),
                 model: Some("Pixel 9".into()),
-                app_version: "1.0.0".into(),
-                agent_device_version: Some("0.13.0".into()),
+                app_version: "1.1.0".into(),
+                engine_version: Some("0.13.0".into()),
             })
+        ),
+        op!(
+            "device.enrollments.create",
+            "Client::pair_enrollment",
+            ["device"],
+            201,
+            "enrollment",
+            Some(enrollment_created()),
+            |c| c.client.pair_enrollment(DEVICE_CREDENTIAL)
         ),
         op!(
             "enrollments.get",
@@ -506,9 +553,38 @@ fn ops() -> Vec<Op> {
             Some(
                 json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": member("carbon", "c:alice"), "team": TEAM,
                         "os": "android", "in_use": {"silicon_id": SILICON_ID, "session_id": SESSION_ID, "since": TS},
-                        "takeover": takeover(), "setup": setup(), "environment": env_view()})
+                        "takeover": takeover(), "setup": setup(), "environment": env_view(),
+                        "instance_id": ENROLLMENT_ID, "hardware_salt": "sentinel-salt", "first_pair": true})
             ),
             |c| c.client.device_self(DEVICE_CREDENTIAL)
+        ),
+        op!(
+            "device.banner",
+            "Client::update_device_self",
+            ["device"],
+            200,
+            "device_self",
+            Some(
+                json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": member("carbon", "c:alice"), "team": TEAM,
+                "os": "android", "in_use": null, "takeover": null, "setup": setup(), "environment": null, "in_use_indicator": "hidden"})
+            ),
+            |c| c.client.update_device_self(
+                DEVICE_CREDENTIAL,
+                &DeviceSelfPatch::in_use_indicator(InUseIndicator::Hidden)
+            )
+        ),
+        op!(
+            "devices.banner",
+            "Authed::set_in_use_indicator",
+            ["device"],
+            200,
+            "device",
+            Some({
+                let mut d = device();
+                d["in_use_indicator"] = json!("hidden");
+                d
+            }),
+            |c| c.carbon().set_in_use_indicator(DEVICE_ID, InUseIndicator::Hidden)
         ),
         op!("device.revoke", "Client::revoke_pair", ["device"], 204, "", None, |c| c
             .client
@@ -658,6 +734,24 @@ fn ops() -> Vec<Op> {
             |c| c.carbon().stop_device(DEVICE_ID)
         ),
         op!(
+            "devices.stop.outcome",
+            "Authed::stop",
+            ["session"],
+            200,
+            "session",
+            Some(session()),
+            |c| c.carbon().stop(DEVICE_ID)
+        ),
+        op!(
+            "devices.stop.device_stopped",
+            "Authed::stop",
+            ["shared_device", "session"],
+            200,
+            "device_stopped",
+            Some(json!({"device_id": SHARED_DEVICE_ID, "stopped_at": TS, "in_use_by_other": true})),
+            |c| c.other_carbon().stop(SHARED_DEVICE_ID)
+        ),
+        op!(
             "team.silicons",
             "Authed::team_silicons",
             [],
@@ -665,6 +759,20 @@ fn ops() -> Vec<Op> {
             "team_silicons",
             Some(json!({"items": [{"id": SILICON_ID, "display_name": "Chef"}]})),
             |c| c.carbon().team_silicons()
+        ),
+        op!(
+            "team.silicons.all",
+            "Authed::team_silicons_all",
+            [],
+            200,
+            "team_silicons",
+            Some(json!({
+                "items": [{"id": SILICON_ID, "display_name": "Chef", "team": TEAM}],
+                "teams": [{"team": TEAM, "ok": true},
+                          {"team": "globex", "ok": false, "error": {"code": "not_a_team_member", "message": "Sign in to Extend for globex.",
+                                                                    "hint": "sentinel", "request_id": "req-sentinel"}}]
+            })),
+            |c| c.carbon().team_silicons_all()
         ),
         op!(
             "devices.setup",
@@ -683,6 +791,15 @@ fn ops() -> Vec<Op> {
             "setup",
             Some(setup()),
             |c| c.carbon().setup_code(ATTACHED_ID, "1234")
+        ),
+        op!(
+            "devices.setup_retry",
+            "Authed::retry_setup",
+            ["failed_setup"],
+            202,
+            "setup_retry",
+            Some(json!({"retrying": ["wireless_debugging"]})),
+            |c| c.carbon().retry_setup(DEVICE_ID, None)
         ),
         op!(
             "access.list",
@@ -706,6 +823,15 @@ fn ops() -> Vec<Op> {
             .carbon()
             .revoke(DEVICE_ID, SILICON_ID)),
         op!(
+            "access.revoke.team",
+            "Authed::revoke_in_team",
+            ["device"],
+            204,
+            "",
+            None,
+            |c| c.carbon().revoke_in_team(DEVICE_ID, SILICON_ID, TEAM)
+        ),
+        op!(
             "devices.activity",
             "Authed::activity",
             ["device"],
@@ -714,7 +840,7 @@ fn ops() -> Vec<Op> {
             Some(page(
                 json!({"id": UPLOAD_ID, "at": TS, "actor": member("silicon", SILICON_ID), "action": "command",
                              "session_id": SESSION_ID, "command": "fill", "args": ["@e3", "[redacted 7 chars]"],
-                             "outcome": "ok", "files": [FILE_ID], "details": {"why": "sentinel"}})
+                             "outcome": "ok", "files": [FILE_ID], "details": {"why": "sentinel"}, "team": TEAM})
             )),
             |c| c.carbon().activity(
                 DEVICE_ID,
@@ -724,6 +850,92 @@ fn ops() -> Vec<Op> {
                     ..Default::default()
                 }
             )
+        ),
+        op!(
+            "wake_requests.create",
+            "Authed::wake",
+            ["device"],
+            201,
+            "wake_request",
+            Some(wake_request()),
+            |c| c.silicon().wake(DEVICE_ID, "Need the TV awake to check the menu")
+        ),
+        op!(
+            "wake_requests.list",
+            "Authed::wake_requests",
+            ["wake_request"],
+            200,
+            "wake_requests",
+            Some(page(wake_request())),
+            |c| c.carbon().wake_requests(
+                DEVICE_ID,
+                ListQuery {
+                    state: Some("open".into()),
+                    limit: Some(20),
+                    ..Default::default()
+                }
+            )
+        ),
+        op!(
+            "wake_requests.cancel",
+            "Authed::cancel_wake",
+            ["wake_request"],
+            204,
+            "",
+            None,
+            |c| c.silicon().cancel_wake(DEVICE_ID, WAKE_ID.parse().unwrap())
+        ),
+        op!(
+            "wake_requests.answer",
+            "Authed::answer_wake",
+            ["wake_request"],
+            200,
+            "wake_answer",
+            Some(json!({"answer": "declined", "ended": [wake_request()]})),
+            |c| c.carbon().answer_wake(
+                DEVICE_ID,
+                &WakeAnswer::declined().wake_ids(vec![WAKE_ID.parse().unwrap()])
+            )
+        ),
+        op!(
+            "wake_settings.update",
+            "Authed::set_wake_settings",
+            ["device"],
+            200,
+            "wake_settings",
+            Some(
+                json!({"device_id": DEVICE_ID, "muted": false, "silicons_muted": [{"silicon_id": SILICON_ID, "team": TEAM}]})
+            ),
+            |c| c
+                .carbon()
+                .set_wake_settings(DEVICE_ID, &WakeSettings::new(true).silicon(SILICON_ID).team(TEAM))
+        ),
+        op!(
+            "ting.registration.get",
+            "Authed::ting_registration",
+            [],
+            200,
+            "ting_registration",
+            Some(ting_registration()),
+            |c| c.carbon().ting_registration(TEAM)
+        ),
+        op!(
+            "ting.registration.all",
+            "Authed::ting_registrations",
+            [],
+            200,
+            "ting_registrations",
+            Some(page(ting_registration())),
+            |c| c.carbon().ting_registrations()
+        ),
+        op!(
+            "ting.registration.turn_on",
+            "Authed::ting_turn_on",
+            [],
+            200,
+            "ting_registration",
+            Some(ting_registration()),
+            |c| c.carbon().ting_turn_on(TEAM)
         ),
         op!(
             "devices.requests",

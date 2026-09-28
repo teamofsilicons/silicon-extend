@@ -25,7 +25,7 @@ struct Cli {
     /// Extend service URL (default https://backend.extend.teamofsilicons.com; env EXTEND_API_URL).
     #[arg(long, global = true)]
     service_url: Option<String>,
-    /// Where the device credential is kept: auto, keyring or file (env EXTEND_AGENT_CREDENTIAL_STORE).
+    /// Where the device credentials are kept: auto, keyring or file (env EXTEND_AGENT_CREDENTIAL_STORE).
     #[arg(long, global = true)]
     credential_store: Option<CredentialStoreKind>,
     /// Base directory; state lives in <home>/.extend-agent (env SILICON_HOME, default ~).
@@ -72,8 +72,13 @@ enum Command {
     },
     /// Stop the Silicon using this computer.
     Stop,
-    /// Revoke pair: remove this computer from its Carbon's account and end every Silicon's access.
+    /// Revoke pair: remove this computer from one Carbon's account and end the access of the
+    /// Silicons that Carbon gave access to. Other Carbons' pairs stay.
     Revoke {
+        /// The pair to revoke (its device id, from `extend-agent status`). Needed when several
+        /// Carbons paired this computer.
+        #[arg(long)]
+        device: Option<String>,
         /// Don't ask for confirmation.
         #[arg(long)]
         yes: bool,
@@ -92,7 +97,7 @@ enum Command {
     /// Run one command on this computer the way a Silicon's command runs, without Extend
     /// (for checking setup). Prints the result as JSON; files stay in --out.
     Exec {
-        /// Session id to run in (agent-device session `extend-<id>`).
+        /// Session id to run in (the device engine's session `extend-<id>`).
         #[arg(long, default_value = "000")]
         session: String,
         /// Deadline in milliseconds.
@@ -101,7 +106,7 @@ enum Command {
         /// Directory to keep produced files in (default: a new directory under the state dir).
         #[arg(long)]
         out: Option<PathBuf>,
-        /// End the session afterwards (closes agent-device's session).
+        /// End the session afterwards (closes the device engine's session).
         #[arg(long)]
         end_session: bool,
         /// The command and its arguments, e.g. `snapshot -i`.
@@ -178,8 +183,8 @@ fn real_main(cli: Cli) -> Result<i32> {
                 let text = status::render_text(&s);
                 // Skip the headline, which only describes a running app.
                 println!("{}", text.lines().skip(1).collect::<Vec<_>>().join("\n"));
-                if let Some(v) = hello.agent_device_version {
-                    println!("agent-device {v}");
+                if let Some(v) = hello.engine_version {
+                    println!("Device engine {v}");
                 }
             }
             Ok(0)
@@ -187,23 +192,53 @@ fn real_main(cli: Cli) -> Result<i32> {
         Command::Stop => {
             let rt = runtime()?;
             let store = credential::store_for(&config);
-            let c = load_for(store.as_ref(), &config.service_url)?.context("this computer isn't paired")?;
+            // Stop ends the Silicon using this computer whichever pair it came through.
+            let c = load_for(store.as_ref(), &config.service_url)?
+                .into_iter()
+                .next()
+                .context("this computer isn't paired")?;
             let service = extend_agent::service::ServiceClient::new(config.service_url.clone());
             rt.block_on(service.stop(&c.device_credential))
                 .map_err(|e| anyhow::anyhow!(e.message))?;
             println!("Stopped.");
             Ok(0)
         }
-        Command::Revoke { yes } => {
+        Command::Revoke { device, yes } => {
             let store = credential::store_for(&config);
-            let c = load_for(store.as_ref(), &config.service_url)?.context("this computer isn't paired")?;
+            let pairs = load_for(store.as_ref(), &config.service_url)?;
+            anyhow::ensure!(!pairs.is_empty(), "this computer isn't paired");
+            let c = match (&device, pairs.len()) {
+                (Some(id), _) => pairs
+                    .iter()
+                    .find(|p| p.device_id.as_str() == id.trim())
+                    .cloned()
+                    .with_context(|| {
+                        format!(
+                            "this computer has no pair {id}; its pairs are {}",
+                            pairs
+                                .iter()
+                                .map(|p| p.device_id.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?,
+                (None, 1) => pairs[0].clone(),
+                (None, _) => anyhow::bail!(
+                    "several Carbons paired this computer; say which pair to revoke with --device (one of {}; `extend-agent status` shows whose each is)",
+                    pairs
+                        .iter()
+                        .map(|p| p.device_id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
             if !yes {
                 anyhow::ensure!(
                     std::io::stdin().is_terminal(),
                     "revoking needs confirmation; run it in a terminal or pass --yes"
                 );
                 print!(
-                    "Revoke pair? This removes this computer ({}) from its Carbon's account and ends every Silicon's access to it. Type yes to revoke: ",
+                    "Revoke pair? This removes this computer ({}) from its Carbon's account and ends the access of every Silicon that Carbon gave access to. Type yes to revoke: ",
                     c.device_id
                 );
                 std::io::stdout().flush()?;
@@ -218,11 +253,15 @@ fn real_main(cli: Cli) -> Result<i32> {
             let service = extend_agent::service::ServiceClient::new(config.service_url.clone());
             match rt.block_on(service.revoke_pair(&c.device_credential)) {
                 Ok(()) => {}
-                Err(e) if e.is_auth() => println!("This computer was already unpaired."),
+                Err(e) if e.is_auth() => println!("That pair had already ended."),
                 Err(e) => anyhow::bail!("couldn't revoke the pair: {}", e.message),
             }
-            store.clear()?;
-            println!("Revoked. Silicon Extend will show a new pairing code.");
+            store.remove(&c.device_id)?;
+            if pairs.len() > 1 {
+                println!("Revoked. The other Carbons' pairs stay; restart Silicon Extend if it is running.");
+            } else {
+                println!("Revoked. Silicon Extend will show a new pairing code.");
+            }
             Ok(0)
         }
         Command::InstallAutostart { headless, systemd } => {
@@ -358,7 +397,19 @@ fn run(config: Config, headless: bool, autostart: extend_agent::autostart::RunFl
         hosted_factory: hosted_factory(),
         credentials: credential::store_for(&config),
         probe_interval: Duration::from_secs(30),
-        screen_watch: Some(Arc::new(extend_agent::drivers::screen_lock::current)),
+        screen_watch: Some(Arc::new(extend_agent::drivers::screen_lock::read)),
+        notifier: if headless {
+            Arc::new(extend_agent::notify::Silent(
+                "Silicon Extend runs without a screen here, so it can't show notifications.".into(),
+            ))
+        } else {
+            extend_agent::notify::for_this_computer()
+        },
+        display: if headless {
+            Arc::new(extend_agent::display::NoKeeper)
+        } else {
+            extend_agent::display::for_this_computer()
+        },
     };
     let (agent, handle) = Agent::new(deps);
     tracing::info!(

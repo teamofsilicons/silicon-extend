@@ -14,6 +14,7 @@ import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.R
 import com.teamofsilicons.extend.adb.DebuggingAfterRestart
 import com.teamofsilicons.extend.config.DeviceInfo
+import com.teamofsilicons.extend.core.InUseIndicator
 import com.teamofsilicons.extend.core.Link
 import com.teamofsilicons.extend.core.Phase
 import com.teamofsilicons.extend.core.UiState
@@ -27,8 +28,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Keeps the device connected to Extend while the app isn't on screen, and carries the in-use
- * notification with its Stop button (phones and tablets).
+ * Keeps the device connected to Extend while the app isn't on screen, carries the in-use
+ * notification with its Stop button (phones and tablets), and listens for the screen turning on
+ * and off, so every connection says whether the device is awake ([com.teamofsilicons.extend.core.Wakefulness]).
  */
 class ExtendForegroundService : Service() {
     private var scope: CoroutineScope? = null
@@ -44,11 +46,21 @@ class ExtendForegroundService : Service() {
         } else {
             startForeground(ID_CONNECTION, connectionNotification(extend.state.value))
         }
+        // Screen and lock broadcasts reach only receivers registered at runtime, so they are
+        // registered here, for as long as the service keeps the device connected.
+        extend.connection.wakefulness.start()
         extend.connection.start()
         val s = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         scope = s
+        // Each notification is posted again only when what it shows changed: Android drops updates
+        // beyond 5 a second per app, which could hold back the wake notification's.
         s.launch {
-            extend.state.map { NotificationModel.of(it) }.distinctUntilChanged().collect { render(extend.state.value) }
+            extend.state.map { NotificationModel.of(it).copy(silicon = null, stopping = false, takeover = null, through = null) }
+                .distinctUntilChanged().collect { renderConnection(extend.state.value) }
+        }
+        s.launch {
+            extend.state.map { st -> st.session?.let { InUseModel(it.siliconId, it.stopping, st.takeover?.reason, it.carbon, st.pairs.size > 1, st.isTv, InUseIndicator.show(st)) } }
+                .distinctUntilChanged().collect { renderInUse(extend.state.value) }
         }
         s.launch {
             // After a restart turned Wireless debugging off, ask the Carbon to turn it back on.
@@ -67,28 +79,34 @@ class ExtendForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        Extend.get(this).connection.wakefulness.stop()
         scope?.cancel()
         super.onDestroy()
     }
 
     /** The parts of the state the notifications show. */
     private data class NotificationModel(
-        val phase: Phase, val link: Link, val code: String?, val silicon: String?, val stopping: Boolean,
-        val takeover: String?, val tv: Boolean, val name: String?, val env: String?,
+        val phase: Phase, val link: Link, val detail: String?, val code: String?, val silicon: String?, val stopping: Boolean,
+        val takeover: String?, val tv: Boolean, val pairs: List<Pair<String?, String>>, val env: String?, val through: String?,
     ) {
         companion object {
             fun of(s: UiState) = NotificationModel(
-                s.phase, s.link, s.pairing.code, s.session?.siliconId, s.session?.stopping == true,
-                s.takeover?.reason, s.isTv, s.device?.name, s.environment?.name,
+                s.phase, s.link, s.linkDetail, s.pairing.code, s.session?.siliconId, s.session?.stopping == true,
+                s.takeover?.reason, s.isTv, s.pairs.map { it.name to it.carbon }, s.environment?.name, s.session?.carbon,
             )
         }
     }
 
-    private fun render(state: UiState) {
+    /** What the in-use notification shows. */
+    private data class InUseModel(val silicon: String, val stopping: Boolean, val takeover: String?, val carbon: String?, val several: Boolean, val tv: Boolean, val show: InUseIndicator.Show)
+
+    private fun renderConnection(state: UiState) {
+        getSystemService(NotificationManager::class.java).notify(ID_CONNECTION, connectionNotification(state))
+    }
+
+    private fun renderInUse(state: UiState) {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(ID_CONNECTION, connectionNotification(state))
-        val session = state.session
-        if (session != null && !state.isTv) {
+        if (state.session != null && !state.isTv && InUseIndicator.show(state) != InUseIndicator.Show.NONE) {
             nm.notify(ID_IN_USE, inUseNotification(state))
         } else {
             nm.cancel(ID_IN_USE)
@@ -112,7 +130,7 @@ class ExtendForegroundService : Service() {
             Phase.STARTING -> app to "Starting…"
             Phase.UNPAIRED -> "Waiting to be paired" to (state.pairing.code?.let { "Pairing code $it — enter it on extend.teamofsilicons.com" } ?: "Getting a pairing code…")
             Phase.PAIRED -> when (state.link) {
-                Link.CONNECTED -> "Connected to $app$env" to (state.device?.let { "${it.name} · paired to ${it.owner.id}" } ?: "Paired")
+                Link.CONNECTED -> "Connected to $app$env" to pairedLine(state)
                 Link.CONNECTING -> "Connecting to $app…$env" to "Paired"
                 Link.OFFLINE -> "$app is offline$env" to (state.linkDetail ?: "Reconnecting")
                 Link.SUPERSEDED -> "$app: connected elsewhere" to (state.linkDetail ?: "")
@@ -129,8 +147,20 @@ class ExtendForegroundService : Service() {
         return builder.build()
     }
 
+    /** "Living room TV · paired to c:alice", or "Paired to c:alice and c:bob" for a device several Carbons paired. */
+    private fun pairedLine(state: UiState): String {
+        val pairs = state.pairs
+        return when {
+            pairs.isEmpty() -> "Paired"
+            pairs.size == 1 -> pairs[0].let { p -> (p.name?.let { "$it · " } ?: "") + "paired to ${p.carbon}" }
+            else -> "Paired to " + com.teamofsilicons.extend.core.SetupReport.list(pairs.map { it.carbon })
+        }
+    }
+
     private fun inUseNotification(state: UiState): Notification {
         val s = state.session!!
+        // Which Carbon gave it access, once the device has more than one.
+        val through = s.carbon?.takeIf { state.pairs.size > 1 }?.let { "Through $it. " } ?: ""
         val builder = Notification.Builder(this, CHANNEL_IN_USE)
             .setSmallIcon(R.drawable.ic_extend_mark)
             // Interface's cobalt for the icon, app name and actions.
@@ -148,7 +178,7 @@ class ExtendForegroundService : Service() {
                 .addAction(Notification.Action.Builder(null, "Stop", action(ActionReceiver.ACTION_STOP, 1)).build())
         } else {
             builder.setContentTitle(if (s.stopping) "Stopping ${s.siliconId}…" else "${s.siliconId} is using this device")
-                .setContentText("Tap Stop to end the session now.")
+                .setContentText("${through}Tap Stop to end the session now.")
                 .addAction(Notification.Action.Builder(null, "Stop", action(ActionReceiver.ACTION_STOP, 1)).build())
         }
         return builder.build()
@@ -182,6 +212,8 @@ class ExtendForegroundService : Service() {
         const val ID_CONNECTION = 1
         const val ID_IN_USE = 2
         const val ID_DEBUGGING = 3
+        /** The wake-request notification ([WakeNotifications]). */
+        const val ID_WAKE = WakeNotifications.ID_WAKE
 
         fun createChannels(context: Context) {
             val nm = context.getSystemService(NotificationManager::class.java)
@@ -201,6 +233,7 @@ class ExtendForegroundService : Service() {
                     description = "Asks you to turn something back on, such as wireless debugging after this device restarts."
                 },
             )
+            WakeNotifications.createChannel(context)
         }
 
         fun start(context: Context) {

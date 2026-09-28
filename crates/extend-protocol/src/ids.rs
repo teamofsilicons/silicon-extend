@@ -176,6 +176,38 @@ pub const ENROLLMENT_SECRET_PREFIX: &str = "ees_";
 pub const DEVICE_CREDENTIAL_PREFIX: &str = "edc_";
 pub const APP_SECRET_PREFIX: &str = "ask_";
 
+/// A device credential on the wire (the `credential` frame). Its `Debug` shows only the prefix, so
+/// logging a frame never logs the secret; read it with [`DeviceCredential::expose`].
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeviceCredential(String);
+
+impl DeviceCredential {
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(secret.into())
+    }
+    /// The secret itself, to store or to send in `Authorization: Extend-Device ...`.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for DeviceCredential {
+    fn from(secret: String) -> Self {
+        Self(secret)
+    }
+}
+
+impl fmt::Debug for DeviceCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let prefix = self.0.get(..DEVICE_CREDENTIAL_PREFIX.len()).unwrap_or("");
+        write!(f, "DeviceCredential({prefix}…)")
+    }
+}
+
 /// A Carbon's public id starts `c:`, a Silicon's `si:`.
 pub fn member_kind(id: &str) -> Option<crate::model::MemberKind> {
     if id.starts_with("c:") && id.len() > 2 {
@@ -231,5 +263,19 @@ mod tests {
         assert!(is_secret(DEVICE_CREDENTIAL_PREFIX, &s), "{s}");
         assert!(!is_secret(ENROLLMENT_SECRET_PREFIX, &s));
         assert_eq!(secret_digest(&s).len(), 64);
+    }
+
+    #[test]
+    fn device_credential_never_debugs_the_secret() {
+        let s = new_secret(DEVICE_CREDENTIAL_PREFIX);
+        let c = DeviceCredential::new(s.clone());
+        assert_eq!(format!("{c:?}"), "DeviceCredential(edc_…)");
+        assert_eq!(serde_json::to_value(&c).unwrap(), serde_json::json!(s));
+        assert_eq!(
+            serde_json::from_value::<DeviceCredential>(serde_json::json!(s)).unwrap(),
+            c
+        );
+        assert_eq!(c.expose(), s);
+        assert_eq!(format!("{:?}", DeviceCredential::new("x")), "DeviceCredential(…)");
     }
 }

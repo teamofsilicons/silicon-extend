@@ -1,0 +1,61 @@
+{
+  "api_version": 1,
+  "call": "Client::update_device_self",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "device.banner",
+  "request": {
+    "body": {
+      "data": {
+        "in_use_indicator": "hidden"
+      },
+      "type": "device_self"
+    },
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "PATCH",
+    "path": "/api/v1/device"
+  },
+  "response": {
+    "non_null": [
+      "/device_id",
+      "/in_use_indicator",
+      "/name",
+      "/os",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/setup",
+      "/setup/state",
+      "/setup/steps",
+      "/setup/steps/*/key",
+      "/setup/steps/*/status",
+      "/setup/steps/*/title",
+      "/team"
+    ],
+    "required": [
+      "/device_id",
+      "/name",
+      "/os",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/setup",
+      "/setup/state",
+      "/setup/steps",
+      "/setup/steps/*/key",
+      "/setup/steps/*/status",
+      "/setup/steps/*/title",
+      "/team"
+    ],
+    "status": "2xx",
+    "type": "device_self"
+  }
+}

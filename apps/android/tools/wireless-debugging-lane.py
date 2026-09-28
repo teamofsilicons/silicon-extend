@@ -8,7 +8,9 @@ connection uses TLS and that the peer proves it is Android's shell.
 Needs: the debug app and its instrumentation APK installed, Wireless debugging switched on
 (`adb shell settings put global adb_wifi_enabled 1`), and the emulator's screen unlocked.
 
-    python3 tools/wireless-debugging-lane.py [--serial emulator-5554] [--keep-connected]
+    python3 tools/wireless-debugging-lane.py --serial emulator-5580 [--keep-connected]
+
+The serial is required: the lane never picks a device by itself.
 """
 import argparse
 import os
@@ -18,7 +20,7 @@ import sys
 import time
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--serial", default="emulator-5554")
+parser.add_argument("--serial", required=True, help="the dedicated emulator, for example emulator-5580")
 parser.add_argument("--keep-connected", action="store_true", help="leave the app's debugging connection on afterwards")
 args = parser.parse_args()
 RUNNER = "com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner"

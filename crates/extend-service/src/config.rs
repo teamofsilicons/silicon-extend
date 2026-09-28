@@ -72,6 +72,43 @@ pub struct Config {
     /// Reverse proxies whose `X-Forwarded-For` is believed (`EXTEND_TRUSTED_PROXY_CIDRS`). Empty:
     /// the TCP peer is the client.
     pub trusted_proxies: Vec<Cidr>,
+    /// Limits and switches added in 1.1 (several Carbons per device, membership checks).
+    pub tuning: Tuning,
+}
+
+/// 1.1 settings. The defaults are the ones the Carbon accepted; each has an `EXTEND_*` variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tuning {
+    /// `EXTEND_MAX_PAIRS_PER_DEVICE`: most Carbons one device may be paired to. A guard on
+    /// connections per device (each pair is one socket), not a product rule.
+    pub max_pairs_per_device: i64,
+    /// `EXTEND_MEMBERSHIP_SWEEP_HOURS`: how often grants are re-checked with IAM.
+    pub membership_sweep_hours: u64,
+    /// `EXTEND_OWNER_CHECK_CACHE_S`: how long IAM's "still a member" for the Carbon behind a grant
+    /// is reused. Only positive answers are kept.
+    pub owner_check_cache_s: u64,
+    /// `EXTEND_OWNER_CHECK_AT_USE`: whether every use checks that the Carbon who gave access is
+    /// still in the Silicon's Team. A switch for when IAM hides Carbons from Silicon readers.
+    pub owner_check_at_use: bool,
+    /// `EXTEND_TEST_LINK_WINDOW_S`: how long a carried device added over a test environment's
+    /// device limit may wait to be recognised as one already paired.
+    pub test_link_window_s: i64,
+    /// `EXTEND_LOCAL_IAM_READERS`: the local IAM stand-in's directory rules. `strict` answers a
+    /// Silicon reading a Carbon's entry with 403, as a real IAM may.
+    pub local_iam_strict_readers: bool,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            max_pairs_per_device: 8,
+            membership_sweep_hours: 6,
+            owner_check_cache_s: 30,
+            owner_check_at_use: true,
+            test_link_window_s: 120,
+            local_iam_strict_readers: false,
+        }
+    }
 }
 
 /// An address block such as `172.30.87.0/24`, `10.0.0.5` (one address) or `fd00::/8`.
@@ -240,6 +277,38 @@ impl Config {
                  send from bugs@teamofsilicons.com."
             );
         }
+        let number = |name: &str, default: i64, min: i64| -> anyhow::Result<i64> {
+            match var(name) {
+                None => Ok(default),
+                Some(v) => v
+                    .trim()
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|n| *n >= min)
+                    .with_context(|| format!("{name} must be a whole number of at least {min}, got {v:?}")),
+            }
+        };
+        let defaults = Tuning::default();
+        let tuning = Tuning {
+            max_pairs_per_device: number("EXTEND_MAX_PAIRS_PER_DEVICE", defaults.max_pairs_per_device, 1)?,
+            membership_sweep_hours: number(
+                "EXTEND_MEMBERSHIP_SWEEP_HOURS",
+                defaults.membership_sweep_hours as i64,
+                1,
+            )? as u64,
+            owner_check_cache_s: number("EXTEND_OWNER_CHECK_CACHE_S", defaults.owner_check_cache_s as i64, 0)? as u64,
+            owner_check_at_use: match var("EXTEND_OWNER_CHECK_AT_USE").as_deref().map(str::trim) {
+                None | Some("true") | Some("1") => true,
+                Some("false") | Some("0") => false,
+                Some(other) => bail!("EXTEND_OWNER_CHECK_AT_USE must be true or false, got {other:?}"),
+            },
+            test_link_window_s: number("EXTEND_TEST_LINK_WINDOW_S", defaults.test_link_window_s, 1)?,
+            local_iam_strict_readers: match var("EXTEND_LOCAL_IAM_READERS").as_deref().map(str::trim) {
+                None | Some("open") => false,
+                Some("strict") => true,
+                Some(other) => bail!("EXTEND_LOCAL_IAM_READERS must be open or strict, got {other:?}"),
+            },
+        };
         let bind = var_or("EXTEND_BIND", "127.0.0.1:8480")
             .parse()
             .context("EXTEND_BIND must be host:port")?;
@@ -302,6 +371,7 @@ impl Config {
                 })
                 .transpose()?
                 .unwrap_or_default(),
+            tuning,
         })
     }
 
@@ -447,6 +517,38 @@ mod tests {
         // Missing or unreadable header: fall back to the peer.
         assert_eq!(client_ip(caddy, &axum::http::HeaderMap::new(), &trusted), caddy);
         assert_eq!(client_ip(caddy, &forwarded(&["garbage"]), &trusted), caddy);
+    }
+
+    #[test]
+    fn tuning_has_the_accepted_defaults_and_reads_the_environment() {
+        let dev = [DB, ("EXTEND_ENVIRONMENT", "development")];
+        let t = cfg(&dev).unwrap().tuning;
+        assert_eq!(t, Tuning::default());
+        assert_eq!(
+            (
+                t.max_pairs_per_device,
+                t.membership_sweep_hours,
+                t.owner_check_cache_s,
+                t.test_link_window_s
+            ),
+            (8, 6, 30, 120)
+        );
+        assert!(t.owner_check_at_use && !t.local_iam_strict_readers);
+        let t = cfg(&[
+            dev[0],
+            dev[1],
+            ("EXTEND_MAX_PAIRS_PER_DEVICE", "3"),
+            ("EXTEND_OWNER_CHECK_AT_USE", "false"),
+            ("EXTEND_LOCAL_IAM_READERS", "strict"),
+        ])
+        .unwrap()
+        .tuning;
+        assert_eq!(t.max_pairs_per_device, 3);
+        assert!(!t.owner_check_at_use && t.local_iam_strict_readers);
+        let err = cfg(&[dev[0], dev[1], ("EXTEND_MAX_PAIRS_PER_DEVICE", "0")])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("EXTEND_MAX_PAIRS_PER_DEVICE"), "{err}");
     }
 
     #[test]

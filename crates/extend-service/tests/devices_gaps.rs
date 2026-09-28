@@ -5,6 +5,9 @@
 //! fake devices speaking docs/device-protocol.md. Needs a PostgreSQL the tests can create databases
 //! on: `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+#[path = "common/readiness.rs"]
+mod readiness;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -74,6 +77,7 @@ async fn start() -> Env {
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     };
     let state = extend_service::build(cfg).await.unwrap();
     tokio::spawn(extend_service::serve_on(listener, state));
@@ -110,7 +114,7 @@ fn enrollment(os: DeviceOs) -> EnrollmentCreate {
         os_version: Some("1".into()),
         model: Some("Fake".into()),
         app_version: "1.0.0".into(),
-        agent_device_version: None,
+        engine_version: None,
     }
 }
 
@@ -185,13 +189,14 @@ impl FakeDevice {
             os,
             os_version: Some("15".into()),
             model: Some("Fake".into()),
-            agent_device_version: None,
+            engine_version: None,
             capabilities: os.full_capabilities().to_vec(),
             missing: vec![],
             setup: Setup::complete(),
+            features: vec![],
         }))
         .await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        readiness::ready(&client.authed(&token, Some("acme")), &d.id).await;
         d
     }
 
@@ -488,6 +493,118 @@ async fn test_environment_with_id(env: &Env) -> (Client, Uuid) {
         .await
         .unwrap();
     (client, envid)
+}
+
+/// Retrying the successful fifth pairing must replay it before checking the new-device limit.
+#[tokio::test]
+async fn pairing_retry_replays_success_after_filling_the_test_environment() {
+    let env = start().await;
+    let t = test_environment(&env).await;
+    let alice = login(&t, "c:alice").await;
+    for i in 0..4 {
+        pair_offline(&t, &alice, DeviceOs::Linux, &format!("existing {i}")).await;
+    }
+    let code = t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code;
+    let body = serde_json::json!({"type": "pairing", "data": claim(&code, "fifth", &[])});
+    let http = reqwest::Client::new();
+    let send = |body: serde_json::Value| {
+        http.post(format!("{}/api/v1/pairings", env.base))
+            .bearer_auth(&alice)
+            .header("x-org-id", "acme")
+            .header(extend_protocol::TESTING_SECRET_HEADER, t.testing_secret().unwrap())
+            .header("idempotency-key", "pairing-fifth-device")
+            .json(&body)
+            .send()
+    };
+    let first = send(body.clone()).await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first = first.json::<serde_json::Value>().await.unwrap();
+    let retry = send(body.clone()).await.unwrap();
+    assert_eq!(retry.status(), 201, "{}", retry.text().await.unwrap_or_default());
+    assert_eq!(retry.headers()["idempotency-replayed"], "true");
+    assert_eq!(retry.json::<serde_json::Value>().await.unwrap(), first);
+    let mut changed = body;
+    changed["data"]["name"] = "different body".into();
+    let conflict = send(changed).await.unwrap();
+    assert_eq!(conflict.status(), 409);
+    let conflict = conflict.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(conflict["data"]["code"], "conflict");
+    assert!(
+        conflict["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Idempotency-Key")
+    );
+    let fresh = t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap();
+    let full = t
+        .authed(&alice, Some("acme"))
+        .pair(&claim(&fresh.pairing_code, "sixth", &[]))
+        .await
+        .unwrap_err();
+    assert_eq!(full.api().unwrap().code, ErrorCode::TestDeviceLimit);
+    assert_eq!(
+        t.authed(&alice, Some("acme"))
+            .devices(DeviceQuery::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        5
+    );
+}
+
+#[tokio::test]
+async fn attachment_retry_replays_success_after_filling_the_test_environment() {
+    let env = start().await;
+    let t = test_environment(&env).await;
+    let alice = login(&t, "c:alice").await;
+    let host = FakeDevice::pair(&t, "c:alice", DeviceOs::Macos, "host", &[]).await;
+    for i in 0..3 {
+        pair_offline(&t, &alice, DeviceOs::Linux, &format!("existing {i}")).await;
+    }
+    let body = serde_json::json!({"type": "attachment", "data": {
+        "os": "tvos", "name": "fifth", "address": "192.0.2.1"
+    }});
+    let http = reqwest::Client::new();
+    let send = |key: &str, body: serde_json::Value| {
+        http.post(format!("{}/api/v1/devices/{}/attachments", env.base, host.id))
+            .bearer_auth(&alice)
+            .header("x-org-id", "acme")
+            .header(extend_protocol::TESTING_SECRET_HEADER, t.testing_secret().unwrap())
+            .header("idempotency-key", key)
+            .json(&body)
+            .send()
+    };
+    let first = send("attachment-fifth", body.clone()).await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first = first.json::<serde_json::Value>().await.unwrap();
+    let replay = send("attachment-fifth", body.clone()).await.unwrap();
+    assert_eq!(replay.status(), 201, "{}", replay.text().await.unwrap_or_default());
+    assert_eq!(replay.headers()["idempotency-replayed"], "true");
+    assert_eq!(replay.json::<serde_json::Value>().await.unwrap(), first);
+    let mut changed = body.clone();
+    changed["data"]["name"] = "different body".into();
+    let conflict = send("attachment-fifth", changed).await.unwrap();
+    assert_eq!(conflict.status(), 409);
+    assert_eq!(
+        conflict.json::<serde_json::Value>().await.unwrap()["data"]["code"],
+        "conflict"
+    );
+    let full = send("attachment-sixth", body).await.unwrap();
+    assert_eq!(full.status(), 409);
+    assert_eq!(
+        full.json::<serde_json::Value>().await.unwrap()["data"]["code"],
+        "test_device_limit"
+    );
+    assert_eq!(
+        t.authed(&alice, Some("acme"))
+            .devices(DeviceQuery::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        5
+    );
 }
 
 /// Eight devices added at once to a test environment that has three: exactly two get in, whether
@@ -812,6 +929,7 @@ async fn hosted_device_end_to_end() {
             name: "Living room TV".into(),
             address: Some("192.168.1.40".into()),
             removed: false,
+            in_use_indicator: InUseIndicator::Shown,
         }
     );
     // A carried device can't carry others.
@@ -856,10 +974,12 @@ async fn hosted_device_end_to_end() {
         capabilities: DeviceOs::Tvos.full_capabilities().to_vec(),
         missing: vec![],
         setup: Setup::complete(),
+        awake: None,
+        sleep_state: None,
+        hardware_key: None,
     }))
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let seen = c.device(&atv_id).await.unwrap();
+    let seen = readiness::ready(&c, &atv_id).await;
     assert!(seen.online);
     assert_eq!(seen.state, DeviceState::Ready);
     assert_eq!(seen.os_version.as_deref(), Some("18.2"));
@@ -888,6 +1008,40 @@ async fn hosted_device_end_to_end() {
             if *t == atv.device_id && *session_id == tv_sid && silicon_id == "si:chef"),
         "{f:?}"
     );
+
+    // A carried rename reaches the host immediately with the carried device's metadata. Refresh
+    // alone only makes an app re-read its own pair, leaving the carried name stale until reconnect.
+    let renamed = a
+        .update_device(
+            &atv_id,
+            None,
+            &DevicePatch {
+                name: Some("Renamed TV".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.name, "Renamed TV");
+    let updated = host
+        .expect(
+            "renamed attachment",
+            |f| matches!(f, ServiceFrame::Attach { device_id, .. } if *device_id == atv.device_id),
+        )
+        .await;
+    assert_eq!(
+        updated,
+        ServiceFrame::Attach {
+            device_id: atv.device_id.clone(),
+            os: DeviceOs::Tvos,
+            name: "Renamed TV".into(),
+            address: Some("192.168.1.40".into()),
+            removed: false,
+            in_use_indicator: InUseIndicator::Shown,
+        }
+    );
+    assert_eq!(c.session(tv_sid.as_str()).await.unwrap().state, SessionState::Active);
+    assert_eq!(s.session(mac_sid.as_str()).await.unwrap().state, SessionState::Active);
 
     // A command on the TV travels to the host with target set, and the host's answer comes back.
     let tv_sid_s = tv_sid.to_string();

@@ -1,17 +1,20 @@
-import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
-import { ArrowLeft, Check, CircleStop, Hand, Pencil, Trash2 } from "lucide-solid";
+import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js";
+import { ArrowLeft, Check, CircleStop, Hand, Pencil, Trash2, Users } from "lucide-solid";
 import { session } from "../lib/session";
-import { ifMatchValue, toApiError, type ApiError } from "../lib/api";
-import type { AccessGrant, ActivityEntry, ExtendRequest, Device, DeviceDetail, Takeover, Visibility } from "../lib/types";
+import { ifMatchValue, toApiError, type ApiError, type DevicePatch } from "../lib/api";
+import type { AccessGrant, ActivityEntry, ExtendRequest, Device, DeviceDetail, Takeover, TingRegistration, WakeRequest } from "../lib/types";
 import { usePoll } from "../lib/poll";
 import { Link, navigate } from "../lib/router";
-import { DEVICE_KINDS, OS_LABEL, POLL_MS } from "../config";
-import { activitySummary, clock, dateTime, day, duration, plural, relativeTime, removedWhy } from "../lib/format";
+import { DEVICE_KINDS, kindOfDevice, OS_LABEL, POLL_MS } from "../config";
+import { activitySummary, awakeLabel, clock, dateTime, day, duration, plural, relativeTime, removedWhy, wakeEnd } from "../lib/format";
 import { Button, DeviceIcon, ErrorNote, MemberTag, memberType, Modal, OnlineDot, Spinner, StatusDot, toast } from "../components/ui";
 import { devicesChanged } from "../lib/refresh";
 import { TtlSlider } from "../components/TtlSlider";
 import { AccessPicker } from "../components/AccessPicker";
 import { SetupSteps } from "../components/SetupSteps";
+import { TingBanner } from "../components/Ting";
+import { WakeBanner } from "../components/WakeRequests";
+import { indicatorShown } from "../lib/wizard";
 
 export default function DevicePage(props: { id: string }) {
   const s = session();
@@ -19,6 +22,9 @@ export default function DevicePage(props: { id: string }) {
   const [etag, setEtag] = createSignal<string | null>(null);
   const [loadError, setLoadError] = createSignal<ApiError | null>(null);
   const [now, setNow] = createSignal(Date.now());
+  const [ting, setTing] = createSignal<TingRegistration[]>([]);
+  const [grantTeams, setGrantTeams] = createSignal<string[]>([]);
+  const isSilicon = () => s.member()?.type === "silicon";
 
   async function load() {
     try {
@@ -31,15 +37,37 @@ export default function DevicePage(props: { id: string }) {
       setLoadError(toApiError(e));
     }
   }
-  createEffect(on([() => props.id, s.team, s.world], () => {
-    setDevice(null);
-    load();
-  }));
+  // A Carbon's device doesn't depend on the selected Team (1.1): only a Silicon's view does.
+  createEffect(
+    on([() => props.id, () => (isSilicon() ? s.team() : null), s.world], () => {
+      setDevice(null);
+      load();
+    }),
+  );
   // A removed device never changes again, so its page stops polling.
   usePoll(load, POLL_MS, () => !device()?.removed_at);
 
+  /**
+   * Ting types missing in the Teams of this device's grants. Read once per device, and again when its
+   * grants change; a service without ting-registration shows nothing.
+   */
+  // A memo, so the 15 s re-read of the grants asks Ting again only when their Teams changed.
+  const teamsKey = createMemo(() => grantTeams().join(","));
+  createEffect(
+    on([() => props.id, teamsKey, s.world], async ([, teams]) => {
+      if (isSilicon()) return setTing([]);
+      try {
+        const all = await s.client().getTingRegistrations("any");
+        const relevant = new Set((teams as string).split(",").filter(Boolean));
+        setTing(all.filter((r) => r.missing_types?.length && relevant.has(r.team)));
+      } catch {
+        setTing([]);
+      }
+    }),
+  );
+
   /** Sends a settings change with If-Match; on a stale version, reloads so the Carbon sees what changed. */
-  async function patch(change: { name?: string; visibility?: Visibility; pair_ttl_days?: number }): Promise<ApiError | null> {
+  async function patch(change: DevicePatch): Promise<ApiError | null> {
     const d = device();
     if (!d) return null;
     const started = performance.now();
@@ -68,6 +96,8 @@ export default function DevicePage(props: { id: string }) {
         {(d) => (
           <Show when={!d().removed_at} fallback={<RemovedDevice device={d()} />}>
             <Header device={d()} patch={patch} />
+            <SharedNote device={d()} />
+            <WakeBanner device={d()} requests={d().wake_requests ?? []} onChanged={load} />
             <Show when={d().state === "setup"}>
               <div class="card">
                 <h2 class="card-title">Setup isn't finished</h2>
@@ -76,8 +106,9 @@ export default function DevicePage(props: { id: string }) {
               </div>
             </Show>
             <InUse device={d()} now={now()} onStopped={load} />
-            <Access device={d()} onChanged={load} />
-            <Settings device={d()} patch={patch} />
+            <TingBanner registrations={ting()} />
+            <Access device={d()} onChanged={load} onTeams={setGrantTeams} />
+            <Settings device={d()} patch={patch} onChanged={load} />
             <Capabilities device={d()} />
             <Activity device={d()} />
             <Requests device={d()} />
@@ -89,12 +120,16 @@ export default function DevicePage(props: { id: string }) {
   );
 }
 
+const KIND_WORD: Record<Device["kind"], string> = { tv: "TV", computer: "Computer", tablet: "Tablet", phone: "Phone" };
+
 function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => Promise<ApiError | null> }) {
+  const s = session();
   const [editing, setEditing] = createSignal(false);
   const [name, setName] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<ApiError | null>(null);
   const d = () => props.device;
+  const awake = () => awakeLabel(d());
   async function save(e: Event) {
     e.preventDefault();
     const value = name().trim();
@@ -116,9 +151,8 @@ function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => 
     <header class="device-header">
       <DeviceIcon device={d()} size={26} />
       <div class="device-header-main">
-        <p class="eyebrow">
-          {d().kind === "tv" ? "TV" : d().kind === "computer" ? "Computer" : d().kind === "tablet" ? "Tablet" : "Phone"} ·{" "}
-          {d().removed_at ? "Removed" : d().visibility === "personal" ? "Only you see it" : `Visible in ${d().team ?? "the team"}`}
+        <p class="eyebrow" data-testid="device-eyebrow">
+          {KIND_WORD[d().kind] ?? "Device"} · {d().removed_at ? "Removed" : d().paired_by_others ? "Also paired by another Carbon" : "Only you see it"}
         </p>
         <Show
           when={editing()}
@@ -145,7 +179,15 @@ function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => 
         </Show>
         <p class="device-meta">
           <Show when={!d().removed_at} fallback={<span class="badge muted" data-testid="removed-badge">Removed</span>}>
-            <OnlineDot online={d().online} inUse={!!d().in_use} paused={!!d().in_use?.paused} />
+            <OnlineDot online={d().online} inUse={!!d().in_use || !!d().in_use_by_other} paused={!!d().in_use?.paused} />
+          </Show>
+          <Show when={awake()}>
+            {(a) => (
+              <span class={`awake ${a().state}`} data-testid="device-awake" title={d().awake_changed_at ? `Since ${dateTime(d().awake_changed_at)}` : undefined}>
+                {a().text}
+                <Show when={d().awake_changed_at && d().online && d().awake !== undefined && d().awake !== null}> since {clock(d().awake_changed_at)}</Show>
+              </span>
+            )}
           </Show>
           <span>
             {OS_LABEL[d().os] ?? d().os}
@@ -161,10 +203,62 @@ function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => 
           <Show when={!d().removed_at && !d().online && d().last_seen_at}>
             <span>last seen {relativeTime(d().last_seen_at)}</span>
           </Show>
+          {/* The Carbon turned off what the device shows while a Silicon uses it (the switch is under Settings). */}
+          <Show when={!d().removed_at && s.member()?.type !== "silicon" && !indicatorShown(d())}>
+            <span class="badge muted" data-testid="banner-off" title="The device shows nothing while a Silicon uses it. Change it under Settings.">
+              Banner off
+            </span>
+          </Show>
         </p>
         <ErrorNote error={error()} compact />
       </div>
     </header>
+  );
+}
+
+/**
+ * When other Carbons paired this device too. Each pair is separate, and each Carbon sees only their
+ * own side. On a computer the terminal runs as the computer's own account, so (Carbon decision 3)
+ * only Silicons given access by the Carbon who installed Extend on it get the terminal; the service
+ * reports it for the others as a missing capability, which is how this page knows which it is.
+ */
+function SharedNote(props: { device: DeviceDetail }) {
+  const d = () => props.device;
+  const computer = () => d().kind === "computer" && !d().host_device_id;
+  const terminal = () => {
+    if (d().missing?.some((m) => m.capability === "terminal")) return "not_yours";
+    if (d().capabilities?.includes("terminal")) return "yours";
+    return "none";
+  };
+  return (
+    <Show when={d().paired_by_others}>
+      <div class="notice shared-note" data-testid="shared-note">
+        <p class="shared-head">
+          <Users size={15} aria-hidden="true" /> <strong>Another Carbon paired this {computer() ? "computer" : "device"} too.</strong>
+        </p>
+        <p>
+          Your pair is separate: its own name, Silicons and pairing time. You see only your own Silicons and their activity; when a Silicon another Carbon gave access to is
+          using it, you see only that it is in use, and you can stop it.
+        </p>
+        <Show
+          when={computer()}
+          fallback={<p data-testid="shared-device-warning">Silicons any Carbon gives access to can use this whole device, including what others leave on it.</p>}
+        >
+          <p data-testid="shared-computer-terminal">
+            Only Silicons given access by the Carbon who installed Silicon Extend on this computer can use its terminal.{" "}
+            {terminal() === "not_yours"
+              ? "That isn't you, so your Silicons use the screen, the keyboard and the apps."
+              : terminal() === "yours"
+                ? "That's you, so your Silicons can use it; the other Carbons' Silicons use the screen, the keyboard and the apps."
+                : "Silicons the other Carbons give access to use the screen, the keyboard and the apps."}
+          </p>
+          <p data-testid="shared-computer-warning">
+            The terminal runs as the computer's own account. Share a computer only with Carbons you trust: a Silicon using it can reach what that account can, including what other
+            Silicons leave on it.
+          </p>
+        </Show>
+      </div>
+    </Show>
   );
 }
 
@@ -203,6 +297,9 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
   const [busy, setBusy] = createSignal<"stop" | "done" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [takeover, setTakeover] = createSignal<Takeover | null>(null);
+  const d = () => props.device;
+  /** In use on another Carbon's side (with Stop), or only a carried device the Carbon didn't pair (no Stop). */
+  const other = () => (d().in_use ? null : d().in_use_by_other_carried ? "carried" : d().in_use_by_other ? "other" : null);
 
   // A paused session means the Silicon handed the device to the Carbon: read why.
   createEffect(
@@ -225,7 +322,11 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
     setError(null);
     try {
       const ended = await s.client().stopDevice(props.device.device_id);
-      toast(`Stopped ${ended.silicon_id} (session ${ended.session_id})`);
+      toast(
+        ended.kind === "session"
+          ? `Stopped ${ended.session.silicon_id} (session ${ended.session.session_id})`
+          : `Stopped the Silicon using ${props.device.name} (another Carbon gave it access)`,
+      );
       devicesChanged();
     } catch (e) {
       setError(toApiError(e));
@@ -252,17 +353,55 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
   }
 
   return (
-    <div class={`card in-use-card ${props.device.in_use ? "active" : ""} ${props.device.in_use?.paused ? "paused" : ""}`} data-testid="in-use-card">
+    <div
+      class={`card in-use-card ${d().in_use || other() === "other" ? "active" : ""} ${d().in_use?.paused ? "paused" : ""}`}
+      data-testid="in-use-card"
+      data-side={d().in_use ? "own" : (other() ?? "free")}
+    >
       <Show
-        when={props.device.in_use}
+        when={d().in_use}
         fallback={
-          <div class="in-use-idle">
-            <p class="eyebrow">Not in use</p>
-            <p class="muted">
-              No Silicon is using {props.device.name} right now.
-              <Show when={props.device.last_used_at}> Last used {relativeTime(props.device.last_used_at, props.now)}.</Show>
-            </p>
-          </div>
+          <Show
+            when={other()}
+            fallback={
+              <div class="in-use-idle">
+                <p class="eyebrow">Not in use</p>
+                <p class="muted">
+                  No Silicon is using {d().name} right now.
+                  <Show when={d().last_used_at}> Last used {relativeTime(d().last_used_at, props.now)}.</Show>
+                </p>
+              </div>
+            }
+          >
+            <Show
+              when={other() === "other"}
+              fallback={
+                <div class="in-use-idle" data-testid="in-use-carried">
+                  <p class="eyebrow in-use-eyebrow">
+                    <StatusDot status="in-use" /> A carried device is in use
+                  </p>
+                  <p class="in-use-line">A device this computer carries is in use.</p>
+                  <p class="fine">
+                    Another Carbon added it through their own pair of {d().name}, so you can't stop it from here. The Stop in {d().name}'s own Extend app stops it, and it stops
+                    everything on the computer.
+                  </p>
+                </div>
+              }
+            >
+              <div class="in-use-row" data-testid="in-use-other">
+                <div>
+                  <p class="eyebrow in-use-eyebrow">
+                    <StatusDot status="in-use" /> In use
+                  </p>
+                  <p class="in-use-line">A Silicon another Carbon gave access to is using it.</p>
+                  <p class="fine">Only one Silicon uses a device at a time, whoever gave it access. You can stop it, because the device is yours too.</p>
+                </div>
+                <Button variant="danger" class="stop" onClick={stop} busy={busy() === "stop"} data-testid="stop-session">
+                  <CircleStop size={16} aria-hidden="true" /> Stop
+                </Button>
+              </div>
+            </Show>
+          </Show>
         }
       >
         {(u) => (
@@ -273,7 +412,13 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
                   <StatusDot status="in-use" /> {u().paused ? "Paused for you" : "In use"}
                 </p>
                 <p class="in-use-line">
-                  <MemberTag type="silicon" /> <strong data-testid="in-use-silicon">{u().silicon_id}</strong> {u().paused ? "handed the device to you" : "is using it now"}
+                  <MemberTag type="silicon" /> <strong data-testid="in-use-silicon">{u().silicon_id}</strong>
+                  <Show when={u().team}>
+                    <span class="team-chip" data-testid="in-use-team" title="The Silicon's Team">
+                      {u().team}
+                    </span>
+                  </Show>{" "}
+                  {u().paused ? "handed the device to you" : "is using it now"}
                 </p>
                 <p class="fine">
                   Since {clock(u().since)} ({duration(u().since, props.now)}) · session <span class="mono">{u().session_id}</span>
@@ -311,75 +456,143 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
   );
 }
 
-function Access(props: { device: DeviceDetail; onChanged: () => void }) {
+/** The Team a grant belongs to. A 1.0 service leaves `team` out: its grants are in the device's Team. */
+const grantTeam = (g: AccessGrant, device: Device, fallback: string | null) => g.team ?? device.team ?? fallback ?? "";
+
+function Access(props: { device: DeviceDetail; onChanged: () => void; onTeams?: (teams: string[]) => void }) {
   const s = session();
   const [grants, setGrants] = createSignal<AccessGrant[] | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
-  const [confirm, setConfirm] = createSignal<string | null>(null);
-  const [revoking, setRevoking] = createSignal<string | null>(null);
+  const [confirm, setConfirm] = createSignal<AccessGrant | null>(null);
+  const [busy, setBusy] = createSignal<string | null>(null);
   async function load() {
     try {
-      setGrants(await s.client().listAccess(props.device.device_id));
+      const list = await s.client().listAccess(props.device.device_id);
+      setGrants(list);
       setError(null);
+      props.onTeams?.([...new Set(list.map((g) => grantTeam(g, props.device, s.team())))].sort());
     } catch (e) {
       setError(toApiError(e));
     }
   }
   onMount(load);
   usePoll(load, POLL_MS * 3);
+  // Re-read when the device changes in a way grants follow: a rename or TTL (version), access given or
+  // taken, or wake requests answered or turned off (a Silicon's wake_muted).
+  // (A memo: the device object is replaced on every poll, and only a changed value should re-read.)
+  const changeKey = createMemo(() => `${props.device.version}/${props.device.access_count}/${props.device.open_wake_requests}`);
+  createEffect(on(changeKey, () => load(), { defer: true }));
 
-  async function revoke(id: string) {
+  const key = (g: AccessGrant) => `${grantTeam(g, props.device, s.team())}\n${g.silicon_id}`;
+  /** Grants by Team: the Carbon's own Teams in the menu's order, then any other Team. */
+  const groups = createMemo(() => {
+    const byTeam = new Map<string, AccessGrant[]>();
+    for (const g of grants() ?? []) {
+      const team = grantTeam(g, props.device, s.team());
+      byTeam.set(team, [...(byTeam.get(team) ?? []), g]);
+    }
+    const order = s.teams();
+    return [...byTeam.entries()]
+      .sort(([a], [b]) => (order.includes(a) ? order.indexOf(a) : 1e6) - (order.includes(b) ? order.indexOf(b) : 1e6) || a.localeCompare(b))
+      .map(([team, list]) => ({ team, list, reached: order.includes(team) }));
+  });
+  const usingNow = (g: AccessGrant) => {
+    const u = props.device.in_use;
+    return !!u && u.silicon_id === g.silicon_id && (!u.team || !g.team || u.team === g.team);
+  };
+
+  async function revoke(g: AccessGrant) {
     setConfirm(null);
-    setRevoking(id);
+    setBusy(`revoke:${key(g)}`);
     try {
-      await s.client().revokeAccess(props.device.device_id, id);
-      toast(`${id} can no longer use ${props.device.name}`);
+      await s.client().revokeAccess(props.device.device_id, g.silicon_id, g.team ?? null);
+      toast(`${g.silicon_id} can no longer use ${props.device.name}${g.team ? ` (in ${g.team})` : ""}`);
       devicesChanged();
       await load();
       props.onChanged();
     } catch (e) {
       setError(toApiError(e));
     } finally {
-      setRevoking(null);
+      setBusy(null);
+    }
+  }
+
+  async function unmute(g: AccessGrant) {
+    setBusy(`unmute:${key(g)}`);
+    try {
+      await s.client().setWakeSettings(props.device.device_id, { muted: false, silicon_id: g.silicon_id, team: g.team ?? undefined });
+      toast(`${g.silicon_id} can ask you to wake ${props.device.name} again`);
+      await load();
+    } catch (e) {
+      setError(toApiError(e));
+    } finally {
+      setBusy(null);
     }
   }
 
   return (
     <div class="card" data-testid="access-card">
       <h2 class="card-title">Silicons with access.</h2>
+      <p class="fine">Each Silicon uses the device as a member of its own Team, and what it does stays in that Team. Every Silicon with access can do the same things.</p>
       <ErrorNote error={error()} compact />
       <Show when={grants()} fallback={<Show when={!error()}><Spinner inline label="Loading access…" /></Show>}>
         {(list) => (
           <Show when={list().length} fallback={<p class="muted">No Silicon can use this device yet.</p>}>
-            <ul class="grant-list">
-              <For each={list()}>
-                {(g) => (
-                  <li class="grant" data-testid="grant" data-silicon={g.silicon_id}>
-                    <div>
-                      <p class="grant-who">
-                        <MemberTag type="silicon" />
-                        <strong>{g.silicon_id}</strong>
-                        <Show when={props.device.in_use?.silicon_id === g.silicon_id}>
-                          <span class="badge live">Using it now</span>
-                        </Show>
-                      </p>
-                      <p class="fine">
-                        Given by {g.granted_by} on {day(g.granted_at)} · last used {relativeTime(g.last_used_at)}
-                      </p>
-                    </div>
-                    <Button
-                      small
-                      variant="ghost"
-                      busy={revoking() === g.silicon_id}
-                      data-testid="revoke"
-                      onClick={() => (props.device.in_use?.silicon_id === g.silicon_id ? setConfirm(g.silicon_id) : revoke(g.silicon_id))}
-                    >
-                      Take away
-                    </Button>
-                  </li>
-                )}
-              </For>
-            </ul>
+            <For each={groups()}>
+              {(group) => (
+                <section class="grant-team" data-testid="grant-team" data-team={group.team}>
+                  <p class="grant-team-head">
+                    <span class="team-chip">{group.team}</span>
+                    <span class="fine">{plural(group.list.length, "Silicon")}</span>
+                  </p>
+                  <Show when={!group.reached}>
+                    <p class="fine sign-in-marker" data-testid="sign-in-marker">
+                      Sign in to Extend for {group.team} to see names, add Silicons from it, open their files and get Tings there. You can still take access away.
+                    </p>
+                  </Show>
+                  <ul class="grant-list">
+                    <For each={group.list}>
+                      {(g) => (
+                        <li class="grant" data-testid="grant" data-silicon={g.silicon_id} data-team={group.team}>
+                          <div>
+                            <p class="grant-who">
+                              <MemberTag type="silicon" />
+                              <strong>{g.silicon_id}</strong>
+                              <Show when={usingNow(g)}>
+                                <span class="badge live">Using it now</span>
+                              </Show>
+                              <Show when={g.wake_muted}>
+                                <span class="badge muted" data-testid="grant-wake-muted">
+                                  Wake requests off
+                                </span>
+                              </Show>
+                            </p>
+                            <p class="fine">
+                              Given by {g.granted_by} on {day(g.granted_at)} · last used {relativeTime(g.last_used_at)}
+                              <Show when={g.wake_muted}>
+                                {" · "}
+                                <button type="button" class="link-button" disabled={!!busy()} onClick={() => unmute(g)} data-testid="grant-unmute">
+                                  let it ask to wake again
+                                </button>
+                              </Show>
+                            </p>
+                          </div>
+                          <Button
+                            small
+                            variant="ghost"
+                            busy={busy() === `revoke:${key(g)}`}
+                            data-testid="revoke"
+                            onClick={() => (usingNow(g) ? setConfirm(g) : revoke(g))}
+                          >
+                            Take away
+                          </Button>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </section>
+              )}
+            </For>
           </Show>
         )}
       </Show>
@@ -387,9 +600,10 @@ function Access(props: { device: DeviceDetail; onChanged: () => void }) {
         <summary>Give another Silicon access</summary>
         <AccessPicker
           deviceId={props.device.device_id}
-          existing={(grants() ?? []).map((g) => g.silicon_id)}
-          onGranted={async (ids) => {
-            toast(`${ids.join(", ")} can now use ${props.device.name}`);
+          existing={(grants() ?? []).map((g) => ({ silicon_id: g.silicon_id, team: grantTeam(g, props.device, s.team()) }))}
+          fallbackTeam={props.device.team ?? s.team()}
+          onGranted={async (ids, team) => {
+            toast(`${ids.join(", ")} can now use ${props.device.name}${team ? ` (in ${team})` : ""}`);
             await load();
             props.onChanged();
           }}
@@ -397,7 +611,7 @@ function Access(props: { device: DeviceDetail; onChanged: () => void }) {
       </details>
       <Modal open={!!confirm()} title="Take access away now?" onClose={() => setConfirm(null)} testid="revoke-confirm">
         <p>
-          <strong>{confirm()}</strong> is using {props.device.name} right now. Taking access away ends its session immediately.
+          <strong>{confirm()?.silicon_id}</strong> is using {props.device.name} right now. Taking access away ends its session immediately.
         </p>
         <div class="modal-actions">
           <Button variant="ghost" onClick={() => setConfirm(null)}>
@@ -412,11 +626,15 @@ function Access(props: { device: DeviceDetail; onChanged: () => void }) {
   );
 }
 
-function Settings(props: { device: DeviceDetail; patch: (c: { visibility?: Visibility; pair_ttl_days?: number }) => Promise<ApiError | null> }) {
+function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Promise<ApiError | null>; onChanged: () => void }) {
+  const s = session();
   const [ttl, setTtl] = createSignal(props.device.pair_ttl_days ?? 14);
   const [dirty, setDirty] = createSignal(false);
-  const [busy, setBusy] = createSignal<"ttl" | "visibility" | null>(null);
+  const [busy, setBusy] = createSignal<"ttl" | "wake" | "banner" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
+  const [bannerError, setBannerError] = createSignal<ApiError | null>(null);
+  const kind = () => kindOfDevice(props.device);
+  const carried = () => !!props.device.host_device_id || kind()?.via === "host";
   // Follow the server's value unless the Carbon is mid-change.
   createEffect(on(() => props.device.pair_ttl_days, (v) => !dirty() && setTtl(v ?? 14)));
 
@@ -430,17 +648,42 @@ function Settings(props: { device: DeviceDetail; patch: (c: { visibility?: Visib
       toast(`${props.device.name} now stays paired for ${plural(ttl(), "day")} without activity`);
     }
   }
-  async function setVisibility(v: Visibility) {
-    if (v === props.device.visibility) return;
-    setBusy("visibility");
-    const err = await props.patch({ visibility: v });
+  /**
+   * Shows or hides what the device itself shows while a Silicon uses it, saved at once. It is one
+   * setting for the whole device, so a version conflict (the device page read before a change) is
+   * sent once more on the version `patch` just re-read: the Carbon's choice is the same either way.
+   */
+  async function setBanner(shown: boolean, input: HTMLInputElement) {
+    setBusy("banner");
+    setBannerError(null);
+    const change: DevicePatch = { in_use_indicator: shown ? "shown" : "hidden" };
+    let err = await props.patch(change);
+    if (err?.status === 412) err = await props.patch(change);
     setBusy(null);
-    setError(err);
-    if (!err) toast(v === "team" ? "Visible to your team" : "Visible only to you");
+    if (err) {
+      // The value didn't change, so nothing re-renders the switch: put it back by hand.
+      input.checked = !shown;
+      setBannerError(err);
+      return;
+    }
+    toast(`Banner preference saved for ${props.device.name}: ${shown ? "on" : "off"}`);
+  }
+  async function setWake(on: boolean) {
+    setBusy("wake");
+    setError(null);
+    try {
+      await s.client().setWakeSettings(props.device.device_id, { muted: !on });
+      toast(on ? `Silicons can ask you to wake ${props.device.name}` : `Wake requests for ${props.device.name} are off`);
+      props.onChanged();
+    } catch (e) {
+      setError(toApiError(e));
+    } finally {
+      setBusy(null);
+    }
   }
   return (
     <div class="card" data-testid="settings-card">
-      <h2 class="card-title">Pairing.</h2>
+      <h2 class="card-title">Settings.</h2>
       <TtlSlider
         id="device-ttl"
         value={ttl()}
@@ -466,21 +709,55 @@ function Settings(props: { device: DeviceDetail; patch: (c: { visibility?: Visib
           </Button>
         </Show>
       </div>
-      <fieldset class="radio-group" disabled={busy() === "visibility"}>
-        <legend>Who can see it exists</legend>
-        <label>
-          <input type="radio" name="device-visibility" checked={props.device.visibility === "team"} onChange={() => setVisibility("team")} data-testid="visibility-team" />
-          <span>
-            <strong>Team</strong> — other Carbons in {props.device.team ?? "the team"} see its name, kind and whether it's online.
-          </span>
+      <Show when={props.device.paired_by_others}>
+        <p class="fine">Any Silicon using the device, through any Carbon's pair, counts as activity for your pair too.</p>
+      </Show>
+      {/* Carbons only: a Silicon never changes what the device shows about it. */}
+      <Show when={s.member()?.type !== "silicon"}>
+        <div class="setting-block" data-testid="banner-setting" data-indicator={indicatorShown(props.device) ? "shown" : "hidden"}>
+          <label class="switch">
+            <input
+              type="checkbox"
+              checked={indicatorShown(props.device)}
+              disabled={busy() === "banner"}
+              onChange={(e) => setBanner(e.currentTarget.checked, e.currentTarget)}
+              data-testid="banner-toggle"
+            />
+            <span>Banner while a Silicon is using this device</span>
+          </label>
+          <Show
+            when={!carried()}
+            fallback={
+              <p class="fine" data-testid="banner-explain">
+                {kind()?.inUse ?? "Extend shows nothing on this device itself."} {kind()?.inUseStays ?? ""} The computer it pairs through and this page show which Silicon is using it, with
+                Stop.
+              </p>
+            }
+          >
+            <p class="fine" data-testid="banner-explain">
+              <strong>On:</strong> {kind()?.inUse ?? "the device names the Silicon for 10 seconds when it starts."} <strong>Off:</strong> the device shows nothing while a Silicon uses it
+              {kind()?.inUseStays ? ` (${kind()!.inUseStays!.replace(/\.$/, "")})` : ""}. The Extend app and this page still show which Silicon is using it, with Stop.
+            </p>
+          </Show>
+          <p class="fine" data-testid="banner-version-note">
+            The device app, or the computer it pairs through, needs Silicon Extend 1.1 or later to apply this choice. Offline devices apply it when they reconnect.
+          </p>
+          <Show when={props.device.paired_by_others}>
+            <p class="fine" data-testid="banner-shared">It's one setting for the whole device, so it changes for the other Carbons who paired it too.</p>
+          </Show>
+          <ErrorNote error={bannerError()} compact testid="banner-error" />
+        </div>
+      </Show>
+      <Show when={props.device.wake_muted !== undefined && props.device.wake_muted !== null}>
+        <label class="switch">
+          <input type="checkbox" checked={!props.device.wake_muted} disabled={busy() === "wake"} onChange={(e) => setWake(e.currentTarget.checked)} data-testid="wake-toggle" />
+          <span>Silicons can ask you to wake it</span>
         </label>
-        <label>
-          <input type="radio" name="device-visibility" checked={props.device.visibility === "personal"} onChange={() => setVisibility("personal")} data-testid="visibility-personal" />
-          <span>
-            <strong>Personal</strong> — only you see it.
-          </span>
-        </label>
-      </fieldset>
+        <p class="fine">
+          A Silicon that needs the screen of a device that isn't awake asks you, with a reason: the device shows it where it can, and you get it through Ting. Extend never wakes a
+          device itself, and the terminal and Android debugging work either way.
+        </p>
+      </Show>
       <ErrorNote error={error()} compact testid="settings-error" />
     </div>
   );
@@ -646,6 +923,11 @@ function Activity(props: { device: DeviceDetail }) {
                         <MemberTag type={a.actor.type} />
                         <span>{a.actor.id}</span>
                       </Show>
+                      <Show when={a.team}>
+                        <span class="team-chip" data-testid="activity-team" title="The Silicon's Team">
+                          {a.team}
+                        </span>
+                      </Show>
                     </span>
                     <span class="action">
                       {a.action === "command" && a.command ? (
@@ -685,11 +967,21 @@ function Activity(props: { device: DeviceDetail }) {
   );
 }
 
+/**
+ * Requests for this device, from the Carbon's side:
+ * - sent by their Silicons through this pair, to the Silicon using it (same Carbon and Team: it is
+ *   named) or else to the Carbon who gave that Silicon access (never named to the asker);
+ * - sent to the Carbon: requests routed to them because a Silicon they gave access to is using it.
+ *   Carbon decision 2: they see which Silicon asked and why (a service that hides the asker says
+ *   "a Silicon another Carbon gave access to");
+ * - wake requests from their Silicons.
+ */
 function Requests(props: { device: DeviceDetail }) {
   const s = session();
   const [items, setItems] = createSignal<ExtendRequest[] | null>(null);
   const [next, setNext] = createSignal<string | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
+  const [wakes, setWakes] = createSignal<WakeRequest[] | null>(null);
   async function load(cursor?: string | null) {
     try {
       const page = await s.client().listDeviceRequests(props.device.device_id, cursor);
@@ -700,36 +992,128 @@ function Requests(props: { device: DeviceDetail }) {
       setError(toApiError(e));
     }
   }
-  onMount(() => load());
+  async function loadWakes() {
+    try {
+      setWakes((await s.client().listWakeRequests(props.device.device_id, { state: "all", limit: 20 })).items);
+    } catch {
+      // A service without wake requests (1.0) has nothing to show here.
+      setWakes(null);
+    }
+  }
+  onMount(() => {
+    load();
+    loadWakes();
+  });
+  // Re-read when the wake requests on the device change (asked, answered, expired).
+  const wakesKey = createMemo(() => (props.device.wake_requests ?? []).map((r) => `${r.wake_id}:${r.asks}`).join(","));
+  createEffect(on(wakesKey, () => loadWakes(), { defer: true }));
+
+  const me = () => s.member()?.id ?? "";
+  const received = (r: ExtendRequest) => r.routed_to === "carbon" && !r.to_hidden && r.to === me();
+  const sent = () => (items() ?? []).filter((r) => !received(r));
+  const toYou = () => (items() ?? []).filter(received);
+
   return (
     <div class="card" data-testid="requests">
-      <h2 class="card-title">Requests between Silicons.</h2>
-      <p class="fine">When a Silicon wants the device while another one is using it, it asks with a reason. Extend delivers it through Ting.</p>
+      <h2 class="card-title">Requests.</h2>
+      <p class="fine">
+        When a Silicon wants a device another Silicon is using, it asks with a reason. When it needs a device that isn't awake, it asks you to wake it. Extend delivers both through Ting.
+      </p>
       <ErrorNote error={error()} compact />
       <Show when={items()} fallback={<Show when={!error()}><Spinner inline label="Loading requests…" /></Show>}>
-        {(list) => (
-          <Show when={list().length} fallback={<p class="muted">No Silicon has asked for this device.</p>}>
+        <Show when={toYou().length}>
+          <section class="request-group" data-testid="requests-received">
+            <h3 class="request-group-title">Sent to you</h3>
             <ul class="request-list">
-              <For each={list()}>
+              <For each={toYou()}>
                 {(r) => (
-                  <li class="request" data-testid="request">
+                  <li class="request" data-testid="request" data-kind="received">
                     <p class="request-who">
-                      <MemberTag type={memberType(r.from)} />
-                      <strong>{r.from}</strong> asked <strong>{r.to}</strong> <span class="muted">· {relativeTime(r.created_at)}</span>
+                      <Show when={!r.from_hidden} fallback={<span data-testid="request-from-hidden">{r.from}</span>}>
+                        <MemberTag type={memberType(r.from)} />
+                        <strong data-testid="request-from">{r.from}</strong>
+                      </Show>
+                      <Show when={r.team}>
+                        <span class="team-chip">{r.team}</span>
+                      </Show>{" "}
+                      asked you for {props.device.name} <span class="muted">· {relativeTime(r.created_at)}</span>
                       <span class={`badge ${r.delivery === "failed" ? "warn" : "muted"}`}>{r.delivery}</span>
                     </p>
                     <blockquote>{r.reason}</blockquote>
+                    <p class="fine">A Silicon you gave access to was using {props.device.name}, so the request came to you. Stop it above to free the device.</p>
+                    <Show when={r.last_error}>
+                      <p class="fine warn-text">{r.last_error}</p>
+                    </Show>
                   </li>
                 )}
               </For>
             </ul>
-            <Show when={next()}>
-              <Button small onClick={() => load(next())}>
-                Load older
-              </Button>
-            </Show>
+          </section>
+        </Show>
+        <section class="request-group" data-testid="requests-sent">
+          <Show when={toYou().length || wakes()?.length}>
+            <h3 class="request-group-title">Sent by your Silicons</h3>
           </Show>
-        )}
+          <Show when={sent().length} fallback={<p class="muted">{toYou().length || wakes()?.length ? "None." : "No Silicon has asked for this device."}</p>}>
+            <ul class="request-list">
+              <For each={sent()}>
+                {(r) => (
+                  <li class="request" data-testid="request" data-kind="sent">
+                    <p class="request-who">
+                      <MemberTag type={memberType(r.from)} />
+                      <strong>{r.from}</strong>
+                      <Show when={r.team}>
+                        <span class="team-chip">{r.team}</span>
+                      </Show>{" "}
+                      asked <Show when={!r.to_hidden} fallback={<span data-testid="request-to-hidden">{r.to}</span>}>
+                        <strong>{r.to}</strong>
+                      </Show>{" "}
+                      <span class="muted">· {relativeTime(r.created_at)}</span>
+                      <span class={`badge ${r.delivery === "failed" ? "warn" : "muted"}`}>{r.delivery}</span>
+                    </p>
+                    <blockquote>{r.reason}</blockquote>
+                    <Show when={r.last_error}>
+                      <p class="fine warn-text">{r.last_error}</p>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </section>
+        <Show when={next()}>
+          <Button small onClick={() => load(next())}>
+            Load older
+          </Button>
+        </Show>
+      </Show>
+      <Show when={wakes()?.length}>
+        <section class="request-group" data-testid="requests-wake">
+          <h3 class="request-group-title">Asked to wake it</h3>
+          <ul class="request-list">
+            <For each={wakes()!}>
+              {(w) => (
+                <li class="request" data-testid="wake-history" data-state={w.state}>
+                  <p class="request-who">
+                    <MemberTag type="silicon" />
+                    <strong>{w.from}</strong>
+                    <span class="team-chip">{w.team}</span> asked you to wake it <span class="muted">· {relativeTime(w.last_asked_at)}</span>
+                    <span class={`badge ${w.state === "open" ? "live" : "muted"}`}>{w.state}</span>
+                  </p>
+                  <blockquote>{w.reason}</blockquote>
+                  <Show when={w.state !== "open" && w.end_reason}>
+                    <p class="fine">
+                      Ended {relativeTime(w.ended_at)}: {wakeEnd(w.end_reason)}.
+                    </p>
+                  </Show>
+                  <Show when={w.answer_ting_last_error}>
+                    <p class="fine warn-text">{w.answer_ting_last_error}</p>
+                  </Show>
+                </li>
+              )}
+            </For>
+          </ul>
+        </section>
       </Show>
     </div>
   );
@@ -801,6 +1185,9 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
                 <strong>{u().silicon_id}</strong> {u().paused ? "handed it to you and is waiting" : "is using it now"}; its session ends immediately.
               </li>
             )}
+          </Show>
+          <Show when={d().paired_by_others}>
+            <li data-testid="remove-others">Only your pair ends. The other Carbons who paired it keep theirs, with their own Silicons.</li>
           </Show>
           <Show when={access() > 0}>
             <li data-testid="remove-access">{access() === 1 ? "1 Silicon loses access." : `${access()} Silicons lose access.`}</li>

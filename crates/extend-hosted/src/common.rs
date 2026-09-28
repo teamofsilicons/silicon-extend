@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 pub(crate) const CLIENT_NAME: &str = "Silicon Extend";
 
 /// How long `tv-remote longpress` holds a button when no `--duration-ms` is given
-/// (matches agent-device's Android TV preset).
+/// (matches the device engine's Android TV preset).
 pub(crate) const LONGPRESS_DEFAULT: Duration = Duration::from_millis(500);
 
 /// The remote buttons `extend tv-remote` accepts (`understanding/cli.yaml`).
@@ -291,6 +291,22 @@ pub(crate) fn step_help(key: &str, title: &str, status: StepStatus, help: &str) 
         error: None,
         input: None,
     }
+}
+
+/// A failed step as the Carbon reads it: `sentence` says what is wrong and what to do; the
+/// technical `detail` behind it (a tool's output, an error code) goes to the log only.
+pub(crate) fn step_failure(
+    key: &str,
+    title: &str,
+    status: StepStatus,
+    sentence: &str,
+    detail: impl std::fmt::Display,
+) -> SetupStep {
+    let detail = detail.to_string();
+    if !detail.trim().is_empty() && detail.trim() != sentence {
+        tracing::info!(step = key, "{sentence} ({detail})");
+    }
+    step_error(key, title, status, None, sentence)
 }
 
 pub(crate) fn step_error(

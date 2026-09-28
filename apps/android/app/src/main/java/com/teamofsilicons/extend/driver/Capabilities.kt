@@ -83,9 +83,11 @@ object Capabilities {
         "display" to listOf(DISPLAY),
     )
 
-    const val RECORD_REASON = "Connect Android debugging in the Extend app's setup to enable screen recording."
-    const val ADB_REASON = "{what} needs Android debugging. Turn on Wireless or Network debugging, then connect it in the Extend app's setup."
-    fun adbReason(what: String) = ADB_REASON.replace("{what}", what)
+    /** A TV can activate an accessibility element without claiming mouse or gesture support. */
+    fun forCommand(command: String, tv: Boolean): List<String>? =
+        if (tv && command == "click") listOf(SCREEN_READ) else COMMAND_CAPABILITIES[command]
+
+    // Why a debugging capability is missing depends on the Android version: adb.DebuggingPath.missingReason.
 
     /** Debugging was connected, then the device restarted and Android turned Wireless debugging off. */
     fun afterRestartReason(what: String, tv: Boolean) =

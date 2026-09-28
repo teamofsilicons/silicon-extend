@@ -19,7 +19,17 @@ pub type DeviceKey = (String, String); // (world schema, device id)
 struct Conn {
     conn_id: Uuid,
     tx: mpsc::UnboundedSender<ServiceFrame>,
+    /// When this connection last answered a ping.
+    last_pong_at: Option<std::time::Instant>,
+    /// What the app said it can do beyond 1.0 (`hello.features`).
+    features: Vec<String>,
+    /// Only reports from this connection establish whether its carried devices are online.
+    attached: HashMap<DeviceKey, AttachedState>,
 }
+
+/// How recently a connection must have answered a ping for a new one replacing it to count as a
+/// take-over (logged as `connection_replaced` on the pair).
+pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Default)]
 pub struct AttachedState {
@@ -31,7 +41,6 @@ pub struct AttachedState {
 #[derive(Default)]
 pub struct Hub {
     conns: RwLock<HashMap<DeviceKey, Conn>>,
-    attached: RwLock<HashMap<DeviceKey, AttachedState>>,
     enrollments: RwLock<HashMap<Uuid, mpsc::UnboundedSender<EnrollmentFrame>>>,
     pending: Mutex<HashMap<Uuid, (DeviceKey, oneshot::Sender<CommandOutcome>)>>,
     session_locks: Mutex<HashMap<DeviceKey, Arc<Mutex<()>>>>,
@@ -45,13 +54,52 @@ pub enum SendError {
 
 impl Hub {
     /// Registers a device socket, replacing (and superseding) any older one for the same device.
-    pub async fn register(&self, key: DeviceKey) -> (Uuid, mpsc::UnboundedReceiver<ServiceFrame>) {
+    /// The flag says whether the one it replaced was live: it answered a ping within
+    /// [`LIVE_WITHIN`], so something else took over a working connection (a copied credential, or
+    /// a second copy of the app), rather than the app reconnecting after a drop.
+    pub async fn register(&self, key: DeviceKey) -> (Uuid, mpsc::UnboundedReceiver<ServiceFrame>, bool) {
         let (tx, rx) = mpsc::unbounded_channel();
         let conn_id = Uuid::new_v4();
-        if let Some(old) = self.conns.write().await.insert(key, Conn { conn_id, tx }) {
+        let conn = Conn {
+            conn_id,
+            tx,
+            last_pong_at: None,
+            features: vec![],
+            attached: HashMap::new(),
+        };
+        let mut replaced_live = false;
+        if let Some(old) = self.conns.write().await.insert(key, conn) {
+            replaced_live = old.last_pong_at.is_some_and(|t| t.elapsed() <= LIVE_WITHIN);
             let _ = old.tx.send(ServiceFrame::Superseded);
         }
-        (conn_id, rx)
+        (conn_id, rx, replaced_live)
+    }
+
+    /// Records a pong on a connection.
+    pub async fn pong(&self, key: &DeviceKey, conn_id: Uuid) {
+        if let Some(c) = self.conns.write().await.get_mut(key)
+            && c.conn_id == conn_id
+        {
+            c.last_pong_at = Some(std::time::Instant::now());
+        }
+    }
+
+    /// Records what a connection's app advertised in its hello.
+    pub async fn set_features(&self, key: &DeviceKey, conn_id: Uuid, features: Vec<String>) {
+        if let Some(c) = self.conns.write().await.get_mut(key)
+            && c.conn_id == conn_id
+        {
+            c.features = features;
+        }
+    }
+
+    /// Whether the app connected for `key` advertised `feature`. `None` when nothing is connected.
+    pub async fn supports(&self, key: &DeviceKey, feature: &str) -> Option<bool> {
+        self.conns
+            .read()
+            .await
+            .get(key)
+            .map(|c| c.features.iter().any(|f| f == feature))
     }
 
     /// Removes a socket if it's still the current one. Returns true when it was.
@@ -93,12 +141,23 @@ impl Hub {
         self.conns.write().await.remove(key);
     }
 
-    pub async fn set_attached(&self, key: DeviceKey, state: AttachedState) {
-        self.attached.write().await.insert(key, state);
+    /// Accepts a carried-device report only from the current connection of its host.
+    pub async fn set_attached(&self, host: &DeviceKey, conn_id: Uuid, key: DeviceKey, state: AttachedState) -> bool {
+        let mut conns = self.conns.write().await;
+        let Some(conn) = conns.get_mut(host).filter(|conn| conn.conn_id == conn_id) else {
+            return false;
+        };
+        conn.attached.insert(key, state);
+        true
     }
 
-    pub async fn attached(&self, key: &DeviceKey) -> Option<AttachedState> {
-        self.attached.read().await.get(key).cloned()
+    pub async fn attached(&self, host: &DeviceKey, key: &DeviceKey) -> Option<AttachedState> {
+        self.conns
+            .read()
+            .await
+            .get(host)
+            .and_then(|conn| conn.attached.get(key))
+            .cloned()
     }
 
     /// Sends a command to `route` (the device, or its host) and waits for the answer.
@@ -166,5 +225,74 @@ impl Hub {
 
     pub async fn enrollment_connected(&self, id: Uuid) -> bool {
         self.enrollments.read().await.contains_key(&id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(online: bool) -> AttachedState {
+        AttachedState {
+            online,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn attached_reports_follow_the_host_connection_generation() {
+        let hub = Hub::default();
+        let host = ("extend".into(), "host".into());
+        let child = ("extend".into(), "child".into());
+        let (old, _old_rx, _) = hub.register(host.clone()).await;
+        assert!(hub.set_attached(&host, old, child.clone(), report(true)).await);
+        assert!(hub.attached(&host, &child).await.unwrap().online);
+
+        let (current, _current_rx, _) = hub.register(host.clone()).await;
+        assert!(hub.attached(&host, &child).await.is_none());
+        assert!(!hub.set_attached(&host, old, child.clone(), report(true)).await);
+        assert!(hub.attached(&host, &child).await.is_none());
+        assert!(hub.set_attached(&host, current, child.clone(), report(false)).await);
+        assert!(!hub.set_attached(&host, old, child.clone(), report(true)).await);
+        assert!(!hub.attached(&host, &child).await.unwrap().online);
+
+        assert!(hub.set_attached(&host, current, child.clone(), report(true)).await);
+        assert!(!hub.unregister(&host, old).await);
+        assert!(hub.attached(&host, &child).await.unwrap().online);
+        assert!(hub.unregister(&host, current).await);
+        assert!(hub.attached(&host, &child).await.is_none());
+        assert!(!hub.set_attached(&host, current, child, report(true)).await);
+    }
+
+    #[tokio::test]
+    async fn attached_reports_are_isolated_by_host_and_world() {
+        let hub = Hub::default();
+        let host = ("extend".into(), "host".into());
+        let other_host = ("extend".into(), "other-host".into());
+        let test_host = ("extend_test_a".into(), "host".into());
+        let child = ("extend".into(), "child".into());
+        let test_child = ("extend_test_a".into(), "child".into());
+        let (id, _rx, _) = hub.register(host.clone()).await;
+        let (other_id, _other_rx, _) = hub.register(other_host.clone()).await;
+        let (test_id, _test_rx, _) = hub.register(test_host.clone()).await;
+        assert!(hub.set_attached(&host, id, child.clone(), report(true)).await);
+        assert!(hub.attached(&other_host, &child).await.is_none());
+        assert!(hub.attached(&test_host, &test_child).await.is_none());
+        assert!(hub.attached(&host, &test_child).await.is_none());
+        assert!(!hub.set_attached(&other_host, id, child.clone(), report(true)).await);
+        assert!(
+            hub.set_attached(&other_host, other_id, child.clone(), report(false))
+                .await
+        );
+        assert!(
+            hub.set_attached(&test_host, test_id, test_child.clone(), report(true))
+                .await
+        );
+        assert!(!hub.attached(&other_host, &child).await.unwrap().online);
+        assert!(hub.attached(&host, &child).await.unwrap().online);
+        hub.disconnect(&host).await;
+        assert!(hub.attached(&host, &child).await.is_none());
+        assert!(hub.attached(&test_host, &test_child).await.unwrap().online);
+        assert!(!hub.attached(&other_host, &child).await.unwrap().online);
     }
 }

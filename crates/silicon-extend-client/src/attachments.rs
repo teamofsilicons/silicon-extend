@@ -305,6 +305,7 @@ pub fn local_input(command: &str, args: &[String], i: usize) -> LocalInput {
         },
         // install <package> <path.apk>: the package name is never read as a file.
         "install" | "reinstall" if i == 1 => LocalInput::Required,
+        "display" if args[i].starts_with("file:") => LocalInput::No,
         "replay" | "test" | "display" | "batch" if matches!(prev, Some("--image" | "--video" | "--steps-file")) => {
             LocalInput::IfFile
         }
@@ -523,6 +524,14 @@ mod tests {
         assert_eq!(at("install", &["com.example.app", "app.apk"], 0), No);
         assert_eq!(at("install", &["com.example.app", "app.apk"], 1), Required);
         assert_eq!(at("display", &["show", "--image", "https://x/a.png"], 2), IfFile);
+        assert_eq!(
+            at(
+                "display",
+                &["show", "--image", "file:01900000-0000-7000-8000-000000000000"],
+                2
+            ),
+            No
+        );
         assert_eq!(at("replay", &["flow.ad"], 0), IfFile);
     }
 

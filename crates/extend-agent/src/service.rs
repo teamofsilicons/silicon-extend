@@ -3,8 +3,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use extend_protocol::model::{DeviceSelf, EnrollmentCreate, EnrollmentCreated, EnrollmentState};
-use extend_protocol::{API_VERSION, API_VERSION_HEADER, Envelope};
+use extend_protocol::model::{
+    DeviceSelf, DeviceSelfPatch, EnrollmentCreate, EnrollmentCreated, EnrollmentState, InUseIndicator,
+};
+use extend_protocol::{API_VERSION, API_VERSION_HEADER, DeviceId, Envelope};
 use rand::Rng as _;
 use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncReadExt as _;
@@ -50,6 +52,13 @@ impl ServiceError {
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+/// The public protocol defaults a missing banner field to shown for old consumers. The native
+/// app also needs its presence: a 1.0 service cannot override a saved local choice by omitting it.
+pub(crate) struct DeviceReading {
+    pub device: DeviceSelf,
+    pub indicator: Option<InUseIndicator>,
+}
 
 #[derive(Clone)]
 pub struct ServiceClient {
@@ -104,6 +113,20 @@ impl ServiceClient {
         read_envelope(resp).await
     }
 
+    /// "Pair with another Carbon": a new pairing code for this device, started with the credential
+    /// of any of its live pairs, so the pair it makes joins this device (and its test environment,
+    /// if any). A 1.0 service answers 404.
+    pub async fn pair_enrollment(&self, credential: &str) -> ServiceResult<EnrollmentCreated> {
+        let resp = self
+            .request(reqwest::Method::POST, "api/v1/device/enrollments")
+            .header("Authorization", device_auth(credential))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(ServiceError::network)?;
+        read_envelope(resp).await
+    }
+
     pub async fn get_enrollment(&self, id: Uuid, secret: &str) -> ServiceResult<EnrollmentState> {
         let resp = self
             .request(reqwest::Method::GET, &format!("api/v1/enrollments/{id}"))
@@ -124,17 +147,57 @@ impl ServiceClient {
         read_empty(resp).await
     }
 
-    pub async fn device_self(&self, credential: &str) -> ServiceResult<DeviceSelf> {
+    pub async fn set_in_use_indicator(&self, credential: &str, value: InUseIndicator) -> ServiceResult<DeviceSelf> {
+        self.set_target_in_use_indicator(credential, None, value).await
+    }
+
+    pub async fn set_target_in_use_indicator(
+        &self,
+        credential: &str,
+        target: Option<&DeviceId>,
+        value: InUseIndicator,
+    ) -> ServiceResult<DeviceSelf> {
+        let path = target.map_or_else(
+            || "api/v1/device".to_owned(),
+            |id| format!("api/v1/device/attachments/{id}"),
+        );
         let resp = self
-            .request(reqwest::Method::GET, "api/v1/device")
+            .request(reqwest::Method::PATCH, &path)
             .header("Authorization", device_auth(credential))
+            .json(&Envelope::new("device_self", DeviceSelfPatch::in_use_indicator(value)))
             .send()
             .await
             .map_err(ServiceError::network)?;
         read_envelope(resp).await
     }
 
-    /// Revoke pair. The caller confirms with the Carbon first.
+    pub async fn device_self(&self, credential: &str) -> ServiceResult<DeviceSelf> {
+        self.device_self_reading(credential).await.map(|r| r.device)
+    }
+
+    pub(crate) async fn device_self_reading(&self, credential: &str) -> ServiceResult<DeviceReading> {
+        let resp = self
+            .request(reqwest::Method::GET, "api/v1/device")
+            .header("Authorization", device_auth(credential))
+            .send()
+            .await
+            .map_err(ServiceError::network)?;
+        let status = resp.status().as_u16();
+        let data: serde_json::Value = read_envelope(resp).await?;
+        let indicator_present = data.get("in_use_indicator").is_some();
+        let device: DeviceSelf = serde_json::from_value(data).map_err(|e| ServiceError {
+            status: Some(status),
+            code: Some("bad_response".into()),
+            message: format!("Extend answered with something this app doesn't understand: {e}"),
+        })?;
+        Ok(DeviceReading {
+            indicator: indicator_present.then_some(device.in_use_indicator),
+            device,
+        })
+    }
+
+    /// Revoke pair: ends the pair `credential` belongs to (one Carbon's), no other. The caller
+    /// confirms with the Carbon first.
     pub async fn revoke_pair(&self, credential: &str) -> ServiceResult<()> {
         let resp = self
             .request(reqwest::Method::DELETE, "api/v1/device")

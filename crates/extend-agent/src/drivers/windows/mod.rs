@@ -1,6 +1,6 @@
-//! Extend's own Windows driver. agent-device doesn't support Windows, so Extend reads the screen
-//! with UI Automation, acts with `SendInput`, captures with GDI, and maps it all onto the same
-//! command set, snapshot shape and `@eN` refs agent-device gives on a Mac or Linux computer.
+//! Extend's own Windows driver. The device engine doesn't support Windows, so Extend reads the
+//! screen with UI Automation, acts with `SendInput`, captures with GDI, and maps it all onto the
+//! same command set, snapshot shape and `@eN` refs the engine gives on a Mac or Linux computer.
 //!
 //! Everything that doesn't touch Windows APIs (the snapshot model, selectors, command parsing,
 //! keystroke plans, app lists, pixels, the probe's answer) is plain Rust that unit-tests on any
@@ -32,4 +32,4 @@ mod worker;
 #[cfg(windows)]
 pub use driver::WindowsDriver;
 #[cfg(windows)]
-pub(crate) use driver::locked as input_desktop_locked;
+pub(crate) use driver::{input_idle, session_state};

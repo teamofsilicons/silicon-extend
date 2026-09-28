@@ -342,7 +342,10 @@ Resources:
                         'EXTEND_TEST_TELEMETRY_KEYS', 'EXTEND_IAM_BASE_URL', 'EXTEND_IAM_PUBLIC_URL',
                         'EXTEND_IAM_LOGIN_URL', 'EXTEND_BRIEFCASE_URL', 'EXTEND_BRIEFCASE_WEB_URL',
                         'EXTEND_TING_URL', 'EXTEND_WEBSITE_URL', 'EXTEND_DOCS_URL',
-                        'EXTEND_REPOSITORY_URL', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG')
+                        'EXTEND_REPOSITORY_URL', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG',
+                        'EXTEND_MAX_PAIRS_PER_DEVICE', 'EXTEND_MEMBERSHIP_SWEEP_HOURS',
+                        'EXTEND_OWNER_CHECK_CACHE_S', 'EXTEND_OWNER_CHECK_AT_USE',
+                        'EXTEND_TEST_LINK_WINDOW_S')
             def clean(key, value):
                 if not isinstance(value, str) or not value or any(ord(c) in (0, 10, 13) for c in value):
                     raise SystemExit('runtime secret value missing or malformed: ' + key)

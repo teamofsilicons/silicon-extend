@@ -78,6 +78,7 @@ async fn start() -> Env {
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     };
     let state = extend_service::build(cfg).await.unwrap();
     let pool = state.pool.clone();
@@ -260,7 +261,7 @@ async fn enroll(client: &Client) -> EnrollmentCreated {
             os_version: Some("1".into()),
             model: Some("Fake".into()),
             app_version: "1.0.0".into(),
-            agent_device_version: None,
+            engine_version: None,
         })
         .await
         .unwrap()
@@ -322,10 +323,11 @@ impl Device {
             os: DeviceOs::Linux,
             os_version: Some("15".into()),
             model: Some("Fake".into()),
-            agent_device_version: None,
+            engine_version: None,
             capabilities: DeviceOs::Linux.full_capabilities().to_vec(),
             missing: vec![],
             setup: Setup::complete(),
+            features: vec![],
         });
         self.ws
             .send(Message::Text(serde_json::to_string(&hello).unwrap().into()))

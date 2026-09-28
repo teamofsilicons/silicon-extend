@@ -31,6 +31,16 @@ class SessionRetentionTest {
         assertEquals(emptyList<String>(), r.reconcile(active = null))
     }
 
+    @Test fun aPairsReconnectReconcilesOnlyItsOwnSessions() {
+        val r = SessionRetention()
+        r.disconnected(setOf("a-old", "b-live"), nowMs = 0)
+        // Pair A reconnected and has nothing in use; pair B's session waits for pair B.
+        assertEquals(listOf("a-old"), r.reconcile(active = null, among = setOf("a-old")))
+        assertEquals(setOf("b-live"), r.pending())
+        assertEquals(emptyList<String>(), r.reconcile(active = "b-live", among = setOf("b-live")))
+        assertEquals(emptySet<String>(), r.pending())
+    }
+
     @Test fun aSessionThatEndedWhileOfflineIsEndedOnReconnect() {
         val r = SessionRetention()
         r.disconnected(setOf("s1"), nowMs = 0)

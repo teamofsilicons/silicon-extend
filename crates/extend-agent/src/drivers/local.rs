@@ -18,7 +18,7 @@ impl LocalDriver {
         Self { platform }
     }
 
-    /// agent-device on Mac and Linux, Extend's own driver on Windows, for a one-off run
+    /// The device engine on Mac and Linux, Extend's own driver on Windows, for a one-off run
     /// (`extend-agent probe`, `extend-agent exec`).
     pub fn for_this_computer(config: &Config) -> Self {
         Self::new(platform_driver(config, false))
@@ -26,7 +26,7 @@ impl LocalDriver {
 
     /// The same for the long-running agent, which may also force a stuck session's release at
     /// session boundaries and retries failed session cleanup in the background (one-off runs
-    /// share its agent-device daemon and leave both to it).
+    /// share its device-engine daemon and leave both to it).
     pub fn for_the_agent(config: &Config) -> Self {
         Self::new(platform_driver(config, true))
     }
@@ -95,11 +95,21 @@ impl Driver for LocalDriver {
     }
 
     async fn session_ended(&self, session_id: &str) {
+        // Whatever the session's terminal left running ends with it (an empty id is "no session
+        // here": nothing of a particular session to end).
+        if !session_id.is_empty() {
+            let id = session_id.to_owned();
+            let _ = tokio::task::spawn_blocking(move || terminal::end_session(&id)).await;
+        }
         self.platform.session_ended(session_id).await;
     }
 
     async fn setup_code(&self, code: &str) -> Result<(), String> {
         self.platform.setup_code(code).await
+    }
+
+    async fn retry_setup(&self, step: Option<&str>) {
+        self.platform.retry_setup(step).await;
     }
 }
 
@@ -120,8 +130,11 @@ mod tests {
                 reason: "x".into(),
             }],
             setup: Setup::complete(),
-            agent_device_version: None,
+            engine_version: None,
             online: true,
+            awake: None,
+            sleep_state: None,
+            hardware_id: None,
         };
         let p = with_terminal(p);
         assert_eq!(

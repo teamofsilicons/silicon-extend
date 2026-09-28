@@ -8,12 +8,16 @@
 //! (`EXTEND_TEST_ADMIN_URL`, default `postgres://extend:extend@127.0.0.1:5440/postgres`), the real
 //! HTTP and WebSocket stack, the official client crate, and scripted fake devices.
 
+#[path = "common/readiness.rs"]
+mod readiness;
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use extend_protocol::frames::{
     CommandFrame, CommandOutcome, DeviceFrame, EnrollmentFrame, Hello, ProducedFile, ServiceFrame,
 };
@@ -95,6 +99,7 @@ fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf) -> Config {
         ],
         web_dir: None,
         trusted_proxies: vec![],
+        tuning: Default::default(),
     }
 }
 
@@ -214,7 +219,7 @@ impl Device {
                 os_version: Some("1".into()),
                 model: Some("Fake".into()),
                 app_version: "1.0.0".into(),
-                agent_device_version: None,
+                engine_version: None,
             })
             .await
             .unwrap();
@@ -257,15 +262,16 @@ impl Device {
             os,
             os_version: Some("15".into()),
             model: Some("Fake".into()),
-            agent_device_version: None,
+            engine_version: None,
             capabilities: os.full_capabilities().to_vec(),
             missing: vec![],
             setup: Setup::complete(),
+            features: vec![],
         });
         ws.send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        readiness::ready(&client.authed(&token, Some("acme")), &id).await;
         Device { id, credential, ws }
     }
 
@@ -948,7 +954,8 @@ async fn starting_a_session_registers_the_silicon_with_ting() {
         .await
         .run(&env.base);
     let ting = env.state.local_ting.clone().unwrap();
-    assert!(ting.registered.lock().await.is_empty());
+    // (Pairing registers the Carbon in the Team they paired in; the Silicon comes at its session.)
+    assert!(!ting.registered.lock().await.iter().any(|(_, _, m)| m == "si:chef"));
     env.client
         .authed(&chef, Some("acme"))
         .start_session(&device.id.parse().unwrap())
@@ -1026,7 +1033,7 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
             .lock()
             .await
             .iter()
-            .any(|t| t["request_id"] == known.to_string() && t["reason"] == "Need it for an OTP")
+            .any(|t| t["data"]["request_id"] == known.to_string() && t["data"]["reason"] == "Need it for an OTP")
     );
     // The recipient was registered with its own login on the way.
     assert!(
@@ -1035,31 +1042,52 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
             .await
             .contains(&(None, "acme".to_owned(), "si:chef".to_owned()))
     );
+    // With no login for any sender, the attempt doesn't count: it waits for the member's next call.
     let (delivery, attempts, error) = request_row(&state, unknown).await;
-    assert_eq!((delivery.as_str(), attempts), ("pending", 2));
-    assert!(error.unwrap().contains("holds no signed-in login for si:ghost"));
-
-    for _ in 0..4 {
-        scheduler::retry_requests(&state, &world).await.unwrap();
-    }
-    let (delivery, attempts, error) = request_row(&state, unknown).await;
-    assert_eq!((delivery.as_str(), attempts), ("failed", scheduler::REQUEST_ATTEMPTS));
+    assert_eq!((delivery.as_str(), attempts), ("pending", 1));
+    assert!(error.unwrap().contains("holds no login for si:ghost"));
+    // After 24 hours it gives up anyway.
+    sqlx::query("UPDATE extend.requests SET created_at = now() - interval '25 hours' WHERE request_id = $1")
+        .bind(unknown)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    scheduler::retry_requests(&state, &world).await.unwrap();
+    let (delivery, _, error) = request_row(&state, unknown).await;
+    assert_eq!(delivery, "failed");
     let error = error.unwrap();
     assert!(
-        error.contains("holds no signed-in login for si:ghost") && error.contains("gave up after 6 attempts"),
+        error.contains("holds no login for si:ghost") && error.contains("24 hours"),
         "{error}"
     );
-    // Nothing more is tried, and the device's log says it failed.
+
+    // Counted attempts (Ting unreachable) back off, and give up after 6.
+    let flaky = insert_request(&state, "0a1b2c3d", "si:sous", "Another reason").await;
+    ting.unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..8 {
+        sqlx::query("UPDATE extend.requests SET ting_next_at = now() - interval '1 second' WHERE request_id = $1 AND delivery = 'pending'")
+            .bind(flaky)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        scheduler::retry_requests(&state, &world).await.unwrap();
+    }
+    let (delivery, attempts, error) = request_row(&state, flaky).await;
+    assert_eq!((delivery.as_str(), attempts), ("failed", scheduler::REQUEST_ATTEMPTS));
+    let error = error.unwrap();
+    assert!(error.contains("gave up after 6 attempts"), "{error}");
+    // Nothing more is tried, and the device's log says each failed.
     scheduler::retry_requests(&state, &world).await.unwrap();
-    assert_eq!(request_row(&state, unknown).await.1, scheduler::REQUEST_ATTEMPTS);
+    assert_eq!(request_row(&state, flaky).await.1, scheduler::REQUEST_ATTEMPTS);
     let logged: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM extend.activity WHERE action = 'request_failed' AND details->>'request_id' = $1",
+        "SELECT count(*) FROM extend.activity WHERE action = 'request_failed' AND details->>'request_id' IN ($1, $2)",
     )
     .bind(unknown.to_string())
+    .bind(flaky.to_string())
     .fetch_one(&state.pool)
     .await
     .unwrap();
-    assert_eq!(logged, 1);
+    assert_eq!(logged, 2);
 }
 
 // ───────────────────────────── Files ─────────────────────────────
@@ -1070,6 +1098,7 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
 struct GatedFiles {
     local: LocalFiles,
     destroys: Mutex<Vec<(String, bool)>>,
+    read_gate: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl GatedFiles {
@@ -1077,6 +1106,7 @@ impl GatedFiles {
         Arc::new(Self {
             local: LocalFiles::new(&data.join("gated"), base).unwrap(),
             destroys: Mutex::default(),
+            read_gate: Mutex::default(),
         })
     }
 }
@@ -1117,13 +1147,19 @@ impl FileStore for GatedFiles {
         }
         self.local.destroy(silicon, file_id, sel).await
     }
-    async fn read(
+    async fn read_bounded(
         &self,
         member: &Principal,
         file_id: Uuid,
         sel: Option<&TestingSelection>,
+        max_bytes: usize,
     ) -> AppResult<(Vec<u8>, String)> {
-        self.local.read(member, file_id, sel).await
+        let gate = self.read_gate.lock().unwrap().clone();
+        if let Some((entered, resume)) = gate {
+            entered.notify_one();
+            resume.notified().await;
+        }
+        self.local.read_bounded(member, file_id, sel, max_bytes).await
     }
     async fn read_local(&self, file_id: Uuid) -> Option<(Vec<u8>, String)> {
         self.local.read_local(file_id).await
@@ -1390,10 +1426,330 @@ async fn file_content_is_served_to_its_silicon_and_owner_with_ranges() {
     assert_eq!(c.file_content(&id).await.unwrap_err().code(), ErrorCode::FileNotFound);
 }
 
+#[tokio::test]
+async fn display_resolves_own_stored_files_into_compatible_device_attachments() {
+    let env = start().await;
+    let chef = login(&env.client, "si:chef").await;
+    let c = env.client.authed(&chef, Some("acme"));
+    let source = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
+        .await
+        .run(&env.base);
+    let source_sid = c
+        .start_session(&source.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    let f = c
+        .run(&source_sid, &cmd("screenshot", &[]))
+        .await
+        .unwrap()
+        .files
+        .remove(0);
+    c.end_session(&source_sid).await.unwrap();
+    let tv = Device::pair(&env, "c:alice", DeviceOs::AndroidTv, &["si:chef"])
+        .await
+        .run(&env.base);
+    let sid = c
+        .start_session(&tv.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    for value in [
+        format!("file:{}", f.file_id),
+        f.file_id.to_string(),
+        f.url,
+        format!("{}/api/v1/files/{}/content", env.base, f.file_id),
+    ] {
+        let result = c
+            .run(&sid, &cmd("display", &["show", &format!("--image={value}")]))
+            .await
+            .unwrap();
+        assert!(result.ok);
+        let frame = tv
+            .frames()
+            .into_iter()
+            .find_map(|f| match f {
+                ServiceFrame::Command(c) if c.id == result.command_id => Some(c),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(frame.attachments.len(), 1);
+        let a = &frame.attachments[0];
+        assert_eq!(frame.args, ["show", &format!("--image=attachment:{}", a.name)]);
+        assert_eq!(a.content_type, "image/png");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&a.content_base64)
+                .unwrap(),
+            b"\x89PNG shot.png 0123456789"
+        );
+        assert!(
+            !serde_json::to_string(&frame).unwrap().contains(&chef),
+            "no caller credential reaches the TV"
+        );
+    }
+    // A public URL is passed through unchanged, without fetching it from the service.
+    let private_url = format!(
+        "https://briefcase.example/org/acme/apps/extend/private/si:chef/{}.png",
+        f.file_id
+    );
+    sqlx::query("UPDATE extend.files SET url = $2 WHERE file_id = $1")
+        .bind(f.file_id)
+        .bind(&private_url)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    assert!(
+        c.run(&sid, &cmd("display", &["show", "--image", &private_url]))
+            .await
+            .unwrap()
+            .ok
+    );
+    let result = c
+        .run(
+            &sid,
+            &cmd("display", &["show", "--image", "https://example.invalid/public.png"]),
+        )
+        .await
+        .unwrap();
+    let frame = tv
+        .frames()
+        .into_iter()
+        .find_map(|f| match f {
+            ServiceFrame::Command(c) if c.id == result.command_id => Some(c),
+            _ => None,
+        })
+        .unwrap();
+    assert!(frame.attachments.is_empty());
+    assert_eq!(frame.args[2], "https://example.invalid/public.png");
+}
+
+#[tokio::test]
+async fn display_files_enforce_owner_team_expiry_type_and_attachment_limits_before_relay() {
+    let env = start().await;
+    let chef = login(&env.client, "si:chef").await;
+    let sous = login(&env.client, "si:sous").await;
+    let c = env.client.authed(&chef, Some("acme"));
+    let tv = Device::pair(&env, "c:alice", DeviceOs::AndroidTv, &["si:chef", "si:sous"])
+        .await
+        .run(&env.base);
+    let sid = c
+        .start_session(&tv.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    let f = c.run(&sid, &cmd("screenshot", &[])).await.unwrap().files.remove(0);
+    let display = cmd("display", &["show", "--image", &format!("file:{}", f.file_id)]);
+    let private_url = format!(
+        "https://briefcase.example/org/acme/apps/extend/private/si:chef/{}.png",
+        f.file_id
+    );
+    sqlx::query("UPDATE extend.files SET url = $2 WHERE file_id = $1")
+        .bind(f.file_id)
+        .bind(&private_url)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    c.end_session(&sid).await.unwrap();
+    let other = env.client.authed(&sous, Some("acme"));
+    let other_sid = other
+        .start_session(&tv.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    assert_eq!(
+        other.run(&other_sid, &display).await.unwrap_err().code(),
+        ErrorCode::FileNotFound
+    );
+    assert_eq!(
+        other
+            .run(&other_sid, &cmd("display", &["show", "--image", &f.url]))
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::FileNotFound
+    );
+    assert_eq!(
+        other
+            .run(&other_sid, &cmd("display", &["show", "--image", &private_url]))
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::FileNotFound
+    );
+    assert_eq!(
+        c.run(&other_sid, &display).await.unwrap_err().code(),
+        ErrorCode::SessionNotFound
+    );
+    other.end_session(&other_sid).await.unwrap();
+    let sid = c
+        .start_session(&tv.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    sqlx::query("UPDATE extend.files SET team = 'another-team' WHERE file_id = $1")
+        .bind(f.file_id)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(c.run(&sid, &display).await.unwrap_err().code(), ErrorCode::FileNotFound);
+    sqlx::query(
+        "UPDATE extend.files SET team = 'acme', self_destruct_at = now() - interval '1 second' WHERE file_id = $1",
+    )
+    .bind(f.file_id)
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(c.run(&sid, &display).await.unwrap_err().code(), ErrorCode::FileNotFound);
+    sqlx::query("UPDATE extend.files SET self_destruct_at = NULL, content_type = 'text/plain' WHERE file_id = $1")
+        .bind(f.file_id)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(c.run(&sid, &display).await.unwrap_err().code(), ErrorCode::InvalidInput);
+    sqlx::query("UPDATE extend.files SET content_type = 'image/png' WHERE file_id = $1")
+        .bind(f.file_id)
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let mut full = display.clone();
+    full.attachments = vec![
+        Attachment {
+            name: "existing".into(),
+            content_type: "text/plain".into(),
+            content_base64: String::new()
+        };
+        8
+    ];
+    assert_eq!(c.run(&sid, &full).await.unwrap_err().code(), ErrorCode::InvalidInput);
+    full.attachments = vec![Attachment {
+        name: "existing".into(),
+        content_type: "image/png".into(),
+        content_base64: base64::engine::general_purpose::STANDARD.encode(vec![0u8; 8 << 20]),
+    }];
+    assert_eq!(c.run(&sid, &full).await.unwrap_err().code(), ErrorCode::InvalidInput);
+    // Stale small metadata cannot bypass the actual store's read limit.
+    tokio::fs::write(
+        env.state.cfg.data_dir.join("files").join(f.file_id.to_string()),
+        vec![0u8; (8 << 20) + 1],
+    )
+    .await
+    .unwrap();
+    assert_eq!(c.run(&sid, &display).await.unwrap_err().code(), ErrorCode::InvalidInput);
+    assert!(
+        tv.frames()
+            .iter()
+            .all(|f| !matches!(f, ServiceFrame::Command(c) if c.command == "display"))
+    );
+}
+
+#[tokio::test]
+async fn briefcase_display_reads_are_delegated_and_bounded_even_without_content_length() {
+    let env = start().await;
+    let chef = login(&env.client, "si:chef").await;
+    let principal = env.state.authorize(&chef, Some("acme"), None).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = axum::Router::new().route(
+        "/api/v1/obo/files/read",
+        axum::routing::post(
+            |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| async move {
+                assert_eq!(
+                    headers["X-IAM-OBO-Access-Proof"],
+                    "obo_local:briefcase:briefcase.files.read:si:chef"
+                );
+                assert_eq!(headers["X-Org-ID"], "acme");
+                assert!(body["entry_id"].as_str().unwrap().parse::<Uuid>().is_ok());
+                let chunks = futures::stream::iter([Ok::<_, std::io::Error>("123"), Ok("456")]);
+                ([("Content-Type", "image/png")], axum::body::Body::from_stream(chunks))
+            },
+        ),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let files =
+        extend_service::files::BriefcaseFiles::new(base, "https://briefcase.example".into(), env.state.iam.clone());
+    assert_eq!(
+        files.read_bounded(&principal, Uuid::new_v4(), None, 6).await.unwrap(),
+        (b"123456".to_vec(), "image/png".into())
+    );
+    assert_eq!(
+        files
+            .read_bounded(&principal, Uuid::new_v4(), None, 5)
+            .await
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidInput
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn display_file_read_respects_timeout_and_stop_before_relay() {
+    let mut files = None;
+    let env = start_with(|base, data| {
+        let store = GatedFiles::new(data, base);
+        files = Some(store.clone());
+        Some(store)
+    })
+    .await;
+    let files = files.unwrap();
+    let chef = login(&env.client, "si:chef").await;
+    let c = env.client.authed(&chef, Some("acme"));
+    let tv = Device::pair(&env, "c:alice", DeviceOs::AndroidTv, &["si:chef"])
+        .await
+        .run(&env.base);
+    let sid = c
+        .start_session(&tv.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    let f = c.run(&sid, &cmd("screenshot", &[])).await.unwrap().files.remove(0);
+    let mut display = cmd("display", &["show", "--image", &format!("file:{}", f.file_id)]);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    *files.read_gate.lock().unwrap() = Some((entered.clone(), resume.clone()));
+    let reading = run_in_background(&env, &chef, &sid, display.clone());
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    c.end_session(&sid).await.unwrap();
+    resume.notify_one();
+    assert_eq!(answer(reading).await.unwrap_err().code(), ErrorCode::SessionEnded);
+
+    let sid = c
+        .start_session(&tv.id.parse().unwrap())
+        .await
+        .unwrap()
+        .session_id
+        .to_string();
+    display.timeout_ms = Some(1000);
+    let error = tokio::time::timeout(Duration::from_secs(3), c.run(&sid, &display))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::CommandTimeout);
+    assert!(
+        tv.frames()
+            .iter()
+            .all(|f| !matches!(f, ServiceFrame::Command(c) if c.command == "display"))
+    );
+}
+
 // ───────────────────────────── Requests ─────────────────────────────
 
 async fn sent_reasons(ting: &extend_service::ting::LocalNotifier) -> Vec<serde_json::Value> {
-    ting.sent.lock().await.iter().map(|t| t["reason"].clone()).collect()
+    ting.sent
+        .lock()
+        .await
+        .iter()
+        .map(|t| t["data"]["reason"].clone())
+        .collect()
 }
 
 #[tokio::test]
@@ -1464,12 +1820,30 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
     let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
     assert_eq!(r.status(), 201);
     let keyed: serde_json::Value = r.json().await.unwrap();
+    let delivered = sent_reasons(&ting).await.len();
     let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
-    assert!(r.status().is_success());
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
     let replay: serde_json::Value = r.json().await.unwrap();
-    assert_eq!(replay["data"]["request_id"], keyed["data"]["request_id"]);
+    assert_eq!(replay, keyed);
     let r = post("core-gaps-key-1", "Another reason").await.unwrap();
     assert_eq!(r.status(), 409);
+    // A reason already sent without a key must not hide a conflicting or malformed key.
+    let r = post("core-gaps-key-1", raw).await.unwrap();
+    assert_eq!(r.status(), 409);
+    let r = post("short", raw).await.unwrap();
+    assert_eq!(r.status(), 422);
+    // A fresh key can fold an existing request; its retry replays that stored 200 response.
+    let r = post("core-gaps-key-2", raw).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(!r.headers().contains_key("idempotency-replayed"));
+    let folded: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(folded["data"]["request_id"], first.request_id.to_string());
+    let r = post("core-gaps-key-2", raw).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), folded);
+    assert_eq!(sent_reasons(&ting).await.len(), delivered);
     // Everything delivered is listed with its reason as sent.
     let mine = s
         .requests(ListQuery {
@@ -1487,8 +1861,18 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
         .end_session(&chef_session)
         .await
         .unwrap();
+    // Completing the original holder's session must not erase a successful keyed response.
+    let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
+    assert_eq!(
+        s.send_request(&id, "Nobody is using it").await.unwrap_err().code(),
+        ErrorCode::DeviceNotInUse
+    );
     let line = login(&env.client, "si:line").await;
-    env.client
+    let line_session = env
+        .client
         .authed(&line, Some("acme"))
         .start_session(&id.parse().unwrap())
         .await
@@ -1499,4 +1883,23 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
         (to_line.to.as_str(), to_line.delivery),
         ("si:line", Delivery::Delivered)
     );
+    let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
+    env.client
+        .authed(&line, Some("acme"))
+        .end_session(line_session.session_id.as_ref())
+        .await
+        .unwrap();
+    s.start_session(&id.parse().unwrap()).await.unwrap();
+    let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert_eq!(r.headers()["idempotency-replayed"], "true");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
+    assert_eq!(
+        s.send_request(&id, "I am using it now").await.unwrap_err().code(),
+        ErrorCode::Conflict
+    );
+    assert_eq!(sent_reasons(&ting).await.len(), delivered + 1);
 }

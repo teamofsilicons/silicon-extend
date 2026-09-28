@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Rust 1.98 (pinned in `rust-toolchain.toml`), Docker, Node 22+ with pnpm (website, agent-device fork),
+Rust 1.98 (pinned in `rust-toolchain.toml`), Docker, Node 22+ with pnpm (website, the device engine),
 and for device apps: the Android SDK (API 36) with a JDK 17+, and Xcode on a Mac.
 
 ## The service
@@ -25,7 +25,13 @@ production):
   `EXTEND_LOCAL_MEMBERS`. `POST /dev/iam/members` simulates membership changes and logouts (and the
   webhook that follows); `GET /dev/iam/login?app_id=&redirect_uri=` is a stand-in consent screen.
 - **Local files**: stored under `EXTEND_DATA_DIR/files`, served at `/dev/files/{id}`.
-- **Local Ting**: requests are recorded; `GET /dev/ting` lists them.
+- **Local Ting**: requests are recorded; `GET /dev/ting` lists them (1.1: with the sender, Team and
+  recipient of each). The service's tests can make it refuse a type in a Team, or a Ting a member
+  sends to themselves.
+- **Several Carbons and Teams (1.1)**: `EXTEND_LOCAL_MEMBERS` takes several Teams per member
+  (`c:alice@acme+globex,c:bob@acme,si:chef@acme+globex,si:scout@globex`). `EXTEND_LOCAL_IAM_READERS=strict`
+  makes the local IAM answer a Silicon reading a Carbon's directory entry with 403, as a real IAM
+  may.
 - **Test environments**: prepare one with Honeycomb's lifecycle endpoint (token
   `hck_local_dev_token`), then register a test app secret with `POST /dev/iam/test-apps`.
 
@@ -48,11 +54,17 @@ own `EXTEND_DATA_DIR`, and point the lane at it (`bash e2e/cli-e2e.sh http://127
 | `cargo test -p silicon-extend-client --test contract_fixtures` and `cargo test -p extend-service --test contracts` | Consumer contracts: the client's recorded fixtures still match what it sends, and a real service accepts every fixture in `contracts/` (`contracts/README.md`) |
 | `cargo test -p silicon-extend-cli` | Includes `tests/device_args.rs`: the real binary against a fake service, reading the exact arguments a device receives |
 | `bash e2e/cli-e2e.sh` | The `extend` CLI end to end against a running service and `examples/fake_device` |
+| `python3 e2e/released-cli-compat.py --old-cli /absolute/path/to/extend-1.0.0 --out target/released-cli-compat --full-cli-lane` | Released CLI 1.0 and current CLI share saved login/session state against an owned current service and scripted 1.0 device; optionally runs all current CLI checks. Requires built debug binaries and local PostgreSQL; leaves installed logins/services untouched and cleans its exact database. |
+| `python3 apps/desktop/macos/banner-native-e2e.py` | macOS production banner in an owned fake-agent app: native frame, controls, focus and timeout checks. `--interactive` leaves only that fixture open for a human drag check. No real driver, service, TCC change or installed-app mutation. |
+| `python3 e2e/linux-release-rehearsal.py --package /path/to/linux-arm64.deb --out /new/output` | Owned Docker X11 app, banner movement/collapse/Stop, recording through host metadata changes and detached terminal cleanup. Uses the existing Linux test image and an owned local service/database. `--agent-bin` records an explicit native agent override for a newly fixed binary. |
+| `node e2e/web-upgrade-rehearsal.mjs` | Builds tagged 1.0/current website sources and switches them on one owned browser origin against a fresh current service/database. Requires built service, web dependencies and Playwright Chromium. |
+| `python3 e2e/released-agent-compat.py --archive /path/to/released-1.0-mac.zip --out /new/output` | Native macOS arm64 headless agent upgrade with an owned file credential store, disabled engine, terminal/session continuity and two-Carbon terminal rules. Requires built current binaries and local PostgreSQL; verifies the published old archive checksum and leaves installed apps/autostart untouched. |
 | `cd web && pnpm test && pnpm build && pnpm test:e2e` | Website unit tests, the type-checked build, and Playwright against the mock API; `pnpm test:e2e:real` against a running service (`EXTEND_REAL_URL`) |
 | `apps/android` | See its README (unit tests, emulator runs, the notices generator and dependency verification) |
 | `crates/extend-agent`, `apps/desktop/linux-e2e` | Desktop agent tests; Linux run and recording lanes in Docker (`apps/desktop/README.md`) |
 | `node --test apps/desktop/*.test.mjs` | Packaged runtime stamp and entry, and the packaging checks (stamp errors, dist freshness) |
-| `cd vendor/agent-device && pnpm typecheck && pnpm exec vitest run --project unit-core <files>` | The agent-device fork: CI runs every test file an Extend change touched (the list is in `.github/workflows/ci.yml`); `pnpm test:macos-helper` for the Swift helper |
+| `node --test apps/desktop/banner-ui.e2e.mjs` | Desktop WebView banner controls in Chromium; requires `web` dependencies and Playwright Chromium, and runs in CI's browser job. |
+| `cd vendor/extend-engine && pnpm typecheck && pnpm lint && pnpm test:unit` | The device engine (Silicon Extend's fork): its whole unit suite (unit-core and fuzz-worker), as CI runs it; `pnpm test:macos-helper` for the Swift helper |
 | `cd apps/android && ./gradlew :app:testDebugUnitTest :libadb:testDebugUnitTest` | The Android app's and libadb's JVM tests (with `JAVA_HOME` at a JDK 17) |
 
 ## Conventions
@@ -63,7 +75,12 @@ own `EXTEND_DATA_DIR`, and point the lane at it (`bash e2e/cli-e2e.sh http://127
   codes to exit codes (`ErrorCode::exit_code`).
 - The contract files in `understanding/` change first, then the code. `UNDERSTANDING.md` is the
   Carbon's alone; changes to the other contract files need a Carbon's approval.
-- Record every change to `vendor/agent-device` in its `FORK.md` (newest first), and every new
-  shipped dependency in `THIRD_PARTY_NOTICES.md`.
+- Record every change to `vendor/extend-engine` in its `FORK.md` (newest first), and every new
+  shipped dependency in `THIRD_PARTY_NOTICES.md`. The engine's settings are `EXTEND_ENGINE_<X>`: use
+  only those names in Extend's code, scripts, CI and docs (the engine maps each onto its fork's
+  `AGENT_DEVICE_<X>`, so the old names still work for anyone who set them). The desktop agent finds
+  the engine through `EXTEND_ENGINE` (a path to `bin/extend-engine.mjs` or an executable).
+- Setup errors (`SetupStep.error`) are one or two sentences for the Carbon: what is wrong and what to
+  do. Environment variables, file paths, build commands, exit codes and stack traces go to the log.
 - End-to-end lanes that drive a desktop run only on a test machine or in a container, never on a
   Mac someone is using.

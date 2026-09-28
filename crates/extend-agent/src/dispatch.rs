@@ -4,6 +4,11 @@
 //! Lifecycle hooks (a driver's session setup and cleanup) have their own time limits, so a stuck
 //! cleanup can hold up the next session's commands for a bounded time only. Once a session has
 //! ended, a command that still arrives for it is answered `session_ended` without running.
+//!
+//! A computer paired by several Carbons has one connection per pair, and a command's answer and
+//! files go back through the pair it came through ([`Reply`]): the result on that pair's socket,
+//! the files uploaded with that pair's credential. A command's scratch directory sits in its
+//! session's (`work/<session>/<command>`), which goes when the session has been cleaned up.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -56,6 +61,15 @@ pub trait Uploader: Send + Sync {
     async fn upload(&self, upload_id: Uuid, path: &Path, name: &str, content_type: &str) -> Result<u64, String>;
 }
 
+/// Where a command's answer goes: the connection and credential of the pair it came through.
+#[derive(Clone)]
+pub struct Reply {
+    /// The pair (`None`: the dispatcher's default route, one pair or tests).
+    pub pair: Option<DeviceId>,
+    pub outbox: Outbox,
+    pub uploader: Arc<dyn Uploader>,
+}
+
 type QueueKey = Option<DeviceId>;
 
 enum Work {
@@ -83,6 +97,7 @@ const RECENT_HOOKS: usize = 4;
 struct Pending {
     target: Option<DeviceId>,
     session_id: String,
+    pair: Option<DeviceId>,
     cancel: CancelToken,
 }
 
@@ -90,12 +105,13 @@ struct Job {
     frame: CommandFrame,
     cancel: CancelToken,
     received: Instant,
+    reply: Reply,
 }
 
 struct Inner {
     lookup: Arc<dyn DriverLookup>,
-    uploader: Arc<dyn Uploader>,
-    outbox: Outbox,
+    /// The route for [`Dispatcher::submit`].
+    default_reply: Reply,
     work_root: PathBuf,
     queues: Mutex<HashMap<QueueKey, mpsc::UnboundedSender<Work>>>,
     pending: Mutex<HashMap<Uuid, Pending>>,
@@ -113,7 +129,7 @@ pub struct Dispatcher {
 /// Seconds a cancelled or timed-out driver gets to wind down before its result is written off.
 const WIND_DOWN: Duration = Duration::from_secs(3);
 
-/// How long a driver's session setup may take before the device moves on. The local agent-device
+/// How long a driver's session setup may take before the device moves on. The local the device engine
 /// driver needs up to about two minutes when it first has to release an earlier session.
 pub const SETUP_LIMIT: Duration = Duration::from_secs(150);
 /// How long a driver's session cleanup may take before the device moves on. Stopping a recording
@@ -140,8 +156,11 @@ impl Dispatcher {
         Self {
             inner: Arc::new(Inner {
                 lookup,
-                uploader,
-                outbox,
+                default_reply: Reply {
+                    pair: None,
+                    outbox,
+                    uploader,
+                },
                 work_root,
                 queues: Mutex::new(HashMap::new()),
                 pending: Mutex::new(HashMap::new()),
@@ -164,13 +183,17 @@ impl Dispatcher {
     /// Queues a command after setup, earlier commands and previous-session cleanup on its device.
     /// A command for a session that has already ended is answered at once and never runs.
     pub fn submit(&self, frame: CommandFrame) {
+        self.submit_to(frame, self.inner.default_reply.clone());
+    }
+
+    /// [`Self::submit`], answering through `reply` (the pair the command came through).
+    pub fn submit_to(&self, frame: CommandFrame, reply: Reply) {
         let session_id = frame.session_id.to_string();
         if self.has_ended(frame.target.as_ref(), &session_id) {
             let message = format!(
                 "Session {session_id} had already ended when this command reached the device, so it didn't run. Start a new session to keep going."
             );
-            if !self
-                .inner
+            if !reply
                 .outbox
                 .send(DeviceFrame::Result(failed(frame.id, error("session_ended", message))))
             {
@@ -187,6 +210,7 @@ impl Dispatcher {
             Pending {
                 target: frame.target.clone(),
                 session_id: frame.session_id.to_string(),
+                pair: reply.pair.clone(),
                 cancel: cancel.clone(),
             },
         );
@@ -195,6 +219,7 @@ impl Dispatcher {
             frame,
             cancel,
             received: Instant::now(),
+            reply,
         };
         self.enqueue(key, Work::Command(job));
     }
@@ -222,9 +247,10 @@ impl Dispatcher {
                 match work {
                     Work::Command(job) => {
                         let id = job.frame.id;
+                        let outbox = job.reply.outbox.clone();
                         let outcome = execute(&inner, job, &recent).await;
                         inner.pending.lock().unwrap().remove(&id);
-                        if !inner.outbox.send(DeviceFrame::Result(outcome)) {
+                        if !outbox.send(DeviceFrame::Result(outcome)) {
                             tracing::warn!(
                                 "command {id} finished while Extend was unreachable; its result was dropped"
                             );
@@ -254,6 +280,10 @@ impl Dispatcher {
                                 "session {session_id} {what} didn't finish within {} s; it was stopped so the device can run its next work",
                                 limit.as_secs()
                             );
+                        }
+                        if !starting && !session_id.is_empty() {
+                            // Whatever the session's commands left behind goes with it.
+                            let _ = tokio::fs::remove_dir_all(session_work_dir(&inner.work_root, &session_id)).await;
                         }
                         recent.push_back(RecentHook {
                             session_id,
@@ -344,6 +374,37 @@ impl Dispatcher {
         done
     }
 
+    /// Ends the sessions of one pair (its Carbon revoked or removed it): `known` ones (this
+    /// computer's own session through it, the devices carried for it) and every session with a
+    /// command that came through it. Commands through other pairs go on.
+    pub fn close_pair(&self, pair: &DeviceId, known: &[(Option<DeviceId>, String)]) -> Vec<oneshot::Receiver<()>> {
+        let mut sessions: Vec<(Option<DeviceId>, String)> = known.to_vec();
+        for p in self.inner.pending.lock().unwrap().values() {
+            if p.pair.as_ref() == Some(pair) {
+                sessions.push((p.target.clone(), p.session_id.clone()));
+            }
+        }
+        let mut done = Vec::new();
+        let mut seen = Vec::new();
+        for (target, session_id) in sessions {
+            if seen.contains(&(target.clone(), session_id.clone())) {
+                continue;
+            }
+            if let Some(rx) = self.session_closed(target.as_ref(), &session_id) {
+                done.push(rx);
+            }
+            seen.push((target, session_id));
+        }
+        done
+    }
+
+    /// Tells a device's driver that no session is live on it (`session_ended` with an empty id), in
+    /// order after whatever that device's queue holds: the service had no session there when this
+    /// computer came back, so any session the driver still has open ended while it was away.
+    pub fn no_session_on(&self, target: &DeviceId) -> Option<oneshot::Receiver<()>> {
+        self.queue_lifecycle(Some(target), "", false)
+    }
+
     fn queue_lifecycle(
         &self,
         target: Option<&DeviceId>,
@@ -375,6 +436,11 @@ impl Dispatcher {
     pub fn in_flight(&self) -> usize {
         self.inner.pending.lock().unwrap().len()
     }
+}
+
+/// A session's scratch directory under the work root.
+fn session_work_dir(work_root: &Path, session_id: &str) -> PathBuf {
+    work_root.join(safe_file_name(session_id, "session"))
 }
 
 /// Checks the command before anything runs. The service checks too; this is the device's own guard.
@@ -454,6 +520,7 @@ async fn execute(inner: &Inner, job: Job, recent: &VecDeque<RecentHook>) -> Comm
         frame,
         cancel,
         received,
+        reply,
     } = job;
     let id = frame.id;
     if cancel.is_cancelled() {
@@ -485,7 +552,7 @@ async fn execute(inner: &Inner, job: Job, recent: &VecDeque<RecentHook>) -> Comm
         .saturating_sub(upload_reserve(total))
         .max(Duration::from_millis(500));
 
-    let workdir = inner.work_root.join(id.to_string());
+    let workdir = session_work_dir(&inner.work_root, frame.session_id.as_str()).join(id.to_string());
     let outcome = async {
         let saved = write_attachments(&workdir, &frame)
             .await
@@ -504,7 +571,7 @@ async fn execute(inner: &Inner, job: Job, recent: &VecDeque<RecentHook>) -> Comm
             cancel: cancel.clone(),
         };
         let output = run_with_deadline(driver.as_ref(), inv, run_budget, &cancel).await;
-        Ok::<_, CommandError>(finish(inner, &frame, output).await)
+        Ok::<_, CommandError>(finish(reply.uploader.as_ref(), &frame, output).await)
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&workdir).await;
@@ -613,7 +680,7 @@ async fn write_attachments(workdir: &Path, frame: &CommandFrame) -> Result<Vec<(
 }
 
 /// Uploads the driver's files with the command's upload ids, in order, then builds the result.
-async fn finish(inner: &Inner, frame: &CommandFrame, output: Output) -> CommandOutcome {
+async fn finish(uploader: &dyn Uploader, frame: &CommandFrame, output: Output) -> CommandOutcome {
     let Output {
         mut ok,
         output,
@@ -629,8 +696,7 @@ async fn finish(inner: &Inner, frame: &CommandFrame, output: Output) -> CommandO
             skipped.push(file.name.clone());
             continue;
         };
-        match inner
-            .uploader
+        match uploader
             .upload(*upload_id, &file.path, &file.name, &file.content_type)
             .await
         {
@@ -702,8 +768,11 @@ mod tests {
                 capabilities: vec![],
                 missing: vec![],
                 setup: Setup::complete(),
-                agent_device_version: None,
+                engine_version: None,
                 online: true,
+                awake: None,
+                sleep_state: None,
+                hardware_id: None,
             }
         }
         async fn run(&self, inv: Invocation<'_>) -> Output {
@@ -1149,9 +1218,14 @@ mod tests {
         h.dispatcher.submit(c);
         let r = next_result(&mut h.rx).await;
         let args: Vec<String> = serde_json::from_value(r.output).unwrap();
-        assert!(args[1].ends_with("/attachments/flow.ad"), "{args:?}");
         assert!(
-            args[2].starts_with("--steps-file=") && args[2].ends_with("/attachments/steps.json"),
+            Path::new(&args[1]).ends_with(Path::new("attachments").join("flow.ad")),
+            "{args:?}"
+        );
+        assert!(
+            args[2]
+                .strip_prefix("--steps-file=")
+                .is_some_and(|path| Path::new(path).ends_with(Path::new("attachments").join("steps.json"))),
             "{args:?}"
         );
         assert_eq!(args[3], "plain");
@@ -1314,6 +1388,63 @@ mod tests {
         assert!(at("end a3f polite") < at("cleanup a3f"));
         assert!(at("end b40 polite") < at("cleanup b40"));
         assert_eq!(h.dispatcher.in_flight(), 0);
+    }
+
+    #[tokio::test]
+    async fn each_pair_gets_its_own_answers_and_its_end_closes_only_its_sessions() {
+        let mut h = harness(false);
+        // Bob's pair: its own outbox and uploads.
+        let bob_outbox = Outbox::default();
+        let (tx, mut bob_rx) = mpsc::unbounded_channel();
+        bob_outbox.set(tx);
+        let bob_uploads = Arc::new(FakeUploader::default());
+        let bob = Reply {
+            pair: Some("0d44e1f2".parse().unwrap()),
+            outbox: bob_outbox,
+            uploader: bob_uploads.clone(),
+        };
+        let mut shot = cmd("b40", "screenshot", &["files", "1"], 30_000, 1);
+        shot.target = Some("00000001".parse().unwrap());
+        h.dispatcher.submit_to(shot, bob.clone());
+        let r = next_result(&mut bob_rx).await;
+        assert!(r.ok, "{r:?}");
+        assert_eq!(bob_uploads.calls.lock().unwrap().len(), 1);
+        assert!(
+            h.uploader.calls.lock().unwrap().is_empty(),
+            "uploaded with the other pair's credential"
+        );
+        // A command through alice's route (the default) is running when bob's pair ends: it
+        // goes on, and bob's is cancelled before its cleanup.
+        h.dispatcher.submit(cmd("a3f", "click", &["sleep", "300"], 30_000, 0));
+        let mut waiting = cmd("b41", "click", &["polite"], 60_000, 0);
+        waiting.target = Some("00000001".parse().unwrap());
+        h.dispatcher.submit_to(waiting, bob);
+        until_logged(&h.driver, "start b41 polite").await;
+        let done = h.dispatcher.close_pair(&"0d44e1f2".parse().unwrap(), &[]);
+        assert_eq!(done.len(), 1);
+        assert_eq!(next_result(&mut bob_rx).await.error.unwrap().code, "cancelled");
+        assert!(next_result(&mut h.rx).await.ok, "alice's command finished");
+    }
+
+    #[tokio::test]
+    async fn a_sessions_scratch_space_goes_after_its_cleanup() {
+        let mut h = harness(false);
+        h.dispatcher
+            .submit(cmd("a3f", "screenshot", &["files", "1"], 30_000, 0));
+        assert!(next_result(&mut h.rx).await.ok);
+        std::fs::create_dir_all(h.work.join("a3f").join("left")).unwrap();
+        let cleaned = h.dispatcher.session_closed(None, "a3f").expect("cleanup queued");
+        tokio::time::timeout(Duration::from_secs(5), cleaned)
+            .await
+            .unwrap()
+            .unwrap();
+        for _ in 0..100 {
+            if !h.work.join("a3f").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!h.work.join("a3f").exists());
     }
 
     #[test]

@@ -73,6 +73,45 @@ pub async fn create(
         )
         .hint("Download the latest Extend app from extend.teamofsilicons.com."));
     }
+    let created = insert_enrollment(
+        &state,
+        &world,
+        NewEnrollment {
+            os: input.os,
+            os_version: input.os_version.clone(),
+            model: input.model.clone(),
+            app_version: input.app_version.clone(),
+            engine_version: input.engine_version.clone(),
+            instance: None,
+            from_device_id: None,
+        },
+    )
+    .await?;
+    Ok(created_response(created))
+}
+
+pub fn created_response(e: EnrollmentCreated) -> Response {
+    created("enrollment", e)
+}
+
+/// An enrollment to insert: a first pairing, or ("Pair with another Carbon") one more pair of the
+/// physical device `instance`, started with the credential of its pair `from_device_id`.
+pub struct NewEnrollment {
+    pub os: DeviceOs,
+    pub os_version: Option<String>,
+    pub model: Option<String>,
+    pub app_version: String,
+    pub engine_version: Option<String>,
+    pub instance: Option<Uuid>,
+    pub from_device_id: Option<String>,
+}
+
+/// Inserts an enrollment in `world` with a fresh pairing code.
+pub async fn insert_enrollment(
+    state: &AppState,
+    world: &crate::db::World,
+    e: NewEnrollment,
+) -> AppResult<EnrollmentCreated> {
     let id = Uuid::now_v7();
     let secret = ids::new_secret(ids::ENROLLMENT_SECRET_PREFIX);
     let expires = OffsetDateTime::now_utc() + time::Duration::seconds(PAIRING_CODE_TTL_S);
@@ -81,38 +120,37 @@ pub async fn create(
         let res = sqlx::query(
             "INSERT INTO extend_global.enrollments
              (enrollment_id, secret_digest, os, os_version, model, app_version, agent_device_version, pairing_code, code_expires_at,
-              world_schema, environment_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+              world_schema, environment_id, instance_id, from_device_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(id)
         .bind(ids::secret_digest(&secret))
-        .bind(input.os.as_str())
-        .bind(&input.os_version)
-        .bind(&input.model)
-        .bind(&input.app_version)
-        .bind(&input.agent_device_version)
+        .bind(e.os.as_str())
+        .bind(&e.os_version)
+        .bind(&e.model)
+        .bind(&e.app_version)
+        .bind(&e.engine_version)
         .bind(code.as_str())
         .bind(expires)
         .bind(&world.schema)
         .bind(world.environment_id)
+        .bind(e.instance)
+        .bind(&e.from_device_id)
         .execute(&state.pool)
         .await;
         match res {
             Ok(_) => break,
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() && attempt < 7 => code = PairingCode::random(),
-            Err(e) => return Err(e.into()),
+            Err(sqlx::Error::Database(err)) if err.is_unique_violation() && attempt < 7 => code = PairingCode::random(),
+            Err(err) => return Err(err.into()),
         }
     }
-    Ok(created(
-        "enrollment",
-        EnrollmentCreated {
-            enrollment_id: id,
-            enrollment_secret: secret,
-            pairing_code: code.to_string(),
-            code_expires_at: expires,
-            rotates_every_s: PAIRING_CODE_TTL_S,
-        },
-    ))
+    Ok(EnrollmentCreated {
+        enrollment_id: id,
+        enrollment_secret: secret,
+        pairing_code: code.to_string(),
+        code_expires_at: expires,
+        rotates_every_s: PAIRING_CODE_TTL_S,
+    })
 }
 
 fn enrollment_secret(headers: &HeaderMap) -> AppResult<String> {

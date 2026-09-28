@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::HostedDevice;
 use crate::common::{
     self, Button, CLIENT_NAME, OpenTarget, find_app, guarded, invalid, load_json, not_ready, offline, save_json,
-    sleep_or_cancel, step, step_error, step_help, unsupported, unsupported_command, url_host,
+    sleep_or_cancel, step, step_failure, step_help, unsupported, unsupported_command, url_host,
 };
 use crate::ws::{self, Ws};
 use crate::{http, script};
@@ -170,10 +170,17 @@ pub(crate) struct DeviceInfo {
     pub name: Option<String>,
     pub model: Option<String>,
     pub os_version: Option<String>,
-    /// `false` when the TV reports `standby` (screen off, network kept alive).
-    pub powered_on: bool,
+    /// `PowerState`: `Some(true)` on, `Some(false)` in standby (screen off, network kept alive),
+    /// `None` when the TV doesn't say (older models).
+    pub power: Option<bool>,
     pub token_auth: bool,
+    /// The TV's own id (`duid`, else `id`, else its Wi-Fi MAC): the same whichever computer or
+    /// Carbon asks, so one TV carried for two Carbons is known as one device.
+    pub hardware_id: Option<String>,
 }
+
+/// Said when the power key is pressed on a TV in standby: Extend never turns a device on.
+pub(crate) const IN_STANDBY: &str = "The TV is in standby; only its Carbon can turn it on (extend device wake).";
 
 pub(crate) fn parse_device_info(v: &Value) -> DeviceInfo {
     let d = v.get("device").cloned().unwrap_or(Value::Null);
@@ -195,8 +202,12 @@ pub(crate) fn parse_device_info(v: &Value) -> DeviceInfo {
         name: s("name").or_else(|| v.get("name").and_then(Value::as_str).map(str::to_owned)),
         model: s("modelName").or_else(|| s("model")),
         os_version,
-        powered_on: s("PowerState").is_none_or(|p| p.eq_ignore_ascii_case("on")),
+        power: s("PowerState").map(|p| p.eq_ignore_ascii_case("on")),
         token_auth: s("TokenAuthSupport").is_some_and(|t| t == "true"),
+        hardware_id: s("duid")
+            .or_else(|| s("id"))
+            .or_else(|| v.get("id").and_then(Value::as_str).map(str::to_owned))
+            .or_else(|| s("wifiMac").map(|m| m.to_ascii_uppercase())),
     }
 }
 
@@ -513,6 +524,11 @@ impl Inner {
     }
 
     async fn press(&self, button: Button, hold: Option<Duration>, inv: &Invocation<'_>) -> Output {
+        // Power turns an on TV off; it never turns one on. In standby it is refused: the TV
+        // would come on, and only its Carbon wakes a device.
+        if button == Button::Power && self.device_info().await.is_ok_and(|i| i.power == Some(false)) {
+            return common::not_ready(IN_STANDBY);
+        }
         let key = if button == Button::PlayPause {
             if self.next_is_pause.fetch_xor(true, Ordering::SeqCst) {
                 "KEY_PAUSE"
@@ -683,28 +699,23 @@ impl Driver for SamsungDriver {
         let me = &self.inner;
         let full = DeviceOs::SamsungTv.full_capabilities();
         let info = me.device_info().await;
-        let online = matches!(&info, Ok(i) if i.powered_on);
+        // A TV in standby answers on the network: it is online, just not awake.
+        let online = info.is_ok();
+        let awake = info.as_ref().ok().and_then(|i| i.power);
         if let Ok(i) = &info {
             *me.info.lock().unwrap() = Some(i.clone());
         }
         let cached = me.info.lock().unwrap().clone().unwrap_or_default();
 
-        let reach_title = "The TV is on and on the same network as this computer";
+        let reach_title = "The TV is on the same network as this computer";
         let reach = match &info {
-            Ok(i) if i.powered_on => step("network", reach_title, StepStatus::Done),
-            Ok(_) => step_error(
+            Ok(_) => step("network", reach_title, StepStatus::Done),
+            Err(e) => step_failure(
                 "network",
                 reach_title,
                 StepStatus::NeedsCarbon,
-                Some("Turn the TV on."),
-                "The TV is in standby",
-            ),
-            Err(e) => step_error(
-                "network",
-                reach_title,
-                StepStatus::NeedsCarbon,
-                Some("Turn the TV on and connect it to the same Wi-Fi or network as this computer."),
-                e.clone(),
+                "The TV can't be reached. Turn it on and connect it to the same Wi-Fi or network as this computer.",
+                e,
             ),
         };
 
@@ -713,6 +724,14 @@ impl Driver for SamsungDriver {
             step("approve", approve_title, StepStatus::Done)
         } else if !online {
             step("approve", approve_title, StepStatus::Todo)
+        } else if awake == Some(false) {
+            // The prompt can't show in standby, and asking wouldn't turn it on.
+            step_help(
+                "approve",
+                approve_title,
+                StepStatus::NeedsCarbon,
+                "The TV is in standby. Turn it on with its remote, then choose Allow when it asks about \"Silicon Extend\".",
+            )
         } else {
             let state = me.pairing.lock().unwrap().clone();
             match state {
@@ -720,20 +739,24 @@ impl Driver for SamsungDriver {
                     // Retry quietly: a TV that remembers the denial answers at once without a prompt.
                     *me.pairing.lock().unwrap() = Pairing::Idle;
                     me.start_pairing();
-                    step_error(
+                    step_failure(
                         "approve",
                         approve_title,
                         StepStatus::Failed,
-                        Some(
-                            "On the TV open Settings › General › External Device Manager › Device Connection Manager › Device List and allow Silicon Extend.",
-                        ),
+                        "The TV turned Silicon Extend down. On the TV, open Settings › General › External Device Manager › Device Connection Manager › Device List, allow Silicon Extend, then tap Retry.",
                         m,
                     )
                 }
                 Pairing::Failed(m) => {
                     *me.pairing.lock().unwrap() = Pairing::Idle;
                     me.start_pairing();
-                    step_error("approve", approve_title, StepStatus::NeedsCarbon, None, m)
+                    step_failure(
+                        "approve",
+                        approve_title,
+                        StepStatus::NeedsCarbon,
+                        "Silicon Extend couldn't ask the TV to allow it. Keep the TV on and on the same network as this computer; it asks again shortly.",
+                        m,
+                    )
                 }
                 Pairing::Idle | Pairing::Waiting { .. } => {
                     me.start_pairing();
@@ -752,7 +775,7 @@ impl Driver for SamsungDriver {
             vec![]
         } else {
             let reason = if !online {
-                "The TV is off or can't be reached"
+                "The TV can't be reached"
             } else {
                 "Waiting for the connection to be approved on the TV"
             };
@@ -770,8 +793,11 @@ impl Driver for SamsungDriver {
             capabilities: if ready { full.to_vec() } else { vec![] },
             missing,
             setup: Setup::from_steps(vec![reach, approve]),
-            agent_device_version: None,
+            engine_version: None,
             online,
+            awake,
+            sleep_state: (awake == Some(false)).then_some(extend_protocol::model::SleepState::Standby),
+            hardware_id: cached.hardware_id,
         }
     }
 
@@ -822,6 +848,14 @@ impl Driver for SamsungDriver {
 
     async fn session_ended(&self, _session_id: &str) {
         *self.inner.last_app.lock().unwrap() = None;
+    }
+
+    /// Retry: a refused or failed approval asks the TV again at the probe that follows at once.
+    async fn retry_setup(&self, _step: Option<&str>) {
+        let mut p = self.inner.pairing.lock().unwrap();
+        if matches!(*p, Pairing::Denied(_) | Pairing::Failed(_)) {
+            *p = Pairing::Idle;
+        }
     }
 }
 
@@ -914,9 +948,17 @@ pub(crate) mod tests {
         let i = parse_device_info(&v);
         assert_eq!(i.model.as_deref(), Some("QN65Q80TAFXZA"));
         assert_eq!(i.os_version.as_deref(), Some("Tizen (remote API 2.0.25)"));
-        assert!(i.powered_on && i.token_auth);
-        let v = json!({"device":{"PowerState":"standby","modelName":"X"}});
-        assert!(!parse_device_info(&v).powered_on);
+        assert!(i.token_auth);
+        assert_eq!(i.power, Some(true));
+        let v = json!({"device":{"PowerState":"standby","modelName":"X","duid":"uuid:1234"}});
+        let standby = parse_device_info(&v);
+        assert_eq!(standby.power, Some(false));
+        assert_eq!(standby.hardware_id.as_deref(), Some("uuid:1234"));
+        // An older TV says nothing about its power: it counts as on, awake unknown.
+        let v = json!({"device":{"modelName":"X","wifiMac":"aa:bb:cc:dd:ee:ff"}});
+        let old = parse_device_info(&v);
+        assert!(old.power.is_none());
+        assert_eq!(old.hardware_id.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
     }
 
     // ───────────── Mock TV ─────────────
@@ -933,6 +975,8 @@ pub(crate) mod tests {
         pub socket_log: Arc<Mutex<Vec<Value>>>,
         pub rest_log: Arc<Mutex<Vec<String>>>,
         pub connect_urls: Arc<Mutex<Vec<String>>>,
+        /// The TV's `PowerState` ("on", "standby", or "" for none).
+        pub power: Arc<Mutex<String>>,
     }
 
     const TOKEN: &str = "46781234";
@@ -946,14 +990,16 @@ pub(crate) mod tests {
             socket_log: Arc::default(),
             rest_log: Arc::default(),
             connect_urls: Arc::default(),
+            power: Arc::new(Mutex::new("on".into())),
         };
-        let rest_log = tv.rest_log.clone();
+        let (rest_log, power) = (tv.rest_log.clone(), tv.power.clone());
         tokio::spawn(async move {
             loop {
                 let Ok((mut s, _)) = rest.accept().await else {
                     return;
                 };
                 let log = rest_log.clone();
+                let power = power.lock().unwrap().clone();
                 tokio::spawn(async move {
                     let mut p = Parser::default();
                     let Ok(req) = read_message(&mut s, &mut p).await else {
@@ -966,13 +1012,24 @@ pub(crate) mod tests {
                     );
                     log.lock().unwrap().push(format!("{method} {path}"));
                     let (status, body) = match (method.as_str(), path.as_str()) {
-                        ("GET", "/api/v2/") => (
+                        ("GET", "/api/v2/") => {
+                            let mut device = json!({"OS":"Tizen","TokenAuthSupport":"true","firmwareVersion":"Unknown","modelName":"QN65Q80TAFXZA","name":"[TV] Living Room","duid":"uuid:0f3c-mock"});
+                            if !power.is_empty() {
+                                device["PowerState"] = power.clone().into();
+                            }
+                            (200, json!({"device":device,"version":"2.0.25"}).to_string())
+                        }
+                        ("GET", "/api/v2/applications/111299001912") => (
                             200,
-                            json!({"device":{"OS":"Tizen","PowerState":"on","TokenAuthSupport":"true","firmwareVersion":"Unknown","modelName":"QN65Q80TAFXZA","name":"[TV] Living Room"},"version":"2.0.25"}).to_string(),
+                            json!({"id":"111299001912","name":"YouTube","running":true,"visible":true}).to_string(),
                         ),
-                        ("GET", "/api/v2/applications/111299001912") => (200, json!({"id":"111299001912","name":"YouTube","running":true,"visible":true}).to_string()),
-                        ("GET", p) if p.starts_with("/api/v2/applications/") => (200, json!({"running":false,"visible":false}).to_string()),
-                        ("POST" | "DELETE", "/api/v2/applications/111299001912" | "/api/v2/applications/3201907018807") => (200, "true".into()),
+                        ("GET", p) if p.starts_with("/api/v2/applications/") => {
+                            (200, json!({"running":false,"visible":false}).to_string())
+                        }
+                        (
+                            "POST" | "DELETE",
+                            "/api/v2/applications/111299001912" | "/api/v2/applications/3201907018807",
+                        ) => (200, "true".into()),
                         _ => (404, "{}".into()),
                     };
                     let _ = s
@@ -1220,6 +1277,52 @@ pub(crate) mod tests {
                 .skip(1)
                 .all(|u| u.contains(&format!("token={TOKEN}")))
         );
+    }
+
+    #[tokio::test]
+    async fn standby_is_online_not_awake_and_power_never_turns_it_on() {
+        let tv = mock_tv(Mode::Allow).await;
+        let dir = tempfile::tempdir().unwrap();
+        common::save_json(dir.path(), STATE_FILE, &json!({"token": TOKEN, "approved": true})).unwrap();
+        let d = driver(&tv, dir.path());
+        let w = dir.path();
+
+        // On: awake, and it says which TV it is.
+        let p = d.probe().await;
+        assert!(p.online);
+        assert_eq!((p.awake, p.sleep_state), (Some(true), None));
+        assert_eq!(p.hardware_id.as_deref(), Some("uuid:0f3c-mock"));
+
+        // Standby: still online and usable as far as Extend is concerned (nothing is withheld),
+        // not awake, and the power key is refused.
+        *tv.power.lock().unwrap() = "standby".into();
+        let p = d.probe().await;
+        assert!(p.online);
+        assert_eq!(
+            (p.awake, p.sleep_state),
+            (Some(false), Some(extend_protocol::model::SleepState::Standby))
+        );
+        assert_eq!(p.capabilities, DeviceOs::SamsungTv.full_capabilities().to_vec());
+        let out = d.run(inv("tv-remote", &args(&["press", "power"]), w, &[])).await;
+        assert!(!out.ok);
+        assert_eq!(out.error.unwrap().message, IN_STANDBY);
+        let sent_power = || {
+            tv.socket_log
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|v| v["params"]["DataOfCmd"] == "KEY_POWER")
+        };
+        assert!(!sent_power(), "KEY_POWER went to a TV in standby");
+
+        // No power state (an older TV): awake can't be told; power goes as the TV's own key.
+        *tv.power.lock().unwrap() = String::new();
+        let p = d.probe().await;
+        assert_eq!((p.awake, p.sleep_state), (None, None));
+        *tv.power.lock().unwrap() = "on".into();
+        let out = d.run(inv("tv-remote", &args(&["press", "power"]), w, &[])).await;
+        assert!(out.ok, "{out:?}");
+        wait_until(sent_power).await;
     }
 
     #[tokio::test]

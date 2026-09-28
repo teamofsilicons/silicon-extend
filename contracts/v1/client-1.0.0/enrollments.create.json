@@ -1,0 +1,45 @@
+{
+  "api_version": 1,
+  "call": "Client::enroll",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "enrollments.create",
+  "request": {
+    "body": {
+      "data": {
+        "agent_device_version": "0.13.0",
+        "app_version": "1.0.0",
+        "model": "Pixel 9",
+        "os": "android",
+        "os_version": "15"
+      },
+      "type": "enrollment"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/enrollments"
+  },
+  "response": {
+    "non_null": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "required": [
+      "/code_expires_at",
+      "/enrollment_id",
+      "/enrollment_secret",
+      "/pairing_code",
+      "/rotates_every_s"
+    ],
+    "status": "2xx",
+    "type": "enrollment"
+  }
+}

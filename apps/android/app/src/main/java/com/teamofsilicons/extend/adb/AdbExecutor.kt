@@ -465,18 +465,19 @@ class AdbExecutor(
             val output = e is RecordingMuxer.OutputFailure
             if (output && ++capture.outputFailures >= 3) {
                 withContext(NonCancellable) { runCatching { withTimeout(12000) { cleanup(capture) } } }
-                throw Discarded("The recording could not be written after three attempts (${e.message}), so it was discarded; another record stop can't recover it. Run record start to record again.")
+                throw Discarded("The recording could not be written after three attempts (${e.message?.trimEnd('.')}), so it was discarded; another record stop can't recover it. Run record start to record again.")
             }
             throw CommandFailure(
                 CommandFailure.ACTION_FAILED,
-                "Could not save the Android recording: ${e.message ?: e.javaClass.simpleName}. The recording is kept on the device; run record stop again.",
+                "Could not save the Android recording: ${(e.message ?: e.javaClass.simpleName).trimEnd('.')}. The recording is kept on the device; run record stop again.",
             )
         }
         if (writers.isEmpty()) {
             withContext(NonCancellable) { runCatching { withTimeout(12000) { cleanup(capture) } } }
             dir.deleteRecursively()
+            // Each note is a sentence of its own, ending in a full stop: no second one after them.
             throw Discarded(
-                "Android produced no usable recording${if (notes.isEmpty()) "" else ": " + notes.joinToString(" ")}. " +
+                "Android produced no usable recording${if (notes.isEmpty()) "." else ": " + notes.joinToString(" ").trimEnd('.') + "."} " +
                     "It was discarded, and another record stop can't recover it. Run record start to record again.",
             )
         }
@@ -505,7 +506,7 @@ class AdbExecutor(
             // Package identity was checked against the attachment before reaching here.
             var removed = false
             if (fresh && app != null) {
-                // agent-device's reinstall: remove the app and its data, then install.
+                // The device engine's reinstall: remove the app and its data, then install.
                 val uninstall = adb.shell(AdbWire.argv(listOf("pm", "uninstall", app)), check = false)
                 removed = uninstall.text.lineSequence().any { it.trim() == "Success" }
             }

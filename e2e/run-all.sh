@@ -33,10 +33,19 @@ fi
 
 if command -v pnpm >/dev/null; then
   run web-unit bash -c "cd web && pnpm test"
+  run desktop-banner-browser node --test apps/desktop/banner-ui.e2e.mjs
   run web-e2e-mock bash -c "cd web && pnpm test:e2e"
   run web-build bash -c "cd web && pnpm build"
 else
   skip web "pnpm not installed"
+fi
+
+if command -v pnpm >/dev/null && command -v node >/dev/null; then
+  # The device engine's whole unit suite, then the packaging checks against its fresh dist.
+  run engine-unit bash -c "cd vendor/extend-engine && pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build"
+  run desktop-packaging node --test apps/desktop/*.test.mjs
+else
+  skip engine "pnpm or node not installed"
 fi
 
 if [ -x apps/android/gradlew ]; then

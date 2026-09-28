@@ -1,6 +1,5 @@
 package com.teamofsilicons.extend
 
-import android.content.Intent
 import com.teamofsilicons.extend.adb.DebuggingAfterRestart
 import com.teamofsilicons.extend.adb.DebuggingAfterRestart.Status
 import com.teamofsilicons.extend.core.SetupItem
@@ -45,7 +44,7 @@ class DebuggingAfterRestartTest {
     )
 
     @Test fun theStepNeedsTheCarbonInHelloButTheDeviceStaysReady() {
-        val step = SetupReport.restartStep(Status.OFF, tv = false, lastError = null) { Intent() }!!
+        val step = SetupReport.restartStep(Status.OFF, tv = false, lastError = null, open = null)!!
         assertEquals("wireless_debugging", step.step.key)
         assertEquals("needs_carbon", step.step.status)
         assertEquals("Open Wireless debugging", step.actionLabel)
@@ -73,21 +72,32 @@ class DebuggingAfterRestartTest {
 
     @Test fun aRequiredStepStillHoldsSetupBack() {
         // The after-restart step is optional, but the required steps keep deciding the state.
-        val step = SetupReport.restartStep(Status.OFF, tv = false, lastError = null) { Intent() }!!
+        val step = SetupReport.restartStep(Status.OFF, tv = false, lastError = null, open = null)!!
         val a11yOff = SetupItem(SetupStep("accessibility", "Allow Silicon Extend to control the screen", "needs_carbon"), true, null, null)
         val report = SetupReport(listOf(a11yOff, required[1], step), emptyList(), emptyList(), Status.OFF)
         assertEquals("needs_carbon", report.setup.state)
     }
 
-    @Test fun reconnectingIsInProgressWithTheLastError() {
-        val step = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = "Could not find this device's debugging port.") { Intent() }!!
-        assertEquals("in_progress", step.step.status)
-        assertEquals("Last try: Could not find this device's debugging port.", step.step.error)
+    @Test fun reconnectingIsInProgressThenFailedWithAPlainError() {
+        val trying = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = null, open = null)!!
+        assertEquals("in_progress", trying.step.status)
+        assertNull(trying.step.error)
+        val step = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = "Could not find this device's debugging port.", open = null)!!
+        assertEquals("failed", step.step.status)
+        // What is wrong and what to do; the technical reason stays in the log and on the card.
+        assertEquals(
+            "Extend couldn't reconnect to wireless debugging on this phone. Check that it is on Wi-Fi, then tap Retry, or pair Android debugging again in the Extend app.",
+            step.step.error,
+        )
+        assertFalse(step.step.error!!.contains("port"))
         assertFalse(step.required)
         val report = SetupReport(required + step, emptyList(), emptyList(), Status.RECONNECTING)
-        assertEquals("complete", report.setup.state)
+        assertEquals("an optional step never holds setup back", "complete", report.setup.state)
         assertFalse("reconnecting needs nothing from the Carbon", report.optionalNeedsCarbon)
-        val tv = SetupReport.restartStep(Status.OFF, tv = true, lastError = null) { Intent() }!!
+        assertEquals(listOf("wireless_debugging"), report.failed.map { it.key })
+        val retrying = SetupReport.restartStep(Status.RECONNECTING, tv = false, lastError = "x", open = null, retrying = true)!!
+        assertEquals("a retry shows as in progress", "in_progress", retrying.step.status)
+        val tv = SetupReport.restartStep(Status.OFF, tv = true, lastError = null, open = null)!!
         assertEquals("network_debugging", tv.step.key)
         assertTrue(tv.step.help!!.startsWith("This TV restarted"))
     }
@@ -96,7 +106,7 @@ class DebuggingAfterRestartTest {
         // The step tells the Carbon they can stop using debugging with this button, so the card
         // must offer it while debugging is paired but not connected (it used to appear only once
         // connected).
-        val step = SetupReport.restartStep(Status.OFF, tv = false, lastError = null) { Intent() }!!
+        val step = SetupReport.restartStep(Status.OFF, tv = false, lastError = null, open = null)!!
         assertTrue(step.step.help!!, step.step.help!!.contains("tap ${DebuggingCardCopy.DISCONNECT} in the Extend app"))
         assertTrue(DebuggingCardCopy.offersDisconnect(connected = false, enabled = true))
         assertTrue(DebuggingCardCopy.offersDisconnect(connected = true, enabled = true))
@@ -111,7 +121,7 @@ class DebuggingAfterRestartTest {
     }
 
     @Test fun withoutARestartTheStepStaysOptional() {
-        assertNull(SetupReport.restartStep(Status.NONE, tv = false, lastError = null) { Intent() })
+        assertNull(SetupReport.restartStep(Status.NONE, tv = false, lastError = null, open = null))
         val optional = SetupItem(SetupStep("wireless_debugging", "Turn on wireless debugging", "todo"), false, null, null)
         assertEquals("complete", SetupReport(required + optional, emptyList(), emptyList()).setup.state)
     }

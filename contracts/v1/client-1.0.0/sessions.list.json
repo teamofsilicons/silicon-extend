@@ -1,0 +1,76 @@
+{
+  "api_version": 1,
+  "call": "Authed::sessions",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "operation": "sessions.list",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/sessions?device_id={device_id}&state=active&limit=20"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/command_count",
+      "/items/*/device/device_id",
+      "/items/*/device/in_use/paused",
+      "/items/*/device/in_use/session_id",
+      "/items/*/device/in_use/silicon_id",
+      "/items/*/device/in_use/since",
+      "/items/*/device/kind",
+      "/items/*/device/missing/*/capability",
+      "/items/*/device/missing/*/reason",
+      "/items/*/device/name",
+      "/items/*/device/online",
+      "/items/*/device/os",
+      "/items/*/device/owner",
+      "/items/*/device/owner/id",
+      "/items/*/device/owner/type",
+      "/items/*/device/state",
+      "/items/*/device/visibility",
+      "/items/*/device_id",
+      "/items/*/session_id",
+      "/items/*/silicon_id",
+      "/items/*/started_at",
+      "/items/*/state"
+    ],
+    "required": [
+      "/items",
+      "/items/*/device/device_id",
+      "/items/*/device/in_use/session_id",
+      "/items/*/device/in_use/silicon_id",
+      "/items/*/device/in_use/since",
+      "/items/*/device/kind",
+      "/items/*/device/missing/*/capability",
+      "/items/*/device/missing/*/reason",
+      "/items/*/device/name",
+      "/items/*/device/online",
+      "/items/*/device/os",
+      "/items/*/device/owner",
+      "/items/*/device/owner/id",
+      "/items/*/device/owner/type",
+      "/items/*/device/state",
+      "/items/*/device/visibility",
+      "/items/*/device_id",
+      "/items/*/ended_at",
+      "/items/*/idle_ends_at",
+      "/items/*/last_command_at",
+      "/items/*/session_id",
+      "/items/*/silicon_id",
+      "/items/*/started_at",
+      "/items/*/state"
+    ],
+    "status": "2xx",
+    "type": "sessions"
+  }
+}

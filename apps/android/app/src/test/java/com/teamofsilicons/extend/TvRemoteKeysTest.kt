@@ -45,9 +45,15 @@ class TvRemoteKeysTest {
         // Android 12 TV: only Android debugging can press the D-pad.
         assertNull(TvRemoteKeys.missingReason(dpadSupported = false, a11yConnected = true, adbConnected = true, a11yReason = a11y, androidRelease = "12"))
         assertEquals(
-            "Remote buttons on this TV (Android 12) need Android debugging: turn on network debugging in Developer options, then connect Android debugging in the Extend app's setup.",
+            "Remote buttons on this TV (Android 12) need Android debugging: accessibility can press the D-pad only from Android 13. " +
+                "Turn on network debugging (Settings › Developer options › Network debugging › On), then connect Android debugging in the Extend app's setup. " +
+                "Until then the back and home commands work, and open starts apps.",
             TvRemoteKeys.missingReason(false, true, false, a11y, "12"),
         )
+        // Android 9 Fire TV without accessibility: where its switch is, and nothing claimed to work.
+        val fire9 = TvRemoteKeys.missingReason(false, false, false, a11y, "9", "Settings › My Fire TV › Developer options › ADB debugging › On")!!
+        assertTrue(fire9, fire9.contains("(Settings › My Fire TV › Developer options › ADB debugging › On)"))
+        assertTrue(fire9, !fire9.contains("back and home"))
         // Android 13+: accessibility or Android debugging.
         assertNull(TvRemoteKeys.missingReason(true, true, false, a11y, "14"))
         assertNull(TvRemoteKeys.missingReason(true, false, true, a11y, "14"))

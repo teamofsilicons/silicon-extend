@@ -2,18 +2,25 @@
  * The "Add a device" wizard as a pure state machine, so every transition is testable without a
  * browser. The page renders `state.step` and turns clicks and API results into events.
  *
- * Devices with an Extend app:   kind → guide → code → name → setup → access → done
- * Devices through a computer:  kind → guide → host → name → setup → access → done
+ * Devices with an Extend app:   kind → guide → code → name → banner → setup → access → done
+ * Devices through a computer:  kind → guide → host → name → banner → setup → access → done
  *
  * The device is created when the name is submitted (the pairing endpoint needs code and name
- * together; attaching needs host and name). From then on there is no going back past `setup`:
- * the device exists, and leaving the wizard leaves it paired.
+ * together; attaching needs host and name). From then on there is no going back past `banner`:
+ * the device exists, and leaving the wizard leaves it paired. Since 1.1 there is no visibility
+ * choice (a device is only ever visible to the Carbons who paired it), and access is given after
+ * the claim, per Team.
+ *
+ * `banner` asks whether the device shows that a Silicon is using it (UNDERSTANDING, "Add a device"
+ * step 5). Neither the claim nor the attach carries it, so the choice is saved with a PATCH of the
+ * device just created. The switch starts from the device's own value: on for a new device, and
+ * whatever another Carbon chose for a device they paired first, since it is one setting per device.
  */
 import { deviceKind, type DeviceKind, type DeviceKindId } from "../config";
-import type { Device, Visibility } from "./types";
+import type { Device } from "./types";
 import { normalizePairingCode } from "./pairing";
 
-export type Step = "kind" | "guide" | "code" | "host" | "name" | "setup" | "access" | "done";
+export type Step = "kind" | "guide" | "code" | "host" | "name" | "banner" | "setup" | "access" | "done";
 
 export interface WizardError {
   code: string;
@@ -27,7 +34,6 @@ export interface WizardState {
   code: string;
   hostId: string | null;
   name: string;
-  visibility: Visibility;
   ttlDays: number;
   /** Set once Extend created the device. */
   device: Device | null;
@@ -37,6 +43,10 @@ export interface WizardState {
   /** Silicons given access in the last step. */
   granted: string[];
   setupComplete: boolean;
+  /** The banner step's switch: whether the device shows that a Silicon is using it. */
+  banner: boolean;
+  /** True while the banner choice is being saved. */
+  savingBanner: boolean;
 }
 
 export type WizardEvent =
@@ -46,11 +56,13 @@ export type WizardEvent =
   | { type: "set_code"; code: string }
   | { type: "set_host"; hostId: string }
   | { type: "set_name"; name: string }
-  | { type: "set_visibility"; visibility: Visibility }
   | { type: "set_ttl"; days: number }
   | { type: "submit" }
   | { type: "created"; device: Device }
   | { type: "failed"; error: WizardError }
+  | { type: "set_banner"; shown: boolean }
+  | { type: "save_banner" }
+  | { type: "banner_saved"; device: Device }
   | { type: "setup_complete" }
   | { type: "access_done"; granted: string[] }
   | { type: "skip_access" }
@@ -63,19 +75,30 @@ export function initialState(kind: DeviceKindId | null = null): WizardState {
     code: "",
     hostId: null,
     name: "",
-    visibility: "team",
     ttlDays: 14,
     device: null,
     submitting: false,
     error: null,
     granted: [],
     setupComplete: false,
+    banner: true,
+    savingBanner: false,
   };
+}
+
+/** Whether a device shows that a Silicon is using it: anything but "hidden" (absent means shown). */
+export function indicatorShown(device: Pick<Device, "in_use_indicator"> | null | undefined): boolean {
+  return device?.in_use_indicator !== "hidden";
+}
+
+/** Whether the banner step has a change to save: the switch differs from the device's own value. */
+export function bannerChanged(state: WizardState): boolean {
+  return !!state.device && state.banner !== indicatorShown(state.device);
 }
 
 export function stepsFor(kind: DeviceKind | undefined): Step[] {
   const pick: Step = kind?.via === "host" ? "host" : "code";
-  return ["kind", "guide", pick, "name", "setup", "access", "done"];
+  return ["kind", "guide", pick, "name", "banner", "setup", "access", "done"];
 }
 
 export function nameProblem(name: string): string | null {
@@ -100,6 +123,8 @@ export function canAdvance(state: WizardState): boolean {
       return !!state.hostId;
     case "name":
       return !state.submitting && !nameProblem(state.name) && state.ttlDays >= 1 && state.ttlDays <= 30;
+    case "banner":
+      return !!state.device && !state.savingBanner;
     case "setup":
       return !!state.device;
     case "access":
@@ -129,12 +154,12 @@ export function reduce(state: WizardState, event: WizardEvent): WizardState {
       return { ...state, hostId: event.hostId, error: null };
     case "set_name":
       return { ...state, name: event.name, error: null };
-    case "set_visibility":
-      return { ...state, visibility: event.visibility };
     case "set_ttl":
       return { ...state, ttlDays: Math.min(30, Math.max(1, Math.round(event.days))) };
     case "next":
       if (!canAdvance(state) || state.step === "name") return state;
+      // Going on from the banner step without saving leaves the device's own value as it is.
+      if (state.step === "banner") return { ...state, step: "setup", error: null };
       if (state.step === "setup") return { ...state, step: "access", error: null };
       if (state.step === "access") return { ...state, step: "done" };
       return { ...state, step: order[index + 1] ?? state.step, error: null };
@@ -145,9 +170,25 @@ export function reduce(state: WizardState, event: WizardEvent): WizardState {
       if (state.step !== "name" || !canAdvance(state)) return state;
       return { ...state, submitting: true, error: null };
     case "created":
-      return { ...state, submitting: false, device: event.device, step: "setup", error: null, setupComplete: event.device.state === "ready" };
+      return {
+        ...state,
+        submitting: false,
+        device: event.device,
+        step: "banner",
+        error: null,
+        setupComplete: event.device.state === "ready",
+        banner: indicatorShown(event.device),
+      };
+    case "set_banner":
+      return state.step === "banner" && !state.savingBanner ? { ...state, banner: event.shown, error: null } : state;
+    case "save_banner":
+      if (state.step !== "banner" || !canAdvance(state) || !bannerChanged(state)) return state;
+      return { ...state, savingBanner: true, error: null };
+    case "banner_saved":
+      // The PATCH answers with the whole device; keep what the claim said about its setup.
+      return { ...state, savingBanner: false, device: { ...state.device!, ...event.device }, step: state.step === "banner" ? "setup" : state.step, error: null };
     case "failed": {
-      const next: WizardState = { ...state, submitting: false, error: event.error };
+      const next: WizardState = { ...state, submitting: false, savingBanner: false, error: event.error };
       if (state.step === "name" && CODE_ERRORS.has(event.error.code)) return { ...next, step: "code" };
       if (state.step === "name" && HOST_ERRORS.has(event.error.code) && kind?.via === "host") return { ...next, step: "host" };
       return next;
@@ -168,6 +209,7 @@ export const STEP_TITLE: Record<Step, string> = {
   code: "Pairing code",
   host: "Host computer",
   name: "Name",
+  banner: "Banner",
   setup: "Device setup",
   access: "Silicons",
   done: "Done",

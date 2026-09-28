@@ -1255,21 +1255,27 @@ dependencies = [
 
 [[package]]
 name = "extend-agent"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "block2",
  "bytes",
  "clap",
+ "dbus",
  "extend-driver",
  "extend-hosted",
  "futures",
  "gethostname",
+ "hmac 0.12.1",
  "http",
  "keyring",
  "libc",
+ "objc2",
+ "objc2-foundation",
+ "objc2-user-notifications",
  "os_info",
  "png",
  "rand 0.9.5",
@@ -1296,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "extend-driver"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "serde_json",
@@ -1307,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "extend-hosted"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1339,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "extend-service"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3123,6 +3129,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.13.2",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]
@@ -4187,7 +4195,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4202,7 +4210,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-client"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "reqwest",
  "serde",
@@ -4218,7 +4226,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-protocol"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.9.5",

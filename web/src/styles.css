@@ -1606,6 +1606,13 @@ input[type="checkbox"] {
   width: 18px;
   height: 18px;
 }
+/* One setting inside a card (its switch, what it means, its own error), spaced like the card's rows. */
+.setting-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
 .segmented {
   display: inline-flex;
   align-self: flex-start;
@@ -3764,4 +3771,208 @@ tr:last-child td {
   .step-progress-bar span.current {
     background: Highlight;
   }
+}
+
+/* 1.1: Retry on a failed setup step (contract A). */
+.step-retry {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.step-retrying {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--blue-deep);
+}
+.access-team {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.access-team select {
+  width: auto;
+  min-width: 140px;
+}
+.access-team-only {
+  font: 500 13px var(--mono);
+}
+
+/* 1.1: Teams, several Carbons, waking and Ting. Every colour is an existing token, so dark mode follows. */
+.team-chip {
+  display: inline-flex;
+  align-items: center;
+  font: 10.5px/1.4 var(--mono);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-soft);
+  background: var(--surface);
+  white-space: nowrap;
+  vertical-align: 1px;
+  margin-left: 6px;
+}
+.actor .team-chip,
+.grant-team-head .team-chip {
+  margin-left: 0;
+}
+.awake {
+  white-space: nowrap;
+}
+.awake.asleep {
+  color: var(--amber);
+}
+.awake.unknown {
+  color: var(--text-soft);
+}
+.shared-note {
+  border-color: var(--blue-edge);
+  background: var(--blue-wash);
+}
+.shared-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shared-head svg {
+  color: var(--blue);
+  flex-shrink: 0;
+}
+.grant-team {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.grant-team + .grant-team {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.grant-team-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sign-in-marker {
+  color: var(--amber);
+}
+.wake-banner {
+  border-color: var(--blue-edge);
+}
+.wake-eyebrow,
+.ting-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--blue-deep);
+}
+.wake-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wake-request {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.wake-request:last-child {
+  border-bottom: 0;
+}
+.wake-request strong {
+  font: 500 12.5px var(--mono);
+}
+.wake-request blockquote {
+  margin: 8px 0 6px;
+  padding: 8px 14px;
+  border-left: 3px solid var(--blue);
+  background: var(--surface);
+  border-radius: 0 6px 6px 0;
+  font: 400 16px/1.55 var(--serif);
+}
+.wake-row-actions,
+.wake-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.wake-row-actions {
+  margin-top: 4px;
+}
+.ting-banner {
+  border-color: var(--line-strong);
+}
+.ting-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.ting-commands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ting-commands li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ting-commands code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.request-group + .request-group {
+  margin-top: 10px;
+}
+.request-group-title {
+  font: 11px/1.5 var(--mono);
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  margin: 4px 0 2px;
+}
+.device-row .row-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.device-row .row-badges .badge {
+  margin-left: 0;
+}
+.in-use.other {
+  color: var(--text-soft);
+}
+.ting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.ting-row:last-child {
+  border-bottom: 0;
+}
+.ting-row-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ting-row-head .badge {
+  margin-left: 0;
+}
+.ting-row-head .button {
+  margin-left: auto;
+}
+.sign-out-note {
+  font-size: 13px;
 }

@@ -23,6 +23,34 @@ code 4503 (§7), readiness, the lifecycle rules and the clean fence (§8), webho
 versioning as built (§10), section 13, and the open questions. [Open questions](#open-questions)
 now starts with the decisions a Carbon still has to make.
 
+**1.1.0 draft, 2026-09-27, for the Carbon's approval.** It follows `UNDERSTANDING.md` as the Carbon
+edited it that day (devices belong to the Carbons who paired them, several Carbons per device, waking
+a device, the device engine) and the Carbon's four decisions of the same day:
+
+1. A Carbon logging out of Extend (website or CLI) ends the running sessions of the Silicons that
+   Carbon gave access to, and only that Carbon's side. A Silicon's logout ends its own (§9).
+2. The Carbon a request is routed to sees the requesting Silicon's id and reason. Its Ting goes at
+   once from the asking Silicon when the two share a Team, else from the recipient's own login (§5).
+3. On a computer several Carbons paired, only Silicons given access by the Carbon who installed
+   Extend on it (its first pair) get the terminal; the others get the screen, keyboard and apps
+   ([Shared computers](#9a-shared-computers-11)).
+4. Ting setup stays visible and actionable. The original design assumed per-Team types and automatic
+   OBO registration where authorized. Verification of Ting 0.1.9 corrected that dependency premise:
+   types resolve per app and context across delivery Teams, and the published OBO catalog has no
+   `types.register`. The supported path is the app-owning Team's manager CLI, with explicit guidance
+   and persistent retry/error state (C2). This is a contract correction, not a new registration API.
+
+It also adds setup retry and plain-language setup errors (§4), and calls the device engine Silicon
+Extend's everywhere a Carbon or Silicon can see it: names, paths, settings and helper apps (§2, §7). Sections marked **1.1** describe the
+design being built; §13 lists where the build differs once it lands. API v1 stays additive
+(`api.yaml`), and 1.0 apps, CLI, client and website keep working.
+
+**Reconciled review copy, 2026-09-28.** This copy proposes the completed 1.1 implementation
+updates without changing the protected original. The API/CLI copies and patch beside it cover the
+banner preference, stored display media, Android TV element clicks, first iOS screenshot attachment,
+Ting's actual catalog scope and schema version 5. Historical 1.0 open questions below are retained
+for context; they are not a fresh signing, authentication or publication approval request.
+
 ---
 
 ## 1. Identifiers and values
@@ -37,14 +65,18 @@ means one isolated data plane: production, or one Honeycomb test environment.
 | `pairing_code` | `4F9C2A` | `^[0-9A-F]{6}$`, 6 hexadecimal characters. Shown uppercase; accepted in any case (`4f9c2a` is the same code). | Valid for 300 s, then rotated. Works once. One live code per enrollment. Unique among live codes across **all** worlds. As built, a code pairs only into the world its enrollment was started in (§4). |
 | `enrollment_id` | `01926f3a-5c1e-7b2d-9a40-3e5f8c7d1b22` | UUIDv7 | One per unpaired app install. Ends when the device pairs or the app discards it. |
 | `enrollment_secret` | `ees_Q2hh…` (47 chars) | `^ees_[A-Za-z0-9_-]{43}$`, 32 random bytes base64url | Held only by the unpaired app. Proves it owns the enrollment. Stored hashed (SHA-256). |
-| `device_id` | `7c1e09ab` | `^[0-9a-f]{8}$`, 8 lowercase hexadecimal characters, random | Unique within its world. Never reused, even after removal. |
-| `device_credential` | `edc_x9Lk…` (47 chars) | `^edc_[A-Za-z0-9_-]{43}$`, 32 random bytes base64url | Issued once when pairing completes. Valid until the pair ends. Stored hashed (SHA-256). On the device it lives in the OS secret store (Keychain, Android Keystore, DPAPI, libsecret). |
+| `device_id` | `7c1e09ab` | `^[0-9a-f]{8}$`, 8 lowercase hexadecimal characters, random | Unique within its world. Never reused, even after removal. 1.1: one per **pair** (one Carbon's pairing of a device), so a device two Carbons paired has two. |
+| `instance_id` (1.1) | UUID | UUID | One per physical device, made by the service at its first pairing. Every pair of the device shares it. The app learns it from `GET /api/v1/device`; it never asserts one. |
+| `device_credential` | `edc_x9Lk…` (47 chars) | `^edc_[A-Za-z0-9_-]{43}$`, 32 random bytes base64url | Issued once when pairing completes, one per pair. Valid until the pair ends; 1.1: on a computer several Carbons paired, replaced at the end of every session (the old one works until the app confirms). Stored hashed (SHA-256). On the device it lives in the OS secret store (Keychain, Android Keystore, DPAPI, libsecret). |
 | `session_id` | `a3f` | `^[0-9a-f]{3,}$`, lowercase hexadecimal, 3 characters to start | Unique within its world and **never reused**. Allocation picks at random among the unused ids of the shortest length that still has any left. When all 4,096 three-character ids are used, new ids have 4 characters (65,536), then 5, and so on. |
 | `command_id` | UUIDv7 | UUIDv7 | One per command sent into a session. Also the activity-log entry id for that command. |
 | `request_id` | UUIDv7 | UUIDv7 | One per Silicon-to-Silicon request. |
 | `activity_id` | UUIDv7 | UUIDv7 | One per activity-log entry that isn't a command (session started, access granted, pair revoked…). |
 | `upload_id` | UUIDv7 | UUIDv7 | One per file a device uploads to Extend on its way to Briefcase. Single use. |
 | `takeover_id` | UUIDv7 | UUIDv7 | One per takeover hold. |
+| `wake_id` (1.1) | UUID | UUID | One per wake request: at most one open per physical device, Team and Silicon. |
+| Side tag (1.1) | `9f2c4b1a0d3e5f67` | `^[0-9a-f]{16}$`: the first 16 hex characters of HMAC-SHA256(salt, owner id + "\n" + Team) | Names a side (a Team plus the Carbon who gave access) on one device without naming either. The salt is kept per physical device by the service and never leaves it; a computer and the devices it carries share one. |
+| `hardware_key` (1.1) | 64 hex | `^[0-9a-f]{64}$`: HMAC-SHA256(world hardware salt, driver + ":" + stable hardware id) | Sent by a computer for a device it carries, so Extend recognises one TV added by two Carbons. A pseudonym, not a secret: anyone with the salt can test a guessed id. Never returned by the API. |
 | Device `version` | `7` | Integer ≥ 1 | Increments on every change to a device's settings. Sent as `ETag` and required as `If-Match` on changes. |
 
 ### Values Extend bounds
@@ -52,7 +84,7 @@ means one isolated data plane: production, or one Honeycomb test environment.
 | Name | Type and range | Default |
 |---|---|---|
 | Device `name` | 1–64 Unicode scalar values after trimming. No control characters. Not unique. | Set by the Carbon at pairing |
-| Device `visibility` | `team` or `personal` | `team` |
+| Device `visibility` | `team` or `personal`. 1.1: always `personal` (a device is visible only to the Carbons who paired it); a value sent is ignored | `personal` |
 | `pair_ttl_days` | Integer 1–30. Days without activity before the pair ends on its own. | `14` |
 | Session idle timeout | Fixed 300 s after the last command finished, or after the session started if no command was sent. A command in flight holds it (until 300 s after its deadline). | 300 s |
 | Request `reason` | 1–300 Unicode scalar values after trimming, and at most 1,000 with the whitespace around it (as built; Open question C3). Stored and delivered exactly as sent, whitespace included. | required |
@@ -61,6 +93,12 @@ means one isolated data plane: production, or one Honeycomb test environment.
 | Test environment paired devices | At most 5 per environment | — |
 | Active test environments | At most 10 across the whole deployment | — |
 | Page `limit` | Integer 1–100 | 50 |
+| Wake request `reason` (1.1) | As a request reason: 1–300 after trimming, at most 1,000 raw | required |
+| Wake request lifetime (1.1) | Expires 1,800 s after the last ask; asking again is allowed after 300 s and refreshes it | — |
+| Wake alerts and Tings (1.1) | The device sounds at most every 900 s; one Carbon Ting per pair and Team every 900 s; at most 6 wake Tings per Carbon per hour (later ones deferred, never refused) | — |
+| Pairs per device (1.1) | `EXTEND_MAX_PAIRS_PER_DEVICE`, a guard on connections, not a product rule | 8 |
+| Waiting "Pair with another Carbon" codes (1.1) | At most 3 per device | — |
+| Setup retries (1.1) | At most one per device every 5 s | — |
 
 ### Identifiers owned by other services
 
@@ -84,8 +122,8 @@ Extend stores and passes these. It never mints or parses beyond the prefix rules
 | `Idempotency-Key` | `b1f0c9d2-…` | `^[!-~]{8,255}$` | Caller. The CLI sends a UUIDv4. |
 | IAM webhook signature | `v1=9f86…` | `^v1=[0-9a-f]{64}$`, HMAC-SHA256 over `{timestamp}.{exact body}` | Silicon IAM |
 | Briefcase `entry_id` (Extend calls it `file_id`) | UUID | UUID | Briefcase |
-| Element ref | `@e12` | `^@e[0-9]+$` | agent-device. Valid until the next `snapshot` in the same session. |
-| Selector | `role="button" label="Continue"` | agent-device selector expression | agent-device |
+| Element ref | `@e12` | `^@e[0-9]+$` | The device engine. Valid until the next `snapshot` in the same session. |
+| Selector | `role="button" label="Continue"` | The device engine's selector expression | The device engine |
 
 ### Formats used everywhere
 
@@ -101,12 +139,12 @@ Extend stores and passes these. It never mints or parses beyond the prefix rules
 
 ```
  Silicon ──extend CLI──┐                                 ┌── Extend app (Android, Android TV, Mac, Windows, Linux)
- Carbon ──website──────┤  HTTPS / JSON                   │     └── agent-device (forked) operates the device
+ Carbon ──website──────┤  HTTPS / JSON                   │     └── the device engine operates the device
  other apps ─client────┴──►  Extend service  ◄── WSS ────┤
                               │   │    │    │            └── Extend app on a Mac or computer, acting as host
                               │   │    │    │                  └── iPhone, iPad, Apple TV, Samsung/LG TV
                               │   │    │    └── Space Station (telemetry)
-                              │   │    └── Ting (requests between Silicons)
+                              │   │    └── Ting (requests for a device, wake requests)
                               │   └── Briefcase (files, through OBO)
                               └── Silicon IAM (login, live authorization, webhooks)
 ```
@@ -119,14 +157,15 @@ Parts, matching `UNDERSTANDING.md`:
 | Configuration website | Uses the Extend client over the same public API. A subset of the CLI. | `extend.teamofsilicons.com` |
 | Extend client | Rust crate `silicon-extend-client`, stateless | crates.io |
 | `extend` CLI | Rust, built only on `silicon-extend-client`, keeps its state on disk | `honeycomb install 'extend'` |
-| Extend apps | Per OS, see §7. Each embeds the forked agent-device. | Downloads on the website |
+| Extend apps | Per OS, see §7. The Mac and Linux apps run the device engine. | Downloads on the website |
+| The device engine | Silicon Extend's fork of an MIT-licensed device automation project, in `vendor/extend-engine` (package `silicon-extend-engine`; `FORK.md` names the project and lists every change). Its settings are `EXTEND_ENGINE_*` (the fork's own `AGENT_DEVICE_*` names still work). | Ships inside the Mac and Linux apps |
 
 The device and the Silicon never talk directly. Both connect outward to the Extend service, so
 neither needs to be reachable from the internet and they never need to share a network.
 
-### Why a relay and not agent-device's own remote mode
+### Why a relay and not the device engine's own remote mode
 
-agent-device can already run against a daemon on another machine. That mode expects the client to
+The device engine can already run against a daemon on another machine. That mode expects the client to
 reach the daemon's address, which personal devices behind home routers can't offer. Extend
 inverts it: the app keeps one outbound WebSocket open, and the service pushes commands down it.
 The same connection also carries the stop button, the in-use indicator and revocation, which have
@@ -163,9 +202,9 @@ Tables per world:
 
 | Table | Holds |
 |---|---|
-| `devices` | `device_id`, team handle, owner Carbon id, name, OS, kind, visibility, `pair_ttl_days`, `last_activity_at`, `paired_at`, `version`, `host_device_id` (for devices paired through a computer), setup state, app version, credential hash |
-| `device_access` | (`device_id`, Silicon id), granted by, granted at |
-| `device_locks` | `device_id` primary key → `session_id`. The unique key is what enforces one Silicon at a time. |
+| `devices` | `device_id`, team handle, owner Carbon id, name, OS, kind, visibility, `pair_ttl_days`, `last_activity_at`, `paired_at`, `version`, `host_device_id` (for devices paired through a computer), setup state, app version, credential hash. 1.1: one row per pair; see below |
+| `device_access` | (`device_id`, Silicon id), granted by, granted at. 1.1: (`device_id`, Team, Silicon id) |
+| `device_locks` | `device_id` primary key → `session_id`. The unique key is what enforces one Silicon at a time. 1.1: unique per physical device |
 | `session_ids` | Every `session_id` ever allocated, so none is reused |
 | `sessions` | `session_id`, `device_id`, Silicon id, state, started, last command, ended, end reason |
 | `commands` | `command_id`, `session_id`, command name, redacted input, outcome, timings, file ids |
@@ -179,6 +218,60 @@ Tables per world:
 As built, lifecycle receipts (`honeycomb_operations`) live in `extend_global`, not per world. A
 clean truncates every per-world table except `iam_events` and `iam_aggregates` (Open question C5),
 including `session_ids`, so session ids can repeat across a clean.
+
+### 1.1: pairs, physical devices and Teams
+
+Two additive world migrations bring every world to schema version 5: version 4 introduces
+physical devices/Teams/waking, and version 5 adds the shared `in_use_indicator` column (default
+`shown`, constrained to `shown|hidden`). One global migration adds enrollment fields. Earlier
+migrations are not rewritten. A rollback retains the banner column/default; 1.0 ignores it.
+
+- **A `devices` row is one pair**: one Carbon's device, with its own `device_id`, credential (and a
+  rotated one not yet confirmed, `next_credential_digest`), owner, name, lifetime, `last_used_at`,
+  removal, `wake_muted`, and for a carried device `hardware_key`, `duplicate` and
+  `provisional_until`. The new `instance_id` names the physical device; pairs of one device share
+  it, and a unique index allows one live pair per Carbon per device. Capabilities, setup and OS
+  facts stay per row: the app writes the same hello on every pair's connection, and a new pair
+  copies them from a live sibling so it is ready at once. `last_activity_at` is written on every
+  live pair of the device at once (a pair's lifetime counts the device's activity, §4).
+- **`devices.team`** is now only the Team selected when the pair was made. It authorizes nothing;
+  it stays because 1.0 apps need `DeviceSelf.team` non-null, and for a rollback to 1.0.0.
+  **`devices.visibility`** is always `personal`; a trigger enforces it for any writer, 1.0.0 too.
+- **`device_instances`** (new): one row per physical device, with `side_salt` (keys side tags;
+  never leaves the service), the awake state (`awake`, `sleep_state`, `awake_changed_at`, and the
+  `awake_run`/`awake_seq` of the last frame applied), `last_wake_alert_at`, and the shared
+  `in_use_indicator` preference (schema 5).
+- **`world_settings`** (new): values of the world itself, kept by a clean: `hardware_salt`.
+- **`device_access`**: one grant per (pair, the Silicon's Team, Silicon). `granted_by` is always
+  the pair's owner. The Team is the key's second column.
+- **`device_locks`**: one row per physical device (`instance_id` unique). It is the one-Silicon
+  lock across every pair and Team; `device_id` is the pair the session runs through.
+- **`sessions`**: unchanged. `device_id` is the pair; `team` is the Silicon's Team. A session's
+  **side** is (its Team, the owner of its pair).
+- **`activity`**: rows stay per pair, so each Carbon's log is their own side; `team` is the acting
+  Silicon's Team. Details never carry another side's Silicon, Carbon, Team or session.
+- **`requests`**: `team` is the requester's Team and `device_id` its pair. New columns say where it
+  went: `routed_to` (`holder` or `carbon`), `routed_to_id` (the Carbon), `holder_device_id`,
+  `holder_team`, `holder_session_id`, and the Ting's Team, frozen body and next attempt. A request
+  routed to a Carbon keeps a fixed text in `to_id` and no `session_id`, so no column 1.0.0 reads
+  ever holds another side's identity.
+- **`wake_requests`** (new): one row per request (open, woken, expired, withdrawn, declined), with
+  its asks, expiry, what the device did with it, and the Carbon's and the answer's Ting deliveries.
+- **`ting_recipients`**, **`ting_type_status`** (new): whether Extend's Tings reach a member in a
+  Team, and missing app/context types observed during delivery in a Team. Those observations do
+  not imply separate type catalogs per Team.
+- **`membership_checks`** (new): IAM's last definite answers about a member of a Team (§9).
+- `extend_global.enrollments` gains `instance_id` and `from_device_id`: an enrollment started by
+  "Pair with another Carbon" adds a pair to that device.
+- A clean truncates the new per-world tables too, and keeps `world_settings`.
+
+**Lock order.** Every transaction that changes who may use a device takes its locks in this order:
+the physical devices' rows (`device_instances`, `FOR NO KEY UPDATE`, in `instance_id` order; for a
+session start, the computer and every device it carries), then `devices`, then `device_access`, then
+`sessions` and `device_locks`, then `wake_requests`. Session start, grant and revoke, unpair, the
+Team-leaving revocations, wake create and answer, the awake handler, carried-device linking and
+credential rotation all follow it. Every change that ends access takes the device row first, so it
+serialises with a session start's re-check, and nothing can deadlock.
 
 ---
 
@@ -245,10 +338,66 @@ As built (2026-09-27):
 | Revoked on the device | `DELETE /api/v1/device` from the app |
 | Removed on the website or CLI | `DELETE /api/v1/devices/{device_id}` by the owner |
 | No activity | `last_activity_at + pair_ttl_days` passes. A scheduler checks every minute. |
-| Owner leaves the team | IAM webhook, then confirmed by introspection |
+| Owner leaves the team | IAM webhook, then confirmed by introspection. **1.1: no longer ends the pair.** A device belongs to the Carbon, not to a Team; the grants that Carbon gave in that Team end instead (§9). |
 
 Activity means a command in a session, or the owner changing the device's settings. A device
-that's merely online doesn't count.
+that's merely online doesn't count. 1.1: a session or command through any Carbon's pair keeps every
+pair of that device alive, because `UNDERSTANDING.md` ends a pair when "the device goes without
+activity" (a family TV B's Silicons never use stays paired to B while A's Silicons use it). "Last
+used" stays per pair, and the owner's own settings changes bump only their own pair.
+
+In 1.1 each of these ends one pair only: its sessions, its grants and its open wake requests end,
+its credential stops working, and `unpaired` goes to that pair's connection. The physical device and
+other Carbons' pairs of it are untouched; when the last pair ends, the app shows the pairing screen.
+
+### Pairing another Carbon (1.1)
+
+A device can be paired to several Carbons (`UNDERSTANDING.md`, Pairing), each with their own pair.
+
+```
+ Extend app (paired to A)            Extend service                         Website (Carbon B)
+ POST /device/enrollments ─────────► enrollment tied to this physical device
+   (A's device credential)           and to its world
+          ◄──── enrollment_id, secret, code (as a first pairing)
+ shows a warning, then the code                     ◄──── POST /pairings {code, name}
+                                     creates B's pair: same instance_id,
+                                     capabilities copied, ready at once;
+                                     "another_carbon_paired" on A's pair
+          ◄──── "paired" {B's device_id, B's credential}
+ keeps both credentials, one socket each
+```
+
+- The app proves it belongs to the device by holding a live credential of it; it never names the
+  device itself. The code pairs only into the device's world.
+- B entering a code for a device B already paired gets `409 conflict`, naming only B's own pair; two
+  of B's claims racing get one 201 and one 409, never a 500.
+- A carried device has no credential: B pairs the computer, then adds the device through B's own
+  pair of it, and the computer's report links the two (§7).
+- Each Carbon sees only their own side. Owners see "Also paired by another Carbon" with no names,
+  and their log records "another Carbon paired this device". The device's own screen lists every
+  Carbon it is paired to, as `UNDERSTANDING.md` asks.
+
+### The test device limit in 1.1
+
+The limit of 5 counts physical devices: another Carbon's pair of a device already paired in the
+environment never counts. A carried device added by a second Carbon while the environment is full,
+through a computer that already carries the same device for another Carbon, is accepted
+provisionally (setup step `recognising`) and counts nothing once the computer links it; if it isn't
+linked within `EXTEND_TEST_LINK_WINDOW_S` (120 s), it is removed with the limit's message.
+
+### Setup steps and retry (1.1)
+
+A setup step's `error` is one or two sentences for the Carbon: what is wrong and what to do ("The
+iPhone is locked or not connected by cable. Unlock it and keep it plugged in."). Environment
+variables, file paths, build commands, exit codes and stack traces go to the app's or agent's log.
+
+A Carbon who paired the device retries a failed step from the website, with
+`extend device setup <id> --retry [--step <key>]`, or (Android) with the Retry button on the app's
+own setup screen. `POST /api/v1/devices/{device_id}/setup/retry` checks the step exists and has
+failed, that the device (or, for a carried device, its computer) is online and its app advertises
+`setup_retry` in its hello, and that no retry of the device went out in the last 5 s; then it sends
+the device `setup_retry` and answers 202 with the steps it asked for. The service changes no step
+itself: the device reruns the step at once and reports progress as usual (docs/device-protocol.md).
 
 When a pair ends, Extend ends any session with the matching reason, removes all access, sends
 `unpaired` down the device's connection, invalidates the credential, and keeps the device row and
@@ -280,23 +429,62 @@ End reasons: `ended_by_silicon`, `idle_timeout`, `stopped_by_carbon`, `access_re
 transaction that creates the session, so a second Silicon gets `409 device_in_use` with the current
 holder's Silicon id, session start time and the `extend request send` command to ask for the device.
 
+**1.1: across pairs, Teams and lock groups.** The lock is per physical device, so one Silicon uses a
+device at a time whichever Carbon's pair or Team it comes through. A computer and the devices it
+carries form one **lock group**: a Silicon can't start on any member while a Silicon on another side
+(another Team, or another Carbon's pair) uses any member, so a terminal on the computer can't watch
+another side's iPhone or TV session. Same side, it is as in 1.0. A session start locks the group's
+device rows first, re-checks the grant and the owner's membership under that lock, then inserts the
+session and the lock (§3, lock order).
+
+`device_in_use` names the holder only to the same side (the same Team and the same Carbon's pair)
+and to the holder itself; for anyone else it says "Device 7c1e09ab (Living room TV) is in use. Only
+one Silicon can use a device at a time." with `details.in_use.hidden` and the request-send hint.
+
+**Stopping (1.1).** Every Carbon who paired a device can stop the Silicon using it (`UNDERSTANDING.md`,
+Always visible), from the website, the CLI, or the device's own Stop. A remote Stop of a computer
+also ends the sessions on devices it carries that the stopper paired, but never one on a carried
+device the stopper didn't pair: that device's own Carbons, or the computer's own Stop, end it. The
+stopped session's pair logs it as stopped by `extend` with `{"stopped_by": "another_carbon"}`,
+naming no one, and the Silicon's hint says "a Carbon who paired the device stopped it".
+
+**Requests for a device in use (1.1).** When the asking Silicon is in the same Team as the Silicon
+using the device and was given access by the same Carbon (the same pair), the request goes to that
+Silicon through Ting, as in 1.0, and the asker sees which Silicon it is. Otherwise it goes to the
+Carbon who gave the Silicon using the device access, who can stop the session:
+
+- The asker sees only "in use" and "Sent to the Carbon who gave access to the Silicon using it",
+  even when that Carbon is its own; never the Carbon, the Silicon using it, or its session.
+- That Carbon sees the asking Silicon's id and its reason (the Carbon's decision of 2026-09-27;
+  `UNDERSTANDING.md`: "with the requesting Silicon's name and reason"), on the website, in
+  `extend device requests` and in the Ting. Nothing names the Silicon using the device, its Team or
+  its session.
+- The Ting (`extend.device.requested`) goes at once from the asking Silicon, with the login it just
+  used, when the asking Silicon and that Carbon share a Team (it goes in that Team). Otherwise it goes
+  from the Carbon's own login, as a notification to themselves, in the Team where they gave the
+  holder access: at once when Extend holds that login, otherwise at their next use of Extend. The
+  website and CLI show the request at once in every case. The Silicon using the device is never the
+  sender.
+- The 60 s repeat fold and the idempotency route keys include the Team, so nothing crosses Teams.
+
 ### Relaying a command
 
 1. The CLI posts `{command, args, timeout_ms}` with the Silicon's access token. `args` are the
-   command-line tokens after the name, exactly as agent-device's CLI takes them.
+   command-line tokens after the name, exactly as the device engine's command line takes them.
 2. The service introspects the token with IAM (cached no longer than 30 s, and dropped immediately
    on a relevant IAM webhook), then checks: the session is the caller's, it is `active`, the caller
-   still has access, the device is online, and the command is in the device's capabilities.
+   still has access (1.1: its grant in the session's Team, and the owner-active check of §9), the
+   device is online, and the command is in the device's capabilities.
 3. The service sends `{"type":"command","id":<command_id>,"timeout_ms":…,"command":…,"args":[…],"upload_ids":[…]}`
    down the device's WebSocket and waits for the matching `result`.
-4. The app runs it through agent-device and replies. Files it produced (screenshots, recordings,
+4. The app runs it (on Mac and Linux, through the device engine) and replies. Files it produced (screenshots, recordings,
    logs, replay scripts) are uploaded to `PUT /api/v1/device/artifacts/{upload_id}` first, using
    upload ids the service included with the command.
 5. The service stores each file in Briefcase on the Silicon's behalf (§6), writes the command to
    the activity log, resets the idle timer, and returns the result with Briefcase links.
 
 Commands in one session run one at a time, in order. A second command sent while one is in flight
-waits for it; this matches agent-device, whose own daemon serialises a session.
+waits for it; this matches the device engine, whose own daemon serialises a session.
 
 If the deadline passes, the service answers `504 command_timeout` and tells the device to cancel.
 If the device drops mid-command, the answer is `503 device_offline`, and the command's outcome is
@@ -378,9 +566,10 @@ on Android, `adb`, `apps.install`, `logs` and `screen.record` until Android debu
 (§7). A locked computer (a Mac also asleep, or showing the login window or another account;
 Windows also behind an admin prompt's secure desktop) reports everything that needs the screen as
 missing with that reason, and reports it again within seconds of a lock or unlock; the terminal
-stays.
+stays. 1.1: on a computer several Carbons paired, `terminal` is only on its first pair (the Carbon
+who installed Extend there); every other pair lists it as missing (§9a).
 
-### agent-device commands Extend does not expose
+### Device engine commands Extend does not expose
 
 The parts made for app developers: `boot`, `shutdown`, `web …`, `viewport`, `react-native …`,
 `react-devtools …`, `metro …`, `cdp …`, `perf …`, `trace …`, `network dump`, `debug symbols`,
@@ -389,6 +578,81 @@ The parts made for app developers: `boot`, `shutdown`, `web …`, `viewport`, `r
 `devices` → `extend device ls`, `connect`/`disconnect` → `extend session connect`/`disconnect`,
 `session list` → `extend session ls`. Any of them sent through Extend returns
 `404 unknown_command` naming the Extend replacement where there is one.
+
+### Android TV element clicks (1.1)
+
+A primary `click @ref` or selector click on an Android TV app >=1.1 uses `screen.read` and
+accessibility element activation. It does not advertise pointer/touch capabilities. The service
+keeps the old pointer/touch eligibility for an app older than 1.1 or with an unknown version, so
+it does not offer an old app a command its local gate refuses. Coordinates, held/repeated and
+secondary clicks retain their native injection requirements. Help and command eligibility share
+the same version-aware rule.
+
+### Waking a device (1.1)
+
+A device can be paired and online but not awake: a phone with its screen off or locked, a computer
+asleep or locked or showing another account, a TV in standby (`UNDERSTANDING.md`, Waking a device).
+
+**Awake is information, never a gate.** The terminal, Android debugging and every other command keep
+working while a device isn't awake, because they run as the Carbon's own account. A command that
+needs the screen fails with the device's own error. When the device is known not to be awake (or
+was not awake when last seen), `device_offline`, `unsupported_on_device` and a failed command's
+answer add the **wake hint**: "<name> isn't awake (<state> since <time>). Its Carbon can wake it:
+extend --team <T> device wake <id> --reason \"...\"". A session starts on a device that isn't awake
+(the CLI prints the hint).
+
+**Reporting.** Apps 1.1 and later report `awake` on every pair's connection, after each hello and
+on every change, with `input_seen` and an ordering (`run`, `seq`); computers report the devices
+they carry in `attached` (docs/device-protocol.md, "Awake", has what each OS reports). A device reads
+awake (yes), not awake (screen off, locked, asleep, standby, another account), or unknown: offline
+(with the last state seen), an app older than 1.1, or a device Extend can't read yet (iPhone, iPad:
+`wake_detectable: false`).
+
+**Asking.** `extend device wake <id> --reason "..."` (up to 300 characters), by a Silicon with a grant
+on that pair in its Team T:
+
+- Where it can, the device shows a notification with the Silicon's name and reason: an Android phone's
+  lock screen (the name always, the reason only where the phone shows notification contents there),
+  or a Mac, Windows or Linux system notification. A TV, and a device paired through a computer,
+  shows nothing; the Carbon's Ting and the website carry it (for a carried device, "its computer must
+  be awake too").
+- The Carbon who gave the Silicon access gets `extend.device.wake_requested` through Ting, in T, sent
+  as the Silicon.
+- When the device is turned on or unlocked (an awake report that isn't `input_seen: false`), every
+  open request on the physical device ends as woken, through any pair and in any Team, and each
+  Silicon that asked gets `extend.device.woken` in its own Team, saying whether the device is free,
+  already its own, or in use (then with the request-send command), naming no one.
+- "It's awake" from a Carbon who paired it (website or CLI) is a fact about the device: it ends every
+  open request on it the same way. This is how requests end on devices Extend can't read. "Decline"
+  ends only the answering Carbon's own pair's requests and sends `extend.device.wake_declined`.
+- Asking again after 5 minutes refreshes the request (new reason, ask count up, expiry reset); sooner
+  is `429`. A request expires 30 minutes after the last ask. `--cancel` withdraws it. It is also
+  withdrawn when access ends, the Carbon leaves the Team, the pair ends, the Carbon turns wake requests
+  off, or the Silicon starts a session while the device's state is unknown.
+
+**Limits (the defaults the Carbon accepted).** The device sounds at most once every 15 minutes. At
+most one wake Ting per pair and Team every 15 minutes: later asks are covered by it. At most 6 wake
+Tings per Carbon per hour: an ask over that is accepted and its Ting waits for the hour's window
+(deferred; the Silicon sees pending), so an ask is never refused because of what other Teams did. A
+Carbon can turn wake requests off for a device, or for one Silicon. Ting delivery is best effort,
+with retries (§9, C2).
+
+**Extend never wakes a device.** Its own code never turns a screen on or sends a power-on: the Apple
+TV's power button sends sleep only while awake and is refused while asleep, a Samsung TV in standby
+gets no power key, Android TV's power key stays refused, LG power only turns the TV off, and no app
+uses a full-screen intent, a screen-on flag or a wake lock that turns the screen on.
+
+**Keeping the screen on.** While a Silicon uses a device that is awake, the app keeps the screen
+from turning off on its own (an accessibility overlay on Android, a display assertion on Mac and
+Windows, an idle inhibit on Linux; docs/device-protocol.md). It never turns a screen on, and the
+Carbon can still lock it; it is released at session end, Stop, a takeover, or when the device stops
+being awake.
+
+**Sides on the device.** A wake request's frame carries a side tag, and so does `session_started`.
+While a Silicon of another side uses the device (or its lock group), the service leaves the asking
+Silicon and reason out of the frame, and the app redacts its screen and OS notification from
+`session_started` before the session's first command, so neither a lock screen nor a notification
+history shows the holder another side's request.
 
 ---
 
@@ -420,6 +684,29 @@ days. `extend file keep <file_id>` makes a file permanent before it goes. As bui
 own records (§13): the file is trashed through Briefcase's `entries.trash` with an `operation_id`
 derived from the file id, so a retry is the same deletion, and a 404 counts as already gone;
 `keep` marks the file permanent in Extend and leaves the Briefcase entry alone.
+
+**1.1: Teams and several Carbons.** A file is stored in the Team the Silicon acted in (the session's
+Team) and shared with the Carbon who gave that Silicon access: the owner of the pair the session ran
+through, whichever Carbons paired the device. A Carbon lists the files made through their own pairs
+in every Team, each tagged with its Team, and reads one only as themselves, in the file's Team: a
+Carbon whose Extend login doesn't reach that Team gets "Sign in to Extend for <team> to open files
+made there". Another Carbon who paired the same device never sees them.
+
+**1.1 stored display media.** `display show --image` and `--video` accept `file:<file_id>`,
+a bare UUID, an Extend content link, or the exact Briefcase URL saved in Extend's file row. A
+Silicon may resolve only its own unexpired file in the session's Team/world. Extend uses the
+caller's Briefcase authority, validates image/video content type, bounds the read by the remaining
+attachment budget, re-checks expiry after reading and re-checks the active session before sending.
+It replaces the media argument with an ordinary attachment, so the device receives neither private
+URLs nor member credentials. Local and stored inputs together stay within 8 files/8 MiB. Unknown,
+expired, or other Silicons' files return `file_not_found`; an arbitrary private Briefcase URL is
+not an input authorization. Public media URLs remain device-side URLs. This does not add stored
+inputs for APK install, replay scripts or screenshot baselines.
+
+The native Android TV display waits for image loading before returning success. Download, format
+or decode failures return `action_failed`, and a later valid display can recover. The isolated real
+IAM/Briefcase/native TV lane verifies round-trip stored screenshots and actual replayed pixels;
+physical TV verification remains separate.
 
 In a test environment every Briefcase call uses Briefcase's test environment with the same
 `environment_id`. **See Open questions 1–3:** Briefcase's OBO endpoints don't currently take a
@@ -453,9 +740,11 @@ As built (2026-09-27):
 
 ## 7. The Extend apps
 
-Every app does four things: keep the WebSocket to the service open, run commands through
-agent-device, show the in-use indicator with a Stop button, and offer "Revoke pair". It starts at
-boot and reconnects on its own.
+Every app does four things: keep the WebSocket to the service open, run commands (on Mac and
+Linux through the device engine), honor the in-use indicator preference while retaining Stop, and offer "Revoke
+pair". It starts at boot and reconnects on its own. 1.1 adds: one socket per pair when several
+Carbons paired the device, "Pair with another Carbon", revoke per Carbon, the awake report, the wake
+notification, keeping an awake screen on during a session, and setup retry (docs/device-protocol.md).
 
 ### Connection protocol (`WSS /api/v1/device/connect`)
 
@@ -463,7 +752,10 @@ boot and reconnects on its own.
 - Frames are flat JSON text: `{"type": ..., <fields>}` (docs/device-protocol.md). Files never travel on the socket.
 - Heartbeat: the service pings every 15 s; the device is **offline** after 45 s without a pong.
 - Reconnect: exponential backoff from 1 s to 60 s with full jitter.
-- One live connection per device. A new connection replaces the old one, which gets `superseded`.
+- One live connection per pair (1.1: an app with several pairs keeps one per pair, each with its
+  own credential, and each is a 1.0 connection plus the 1.1 frames). A new connection replaces the
+  old one, which gets `superseded`; when the old one had answered a ping within 30 s, the pair's log
+  records `connection_replaced`, so a takeover of a pair's connection is visible to its Carbon.
 - Close codes (as built): `4401` unpaired, `4409` superseded, `4426` upgrade required, and `4503`
   when the device's test environment closes (disabled, or waiting for Honeycomb's readiness): the
   pair is kept and the app reconnects with backoff. The handshake and the device's HTTP routes
@@ -471,7 +763,7 @@ boot and reconnects on its own.
 
 | Direction | `type` | Meaning |
 |---|---|---|
-| device → service | `hello` | App version, OS and version, agent-device version, capabilities, setup state |
+| device → service | `hello` | App version, OS and version, device engine version (`engine_version`; 1.0: `agent_device_version`), capabilities, setup state, 1.1 `features` (`setup_retry`) |
 | device → service | `setup_progress` | One setup step changed |
 | device → service | `result` | Answer to a `command`, same `id` |
 | device → service | `stop` | The Carbon tapped Stop |
@@ -484,6 +776,50 @@ boot and reconnects on its own.
 | service → device | `unpaired` | Forget the credential, return to the pairing screen |
 | service → device | `environment` | Test environment name for the banner, or `null` for production |
 | service → device | `superseded` | Another connection took over; close without reconnecting |
+| device → service | `awake` (1.1) | Awake or not, why not, whether input was seen; ordered by `run` and `seq` |
+| device → service | `wake_request_shown` (1.1) | Whether the device could show a wake request, and why not |
+| device → service | `credential_saved` (1.1) | The app stored the credential the last `credential` frame gave |
+| device → service | `attached` (1.1 fields) | A carried device's `awake`, `sleep_state` and `hardware_key` |
+| service → device | `session_started.side` (1.1) | The session's side tag, for redacting other sides' wake requests |
+| service → device | `wake_request` / `wake_request_ended` (1.1) | Show or remove a wake request; redacted while another side uses the device |
+| service → device | `credential` (1.1) | Computers several Carbons paired: this pair's new credential |
+| service → device | `setup_retry` (1.1) | Run a failed setup step (or every failed step) again now; only to apps whose hello lists `setup_retry` |
+
+### In-use banner controls (1.1)
+
+`in_use_indicator: shown|hidden` is shared by all pairs of a physical device, including carried
+aliases. `shown` is the default for a new device and an omitted wire field; an unknown future value
+also shows it. A Carbon can change it through the website or `extend device banner <id> on|off`
+(the existing owner device PATCH). A Silicon cannot. Device apps can PATCH `/api/v1/device` with
+`device_self` data and any live pair credential. A host app can PATCH
+`/api/v1/device/attachments/{device_id}` only for a live device carried by that exact host pair in
+the same world. The response is the target's `device_self`. Authorization is re-checked under the
+instance locks. The service sends `refresh` to direct pairs or `attach` carrying the preference to
+all carried aliases/hosts, preserving live drivers, commands, sessions and recording state.
+
+Shown banners/notifications hide after 10 seconds without ending the session or screen hold.
+Desktop banners are movable and collapsible and retain position; the desktop icon stays changed
+for the session. Hidden suppresses in-use announcements and the icon change. Takeover requests
+still show until answered; app and website Stop remain available. Android TV's badge is at bottom
+centre. Android's quiet running notification, Apple's Automation Running banner and test-environment
+disclosure are separate and are not hidden by this setting.
+
+Desktop changes are saved locally before success, scoped to the service URL, retried after reconnect
+and protected against stale responses overwriting a newer choice. Carried aliases update together.
+Android also saves offline choices. An older service's omitted preference does not erase a saved
+choice. On an unsupported PATCH, Android keeps the local choice with a local-only notice; desktop
+keeps it with synchronization pending/error visible. The write cannot block Stop.
+
+### First iPhone/iPad screenshot (1.1)
+
+A first screenshot with no engine session, or a capture refused with `SESSION_NOT_FOUND`, uses a
+bare engine `open` to attach the session to the current device, then captures the existing screen.
+It does not launch an app. Plain screenshots and bare attachment require no runner; overlays and
+selector cropping can need one. Attach, stale-session recovery and capture share the caller's one
+deadline. Repeated screenshots reuse the session, and session end closes it. This was verified
+through the real engine on an isolated iPad simulator; physical iPad reconnect/new-session checks
+remain hardware verification. It does not establish an iPhone/iPad lock-state reading: awake stays
+unknown and the Carbon can answer "It's awake".
 
 ### Per device
 
@@ -492,22 +828,34 @@ that changed; §13 says why):
 
 | Device | How commands are carried out | Indicator |
 |---|---|---|
-| **Android phone and tablet** | The app's AccessibilityService reads every window as an element tree (same `@eN` refs and snapshot shape as agent-device), taps and gestures with `dispatchGesture`, presses back/home/recents, takes screenshots, and reads notifications through a notification listener. **Android debugging** (the Carbon pairs Wireless debugging from the app once; a TV can use its TCP port) connects the app's own ADB client on the device, which adds `adb`, `install`/`reinstall`, `logs` and `record`. Recording runs supervised `screenrecord` segments of up to 180 s and joins them into one MP4, bounded to 30 minutes or 1 GiB; there is no per-recording consent prompt. Without debugging connected those capabilities are reported missing with "connect Android debugging". | Ongoing notification with Stop |
-| **Android TV, Google TV, Fire OS** | Same, plus the remote's arrows and select through the accessibility D-pad actions (Android 13+). With Android debugging connected, every remote button but Power (Menu too, and older TVs' D-pad) is a real key press through `input keyevent`; Power is always refused. The display screen is an activity inside the app. With Android debugging: `adb`, `install`/`reinstall` and `logs`; no recording on TVs. The app is named **Silicon Extend TV** on a TV. | Corner badge drawn as an accessibility overlay (no extra permission); Stop in the app |
-| **Mac** | agent-device's macOS driver through its signed native helper, with no XCTest runner and no UI Automation setup: Accessibility for the element tree, pointer input and text entry (text passed over stdin, focus checked before each key event), ScreenCaptureKit for screenshots and H.264 recording of one app or the display. The only setup steps are Accessibility and Screen Recording for Silicon Extend. A session starts on the frontmost app; `open <app>` binds the named app; links open with the system and the session follows the frontmost app. Terminal commands run as the logged-in user. | Menu bar icon changes; banner; Stop in the menu |
-| **Windows** (built by Extend) | UI Automation for the element tree, `SendInput` for mouse and keyboard, GDI for screenshots, Win32 for the clipboard, the Start menu and shell for apps, `cmd.exe` for the terminal. Mapped onto the same agent-device command set and snapshot shape. `record`, `logs`, `alert` and `replay`/`test`/`batch` are reported missing. Compile-checked and unit-tested only; it has never run on Windows. | Tray icon changes; banner with Stop |
-| **Linux** | agent-device's Linux driver: AT-SPI2 for the element tree, xdotool (X11) or ydotool (Wayland) for input, a screenshot tool (gnome-screenshot, scrot or ImageMagick; grim on Wayland), xclip/xsel or wl-clipboard. On X11, recording with ffmpeg (libx264 from `x11grab`): the whole screen, or one app's window through XComposite so windows over it are not recorded (an app that can't redraw its whole window within 5 s is refused, with "record the whole screen instead"). `--quality` picks the bit rate: `normal` 8 Mbit/s, `high` 20 Mbit/s. Wayland recording (the ScreenCast portal) is not built and is reported missing, as are `logs`. PTY for the terminal. | Banner with Stop |
-| **iPhone, iPad** (via Mac) | The Mac's app runs agent-device's physical-iOS driver: its XCTest runner is installed on the iPhone once over USB, then reached over Wi-Fi. | On the Mac's app and the website |
+| **Android phone and tablet** | The app's AccessibilityService reads every window as an element tree (same `@eN` refs and snapshot shape as the device engine), taps and gestures with `dispatchGesture`, presses back/home/recents, takes screenshots, and reads notifications through a notification listener. **Android debugging** (the Carbon pairs Wireless debugging from the app once; a TV can use its TCP port) connects the app's own ADB client on the device, which adds `adb`, `install`/`reinstall`, `logs` and `record`. Recording runs supervised `screenrecord` segments of up to 180 s and joins them into one MP4, bounded to 30 minutes or 1 GiB; there is no per-recording consent prompt. Without debugging connected those capabilities are reported missing with "connect Android debugging". | In-use notification for 10 seconds when enabled; quiet running notification and Stop remain |
+| **Android TV, Google TV, Fire OS** | Same, plus the remote's arrows and select through the accessibility D-pad actions (Android 13+). With Android debugging connected, every remote button but Power (Menu too, and older TVs' D-pad) is a real key press through `input keyevent`; Power is always refused. The display screen is an activity inside the app. With Android debugging: `adb`, `install`/`reinstall` and `logs`; no recording on TVs. The app is named **Silicon Extend TV** on a TV. | Bottom-centre badge for 10 seconds when enabled, as an accessibility overlay (no extra permission); Stop in the app |
+| **Mac** | The device engine's macOS driver through its signed native helper, with no XCTest runner and no UI Automation setup: Accessibility for the element tree, pointer input and text entry (text passed over stdin, focus checked before each key event), ScreenCaptureKit for screenshots and H.264 recording of one app or the display. The only setup steps are Accessibility and Screen Recording for Silicon Extend. A session starts on the frontmost app; `open <app>` binds the named app; links open with the system and the session follows the frontmost app. Terminal commands run as the logged-in user. | Enabled: menu bar icon changes, 10-second movable/collapsible banner; Stop remains in the menu |
+| **Windows** (built by Extend) | UI Automation for the element tree, `SendInput` for mouse and keyboard, GDI for screenshots, Win32 for the clipboard, the Start menu and shell for apps, `cmd.exe` for the terminal. Mapped onto the same device engine command set and snapshot shape. `record`, `logs`, `alert` and `replay`/`test`/`batch` are reported missing. Compile-checked and unit-tested only; it has never run on Windows. | Enabled: tray icon changes and 10-second movable/collapsible banner; Stop remains in the app |
+| **Linux** | The device engine's Linux driver: AT-SPI2 for the element tree, xdotool (X11) or ydotool (Wayland) for input, a screenshot tool (gnome-screenshot, scrot or ImageMagick; grim on Wayland), xclip/xsel or wl-clipboard. On X11, recording with ffmpeg (libx264 from `x11grab`): the whole screen, or one app's window through XComposite so windows over it are not recorded (an app that can't redraw its whole window within 5 s is refused, with "record the whole screen instead"). `--quality` picks the bit rate: `normal` 8 Mbit/s, `high` 20 Mbit/s. Wayland recording (the ScreenCast portal) is not built and is reported missing, as are `logs`. PTY for the terminal. | Enabled: 10-second movable/collapsible banner; Stop remains in the app |
+| **iPhone, iPad** (via Mac) | The Mac's app runs the device engine's iOS driver: its helper (1.1: Silicon Extend Helper, bundle id `com.teamofsilicons.extend.helper`, replacing the fork's older helper, which is removed after the new one installs) is installed on the iPhone once over USB, then reached over Wi-Fi. | On the Mac's app and the website |
 | **Apple TV** (via Mac) | The Companion protocol for apps and remote buttons, and AirPlay for pictures and videos, from the Mac on the same network. The Apple TV shows a code the Carbon enters once. | On the Mac's app and the website |
 | **Samsung TV** (via computer) | Tizen's local remote-control WebSocket (ports 8001/8002). The TV asks the Carbon to allow the connection once and issues a token. | On the host's app and the website |
 | **LG TV** (via computer) | webOS's local SSAP WebSocket (ports 3000/3001). The TV asks the Carbon to accept once and issues a client key. | On the host's app and the website |
 
 A device paired through a host is offline whenever its host is offline or can't reach it.
 
+**Names a Carbon or Silicon sees (1.1).** Everything says Silicon Extend: the apps, CLI output, help
+and errors, the website, logs a Carbon reads, the helper apps a device shows (the iPhone and iPad
+helper "Silicon Extend Helper"; the device engine's Android helpers "Silicon Extend Keyboard" and
+"Silicon Extend Snapshot Helper", packages `com.teamofsilicons.extend.imehelper` and
+`…snapshothelper`, which replace the fork's older helpers), process and file names, and settings: the
+engine reads `EXTEND_ENGINE_<X>` (its fork's `AGENT_DEVICE_<X>` names still work, and the new name
+wins), the desktop agent finds the engine through `EXTEND_ENGINE` or `config.json` `engine` (1.0's
+`EXTEND_AGENT_DEVICE` and `agent_device` are still read) and keeps its state in `engine/` (1.0's
+`agent-device/` is renamed once). The protocol calls its version `engine_version`. Internal code names
+nobody sees may keep the fork's spelling, and the fork's MIT licence and attribution stay where the
+licence requires them (`vendor/extend-engine/LICENSE`, `FORK.md`, `THIRD_PARTY_NOTICES.md`).
+
 As built (2026-09-27): the Mac, Windows and Linux app turns start at login on by itself once paired,
 unless the Carbon turned it off (the window's switch, the menu, `run --no-autostart`); a copy run
 from App Translocation or a disk image is never registered, and `--headless` only with
-`--autostart`. On a Mac `record start --quality normal|high` is agent-device's `medium|high` (the
+`--autostart`. On a Mac `record start --quality normal|high` is the device engine's `medium|high` (the
 same for a carried iPhone or iPad). A host shows Stop (and Done) for each device it carries in its
 window, tray menu and banner, but can't revoke a carried device's pair: the device API has no
 route for that yet, so the window sends the Carbon to the website. After a restart turns Wireless
@@ -589,6 +937,15 @@ As built (2026-09-27):
   so work admitted before them can't write after them. The scheduler holds the same guard per world
   and skips worlds that aren't open. A clean also deletes the environment's waiting pairing codes;
   webhooks for an environment that isn't open are dropped (§9).
+- **1.1.** Every pair of a device is in one world ("Pair with another Carbon" inherits its world),
+  and the device limit counts physical devices (§4). A clean, restore or purge also forgets which
+  members Extend registered with Ting and its cached membership answers for that environment, and a
+  clean removes every pair, so each app returns to its pairing screen. Ting's own clean removes its
+  types and grants: Extend's four Ting types must be registered again through the app-owning Team
+  once for the cleaned context, not once per delivery Team (`docs/operations.md`), and Silicons are registered again at their next session.
+  The world's hardware salt survives a clean. Every new handler and background task checks that its
+  world is open first, so a clean during an awake report, a rotation, a pair enrollment or a pending
+  Ting leaves nothing behind and sends nothing.
 
 ---
 
@@ -598,12 +955,13 @@ Anything that ends access takes effect on the next command at the latest, and us
 
 | Event | Source | Effect |
 |---|---|---|
-| Owner removes a Silicon's access | API | That Silicon's session on the device ends at once (`access_removed`) |
-| Device removed or pair revoked | API | Session ends; pair ends (§4) |
-| Carbon taps Stop | Device socket or API | Session ends (`stopped_by_carbon`) |
+| Owner removes a Silicon's access | API | That Silicon's session on the device ends at once (`access_removed`). 1.1: per Team (`?team=`), or every Team's grant |
+| Device removed or pair revoked | API | Session ends; pair ends (§4). 1.1: that Carbon's pair only |
+| Carbon taps Stop | Device socket or API | Session ends (`stopped_by_carbon`). 1.1: any Carbon who paired the device (§5) |
 | Silicon logs out, or its IAM session is revoked | IAM webhook | Its sessions end (`silicon_logged_out`) |
-| Silicon removed from the team or deleted | IAM webhook | Its sessions end (`left_team`); its access grants are removed |
-| Owner Carbon leaves the team | IAM webhook | All the Carbon's devices in that team are unpaired |
+| Carbon logs out of Extend (1.1) | `POST /api/v1/auth/logout` | The running sessions of the Silicons that Carbon gave access to end (`access_removed`), through that Carbon's pairs, in every Team; another Carbon's Silicons on the same device keep theirs. Devices and grants stay |
+| Silicon removed from the team or deleted | IAM webhook | Its sessions end (`left_team`); its access grants are removed. 1.1: in that Team only |
+| Owner Carbon leaves the team | IAM webhook | All the Carbon's devices in that team are unpaired. **1.1:** the grants that Carbon gave in that Team end, on all their pairs, and those sessions end (`left_team`); open wake requests there are withdrawn. The devices stay paired, and grants in their other Teams stay |
 
 Webhooks are verified by the official IAM client over the exact raw body, de-duplicated on event id,
 and applied only if their aggregate version is newer than the last one applied. A webhook is a
@@ -634,6 +992,81 @@ As built (2026-09-27):
     only by an instance that saw its login (Open question C1).
 - **Starting a session registers the Silicon as a Ting recipient** (in the background), so requests
   reach it; a real Ting refuses requests to unregistered recipients.
+
+### Membership in 1.1: acting only on definite answers
+
+A grant needs the Carbon's Extend login to reach the Silicon's Team (checked live) and the Silicon to
+be an active member there. Access then ends when the Silicon or the Carbon leaves the Silicon's Team
+(`UNDERSTANDING.md`, Access). Extend learns it four ways: the IAM webhook (re-checked with IAM), a
+Silicon's refused login on the session routes (above), the owner-active check at every use, and a
+sweep.
+
+- **A membership answer is one of three.** `active`: IAM answered 200 for the member's directory
+  entry. `gone`: IAM answered 404 for it, and the same reader's read of its own entry in the Team
+  succeeded just before, so the reader can read the Team's directory. `unknown`: a 403, any other
+  error, or nobody signed in to ask. Nothing is ever deleted on `unknown`.
+- **The owner-active check.** At session start, every command, a wake request and a request send, a
+  Silicon acting in Team T through a Carbon's pair asks whether that Carbon is still active in T,
+  reading as the Silicon itself. `active` answers are cached for `EXTEND_OWNER_CHECK_CACHE_S` (30 s)
+  per world, Team and Carbon; an IAM event about the Carbon and a test clean clear the cache. `gone`
+  refuses the call at once (`403 no_access`, "c:alice, who gave you access to Living room TV, is no
+  longer an active member of labs, so her access grants in labs ended.") and ends that Carbon's
+  running sessions in T through any of their pairs; the grants are deleted only when a second reader
+  confirms `gone`. If the second reader says `active`, the grants stay, and for the next 10 minutes
+  a Silicon reader's `gone` for that Carbon and Team counts as `unknown` (and is logged as an error,
+  naming both readers). `EXTEND_OWNER_CHECK_AT_USE=false` turns the check off, in case IAM hides a
+  Team's Carbons from its Silicons.
+- **The sweep.** Every `EXTEND_MEMBERSHIP_SWEEP_HOURS` (6), the scheduler checks every (Silicon, Team)
+  and (granting Carbon, Team) with grants, and deletes grants only after two `gone` answers at least
+  10 minutes apart, from different readers when there are two.
+- So one Silicon's view of IAM can never wipe a Carbon's grants, and a missed webhook can't keep a
+  session running past the next use plus 30 seconds.
+- **Revocation per Team.** A Silicon that left Team T loses its grants in T only. A Carbon who left T
+  loses the grants they gave in T on all their pairs; the devices stay theirs.
+- **Logout (the Carbon's decision, 2026-09-27).** A Silicon's logout ends its own running sessions.
+  A Carbon's logout of Extend, on the website or with `extend logout`, ends the running sessions of the
+  Silicons that Carbon gave access to: only that Carbon's side, never another Carbon's. Nothing is
+  unpaired or revoked; the Silicons can start again once the Carbon is back, or right away (a Carbon's
+  login isn't needed for a Silicon to use a device it has access to).
+
+---
+
+## 9a. Shared computers (1.1)
+
+A Mac, Windows or Linux computer can be paired by several Carbons. A Silicon's terminal there runs as
+the computer's own account (the Carbon's decision), which can reach what the Extend app keeps for
+every pair. `UNDERSTANDING.md` and the Carbon's decision of 2026-09-27 settle who gets the terminal,
+and Extend limits what outlives a session:
+
+- **The terminal belongs to the installer's Silicons.** On a computer whose live pairs belong to two or
+  more Carbons, only Silicons given access through its first pair (the one made by the app's first
+  enrollment: the Carbon who installed Extend on it) get `terminal`. Every other pair reports it
+  missing, with "Several Carbons paired this computer. Only Silicons given access by the Carbon who
+  installed Silicon Extend on it can use its terminal. The screen, keyboard and apps work as usual.",
+  and the service refuses `terminal` through those pairs. When only one Carbon's pair is left, the
+  terminal is theirs again; when the first pair has ended and several Carbons remain, no pair has it
+  (decision 16 below). This limits Extend's `terminal` command. A Silicon with the screen and keyboard
+  can still open a terminal app, so the warnings below stay.
+- **Session processes end with the session.** Every process a session's terminal started carries a
+  per-session mark (a Job Object on Windows) and is killed at session end. Jobs handed to the OS's
+  own schedulers (`launchd`, `schtasks`, `systemd-run`, `cron`, `at`) can't be contained.
+- **Credentials rotate.** At the end of every session on a computer whose pairs belong to more than
+  one Carbon, each pair gets a new credential over its own connection, and the old one stops working
+  once the app confirms. A copy made during the session is useless afterwards. If the copy holds the
+  pair's connection at that moment, or connects first while the app is offline, it receives the
+  rotation: that shows as `connection_replaced` in the pair's log, and as the real app's Reconnect.
+- **Take-overs are visible.** A connection that replaces a pair's live connection is logged as
+  `connection_replaced` on that pair, and the app shows Reconnect for it.
+- **Carbons are warned** before a second Carbon pairs a computer, in the app and on the website: the
+  installer's Silicons use its terminal as the OS user and can reach what that user can, including
+  the app's other pairs; other Carbons' Silicons use its screen, keyboard and apps; share a computer
+  only with Carbons you trust. Other devices get the general note: "Silicons any Carbon gives access
+  to can use this whole device, including what others leave on it."
+- **What Extend keeps off the device.** Status and log files hold no wake requests, reasons or other
+  sides' Silicons; each command's work directory and a session's recordings are wiped at its end;
+  the service never receives raw hardware ids.
+- Android pairs are never rotated: their credentials are sealed with the app's Android Keystore key
+  in app-private storage, which Android debugging can't read.
 
 ---
 
@@ -686,6 +1119,20 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
   service test `contracts` replays every fixture of every major still served against a real
   service and PostgreSQL, and fails if a consumer's request is no longer accepted or an answer lost
   a field that consumer reads. CI runs both.
+- **1.1 keeps 1.0 consumers under test.** Before the client's fixtures are regenerated for 1.1, the
+  released 1.0.0 ones are frozen in `contracts/v1/client-1.0.0/` and replayed too; the 1.0.0 device
+  fixtures stay as they were, and the 1.1 apps' fixtures are new files beside them. The compatibility
+  matrix is unchanged: client crate and CLI `>=1.0.0, <2.0.0`, device apps from 1.0.0. The new
+  frames, fields and routes are additive, and no error code, end reason, capability, visibility or
+  OS value was added, because 1.0 readers refuse values they don't know.
+- **Older servers and new consumers.** Deploy the 1.1 service first. A 1.0 service does not support
+  new pair enrollment, wake/setup routes, banner PATCH or stored-media resolution. Its absent banner
+  field defaults to shown for a fresh client but cannot overwrite a native app's saved local
+  choice. Older device apps ignore the optional preference and attach metadata. Stored media uses
+  existing command attachments, so no new media wire frame or capability is needed. TV click
+  eligibility stays old for apps below 1.1 or of unknown version. The Rust `DevicePatch` struct
+  remains source compatible; the additive `DeviceSettingsPatch` and `set_in_use_indicator` client
+  method carry the new setting.
 
 ---
 
@@ -740,7 +1187,9 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
 - **Redaction in the activity log:** text typed with `fill` and `type`, and text written with
   `clipboard write`, is replaced with `[redacted N chars]`. Everything else is logged as sent.
 - Secrets never appear in URLs, logs, audit rows, telemetry or stored webhook bodies. Credentials and
-  enrollment secrets are stored as SHA-256 digests. Pairing codes are stored in plain text: the
+  enrollment secrets are stored as SHA-256 digests. 1.1: the `credential` frame is never logged (its
+  Rust type prints only the `edc_` prefix), apps keep wake requests and their reasons in memory only,
+  and the service never stores or logs a carried device's raw hardware id. Pairing codes are stored in plain text: the
   unpaired app has to be able to fetch its current code by polling, a code lives 5 minutes, works
   once, and guessing is rate limited.
 
@@ -751,16 +1200,16 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
 Differences from the first draft, each deliberate:
 
 - **Commands are CLI tokens, not structured input.** A command is `{command, args}` where `args` are
-  agent-device's command-line tokens. agent-device's structured inputs differ per command and change
-  between versions; forwarding tokens keeps its own parser the authority. Flags that pick a device or
-  session inside agent-device are refused. Files a caller sends (a replay script, an image for a TV)
+  the device engine's command-line tokens. The engine's structured inputs differ per command and
+  change between versions; forwarding tokens keeps its own parser the authority. Flags that pick a
+  device or session inside the engine are refused. Files a caller sends (a replay script, an image for a TV)
   travel as `attachments` and are referenced in args as `attachment:<name>`.
 - **Self-destruct is enforced by Extend.** Briefcase's delegated upload takes no self-destruct time,
   so Extend records the time, deletes the file through Briefcase's delegated trash when it passes,
   and `extend file keep` cancels that. Open questions 1–2 still stand for Briefcase itself.
 - **One service instance.** Device sockets and waiting commands live in the process
   (`docs/operations.md`).
-- **Android reads the screen with an AccessibilityService**, not agent-device's helper over
+- **Android reads the screen with an AccessibilityService**, not the device engine's helper over
   on-device ADB: the accessibility tree gives the same element list and needs no debugging setup.
   ADB is used only for what accessibility can't do (`adb`, `install`, `logs`, `record`), through an
   ADB client inside the app (a patched libadb-android) that the Carbon pairs with Wireless debugging
@@ -778,14 +1227,14 @@ Differences from the first draft, each deliberate:
   `device_not_ready`. On computers, a command that arrives for a session the app already ended is
   answered `session_ended` without running. On Android, commands running when the socket drops get
   no answer (the service reports `device_offline`).
-- **Mac uses agent-device's native helper for everything**: text entry through Accessibility and
+- **Mac uses the device engine's native helper for everything**: text entry through Accessibility and
   recording through ScreenCaptureKit, so neither Xcode nor UI Automation is needed (the first draft
   expected the XCTest runner for typing and recording).
-- **Computer cleanup.** When agent-device can't release a Mac or Linux computer after a session
+- **Computer cleanup.** When the device engine can't release a Mac or Linux computer after a session
   (close fails, then a forced release fails), the app keeps working but reports every capability
-  that needs agent-device as missing, with one reason, and retries in the background; `terminal`
+  that needs the engine as missing, with one reason, and retries in the background; `terminal`
   and `takeover` stay available.
-- **Packaged runtime identity.** Mac and Linux packages stamp agent-device's version with a
+- **Packaged runtime identity.** Mac and Linux packages stamp the device engine's version with a
   content digest and install an entry that replaces a daemon started from another install path,
   so an update or a moved app never keeps running old code.
 - **Local stand-ins** for Silicon IAM, Briefcase and Ting (`EXTEND_IAM_MODE=local` etc.) exist for
@@ -815,6 +1264,39 @@ Added by the second round (2026-09-27), each described in its section above:
   and close code `4503` (§7, §8).
 - **Versioning:** the lifecycle, headers, matrix and contract fixtures (§10).
 
+1.1.0 (draft, 2026-09-27). Deliberate choices in the 1.1 design, each described in its section; this
+list is checked against the build before release:
+
+- **One pair per Carbon, one row per pair** (§3). A physical device is an instance that pairs point
+  to, so every 1.0 route, frame and credential keeps working, and a 1.0 app is the one-pair case.
+- **One connection per pair**, not one connection carrying several pairs: no 1.0 frame or handshake
+  changes, uploads stay bound to one credential, and a reconnect never half-replaces a socket other
+  pairs use. The cost is one socket per Carbon (at most 8).
+- **The app proves the device by holding a credential**; "Pair with another Carbon" is an enrollment
+  started with one, so no Carbon can attach to another's device without it showing a code.
+- **Carried devices are matched by a keyed hardware id** (`hardware_key`) with a salt every computer in
+  the world gets, and a device can be carried by one computer only (a second computer's pair is
+  refused, naming no one), so one lock group holds it and one Silicon at a time holds.
+- **Side tags on frames** let an app redact other sides' wake requests before a session's first
+  command, without the service naming a Carbon or Team to the device.
+- **No awake gate, no Extend wake.** Awake is information and a request flow; commands, the terminal
+  and Android debugging never wait for it.
+- **Requests routed to a Carbon** keep a fixed text in the 1.0 `to` column and no session, so a
+  rollback to 1.0.0 can't leak another side; the recipient Carbon sees the asking Silicon (the
+  Carbon's decision).
+- **Membership acts on definite answers only** (§9), with a second reader before deleting grants.
+- **Ting retries freeze the first body** (a retry after a rename still matches Ting's idempotency
+  key), back off, and don't count attempts with no login held; a missing Ting type is shown with its
+  register command instead of being retried silently.
+- **No new error code, end reason, capability, visibility or OS value**: 1.0 readers decode those
+  strictly. A Carbon's logout ends sessions as `access_removed`, whose hint to the Silicon says the
+  Carbon took its access away or signed out.
+- **Rollback to 1.0.0 needs a down step** (`deploy/rollback/1.1-to-1.0.sql`, listed in
+  `deploy/aws/README.md` and `docs/deployment.md`): it removes grants 1.0.0 would misread, fails routed
+  requests still pending, withdraws open wake requests, and deletes waiting "Pair with another Carbon"
+  codes. Triggers keep 1.0.0 safe while rolled back (devices stay personal, one Silicon per physical
+  device).
+
 ## Open questions
 
 Proposals in this file that `UNDERSTANDING.md` doesn't settle, or where it conflicts with another
@@ -835,6 +1317,24 @@ unless marked settled. Naming, signing and publishing decisions are in `docs/com
   Briefcase taking the self-destruct time itself through OBO (questions 1–2). Pending Ting requests
   have the same limit, but fail instead of waiting: with no login held, each 30-second retry still
   counts, so the request is marked failed after about 2.5 minutes, saying why.
+  *1.1 changes the Ting side:* every Ting goes from a member who took part (the asking Silicon, the
+  answering Carbon, or the recipient Carbon to themselves), never from a bystander such as the
+  Silicon using the device; each has a chain of such actors to try. An attempt with no login held
+  doesn't count, and a pending Ting goes out at the next signed-in call of any member in its chain.
+  Retries back off (30 s, then 1, 2, 4 and 8 minutes, then every 8 minutes) and resend the exact
+  first body; requests give up after 6 counted attempts or 24 hours, woken and declined Tings 30
+  minutes after their request ended. A member who turned Extend's Tings off stops the retries until
+  "Turn on". Recipient registration remains per Team. Ting 0.1.9 resolves types by context and
+  app, across delivery Teams. Extend's four types (`extend.device.requested`, `.wake_requested`,
+  `.woken`, `.wake_declined`) are registered once through the app-owning Team's authorized manager
+  in each context, and registered again after that context is cleaned. Its current OBO catalog has
+  no `types.register`; Extend cannot register them automatically on a Carbon's behalf. Settings,
+  the device page, `extend ting status` and delivery lines show missing types and the supported
+  manager command. When the owning Team is unknown, guidance uses the quoted `'<owning-team>'`
+  placeholder and never substitutes the delivery Team. Turning a recipient on or reading Settings
+  does not erase a missing-type error; successful delivery clears that Team's observation of the
+  type. The previous app-level-types request's per-Team premise is obsolete and needs a separate
+  documentation correction; no maintainer message is implied by this contract review.
 - **C3. A raw request reason is capped at 1,000 characters**, whitespace included (the reason
   itself is 1–300 without it). Confirm the cap or change it.
 - **C4. The `activate` participant action.** Extend opens a test environment when IAM accepts its
@@ -850,8 +1350,11 @@ unless marked settled. Naming, signing and publishing decisions are in `docs/com
 - **C8. Sign-up.** The website's "Create an account" goes to IAM's `/signup` beside its `/login`
   (or `iam_signup_url` if `GET /api/v1/iam` ever returns one). Confirm IAM's sign-up address, or
   have Extend return it.
-- **C9. Carbon logout (question 4)** is still open: a Carbon signing out of the website ends
-  nothing.
+- **C9. Carbon logout (question 4).** *Settled for 1.1 on 2026-09-27:* a Carbon signing out of the
+  website or the CLI ends the running sessions of the Silicons that Carbon gave access to, only on
+  that Carbon's side (§9). The build ends them as `access_removed` (the Silicon's hint says the Carbon
+  took its access away or signed out), since no end reason can be added without breaking 1.0
+  readers. This accepted 1.1 decision does not need another end-reason choice.
 
 Settled by round 2: question 13 (downloads go through Extend), question 15 (what `--quality`
 means on computers), the audit's "bind or document" for pairing codes across worlds (bound, as
@@ -868,11 +1371,12 @@ means on computers), the audit's "bind or document" for pairing codes across wor
 3. **Where files live.** `UNDERSTANDING.md` says "the private folder of the Silicon". Briefcase OBO
    can only write inside the app's own folder, so files land in `apps/extend/private/{silicon id}/`.
    Is that acceptable?
-4. **"Logging out … ends it immediately."** Read here as the *Silicon* logging out. Ending every
-   Silicon's access when the owning *Carbon* logs out of the website would break sessions each
-   time a browser signs out. Confirm. (How a Silicon's logout elsewhere is noticed: C1.)
-5. **Team-visible devices.** Proposed: other Carbons in the team see the device's name, OS, owner
-   and whether it is online, read-only. They can't grant access or see the activity log.
+4. **"Logging out … ends it immediately."** *Settled on 2026-09-27* (C9): a Silicon's logout ends
+   its own sessions; a Carbon's logout ends the sessions of the Silicons that Carbon gave access to.
+   (How a Silicon's logout elsewhere is noticed: C1.)
+5. **Team-visible devices.** *Settled by `UNDERSTANDING.md` on 2026-09-27:* a device belongs to the
+   Carbons who paired it and nobody else sees it; 1.1 removes visibility (every device reads
+   `personal`, and 1.0's "Team devices" list is empty).
 6. **Can Carbons start sessions?** Proposed: no; sessions are for Silicons, as `UNDERSTANDING.md`
    describes them. Carbons manage devices.
 7. **Daemon.** The house style suggests a CLI daemon. Extend doesn't need one for correctness;
@@ -887,10 +1391,10 @@ means on computers), the audit's "bind or document" for pairing codes across wor
    wait for a test environment's device-add turn.
 9. **Activity-log retention.** Not stated. Proposed: keep for the life of the device plus 90 days
    after it is removed.
-10. **Physical Fire TV.** `UNDERSTANDING.md` says Extend adds it. agent-device's Fire TV support is
+10. **Physical Fire TV.** `UNDERSTANDING.md` says Extend adds it. The device engine's Fire TV support is
     limited to Amazon's virtual device, so screen reading on a physical Fire TV depends on Extend's
     fork of the Android helper working on Fire OS. Needs a hardware check early.
-11. **iPhone signing.** agent-device's physical-iOS runner is an XCTest app that must be signed with
+11. **iPhone signing.** The device engine's iPhone helper (Silicon Extend Helper) is an XCTest app that must be signed with
     an Apple development team and installed from a Mac with Xcode tools. The setup guide needs to
     say which Apple account signs it: the Carbon's own, or a team one.
 12. **What the owner Carbon may do with a Silicon's file.** §6 first said create, read and update.
@@ -901,13 +1405,39 @@ means on computers), the audit's "bind or document" for pairing codes across wor
     Extend's own visibility check (§6, `api.yaml`); `extend file get` and every `--out` use it. It
     was the proposal here because the CLI's use of the Briefcase URL with an Extend token was
     refused by Briefcase.
-14. **Briefcase file ids as inputs.** `cli.yaml` offered a Briefcase file id for `install`, and
-    still does for `replay`, `display` and `diff screenshot --baseline`; nothing in the CLI, the
-    service or the devices resolves one. The CLI now refuses ids for `install` and asks for a local
-    file. Decide whether the service (or the device) should fetch Briefcase inputs, which would also
-    lift the 8 MiB attachment limit for APKs, or whether `cli.yaml` drops `file_id` there.
+14. **Briefcase file ids as inputs.** *Settled for display media in 1.1:* Extend resolves only its
+    own stored image/video references with the caller's authority (§6), keeping the 8-file/8-MiB
+    total. `install`, `replay` and `diff screenshot --baseline` require local inputs. Arbitrary
+    Briefcase entries and larger APK streaming are not implied by this change.
 15. **`record start --quality` on computers.** *Settled as built on 2026-09-27:* `normal` and
-    `high` work everywhere `cli.yaml` offers them. The agent passes them to agent-device as
+    `high` work everywhere `cli.yaml` offers them. The agent passes them to the device engine as
     `medium` and `high`; on a Mac (and a carried iPhone or iPad) that is the export quality, and the
     fork's Linux recorder now encodes at 8 Mbit/s (`medium`) or 20 Mbit/s (`high`), as Android's
     screenrecord does, instead of refusing the option.
+
+### 1.1.0 decisions and verification (reconciled 2026-09-28)
+
+The accepted design already settles logout (C9), the requester identity shown to a routed Carbon,
+the first-pair terminal restriction and the cross-Team self-send fallback. Ting's actual type lookup
+and OBO catalog correct the old dependency assumptions. These do not need fresh product approval.
+
+16. **After the installer's pair ends.** The implemented literal first-pair rule remains: while
+    several Carbons remain paired and none holds the original first pair, no pair gets Extend's
+    terminal; when only one remains, it gets terminal capability again. Automatically transferring
+    the installer role would be a separate product change, not required by the accepted design.
+17. **Terminal apps on the screen.** Settled by the accepted scope: other pairs retain screen,
+    keyboard and apps. The restriction removes Extend's terminal capability; it is not an OS-user
+    security boundary and does not add a terminal-app denylist. Pairing warns about the shared OS
+    account. Process cleanup and credential rotation remain required safeguards.
+18. **iPhone/iPad awake state.** A hardware verification item, not an unresolved behavior: report
+    unknown until a real lock-state reading is verified, with manual "It's awake" available.
+19. **Ting types.** Verified app/context lookup works across delivery Teams. Use the owning-Team
+    manager path once per context; there is no current `types.register` OBO endpoint. Keep missing
+    type and retry state visible. No per-delivery-Team registration or new Ting API is required.
+20. **Routed request with no shared Team.** Accepted: it sends from the recipient Carbon to
+    themselves with their own login. If Extend holds no usable login, delivery waits for that
+    Carbon's next use; the website/CLI request is visible at once. Never substitute a bystander's
+    authority. Self-send was accepted by the isolated real Ting fixture.
+
+No new undecided product choice was found in these 1.1 deltas. Physical-device coverage and release
+execution remain verification/operations work, separate from approving edits to the protected files.

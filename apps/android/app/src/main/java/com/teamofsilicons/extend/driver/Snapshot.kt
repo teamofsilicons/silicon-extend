@@ -105,7 +105,7 @@ class Snapshot(
 }
 
 /**
- * Turns a [Capture] into agent-device's snapshot: the same inclusion rules as its Android
+ * Turns a [Capture] into the device engine's snapshot: the same inclusion rules as its Android
  * presentation (`ui-hierarchy-inclusion.ts`), the same line format (`snapshot-lines.ts`), and refs
  * `e1…eN` in document order, valid until the next snapshot in the session.
  */
@@ -113,7 +113,7 @@ object SnapshotEngine {
     const val MAX_NODES = 5000
 
     fun build(capture: Capture, options: SnapshotOptions, previous: Snapshot? = null): Snapshot {
-        // 1. Flatten in document order, capped like agent-device's helper.
+        // 1. Flatten in document order, capped like the device engine's helper.
         val flat = ArrayList<Pair<UiNode, Int>>()
         val rootStarts = HashSet<Int>()
         var truncated = false
@@ -294,7 +294,7 @@ object SnapshotEngine {
             if (it.length > 200) it.take(197) + "..." else it
         }
 
-    /** Line diff between two snapshots' texts (agent-device `diff snapshot`), refs ignored. */
+    /** Line diff between two snapshots' texts (the device engine's `diff snapshot`), refs ignored. */
     fun diff(previous: Snapshot, current: Snapshot): Pair<String, JsonElement> {
         fun strip(n: SnapNode) = formatLine(n).replace(Regex("@e\\d+ "), "")
         val a = previous.nodes.map(::strip)

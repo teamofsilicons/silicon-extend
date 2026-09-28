@@ -97,9 +97,9 @@ describe("errors", () => {
 describe("headers", () => {
   it("sends the bearer token, team, API version and nothing test-related in production", async () => {
     const { client: c, calls } = client(() => json(200, DEVICES));
-    await c.listDevices({ scope: "team", limit: 20 });
+    await c.listDevices({ scope: "accessible", limit: 20 });
     const [call] = calls;
-    expect(call.url).toBe("https://api.test/api/v1/devices?scope=team&limit=20");
+    expect(call.url).toBe("https://api.test/api/v1/devices?scope=accessible&limit=20");
     expect(call.headers.Authorization).toBe("Bearer oat_old");
     expect(call.headers["X-Org-ID"]).toBe("acme");
     expect(call.headers["Silicon-Extend-API-Version"]).toBe("1");
@@ -151,8 +151,20 @@ describe("headers", () => {
 
   it("refuses to send a team-scoped request without a team, without calling the service", async () => {
     const { client: c, calls } = client(() => json(200, DEVICES), { team: () => null });
-    await expect(c.listDevices({ scope: "mine" })).rejects.toMatchObject({ code: "no_team_selected" });
+    await expect(c.listDevices({ scope: "accessible" })).rejects.toMatchObject({ code: "no_team_selected" });
+    await expect(c.grantAccess("7c1e09ab", "si:chef")).rejects.toMatchObject({ code: "no_team_selected" });
     expect(calls).toHaveLength(0);
+  });
+
+  it("lists and reads a Carbon's own devices without a Team (1.1: devices belong to the Carbon)", async () => {
+    const { client: c, calls } = client(
+      (call) => (call.url.includes("/devices/7c1e09ab") ? json(200, { type: "device", data: { device_id: "7c1e09ab" } }) : json(200, DEVICES)),
+      { team: () => null },
+    );
+    await c.listDevices({ scope: "mine" });
+    await c.getDevice("7c1e09ab");
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect(call.headers["X-Org-ID"]).toBeUndefined();
   });
 
   it("encodes path parameters", async () => {
@@ -199,7 +211,7 @@ describe("token refresh", () => {
       },
       { tokens },
     );
-    const all = Promise.all([c.listDevices({ scope: "mine" }), c.listDevices({ scope: "team" }), c.getSetup("7c1e09ab").catch(() => null), c.listAccess("7c1e09ab").catch(() => null)]);
+    const all = Promise.all([c.listDevices({ scope: "mine" }), c.listDevices({ scope: "accessible" }), c.getSetup("7c1e09ab").catch(() => null), c.listAccess("7c1e09ab").catch(() => null)]);
     await new Promise((r) => setTimeout(r, 5));
     release();
     await all;

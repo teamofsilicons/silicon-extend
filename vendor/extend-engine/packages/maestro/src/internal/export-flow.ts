@@ -1,0 +1,482 @@
+import type { SessionAction } from '@agent-device/contracts/session';
+import { GESTURE_FLING_DURATION_MS } from '@agent-device/contracts/gesture-plan';
+import { AppError } from '@agent-device/kernel/errors';
+import { selectorContainsKey } from '@agent-device/selectors';
+import { formatMaestroPoint } from './export-points.ts';
+import { DEFAULT_MAESTRO_COMPATIBILITY_TIMING_POLICY } from './compatibility-policy.ts';
+import type { ConvertedAction, MaestroExportCommand, MaestroExportConfig } from './export-types.ts';
+import { NAVIGATION_ACTION_CONVERTERS } from './export-navigation.ts';
+import { stringifyMaestroYamlDocuments } from './export-yaml.ts';
+
+export type MaestroExportWarning = {
+  line: number;
+  action: string;
+  message: string;
+};
+
+export type MaestroExportResult = {
+  yaml: string;
+  warnings: MaestroExportWarning[];
+};
+
+export type MaestroSelectorProjection = string | Readonly<Record<string, string | boolean>> | null;
+
+export type MaestroExportOptions = {
+  actionLines?: number[];
+  metadata?: { env?: Record<string, string> };
+  resolveSelector(expression: string): MaestroSelectorProjection;
+};
+
+type ExportContext = {
+  config: MaestroExportConfig;
+  warnings: MaestroExportWarning[];
+  unsupported: MaestroExportWarning[];
+};
+
+type ActionConverter = (
+  action: SessionAction,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+) => ConvertedAction;
+type SwipeGeometry = {
+  start: string;
+  end: string;
+  duration: number;
+};
+
+const LONG_PRESS_DURATION_WARNING =
+  'long-press duration exports as Maestro longPressOn; Maestro uses its default long-press duration';
+const LABEL_SELECTOR_EXPORT_WARNING =
+  'label= selectors export as Maestro text; Maestro text matching is broader than label-only matching in the device engine';
+
+export function exportReplayActionsToMaestro(
+  actions: SessionAction[],
+  options: MaestroExportOptions,
+): MaestroExportResult {
+  const context: ExportContext = {
+    config: buildInitialConfig(options.metadata),
+    warnings: [],
+    unsupported: [],
+  };
+  const commands: MaestroExportCommand[] = [];
+
+  for (const [index, action] of actions.entries()) {
+    const line = options.actionLines?.[index] ?? index + 1;
+    const converted = convertAction(action, options.resolveSelector);
+    switch (converted.kind) {
+      case 'commands':
+        commands.push(...converted.commands);
+        appendWarnings(context, converted.warnings, action, line);
+        break;
+      case 'config':
+        context.config.appId ??= converted.appId;
+        commands.push(...converted.commands);
+        appendWarnings(context, converted.warnings, action, line);
+        break;
+      case 'unsupported':
+        context.unsupported.push({
+          line,
+          action: formatActionForMessage(action),
+          message: converted.message,
+        });
+        break;
+    }
+  }
+
+  if (context.unsupported.length > 0) {
+    throw new AppError(
+      'INVALID_ARGS',
+      `Cannot export replay to Maestro YAML: unsupported .ad action ${formatUnsupportedList(
+        context.unsupported,
+      )}.`,
+      { unsupported: context.unsupported },
+    );
+  }
+
+  return {
+    yaml: formatMaestroYaml(context.config, commands),
+    warnings: context.warnings,
+  };
+}
+
+function buildInitialConfig(metadata: MaestroExportOptions['metadata']): MaestroExportConfig {
+  return metadata?.env && Object.keys(metadata.env).length > 0 ? { env: metadata.env } : {};
+}
+
+const ACTION_CONVERTERS: Record<string, ActionConverter> = {
+  ...NAVIGATION_ACTION_CONVERTERS,
+  click: convertClickAction,
+  press: convertClickAction,
+  longpress: convertLongPressAction,
+  fill: convertFillAction,
+  type: convertTypeAction,
+  wait: convertWaitAction,
+  find: convertFindAction,
+  screenshot: convertScreenshotAction,
+  scroll: convertScrollAction,
+  swipe: convertSwipeAction,
+};
+
+function convertAction(
+  action: SessionAction,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+): ConvertedAction {
+  return (
+    ACTION_CONVERTERS[action.command]?.(action, resolveSelector) ?? {
+      kind: 'unsupported',
+      message: `${action.command} has no Maestro equivalent`,
+    }
+  );
+}
+
+function convertClickAction(
+  action: SessionAction,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+): ConvertedAction {
+  const [first, second] = action.positionals;
+  if (!first) return { kind: 'unsupported', message: `${action.command} requires a target` };
+  const tapTarget = readTapTarget(first, second, resolveSelector);
+  if (!tapTarget) return { kind: 'unsupported', message: 'tap target is not Maestro-compatible' };
+
+  const tapOptions = readRepeatedTapOptions(action);
+  if (!tapOptions.ok) return { kind: 'unsupported', message: tapOptions.message };
+
+  if (action.flags?.doubleTap === true) {
+    return {
+      kind: 'commands',
+      commands: [{ doubleTapOn: tapTarget }],
+      warnings: [
+        ...readLabelSelectorWarnings(first),
+        ...readIgnoredRepeatedTapOptionWarnings(action, 'doubleTapOn'),
+      ],
+    };
+  }
+  if (typeof action.flags?.holdMs === 'number') {
+    return {
+      kind: 'commands',
+      commands: [{ longPressOn: tapTarget }],
+      warnings: [
+        ...readLabelSelectorWarnings(first),
+        formatLongPressDurationWarning(action.flags.holdMs),
+        ...readIgnoredRepeatedTapOptionWarnings(action, 'longPressOn'),
+      ],
+    };
+  }
+
+  return {
+    kind: 'commands',
+    commands: [withTapOptions(tapTarget, tapOptions.options)],
+    warnings: readLabelSelectorWarnings(first),
+  };
+}
+
+function convertLongPressAction(
+  action: SessionAction,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+): ConvertedAction {
+  const [first, second] = action.positionals;
+  if (!first) return { kind: 'unsupported', message: 'longpress requires a target' };
+  const target = readTapTarget(first, second, resolveSelector);
+  if (!target)
+    return { kind: 'unsupported', message: 'longpress target is not Maestro-compatible' };
+  return {
+    kind: 'commands',
+    commands: [{ longPressOn: target }],
+    warnings: [
+      ...readLabelSelectorWarnings(first),
+      ...readLongPressDuration(action).map(formatLongPressDurationWarning),
+    ],
+  };
+}
+
+function readLongPressDuration(action: SessionAction): number[] {
+  const [first, second, third] = action.positionals;
+  const duration = isNumber(first) && isNumber(second) ? third : second;
+  return duration && isNumber(duration) ? [Number(duration)] : [];
+}
+
+function formatLongPressDurationWarning(durationMs: number): string {
+  return `${LONG_PRESS_DURATION_WARNING} instead of ${durationMs}ms`;
+}
+
+function readIgnoredRepeatedTapOptionWarnings(
+  action: SessionAction,
+  maestroCommand: 'doubleTapOn' | 'longPressOn',
+): string[] {
+  const warnings: string[] = [];
+  if (typeof action.flags?.count === 'number' && action.flags.count > 1) {
+    warnings.push(
+      `tap --count ${action.flags.count} is not represented by Maestro ${maestroCommand}`,
+    );
+  }
+  if (typeof action.flags?.intervalMs === 'number' && action.flags.intervalMs > 0) {
+    warnings.push(
+      `tap --interval-ms ${action.flags.intervalMs} is not represented by Maestro ${maestroCommand}`,
+    );
+  }
+  return warnings;
+}
+
+function convertFillAction(
+  action: SessionAction,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+): ConvertedAction {
+  const [target, text] = action.positionals;
+  if (!target || text === undefined) {
+    return { kind: 'unsupported', message: 'fill requires a target and text' };
+  }
+  const tapTarget = readTapTarget(target, undefined, resolveSelector);
+  if (!tapTarget) return { kind: 'unsupported', message: 'fill target is not Maestro-compatible' };
+  if (text.length === 0) {
+    // The clear request (#2063): `inputText: ""` types nothing in Maestro, so the recorded
+    // clear would silently become a no-op. `eraseText` is Maestro's clear verb; without a
+    // count it erases up to its 50-character default, which is a bound this export cannot
+    // recover the real length for.
+    return {
+      kind: 'commands',
+      commands: [{ tapOn: tapTarget }, 'eraseText'],
+      warnings: [
+        ...readLabelSelectorWarnings(target),
+        'fill "" exports as tapOn + eraseText; Maestro erases at most its 50-character default',
+      ],
+    };
+  }
+  return {
+    kind: 'commands',
+    commands: [{ tapOn: tapTarget }, { inputText: text }],
+    warnings: [
+      ...readLabelSelectorWarnings(target),
+      'fill exports as tapOn + inputText; Maestro may append text instead of replacing existing field contents',
+    ],
+  };
+}
+
+function convertTypeAction(action: SessionAction): ConvertedAction {
+  const [text] = action.positionals;
+  if (text === undefined) return { kind: 'unsupported', message: 'type requires text' };
+  const eraseCount = readBackspaceCount(text);
+  if (eraseCount !== null) return { kind: 'commands', commands: [{ eraseText: eraseCount }] };
+  return { kind: 'commands', commands: [{ inputText: text }] };
+}
+
+function convertWaitAction(
+  action: SessionAction,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+): ConvertedAction {
+  const [first, second] = action.positionals;
+  if (!first) return { kind: 'unsupported', message: 'wait requires a target or duration' };
+  if (isNumber(first)) {
+    return {
+      kind: 'commands',
+      commands: [{ waitForAnimationToEnd: { timeout: Number(first) } }],
+      warnings: [
+        'wait <ms> exports as waitForAnimationToEnd and may return before the full duration',
+      ],
+    };
+  }
+  if (first === 'absent') {
+    return {
+      kind: 'unsupported',
+      message: 'strict wait absent requires zero selector matches and is unsupported by Maestro',
+    };
+  }
+  if (first === 'text' && second) {
+    return {
+      kind: 'commands',
+      commands: [
+        {
+          extendedWaitUntil: {
+            visible: second,
+            timeout: readTimeout(
+              action,
+              DEFAULT_MAESTRO_COMPATIBILITY_TIMING_POLICY.extendedWaitUntilTimeoutMs,
+            ),
+          },
+        },
+      ],
+    };
+  }
+  const selector = resolveSelector(first);
+  if (!selector) return { kind: 'unsupported', message: 'wait selector is not Maestro-compatible' };
+  return {
+    kind: 'commands',
+    commands: [
+      {
+        extendedWaitUntil: {
+          visible: selector,
+          timeout: readTimeout(
+            action,
+            DEFAULT_MAESTRO_COMPATIBILITY_TIMING_POLICY.extendedWaitUntilTimeoutMs,
+          ),
+        },
+      },
+    ],
+    warnings: readLabelSelectorWarnings(first),
+  };
+}
+
+function readLabelSelectorWarnings(expression: string): string[] {
+  return selectorContainsKey(expression, 'label') ? [LABEL_SELECTOR_EXPORT_WARNING] : [];
+}
+
+function convertFindAction(action: SessionAction): ConvertedAction {
+  const [kind, query, assertion] = action.positionals;
+  if (kind !== 'text' || !query || !assertion) {
+    return {
+      kind: 'unsupported',
+      message: 'only find text <query> exists|missing exports to Maestro',
+    };
+  }
+  if (assertion === 'exists') return { kind: 'commands', commands: [{ assertVisible: query }] };
+  if (assertion === 'missing' || assertion === 'not-exists') {
+    return { kind: 'commands', commands: [{ assertNotVisible: query }] };
+  }
+  return { kind: 'unsupported', message: `find text assertion "${assertion}" is unsupported` };
+}
+
+function convertScreenshotAction(action: SessionAction): ConvertedAction {
+  const [name] = action.positionals;
+  if (!name) return { kind: 'unsupported', message: 'screenshot requires an output path' };
+  return { kind: 'commands', commands: [{ takeScreenshot: name }] };
+}
+
+function convertScrollAction(action: SessionAction): ConvertedAction {
+  const [direction] = action.positionals;
+  if (!direction || direction === 'down') return { kind: 'commands', commands: ['scroll'] };
+  return { kind: 'unsupported', message: `scroll ${direction} is not exported yet` };
+}
+
+function convertSwipeAction(action: SessionAction): ConvertedAction {
+  const swipe = readSwipeGeometry(action);
+  if (!swipe) return { kind: 'unsupported', message: 'only coordinate swipe exports to Maestro' };
+  const count = readSwipeCount(action);
+  if (count === null)
+    return { kind: 'unsupported', message: 'swipe count must be a positive integer' };
+  const unsupportedFlag = readUnsupportedSwipeFlag(action);
+  if (unsupportedFlag) return { kind: 'unsupported', message: unsupportedFlag };
+  return {
+    kind: 'commands',
+    commands: Array.from({ length: count }, () => ({ swipe })),
+  };
+}
+
+/**
+ * `swipe` carries no duration positional, so the export states the canonical
+ * fling duration rather than letting Maestro apply its own 400 ms default to a
+ * gesture the script runs at 100 ms.
+ */
+function readSwipeGeometry(action: SessionAction): SwipeGeometry | undefined {
+  const [x1, y1, x2, y2] = action.positionals;
+  if (!isNumber(x1) || !isNumber(y1) || !isNumber(x2) || !isNumber(y2)) return undefined;
+  return {
+    start: formatMaestroPoint(x1, y1),
+    end: formatMaestroPoint(x2, y2),
+    duration: GESTURE_FLING_DURATION_MS,
+  };
+}
+
+function readSwipeCount(action: SessionAction): number | null {
+  const count = action.flags?.count ?? 1;
+  return Number.isInteger(count) && count >= 1 ? count : null;
+}
+
+function readUnsupportedSwipeFlag(action: SessionAction): string | undefined {
+  if (action.flags?.pauseMs !== undefined) return 'swipe --pause-ms has no Maestro equivalent';
+  if (action.flags?.pattern && action.flags.pattern !== 'one-way') {
+    return 'swipe ping-pong pattern has no Maestro equivalent';
+  }
+  return undefined;
+}
+
+function readTapTarget(
+  first: string,
+  second: string | undefined,
+  resolveSelector: MaestroExportOptions['resolveSelector'],
+): unknown | null {
+  if (isNumber(first) && isNumber(second)) return { point: formatMaestroPoint(first, second) };
+  if (first.startsWith('@')) return null;
+  return resolveSelector(first);
+}
+
+function readRepeatedTapOptions(
+  action: SessionAction,
+): { ok: true; options: Record<string, unknown> } | { ok: false; message: string } {
+  const unsupported = readUnsupportedRepeatedTapOption(action);
+  if (unsupported) return { ok: false, message: unsupported };
+  return { ok: true, options: buildRepeatedTapOptions(action) };
+}
+
+function buildRepeatedTapOptions(action: SessionAction): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  if (typeof action.flags?.count === 'number' && action.flags.count > 1) {
+    options.repeat = action.flags.count;
+  }
+  if (typeof action.flags?.intervalMs === 'number' && action.flags.intervalMs > 0) {
+    options.delay = action.flags.intervalMs;
+  }
+  return options;
+}
+
+function readUnsupportedRepeatedTapOption(action: SessionAction): string | undefined {
+  if (action.flags?.jitterPx !== undefined) {
+    return 'tap --jitter-px has no Maestro equivalent';
+  }
+  if (action.flags?.clickButton && action.flags.clickButton !== 'primary') {
+    return `tap --button ${action.flags.clickButton} has no Maestro equivalent`;
+  }
+  return undefined;
+}
+
+function withTapOptions(target: unknown, options: Record<string, unknown>): MaestroExportCommand {
+  if (Object.keys(options).length === 0) return { tapOn: target };
+  if (typeof target === 'string') return { tapOn: { text: target, ...options } };
+  if (target && typeof target === 'object' && !Array.isArray(target)) {
+    return { tapOn: { ...(target as Record<string, unknown>), ...options } };
+  }
+  return { tapOn: target };
+}
+
+function readBackspaceCount(text: string): number | null {
+  if (text.length === 0) return null;
+  if (![...text].every((char) => char === '\b')) return null;
+  return text.length;
+}
+
+function appendWarnings(
+  context: ExportContext,
+  warnings: string[] | undefined,
+  action: SessionAction,
+  line: number,
+): void {
+  for (const message of warnings ?? []) {
+    context.warnings.push({
+      line,
+      action: formatActionForMessage(action),
+      message,
+    });
+  }
+}
+
+function readTimeout(action: SessionAction, fallback: number): number {
+  const candidate = action.positionals.at(-1);
+  return candidate && isNumber(candidate) ? Number(candidate) : fallback;
+}
+
+function formatMaestroYaml(config: MaestroExportConfig, commands: MaestroExportCommand[]): string {
+  const hasConfig = Object.keys(config).length > 0;
+  const docs: unknown[] = hasConfig ? [config, commands] : [commands];
+  return stringifyMaestroYamlDocuments(docs);
+}
+
+function formatUnsupportedList(entries: MaestroExportWarning[]): string {
+  return entries
+    .map((entry) => `line ${entry.line} (${entry.action}): ${entry.message}`)
+    .join('; ');
+}
+
+function formatActionForMessage(action: SessionAction): string {
+  return [action.command, ...(action.positionals ?? [])].join(' ').trim();
+}
+
+function isNumber(value: string | undefined): value is string {
+  return value !== undefined && Number.isFinite(Number(value));
+}

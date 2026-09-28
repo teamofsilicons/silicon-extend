@@ -7,8 +7,8 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 IMAGE="${IMAGE:-silicon-extend-linux-e2e}"
 # Bundle the current source, even when an older dist directory already exists, and record what it
 # was built from: the container has no pnpm, and build-package.sh checks the dist against it.
-(cd "$ROOT/vendor/agent-device" && pnpm install --frozen-lockfile && pnpm build)
-node "$ROOT/apps/desktop/dist-manifest.mjs" record "$ROOT/vendor/agent-device"
+(cd "$ROOT/vendor/extend-engine" && pnpm install --frozen-lockfile && pnpm build)
+node "$ROOT/apps/desktop/dist-manifest.mjs" record "$ROOT/vendor/extend-engine"
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$ROOT/apps/desktop/linux-e2e"
 mkdir -p "$ROOT/target/desktop/linux"
 docker run --rm \

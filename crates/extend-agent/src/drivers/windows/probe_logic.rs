@@ -5,7 +5,7 @@ use extend_protocol::Capability as C;
 use extend_protocol::DeviceOs;
 use extend_protocol::model::{MissingCapability, Setup, SetupStep, StepStatus};
 
-pub const LOCKED_REASON: &str = "This computer is locked. Unlock it to let a Silicon use it.";
+use crate::drivers::screen_lock::ScreenBlock;
 
 /// What this build does on Windows when the computer is unlocked. `terminal` is added by the agent.
 pub const WORKING: &[C] = &[
@@ -43,17 +43,17 @@ pub const NOT_BUILT: &[(C, &str)] = &[
 /// Capabilities a locked computer still offers (they don't touch the screen).
 const WHILE_LOCKED: &[C] = &[C::AppsList, C::Takeover];
 
-pub fn probe_from(locked: bool, os_version: Option<String>) -> Probe {
+/// What the computer can do given what blocks its screen (`None`: nothing does).
+pub fn probe_from(block: Option<ScreenBlock>, os_version: Option<String>) -> Probe {
     let mut capabilities = Vec::new();
     let mut missing: Vec<MissingCapability> = Vec::new();
     for &cap in WORKING {
-        if !locked || WHILE_LOCKED.contains(&cap) {
-            capabilities.push(cap);
-        } else {
-            missing.push(MissingCapability {
+        match block {
+            Some(b) if !WHILE_LOCKED.contains(&cap) => missing.push(MissingCapability {
                 capability: cap,
-                reason: LOCKED_REASON.into(),
-            });
+                reason: b.reason(),
+            }),
+            _ => capabilities.push(cap),
         }
     }
     for (cap, reason) in NOT_BUILT {
@@ -62,7 +62,8 @@ pub fn probe_from(locked: bool, os_version: Option<String>) -> Probe {
             reason: (*reason).into(),
         });
     }
-    let setup = if locked {
+    // A lock screen or another account needs the Carbon; an admin prompt is the Carbon at work.
+    let setup = if matches!(block, Some(ScreenBlock::Locked | ScreenBlock::OtherSession)) {
         Setup::from_steps(vec![SetupStep {
             key: "unlocked".into(),
             title: "Unlock this computer".into(),
@@ -84,8 +85,11 @@ pub fn probe_from(locked: bool, os_version: Option<String>) -> Probe {
         capabilities,
         missing,
         setup,
-        agent_device_version: None,
+        engine_version: None,
         online: true,
+        awake: None,
+        sleep_state: None,
+        hardware_id: None,
     }
 }
 
@@ -105,7 +109,7 @@ mod tests {
 
     #[test]
     fn unlocked_probe() {
-        let p = probe_from(false, Some("10.0.22631".into()));
+        let p = probe_from(None, Some("10.0.22631".into()));
         assert_eq!(p.os, DeviceOs::Windows);
         assert!(p.capabilities.contains(&C::ScreenRead));
         assert!(p.capabilities.contains(&C::InputText));
@@ -127,12 +131,21 @@ mod tests {
 
     #[test]
     fn locked_probe() {
-        let p = probe_from(true, None);
+        let p = probe_from(Some(ScreenBlock::Locked), None);
         assert_eq!(p.capabilities, vec![C::AppsList, C::Takeover]);
         let screen = p.missing.iter().find(|m| m.capability == C::ScreenRead).unwrap();
-        assert_eq!(screen.reason, LOCKED_REASON);
+        assert_eq!(screen.reason, ScreenBlock::Locked.reason());
+        assert!(
+            screen.reason.contains("Only its Carbon can unlock it"),
+            "{}",
+            screen.reason
+        );
         assert_eq!(p.setup.state, SetupState::NeedsCarbon);
         assert!(p.online);
+        // An admin prompt blocks the screen the same way, but needs no setup step.
+        let p = probe_from(Some(ScreenBlock::AdminPrompt), None);
+        assert_eq!(p.capabilities, vec![C::AppsList, C::Takeover]);
+        assert_eq!(p.setup.state, SetupState::Complete);
     }
 
     #[test]

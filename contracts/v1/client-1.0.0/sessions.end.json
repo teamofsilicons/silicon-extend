@@ -1,0 +1,78 @@
+{
+  "api_version": 1,
+  "call": "Authed::end_session",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "operation": "sessions.end",
+  "request": {
+    "body": {
+      "data": {},
+      "type": "end"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/sessions/{session_id}/end"
+  },
+  "response": {
+    "non_null": [
+      "/command_count",
+      "/device/device_id",
+      "/device/in_use/paused",
+      "/device/in_use/session_id",
+      "/device/in_use/silicon_id",
+      "/device/in_use/since",
+      "/device/kind",
+      "/device/missing/*/capability",
+      "/device/missing/*/reason",
+      "/device/name",
+      "/device/online",
+      "/device/os",
+      "/device/owner",
+      "/device/owner/id",
+      "/device/owner/type",
+      "/device/state",
+      "/device/visibility",
+      "/device_id",
+      "/session_id",
+      "/silicon_id",
+      "/started_at",
+      "/state"
+    ],
+    "required": [
+      "/device/device_id",
+      "/device/in_use/session_id",
+      "/device/in_use/silicon_id",
+      "/device/in_use/since",
+      "/device/kind",
+      "/device/missing/*/capability",
+      "/device/missing/*/reason",
+      "/device/name",
+      "/device/online",
+      "/device/os",
+      "/device/owner",
+      "/device/owner/id",
+      "/device/owner/type",
+      "/device/state",
+      "/device/visibility",
+      "/device_id",
+      "/ended_at",
+      "/idle_ends_at",
+      "/last_command_at",
+      "/session_id",
+      "/silicon_id",
+      "/started_at",
+      "/state"
+    ],
+    "status": "2xx",
+    "type": "session"
+  }
+}

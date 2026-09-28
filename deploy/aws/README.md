@@ -40,9 +40,33 @@ On the host:
 3. Record the new digest in the SSM parameter.
 4. Over SSM, run `/usr/local/sbin/extend-release`.
 
+For 1.1.0, follow the order and the two release gates in [Releasing 1.1.0](../../docs/deployment.md#releasing-110): the service goes out first.
+
+The template's host helpers are installed at instance bootstrap. An image-only release does not
+refresh `/usr/local/sbin/extend-render-env`. Before applying 1.1 tuning overrides to an existing
+host, back up that helper and replace it with the corresponding script from the release's
+`standalone.yaml` (retain root ownership and mode 0750). The 1.1 allowlist includes all five
+documented tuning variables, including `EXTEND_OWNER_CHECK_AT_USE=false`. Run
+`python3 deploy/aws/test_render_env.py` before deployment; verify the selected non-secret settings
+in the rendered environment afterward. Absent overrides continue using service defaults.
+
+Keep the existing stop-old-container/start-new-container order for the idempotency update. Old
+writers do not reserve keys before running an operation, so overlapping old and new writers would
+not provide the new concurrency guarantee. Reservations use the existing table and a valid 503
+error envelope; completed successes and explicit errors are both stored before they are returned.
+
+An interrupted operation or uncertain final database write can leave a pending claim. It must
+not expire into an automatic rerun: first reconcile its session/device/request/report/wake record
+and any provider delivery. Do not delete the claim or advise a new key merely because it is old.
+Backup/restore must preserve the idempotency records together with the affected operation data.
+The 503 marker is readable by older code only under the same route namespace; the existing 1.0
+session/request route keys differ from 1.1, so marker compatibility alone is not rollback replay
+proof for those operations.
+
 The outage lasts a few seconds, and devices reconnect by themselves. Pass `PinnedImageId`, `InstanceType` and `--tags Service=silicon-extend Environment=production` on every stack update (leaving the tags out strips them from every resource), and read the change set first: `Instance` must never show a replacement.
 
 ## Rollback
 
 - **Image:** put the previous digest in the SSM parameter and run `extend-release`. Migrations only go forward, so restore the pre-release snapshot if the old image can't run against the new schema.
+- **1.1.0 back to 1.0.0** needs a down step as well. Stop the service, run `psql "$EXTEND_DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/rollback/1.1-to-1.0.sql` once (it changes production and every test environment in one transaction, and running it twice does no harm), then put the 1.0.0 digest in the SSM parameter and run `extend-release`. What it does: [Rolling back to 1.0.0](../../docs/deployment.md#rolling-back-to-100).
 - **Secret:** move `AWSCURRENT` back to `AWSPREVIOUS`, then run `extend-release`.

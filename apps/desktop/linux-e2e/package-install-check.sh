@@ -4,7 +4,7 @@
 # already holds every -dev package and the whole toolchain, so an install there cannot show that
 # the package's own Depends line is enough; this check can. record-service-e2e.py runs it twice:
 #   PHASE=depends     apt install --no-install-recommends: Depends alone must be enough for
-#                     extend-agent, the bundled Node and agent-device to start
+#                     extend-agent, the bundled Node and the device engine to start
 #   PHASE=recommends  a default apt install: Recommends must also bring every tool and library
 #                     X11 recording needs (whole screen and single app)
 # Mounts: the package at /tmp/extend-package.deb. Needs network access for apt.
@@ -28,7 +28,7 @@ for binary in /usr/bin/extend-agent /usr/lib/silicon-extend/node/bin/node; do
   fi
 done
 SILICON_HOME=/tmp/h extend-agent --version
-/usr/lib/silicon-extend/node/bin/node /usr/lib/silicon-extend/agent-device/bin/agent-device.mjs --version
+/usr/lib/silicon-extend/node/bin/node /usr/lib/silicon-extend/engine/bin/extend-engine.mjs --version
 env -u DISPLAY SILICON_HOME=/tmp/h extend-agent probe >/tmp/probe.txt
 python3 -c 'import gi; gi.require_version("Atspi", "2.0"); from gi.repository import Atspi'
 if [[ "$PHASE" == recommends ]]; then

@@ -77,11 +77,12 @@ class UiLookTest {
         assertNull("phones use the notification, not the badge", InUseBadge.from(UiState(session = session)))
         assertNull("nothing running, no badge", InUseBadge.from(UiState(isTv = true)))
 
-        val using = InUseBadge.from(UiState(isTv = true, session = session))!!
+        val announcement = com.teamofsilicons.extend.core.AnnounceUi(session.sessionId, session.siliconId, true)
+        val using = InUseBadge.from(UiState(isTv = true, session = session, announce = announcement))!!
         assertEquals("si:concierge is using this TV", using.spoken)
         assertFalse(using.waiting)
 
-        val stopping = InUseBadge.from(UiState(isTv = true, session = session.copy(stopping = true)))!!
+        val stopping = InUseBadge.from(UiState(isTv = true, session = session.copy(stopping = true), announce = announcement))!!
         assertEquals("si:concierge is stopping…", stopping.spoken)
 
         val waiting = InUseBadge.from(UiState(isTv = true, session = session, takeover = TakeoverUi("s-1", "Sign in to Netflix", null)))!!

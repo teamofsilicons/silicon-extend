@@ -1,0 +1,33 @@
+{
+  "api_version": 1,
+  "call": "Client::logout",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.0.0",
+  "contract": 1,
+  "given": [
+    "refresh_token"
+  ],
+  "operation": "auth.logout",
+  "request": {
+    "body": {
+      "data": {
+        "token": "{refresh_token}"
+      },
+      "type": "logout"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/auth/logout"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": "logout"
+  }
+}

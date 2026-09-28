@@ -23,7 +23,7 @@ import java.time.format.DateTimeFormatter
 
 /** What the enrollment loop needs from the service; [ConnectionManager] wires the real calls, tests fake them. */
 interface EnrollmentPort {
-    /** `POST /api/v1/enrollments`. */
+    /** `POST /api/v1/enrollments`, or `POST /api/v1/device/enrollments` for "Pair with another Carbon". */
     suspend fun create(): EnrollmentCreated
 
     /** `GET /api/v1/enrollments/{id}`; throws [ApiException] when the service refuses. */
@@ -47,6 +47,8 @@ interface EnrollmentPort {
  * - `429 rate_limited` waits the service's `retry_after_s` (or at least [RATE_LIMIT_FALLBACK_MS]
  *   without one), and a network coming back does not cut that wait short.
  * - Only a failure to reach the service wakes early when the network returns ([netWake]).
+ * - A refusal [giveUp] names (an old service, the pair limit) ends the loop: [run] throws it, since
+ *   asking again can't help.
  */
 class EnrollmentLoop(
     private val port: EnrollmentPort,
@@ -57,6 +59,7 @@ class EnrollmentLoop(
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: ZoneId = ZoneId.systemDefault(),
     private val log: (String, Throwable?) -> Unit = { m, e -> Extend.log(m, e) },
+    private val giveUp: (Exception) -> Boolean = { false },
 ) {
     /** How following one enrollment ended. */
     private sealed interface Followed {
@@ -81,6 +84,7 @@ class EnrollmentLoop(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (giveUp(e)) throw e
                 val wait = waitAfterCreateFailure(e)
                 ui { it.copy(code = null, expiresAt = null, live = false, error = PairingMessages.createFailed(e, wait, serviceUrl(), clock(), zone)) }
                 log("enrollment create failed", e)

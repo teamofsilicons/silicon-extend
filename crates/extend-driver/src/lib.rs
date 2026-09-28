@@ -2,13 +2,13 @@
 //!
 //! The agent owns the connection to the service, sessions, uploads and the indicator. A driver
 //! only answers two questions: what can this device do right now (`probe`), and run this command
-//! (`run`). Drivers exist for agent-device (Mac, Linux, and iPhone/iPad through a Mac), Windows,
-//! and the TVs a computer carries (Apple TV, Samsung, LG).
+//! (`run`). Drivers exist for the device engine (Mac, Linux, and iPhone/iPad through a Mac),
+//! Windows, and the TVs a computer carries (Apple TV, Samsung, LG).
 
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use extend_protocol::model::{CommandError, FileKind, MissingCapability, Setup};
+use extend_protocol::model::{CommandError, FileKind, MissingCapability, Setup, SleepState};
 use extend_protocol::{Capability, DeviceOs};
 use tokio_util_cancel::CancelToken;
 
@@ -24,13 +24,23 @@ pub struct Probe {
     /// Capabilities this kind of device has when fully set up but this one lacks, with why.
     pub missing: Vec<MissingCapability>,
     pub setup: Setup,
-    /// agent-device version when the driver uses it.
-    pub agent_device_version: Option<String>,
+    /// The device engine's version when the driver uses it.
+    pub engine_version: Option<String>,
     /// False when the device can't be reached right now (a TV that's off).
     pub online: bool,
+    /// Whether the device is awake: its screen on and unlocked, or a TV out of standby. `None`
+    /// when the driver can't tell (an iPhone, a TV that doesn't say). Information only: nothing
+    /// is withheld for it, and no driver ever wakes a device to find out.
+    pub awake: Option<bool>,
+    /// Why it isn't awake, when `awake` is `Some(false)`.
+    pub sleep_state: Option<SleepState>,
+    /// A stable id of the physical device that survives restarts and re-pairing (an iPhone's UDID,
+    /// a TV's DUID or MAC), for a carried device. The agent never sends it: it sends an HMAC of it
+    /// keyed with the world's salt (`hardware_key`), so one TV carried for two Carbons is one device.
+    pub hardware_id: Option<String>,
 }
 
-/// One command to run. `args` are agent-device command-line tokens after the command name.
+/// One command to run. `args` are device-engine command-line tokens after the command name.
 #[derive(Debug, Clone)]
 pub struct Invocation<'a> {
     pub id: uuid::Uuid,
@@ -57,7 +67,7 @@ pub struct LocalFile {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Output {
     pub ok: bool,
-    /// Structured result (agent-device's `--json` data, or the driver's own).
+    /// Structured result (the device engine's `--json` data, or the driver's own).
     pub output: serde_json::Value,
     /// What the CLI prints without `--json`.
     pub text: Option<String>,
@@ -105,14 +115,22 @@ pub trait Driver: Send + Sync {
     async fn run(&self, inv: Invocation<'_>) -> Output;
 
     /// Called when a session starts and ends, so the driver can prepare or clean up (close its
-    /// agent-device session, stop a recording that was left running).
+    /// device-engine session, stop a recording that was left running).
     async fn session_started(&self, _session_id: &str) {}
     async fn session_ended(&self, _session_id: &str) {}
+    /// The session is still live though no command runs: a takeover started or ended.
+    async fn session_active(&self, _session_id: &str) {}
 
     /// A code the Carbon entered on the website during setup (Apple TV).
     async fn setup_code(&self, _code: &str) -> Result<(), String> {
         Err("this device has no setup code".into())
     }
+
+    /// The Carbon asked to retry a failed setup step now (`setup_retry`): `step` names it, `None`
+    /// means every failed step. A driver that retries on a timer or with backoff runs the attempt
+    /// at once instead of waiting; the caller then probes and reports the result as usual. The
+    /// default does nothing beyond that probe, which is all a step that is only checked needs.
+    async fn retry_setup(&self, _step: Option<&str>) {}
 }
 
 /// Tiny cancellation token so drivers don't need tokio-util.

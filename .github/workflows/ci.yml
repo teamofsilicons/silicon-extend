@@ -26,6 +26,8 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL && df -h /
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev
       - run: cargo fmt --all --check
+      - name: Deployment environment renderer
+        run: python3 deploy/aws/test_render_env.py
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Consumer-driven contracts (TECHNICAL.md section 10, contracts/README.md): the client crate's
       # recorded fixtures must match what it sends, and a real service must still accept every
@@ -55,50 +57,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium && pnpm test:e2e
-  # The agent-device fork and the desktop packaging that stamps and wraps it.
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Desktop banner browser controls
+        run: node --test ../apps/desktop/banner-ui.e2e.mjs
+      - run: pnpm test:e2e
+  # The device engine (vendor/extend-engine) and the desktop packaging that stamps and wraps it.
   fork:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: pnpm/action-setup@v4
-        with: {version: 11.17.0} # vendor/agent-device/package.json packageManager
+        with: {version: 11.17.0} # vendor/extend-engine/package.json packageManager
       - uses: actions/setup-node@v4
-        with: {node-version: 24, cache: pnpm, cache-dependency-path: vendor/agent-device/pnpm-lock.yaml}
+        with: {node-version: 24, cache: pnpm, cache-dependency-path: vendor/extend-engine/pnpm-lock.yaml}
       - run: pnpm install --frozen-lockfile
-        working-directory: vendor/agent-device
-      # Every fork test file an Extend change touched (vendor/agent-device/FORK.md). The fork's full
-      # suite has failures that predate Extend, so it is not run here.
-      - name: Fork tests Extend changed
-        working-directory: vendor/agent-device
-        run: >-
-          pnpm exec vitest run --project unit-core
-          packages/contracts/src/session-surface.test.ts
-          packages/platform-apple/src/__tests__/interactor-macos-surface.test.ts
-          packages/platform-apple/src/__tests__/interactor-runner-provider.test.ts
-          packages/platform-apple/src/__tests__/runner-requests.test.ts
-          packages/platform-apple/src/core/__tests__/interactions.test.ts
-          packages/platform-apple/src/os/macos/apps.test.ts
-          packages/platform-apple/src/os/macos/helper.test.ts
-          packages/platform-apple/src/recording/recovery.test.ts
-          packages/platform-apple/src/recording/runtime.test.ts
-          packages/platform-apple/src/runtime.test.ts
-          packages/platform-linux/src/__tests__/clipboard.test.ts
-          packages/platform-linux/src/lifecycle.test.ts
-          packages/platform-linux/src/recording/runtime.test.ts
-          packages/platform-linux/src/runtime.test.ts
-          src/daemon/__tests__/macos-text-surface-runner-context.test.ts
-          src/daemon/__tests__/screenshot-crop-target.test.ts
-          src/daemon/interaction/internal/__tests__/find-macos-frontmost-surface.test.ts
-          src/daemon/session-lifecycle/internal/__tests__/session-close-error-precedence.test.ts
-          src/daemon/session-lifecycle/internal/__tests__/session-open-surface.test.ts
-          src/platform-runtime-screen-recording-host.test.ts
-          src/platform-runtime-screen-recording-linux-host.test.ts
-          src/platform-runtime-screen-recording-macos-host.test.ts
-          src/platform-runtime-screen-recording-process-host.test.ts
+        working-directory: vendor/extend-engine
+      # The engine's whole unit suite (its `pnpm test:unit`: the unit-core and fuzz-worker projects).
+      # Tests of upstream tooling Silicon Extend doesn't ship were removed (vendor/extend-engine/FORK.md),
+      # so it passes in full; it needs zip and unzip, which the runner has.
+      - name: Engine unit tests
+        working-directory: vendor/extend-engine
+        run: pnpm test:unit
       # Built so the packaging tests also check the real dist (they skip that case without one).
       - run: pnpm build
-        working-directory: vendor/agent-device
+        working-directory: vendor/extend-engine
       - name: Desktop runtime entry, runtime stamp and packaging checks
         run: node --test apps/desktop/*.test.mjs
   android:
@@ -108,7 +90,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: 17}
-      # JVM tests only (the app's 138 and libadb's); the instrumented tests need an emulator.
+      # JVM tests only (the app's 226 and libadb's 10); the instrumented tests need an emulator.
       - run: ./gradlew --no-daemon :app:testDebugUnitTest :libadb:testDebugUnitTest
   contracts:
     runs-on: ubuntu-24.04

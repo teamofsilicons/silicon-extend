@@ -1,15 +1,55 @@
 # Verification record
 
 What was run to check that Silicon Extend works as `understanding/UNDERSTANDING.md` intends, on what,
-and what has **not** been verified. Newest first: the 2026-09-27 round-2 section, the earlier
-2026-09-27 section, then the 2026-09-26 record, corrected in place where later work showed it wrong
-(marked *Corrected 2026-09-27*). Rerun the automated part with `e2e/run-all.sh`.
+and what has **not** been verified. Newest first: the 1.1.0 integration section, the 2026-09-27
+round-2 section, the earlier 2026-09-27 section, then the 2026-09-26 record, corrected in place where
+later work showed it wrong (marked *Corrected 2026-09-27*). Rerun the automated part with
+`e2e/run-all.sh`. The device engine is named as it is from 1.1 (it lived in another directory when
+the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
+
+## Release publication checks — 2026-09-28
+
+General CI at `1fb7f9b` passed all five jobs in run `36386435484`, including generated approved
+website references and contract lint. Earlier runs `36385649314` and `36386082662` also passed.
+Windows ARM64 run `36386077370` at `49e683d` passed 205 selected checks: 177 unit, 27 fake-service
+and one exact native terminal check. Its explicit manual terminal-only mode records
+`gui_verified:false`; the runner's privacy setup overlay still blocks GUI verification. Both
+Windows packages, both Linux tarballs and Debian packages, signed/notarized Mac, signed Android,
+and the six-platform Honeycomb archive retain verified hashes and original source labels.
+All ten release asset checksums pass locally. Native/CLI/Android source equivalence is verified
+through `1fb7f9b`; website references are separately built from the approved contracts.
+
+The production database snapshot `extend-pre-1-1-0-20260928-062212-af873a` was available before
+backend deployment. The retained ARM64 image was pushed to ECR without rebuilding and deployed
+by immutable digest. SSM command `592793d0-4786-4bf1-8788-4525df3c7aff` completed successfully;
+the service is healthy at 1.1.0/API1. A read-only query verified production schema5 and no active
+test environments. The original host and IAM/OBO/provider contracts were retained. The website
+was deployed from its 73-file prebuilt output and aliased to `extend.teamofsilicons.com`.
+Both `silicon-extend-protocol` and `silicon-extend-client` 1.1.0 were built/verified and published
+to crates.io. Honeycomb accepted 1.1.0 as a public production release at configuration revision1,
+without a new permission approval requirement. Public download and fresh-install checks are
+recorded separately from local artifact verification.
+
+## Final API 29 diagnostic round — 2026-09-28
+
+Run [36385642679](https://github.com/teamofsilicons/silicon-extend/actions/runs/36385642679) tested the phone profile only. Harness `7dc8f9d4702374e7afe94f88e407104bc8fe73b1` used native-test source `571868a501945efb3c80d4302218d43981080d8c`, whose runtime matches signed candidate `cf43b539c5d9ae91e363172436bb8d1d677d2441`. The stock API 29 TV image remains blocked by its observed ADB authorization/controller-reset behavior; this run makes no TV pass claim.
+
+The phone multi-Carbon scenario passed **42/42**. All **20 applicable native methods executed: 18 passed, 2 failed**. Passing checks include direct display decoding/error behavior, impostor-daemon refusal, streaming output larger than the app heap, recording duration limit, still-screen segments, rotation, malformed-segment handling, retained/low-space recordings, offline discard, ownership-loop cleanup, and recording past the native 180-second limit. The long-recording output reported **187,251 ms** and contained a frame after 182 seconds; **192.948 seconds** was the complete test execution time.
+
+Two native assertions remain failed, not waived: (1) the detached-process global session-tag enumeration counted zero despite the exact owned PID remaining alive and its exact tag probe succeeding; detached-process cleanup on this image is not verified; (2) a burst-then-still recording reported **5,900 ms** for **8,272 ms** wall-clock capture, outside the existing ±1,500 ms tolerance. Retained logs show source frame counts 73+1 and combined output 74 plus EOS, so dropped captured frames/content is not established. Without the MP4 and segment timing evidence, VFR/end-frame metadata behavior versus timeline placement is unresolved. No assertion or deadline was relaxed.
+
+Independent native checks continued after ordinary completed assertions. Reconnect's baseline UID/AVD command passed; the fixture's exact-owned `run-as ... kill -9` then returned exit 1, before process-death recovery or adbd-restart checks. Those recovery checks remain incomplete. External video decode/DTS and preview-frame checks were not run because a required recording producer failed; there are no new video previews to inspect. The earlier phone UI mismatch was not reproduced (42/42 passed), and no failure-triggered transition capture was needed.
+
+Both APK installs and the bounded host ADB lifecycle collector succeeded. The GitHub archive digest (`8fb4cb1d0b64f06c1f0804d281f6d23122ccaae9e3cff8641a216c059d776ade`) and all public file hashes were verified. All 5,080 native source-file hashes and six harness hashes match their recorded commits; source stayed clean and unchanged. All 24 owned remote processes and the owned AVD home were removed. No physical device, installed user app, production service, signing material, or real credentials were used. No additional diagnostic run was started.
+
+Evidence: `target/api29-remote-plan/run-36385642679/verification.json`, the retained sanitized artifact, native method logs, and `reconnect-results.json`. These are disclosed API 29 limitations; the retained evidence does not establish a new severe release-critical defect requiring an additional diagnostic cycle.
 
 ## Where the evidence is
 
-- **Nothing here is committed evidence.** Each result was observed by the agent that ran it; its
-  logs, videos and screenshots stayed on this Mac, outside version control. The record itself is
-  the only durable account.
+- **Raw evidence is not committed.** Local reports, logs, videos and screenshots remain outside
+  version control. Recent remote runs also publish sanitized, retention-limited GitHub artifacts;
+  their downloaded copies and hash checks are retained under `target/` on this Mac. The committed
+  record preserves run IDs, source attribution and proof limits, rather than the raw evidence.
 - **Gone.** The 2026-09-26 record cites logs under `/tmp/extend-*.log` and ignored folders under
   `target/`. On 2026-09-27 no `/tmp/extend-*` file exists any more, and neither do
   `target/desktop/macos/`, `target/desktop/linux/verification.json`,
@@ -29,6 +69,1168 @@ and what has **not** been verified. Newest first: the 2026-09-27 round-2 section
 - Lanes that now write their evidence under `target/`: `apps/desktop/linux-e2e/record-service-e2e.py`
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
+
+## 2026-09-28 — final candidates, API29 fixtures and physical iPad capture
+
+Product runtime `cf43b53` passed all five CI jobs in `36372182254` and the desktop workflow
+`36372228330`. Both Linux package architectures passed content/runtime audits. Windows x64
+passed 206 checks and its package audit. The signed Mac passed Apple notarization
+(`8b5103f1-d252-46dd-bce4-0233a7289cb1`), stapling/Gatekeeper and 13 independent archive/runtime
+checks. Its archive SHA256 is
+`1983267cc8288fbfab0f8cd6f20db15d25bf1a41c530d6f3216bf2861fc0fac3`.
+Evidence: `target/release-candidate/desktop-cf43b53/` and
+`target/release-candidate/macos-cf43b539c5d9ae91e363172436bb8d1d677d2441/`.
+The 18 signed upgrade groups retain their earlier `9564044` attribution; their relevant code
+is unchanged, but they were not rerun on the refreshed artifact.
+
+General CI `36378347424` at `a91975a`, `36379967434` at `d187051` and `36381418185`
+at `0ccafb8` passed all five jobs.
+Later changes are verification only:
+a bounded sleep-state wait prevents sampling an intermediate lock event, and the native MP4
+header test uses `DataInputStream.readFully` because `readNBytes` is unavailable on Android 10.
+The latter retains the exact header and short-file checks and passes 13 focused assertions.
+Source `2a1dbad` differs from `cf43b53` only in three test files and three verification additions;
+5074 existing file contents/modes and the Rust driver's 76102-byte runtime prefix are identical.
+The workflow rejects runtime or mode drift before building. Evidence:
+`target/api29-readfully-verification/`, `target/release-candidate/runtime-equivalence-cf43-2a1dbad/`
+and `target/api29-remote-plan/final-pin-validation/` (36 adapter tests plus guard negative cases).
+
+The preceding native run `36378339315` passed all 42 phone multi-session checks and six native
+methods, then stopped at the incompatible test API. Actual TV runs at a verified 192 MiB heap
+with shell UID2000; its first ADB connection closes immediately after authorization. The key-save
+permission warning follows the closure and is not an established cause. Both jobs passed source
+integrity and owned cleanup. Run `36379963836` used native source `2a1dbad`, runtime reference
+`cf43b53` and harness `d187051`. Phone passed the corrected MP4 header assertion, then failed
+to observe its detached process's session tag within five seconds. Android 10's exact toybox
+source supports the grep flags being used; a product or fixture cause is not established.
+Test-only diagnostics at `571868a` retain the launch result and inspect a captured PID with a
+start-time fence, without logging environment values or changing the assertion. Extracted
+Kotlin compilation, nine diagnostic cases and three shell syntax cases passed. Printing the PID
+can affect timing; a subsequent pass alone would not establish the cause. Evidence:
+`target/api29-session-tag-diagnostics/`.
+
+TV's passive metadata-only SYN/FIN/RST trace was ready: five control packets, zero kernel drops
+and clean owned-process termination. This attempt stopped on an uncaught eight-second UI dump
+timeout before authorization; the app connection had no FIN/RST before forced cleanup, so it
+does not explain the earlier authorized connection's closure. The poll correction waits for
+any previous guest UI dump runner to exit, records read timeouts and retries within the existing
+90-second controller/60-second native deadlines. It preserves exact dialog/button guards and
+passes 41 adapter checks, including an old-code negative control and actual host-child reaping.
+Evidence: `target/api29-remote-plan/run-36379963836/` and
+`target/api29-remote-plan/tv-auth-poll-validation/`. Both latest jobs passed source/provenance
+and owned cleanup. Required counts remain 20 phone/19 TV native methods and 42/35 multi-session
+checks, with explicit capability exclusions. Later recording/decode/timestamps and reconnect
+checks remain open until observed.
+
+Run `36381413979` at harness `0ccafb8` retained native source `571868a` and runtime reference
+`cf43b53`. Phone timed out installing its test APK after 120 seconds, before native or multi-session
+tests started. Package-manager processing and background dexopt are not install-completion proof.
+The SDK/emulator/runner versions match the five prior attempts that installed successfully; the
+late adbd shutdown warning also appears in successful setup and is not an established cause.
+TV reached authorization without a UI dump timeout. Its valid passive trace retained eight
+control packets with zero drops: the host reverse endpoint sent FIN first, and the emulator
+replied 0.901 ms later. That endpoint is the host ADB reverse connection, so this does not identify
+the Android app as the closer or distinguish a guest close request from a host error/control reset.
+The key-save warning again followed the closure. Evidence:
+`target/api29-remote-plan/run-36381413979/`.
+
+The next harness keeps installation failures unchanged while retaining expected APK/package/hash,
+duration and bounded redacted output. A timeout preserves partial output and performs at most
+15 seconds of read-only package observations after verifying the owned AVD. Both matrix jobs
+start an owned foreground host ADB server on the unchanged default port; a preexisting server
+is refused. Only `ADB_TRACE=adb` lifecycle enums are stored, with byte/time bounds and explicit
+usability/drop counts. Official Linux ADB 37.0.1 was hash-verified and exercised in an isolated
+container: the trace exposes control-reset/online/offline events but cannot distinguish a guest
+per-stream close from a local reverse-socket failure when no reset occurs. Banner, key, payload
+and unmatched text are discarded. No product, native assertion, timeout or transport changes
+were made. The combined 61 focused checks pass; all owned validation containers were removed.
+Evidence: `target/api29-remote-plan/installer-evidence-validation/` and
+`target/api29-remote-plan/tv-host-adb-diagnostic/`.
+
+The physical iPad Air passed bare connection and a plain, visually verified 3180-by-2384 screenshot
+using the exact signed candidate's bundled engine. No helper was installed or launched and no
+input was sent. Exact owned session/daemon/claim cleanup passed; protected services and device
+runner state were unchanged. The capture remains private under
+`target/physical-ipad-cf43/run-c7cca8f27b77/`. This proves direct packaged-engine capture only,
+not carried service routing, recording or physical reconnect. Later preparation with the existing
+automatic signing identity built, installed and started the current helper. Read-only app-state
+queries identified Books as foreground. Binding that existing app skipped activation; its PID
+stayed unchanged through recording and cleanup. An eight-second recording request produced a
+9.000-second H.264 file (3180 by 2384, 2 FPS, 18 decoded frames, 1,021,734 bytes), with readable
+frames visually checked at one and six seconds. SHA256:
+`87a88483e1a6c4b0d5567f03048d1cca00964039075f9fda683b3bbb532c39b6`.
+No input, navigation or relaunch occurred. Owned daemon/device runner, claims and leases were
+cleaned; protected processes and the old helper were unchanged. Current helper remains installed.
+The video and device evidence remain private under
+`target/physical-ipad-recording-cf43/prepare-908e8aab6ea5/record-report.json`.
+This static, short recording does not prove animation, the 60-second idle policy, alias removal,
+carried service routing or reconnect. The iPhone remains locked in the fresh one-shot readiness
+check at `target/physical-iphone-cf43/run-8727983fa23d/`; no capture or helper was launched there.
+
+The Carbon subsequently approved and the prepared API/CLI/technical patch was applied exactly.
+Both original and resulting hashes match its manifest; both YAML files parse with unique keys,
+446 local API references resolve and all 64 operation IDs are unique. The human-owned
+`UNDERSTANDING.md` was unchanged. The Carbon then canceled the briefly authorized IAM/OBO
+implementation and directed publication after the current diagnostic round. Only this attempt's
+new member-read edits have been restored. All 120 captured pre-existing dirty/untracked IAM
+files and the two previously clean tracked files match their recorded baselines; only this
+attempt's three new source/migration files were removed. No IAM build, deployment or fixture
+resource was started. The pre-existing IAM redesign is preserved.
+
+Windows ARM64 still requires a prepared desktop after the privacy-setup overlay blocked the
+owned fixture with zero input sent. First-time Briefcase sharing and the remaining physical
+matrix stay documented limitations under that release scope. Production remains 1.0.0; no 1.1
+deployment or publication is claimed.
+
+## 2026-09-28 — shared iOS runner idle deadline
+
+The first alias-ownership fix preserved recordings, but a focused review found that two owners
+with recent saved sessions could mutually veto the runner's normal 60-second idle shutdown.
+Saved-session expiry is 2,565 seconds. A concrete supported path uses simulator aliases, which
+never merge by hardware ID: recovering a stale engine claim can leave another alias's saved
+session behind even though only one engine claim remains active.
+
+The production idle predicate now aggregates live sessions before applying the existing global
+idle deadline. Recording and any current, other or rebuilt driver's active setup still prevent
+an idle stop. Immediate cleanup respects another owner's recent work. The end-session ownership
+guard and external engine behavior are unchanged.
+
+A faithful extraction of the old `tend` predicate fails the new past-60-second assertion. The
+fixed two-owner regressions pass, using actual IosDriver owners and saved state with fake external
+engine calls. The full hosted library passes **82 tests**, agent library **205**, and fake-service
+integration **27**: **314 distinct passes**, zero failures and five existing ignores. Strict
+all-target Clippy for both crates, workspace formatting and diff checks pass. No database,
+physical device or AVD was used; temporary fixtures and processes were cleaned. Evidence:
+`target/ios-idle-owner-verification/`. This proves the shared idle decision, not physical runner
+termination.
+
+The preceding `9564044` source passed all five CI jobs, a fresh notarized Mac artifact with 13
+independent checks, ten signed credential-rotation upgrade groups and eight Keychain migration
+groups. Both Linux architectures and Windows x64 packages passed content/runtime audits, with
+206 Windows tests passing. Evidence is under `target/release-candidate/` in the `ci-956404…`,
+`macos-956404…`, `desktop-9564044` and `equivalence-956404…` folders. The subsequent `cf43b53`
+candidate refresh is recorded above; earlier artifacts retain their original source attribution.
+
+## 2026-09-28 — restored iOS alias cleanup
+
+Removing an unprobed restored alias could discard another alias's recording before their drivers
+merged. A deterministic regression using the production HostedRegistry and IosDriver failed on
+the old code: Record Stop returned no video even though the second alias's recording file existed.
+Only external engine execution and discovery were simulated; this is not physical iOS proof.
+
+Recordings now belong to a driver state directory and engine session. Weak references track
+other live driver owners for the same UDID, preserving their recent sessions, recordings and
+active setup when an alias ends. Dropped drivers and expired saved sessions do not retain the
+runner indefinitely. Cleanup still closes the removed owner's sessions and setup. Existing
+merged-driver alias behavior is unchanged.
+
+The full hosted library passed 80 tests with four existing ignores, the agent library passed
+205 with one existing ignore, and the fake-service integration passed 27: **312 distinct passes,
+zero failures**. Strict all-target Clippy for both crates, workspace formatting and diff checks
+passed. The owned temporary fixtures and processes were cleaned; no database, AVD or physical
+device was used. Evidence and source hashes are in `target/ios-alias-cleanup-verification/`.
+The changed native source requires refreshed desktop artifacts before release; earlier signed
+Mac and Linux/Windows packages must not be described as built from this source.
+
+## 2026-09-28 — carried-device reconnect reconciliation
+
+The final audit confirmed two historical reconnect defects. A host that missed a carried
+removal received no deletion when it returned; the greeting now sends existing `attach
+removed:true` frames for removed children of that exact host pair. Removed aliases never announce
+a sibling's session. Both 1.0 and 1.1 reconnect regressions fail against the old greeting and
+pass with the fix, preserving the other Carbon's live alias, session and commands.
+
+Carried online reports also survived their host socket. Reports now belong to the current
+connection, whose replacement starts empty. A replaced connection cannot publish a new report,
+and its later disconnect cannot erase the replacement's report. Carried online reads check the
+host and child together. The real HTTP/WebSocket regression fails against the old code and
+passes for both host versions; two Hub tests cover connection identity, host/world isolation
+and disconnect cleanup.
+
+The combined full service suite reports **177 passes, zero failures and one explicit ignore** in
+161.074 seconds with two test threads. The real-provider entry returns early without its fixture;
+the captured-schema rehearsal is the explicit ignore. Strict service Clippy and scoped formatting
+pass. All 105 databases belonging to the generated test role, the role and private temporary
+directory were removed; all 825 baseline databases were preserved. Evidence is in
+`target/{carried-reconnect-removal-verification,carried-online-freshness-verification,service-carried-reconnect-verification}/`.
+
+The preceding `1f90579` candidate passed all five CI jobs. The refreshed immutable backend from
+`d8ce933` passed six startup/authentication/schema/non-root smoke groups; its image digest is
+`sha256:e8d5b4f28d77c8895494e209fb009532d4ec24c87e370e2b96db9d7958d0a83d`.
+A fresh pinned IAM/Briefcase/Ting run at the same commit passed **75/75**, with all exact-owned
+containers, network, database, process and ports cleaned. Baseline resources were preserved.
+Evidence is in `target/release-candidate/backend-d8ce933/` and
+`target/realiam-1.1-verification/d8ce933-final/`. The separate native alias cleanup is recorded
+above; service fake-device checks do not substitute for it. No candidate has been deployed.
+
+## 2026-09-28 — API 29 native attempt blocked by emulator storage
+
+The explicit API 29 (Android 10) native requirement remains open. Existing native evidence is for
+API 26, 28, 34 and 36; the API 28/Android 9 results and JVM branches that simulate API 29 do not
+substitute for running API 29.
+
+The official `system-images;android-29;default;arm64-v8a` revision 8 was available and installed
+successfully: 498,049,256 bytes compressed, 3,302,628,690 bytes expanded. SDK Manager reported all
+licenses already accepted; input was closed and every license-file SHA256 stayed unchanged.
+An active disk guard observed at least 5,758,464,000 free bytes during installation.
+
+Only the new `ExtendApi29Verification_fdb4cbfb` AVD was created, on unused emulator port 5660,
+with snapshots disabled and a requested 1 GiB data partition. Emulator 35.5.10 rewrote that to
+6 GiB and refused before boot: `Available: 5958.570312 MB`, `need 7372.800000 MB`. The documented
+source behavior applies a 6 GiB first-boot minimum for API 24+ and a 1.2 space factor
+([Android emulator source](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)).
+No app, two-Carbon, wake/privacy, reconnect or device commands ran on API 29. There was no attempt
+to bypass the check, change the emulator, accept a license or delete unrelated data.
+
+The exact new AVD and newly installed API 29 image were removed through `avdmanager`/`sdkmanager`.
+Cleanup restored 9,556,111,360 free bytes (about 8.90 GiB), retained the original SDK images and AVD
+inventory, and left emulators 5620/5622/5640 and services 5327/8480 and 85226/8498 unchanged.
+A retry needs at least 7.2 GiB free after installing the image to pass the emulator's initial
+check, plus enough room to keep the required 4 GiB reserve while userdata grows; the actual
+running footprint was not measured. Evidence: `target/api29-native-verification/` contains the
+official package metadata, installation/license records, exact refusal, report and cleanup.
+
+## 2026-09-28 — carried rename propagation and membership audit completion
+
+Renaming a carried device sent only `refresh`, which refreshes the host's own pair. Its attached
+status and Done/Stop labels kept the old name until reconnect or a banner change. The service now
+sends a fresh `attach` to that pair's existing host route after a name/TTL update. Ordinary device
+updates retain `refresh`; another Carbon's pair is not renamed.
+
+The hosted-device regression fails against the old service with only `[Refresh]` received. With
+the fix, all nine device-gap tests pass, including exact updated attachment metadata, both host
+and carried sessions remaining active, routed input and targeted Stop. Strict service all-target
+Clippy, workspace formatting and diff checks pass. Ten exact owned databases and temporary
+directories from the negative control and passing suite were removed; the pre-existing set was
+preserved. Evidence: `target/carried-rename-verification/`.
+
+The current service and headless Mac agent, with the previously notarized candidate engine, also
+passed a real hosted iPad-simulator recording lane. The same native recorder survived six
+rename-only updates (observed before each banner change) and six separate banner updates. The
+9.947-second MP4 has 599 packets with strictly increasing DTS, frames beyond the last update,
+changing background colours/counter/position, and a full decode with no errors. Creator and
+Carbon downloads are byte-identical. Carbon Stop ended the session, recorder and recording
+directory. The one owned simulator, database and processes were removed; all 825 baseline
+databases, other simulators and protected service processes were preserved.
+
+Evidence: `target/carried-recording-verification/summary.json` and `run-5a78337152ea/` beneath it.
+Earlier harness attempts are retained, including a rejected static-animation fixture; they are
+not counted as passing video-content proof. This closes carried metadata/recording continuity
+through the real hosted driver on a simulator. Physical iOS capture, hardware-key linking across
+hosts and native banner placement remain separate gates.
+
+CI `36366926600` at `43dd9e6` passed four jobs and all 21 core-gap tests, but the Rust membership
+test observed grant deletion before the asynchronous confirmation finished writing its audit
+entry. The bounded fixture wait now requires both empty grants and the exact `access_revoked` /
+`left_team` activity before retaining the explicit assertions. All seven membership tests pass;
+the dedicated database role, its seven databases and private temporary directories were cleaned.
+Awaited HTTP revocation/webhook tests do not have this ordering gap. Evidence:
+`target/membership-audit-barrier-verification/` and `target/release-candidate/ci-43dd9e6*/`.
+A new complete CI result is still required.
+
+## 2026-09-28 — signed Mac upgrade and two-Carbon credential rotation
+
+`e2e/released-agent-compat.py` passed 10/10 groups in 4.082 seconds using the actual published
+signed 1.0 Mac executable and signed `0159b7a` 1.1 candidate against an owned local service.
+Both signatures had the same Developer ID designated requirement; executable hashes and
+signatures were unchanged afterward. The retained source comparison at `43dd9e6` confirms no
+Mac runtime changes since that candidate; the service binary matches the final provider lane.
+
+The private file store retained identity and the active session through upgrade. After Stop,
+both Carbon links persisted new credentials and acknowledged them: server digests were confirmed
+before API reads, then each old credential returned 401 and each new credential returned 200.
+Restart reconnected both links, cleared their fallback credentials and preserved device,
+instance, owner and first-pair identity. Terminal remained available only to the first pair;
+native Stop cancelled the owned terminal in 30 ms. Autostart bytes and timestamps were unchanged.
+
+Evidence: `target/desktop-agent-rotation-upgrade-0159b7a-retry/report.json` and
+`target/desktop-agent-rotation-verification/{provenance.json,verified-summary.json,native-retry.log}`.
+The first attempt exposed a harness assumption: Stop's service `409 session_ended` can win the
+race against the native cancellation result. The check now accepts only those specific stopped
+outcomes and still requires an ended session and no escaped terminal work. Both attempts' exact
+databases, processes, ports and synthetic credential files were independently confirmed cleaned.
+This is headless file-store proof with synthetic IAM and disabled engines. It does not test
+installed GUI replacement, Keychain rotation, TCC, Android rotation or physical carried-device
+linking; the second pair is API-claimed and loaded into the owned file store while stopped.
+
+The service logout checks `a_carbons_logout_ends_only_their_side` and
+`a_carbons_logout_by_iam_event_ends_their_side` also pass, with the accepted `access_removed`
+reason (`target/service-final-verification/tests.log`). Their service-level session evidence
+does not replace native process-cleanup verification across the physical OS matrix.
+
+## 2026-09-28 — service fixture readiness under CI load
+
+CI `36365195398` passed contracts, web, fork and Android, but Rust's request-reason test started
+a session before its Android fixture's Hello had finished updating setup. Its helper waited a
+fixed 150 milliseconds. Complete-setup helpers now observe online/ready state with a bounded
+deadline. The shared helper also fences connection initialization/Hello with a unique WebSocket
+Ping/Pong before checking the exact persisted setup, version and capabilities, preserving failed
+setup and identical-metadata reconnect tests. No product code or session retry was added.
+
+The affected suite first exposed the identical-reconnect gap in a state-only barrier; the
+Ping/Pong fence fixed it. A later privacy assertion matched session `b06` inside an unrelated
+request UUID containing `b068`, despite correctly redacted holder data. That assertion now checks
+the exact redacted details shape and human-text identity/session tokens instead of arbitrary
+UUID substrings. Final targeted runs cover all 79 affected tests across 11 suites, with strict
+all-targets service Clippy, workspace formatting and independent review passing. The intermediate
+failures remain in the report. Exactly 131 created databases and matching temporary directories
+were removed, preserving all 825 baseline databases. Evidence:
+`target/fixture-readiness-verification/`. A fresh CI run is required. Backend runtime inputs are
+unchanged from the verified `a1b180d` image; the 75-check provider lane at `cc81c37` is unaffected.
+
+## 2026-09-28 — refreshed backend and real-provider checks
+
+The immutable `a1b180d` backend includes all final replay/reservation/request-folding fixes.
+Its native arm64 image passed six smoke groups: fail-closed production configuration, readiness,
+service 1.1.0/API v1, synthetic authentication, schema 5 and actual non-root UID 10001. Digest:
+`sha256:3bb4b00516da452d7fb11b9ee3965fafd8d9ffa5d6adfe564a3390b009e0df9f`.
+Both owned containers, the exact smoke database and port were removed; older images remain.
+Evidence: `target/release-candidate/backend-a1b180d/`. Nothing was pushed to ECR or deployed.
+
+A fresh dedicated IAM/Briefcase/Ting lane at `cc81c37` passed 75/75 checks in 108 seconds,
+using frozen Extend binary hashes and pinned provider images/Ting binary. It covers real routing,
+file access, token refresh, revocation, signed removal events and testing-plane behavior. All ten
+owned containers, the network, database, service process and five ports were cleaned, while
+baseline services including port 8480 remained unchanged. Evidence:
+`target/realiam-1.1-verification/cc81c37-final/`.
+
+The first-time Carbon Briefcase projection failure remains reproduced; priming that recipient
+does not close the proposed provider fix. Ting's missing delegated `types.register` operation
+is an expected provider constraint: registration remains with a manager in the app-owning Team,
+as already implemented/documented. This is not an additional outstanding API implementation.
+
+## 2026-09-28 — Windows ARM64 fixture diagnostics
+
+The focused native run `36365191010` at `cc81c37` identified the covering process as
+`C:\Windows\System32\WWAHost.exe`, with a full-screen topmost `Microsoft account` window.
+The saved screenshot shows Windows' initial "Choose privacy settings for your device" screen.
+The fixture is visible, enabled, uncloaked and topmost; parent and child use session 2,
+`WinSta0\Default`, the active input desktop, and 96 DPI. Its queue acknowledges messages.
+This identifies runner provisioning, rather than a DPI/input-desktop mismatch, as the blocker.
+The 177 unit, 27 integration and terminal tests passed, but the exact ownership guard sent zero
+input before the GUI driver could run. No ARM64 package was uploaded and no privacy choices or
+covering-process changes were made. GUI verification still requires a prepared ARM64 desktop.
+Evidence: `target/release-candidate/ci-cc81c37e538b80d9c7187cff4c8c2aaa829b2e49/`.
+This matches the open upstream [runner-image issue #14069](https://github.com/actions/runner-images/issues/14069).
+The proposed [image fix #14673](https://github.com/actions/runner-images/pull/14673) was still
+unmerged when checked; it prevents the prompt before a later logon and does not dismiss an
+already-open window. No further unchanged rerun is expected to establish GUI coverage. A fixed
+hosted image or a separately prepared ARM64 interactive runner is required.
+
+Main CI `36363764146` passed all five jobs at `b3158bc`. Windows run `36363796014` passed
+all 206 x64 checks and its ZIP audit (SHA256
+`4a430b1d36af1a65ff4a932683871a77ca97ec038785581f68f8440ed0b2c118`). ARM64 passed
+portable tests and terminal containment, but its GUI fixture guard saw a foreign window at the
+owned title-bar point. The new application class reports `HTCAPTION` correctly; the guard still
+refused all input before product-driver creation. Existing evidence cannot identify that foreign
+process or establish whether the input desktop, DPI or window state caused the mismatch.
+
+The fixture now records read-only process/window/DPI/desktop observations and a bounded screenshot
+only on the confirmed normal runner input desktop. It preserves the original ownership failure,
+does not switch desktops and cannot turn those observations into permission to inject input.
+Both Windows target checks, strict x64 Clippy, formatting and independent review pass. A focused
+ARM64 rerun is required; the workflow's optional architecture selector applies only to manual
+Windows-only runs, while normal releases still build both architectures. These are test-only
+changes, including the Windows Dwm dev feature. Evidence:
+`target/release-candidate/ci-b3158bc9e7b2933f4b88cfdd910f4c91b02a5540/` and
+`target/windows-ci-assessment/diagnostics-*.log`.
+
+## 2026-09-28 — fold simultaneous device requests atomically
+
+After integrating all replay/reservation/folding fixes, the full service suite reported 172
+passed, zero failed and one explicitly ignored in 164 seconds. The real-provider entry point
+returns without running when its fixture variable is absent; it is not fresh real-provider
+evidence. The ignored production-schema rehearsal also needs its separate captured-schema lane.
+Strict all-targets service Clippy and service formatting pass. All 102 retained databases created
+by this full run were identified from the before/after inventory, confirmed idle and dropped by
+exact name; the prior inventory is unchanged. Evidence: `target/service-final-verification/`.
+
+Different keys, or no key, could create duplicate same-reason requests and notifications when
+two service instances checked for a recent request before either inserted it. The check and
+insert now share a short transaction and an advisory lock scoped to world, device, Team,
+requester, holder session and the exact untrimmed reason. Busy callers release their connection
+between attempts and stop after five seconds. The transaction commits before notification or
+activity helpers run, including cross-pair routing with a one-connection pool.
+
+Three deterministic concurrency tests and both existing reason/routing regressions pass. They
+prove one 201 and one folded 200, one row and one Ting for simultaneous no-key or distinct-key
+requests; bounded contention, retained keyed refusal and a fresh retry; and preserved raw-reason
+and cross-Carbon routing. The old code fails at the forced overlapping insert. Strict Clippy and
+formatting pass. Exact owned databases and temporary files were removed, with the original
+database set preserved. Evidence: `target/request-fold-verification/`. This uses local provider
+fixtures and does not establish crash-safe exactly-once notification delivery.
+
+## 2026-09-28 — reserve keyed operations across service instances
+
+The old helper could execute the same keyed operation twice when separate instances both missed
+the stored response. A deterministic negative control reproduced two executions. The helper
+now reserves the existing idempotency row atomically before doing work. Duplicate callers wait
+boundedly for its status/body, changed bodies conflict, and final persistence must succeed before
+the original caller receives its answer. No connection is held while running the operation or
+sleeping between reads. Every explicit result, including errors and unusual HTTP status overrides,
+is retained; a retry preserves the original error's request ID. Invalid opaque/non-ASCII keys
+are refused rather than treated as missing.
+
+Eight targeted tests pass with independent states and one-connection pools: single execution,
+pending/completed conflicts, exact response/error replay, ordinary final 503, cancellation,
+owner-nonce replacement, forced finalization failure, old completed rows and key validation.
+Strict Clippy and independent review pass. All ten owned databases were removed. Evidence:
+`target/idempotency-concurrency-verification/`. No schema change is needed: an in-progress claim
+is a valid 503 error envelope. Old writers must stop before the new implementation starts.
+Interrupted or indeterminate operations retain their claims without automatic expiry/takeover;
+recovery requires operation-specific reconciliation. This proves concurrent execution exclusion,
+not exactly-once provider delivery across process crashes or cross-version route-key migration.
+
+Wake-request mute checks and report quota counting now run only for a new reserved operation.
+Negative controls reproduced a refused successful wake retry after muting and report retries
+incorrectly consuming the hourly quota. Four retry tests and all eight waking tests pass;
+replays add no notification, while new operations still obey mute and quota rules. Seventeen
+owned test databases were removed with the prior set preserved. Evidence:
+`target/wake-report-replay-verification/`. Simultaneous same-reason requests without the same
+idempotency key are covered by the separate request-folding pass.
+
+## 2026-09-28 — session and attachment response replay
+
+Session creation checked the device's live busy/readiness/online state before its stored response;
+a successful start therefore blocked its own keyed retry. Attachment retries similarly failed
+after the host disconnected or the first attachment filled a test environment. These new-work
+checks now run inside the idempotent operation. Authentication, device visibility and ownership,
+owner membership and structural input validation still run before replay.
+
+Negative controls reproduced all three failures: `device_in_use`, `device_offline`, and
+`test_device_limit` instead of the stored 201. All nine `devices_gaps` and two new `idempotency`
+checks pass, covering repeated session creation before/after end and disconnect, revoked access,
+one attach frame/one child device, a full environment, changed-body conflict and fresh-operation
+refusals. Existing concurrent capacity and hosted-device tests remain green. Strict service
+Clippy and formatting pass. Sixteen exact test databases across the negative/fixed runs were
+removed with the original database set preserved. Evidence:
+`target/session-attachment-replay-verification/`. Generic same-key concurrency is a separate pass.
+
+CI `36362460118` passed all five jobs at `b2ac122`, whose refreshed backend image also passed all
+six smoke groups. Windows run `36362498227` repeated x64 success but exposed that the ARM64
+fixture's built-in STATIC top-level class returns `HTTRANSPARENT`: its caption guard refused the
+click before injecting input or calling the product driver. The fixture now registers a real
+application class with `DefWindowProcW`, retaining owned-window/sentinel guards and cleanup.
+Both Windows cross-checks, strict Clippy and independent review pass; a native rerun is required.
+The added Windows LibraryLoader feature is a test-only dev-dependency. Evidence:
+`target/windows-ci-assessment/run-36362498227-native-review.json`,
+`target/release-candidate/ci-b2ac122cf7ddefb172b3ae2e594f7cd8f3342dc8/`, and
+`target/release-candidate/backend-b2ac122/`.
+
+## 2026-09-28 — preserve sessions when IAM cannot confirm membership
+
+A refused login could end an existing session as `left_team` when the membership lookup returned
+`Unknown`, for example because no other signed-in Team member could read the directory. Extend
+now ends these sessions only after a definite `Gone` answer. The refused call remains refused;
+uncertainty preserves the existing session and grant, and confirmed membership loss still ends
+the session and removes the grant after the existing second-reader check.
+
+The regression fails against the old guard (`ended` instead of `active`). All seven membership
+tests pass after the fix. The same session stays active, runs a command with its original valid
+login after the uncertain refusal, and subsequently ends when membership loss is confirmed.
+Strict service Clippy, formatting and diff checks pass. All eight exact test databases were
+removed and the pre-existing database set was unchanged. Evidence:
+`target/left-team-unknown-verification/`. This changes Extend's handling of IAM responses, not
+IAM's authorization policy or API.
+
+## 2026-09-28 — device-request retries and final-candidate checks
+
+`request_send` previously folded a recent same-reason request before checking its idempotency key.
+Identical keyed retries therefore returned 200 instead of the stored 201, while an already-sent
+reason could bypass changed-body conflicts and malformed-key validation. The key lookup now
+precedes repeat folding and holder-state checks. Authentication, current device access, owner
+membership and reason validation still run before replay; new requests still require another
+Silicon to hold the device.
+
+The negative control failed with 200 instead of 201. All 21 `core_gaps` tests and the multi-Carbon
+request-routing test pass after the fix, including complete response/header replay, conflicting
+and malformed keys, a keyed folded-200 response, and retries after the holder ends, changes or
+becomes the requester. No extra Ting is sent. Strict service Clippy and formatting pass; all 43
+owned test databases were removed with the pre-existing set preserved. Evidence:
+`target/request-replay-verification/`. The subsequent reservation and request-folding passes
+above now cover simultaneous same-key operations and distinct-key/no-key duplicate requests.
+
+CI `36361278876` passed all five jobs at `a9bede4`. The immutable backend image at that source,
+`silicon-extend-candidate:1.1.0-a9bede4`, passed six smoke groups: fail-closed production configuration,
+readiness, API/service version, synthetic authentication, schema 5 and actual non-root UID 10001.
+Its digest is `sha256:4b7df4a1255d00acb633e862480f5046445736f613403b204e933fa7ba538bc2`.
+Owned containers, database and listener were removed. Evidence:
+`target/release-candidate/backend-a9bede4/`. Subsequent service changes need a new image and CI;
+no 1.1 image was pushed or deployed.
+
+Windows run `36361296700` at the same source again passed all 177 unit, 27 integration and two
+native tests on x64. Its ZIP passed static audit with SHA256
+`2c5d8e42ddbace9b59315fa2ee7a6c322bfcd00ce7286e062e6224609b5eb9e3`.
+ARM64 passed unit/integration and terminal containment, but programmatic window activation was
+denied even though its message queue acknowledged the request; no product-driver input ran.
+This corrects the earlier asynchronous-focus hypothesis below. The fixture now bootstraps denied
+activation by clicking its actual title-bar rectangle, verifying the exact HWND/PID and caption
+hit before input. Partial-click cleanup releases the button before any cursor restoration;
+incomplete clicks leave the cursor in place for fixture teardown. Product-driver and sentinel
+assertions remain unchanged. Both Windows cross-checks, strict x64 Clippy and independent review
+pass; native ARM64 verification still needs a rerun. Evidence:
+`target/windows-ci-assessment/run-36361296700-native-review.json`
+and `target/release-candidate/ci-a9bede490e55fa0494e6c9a8674fc0f74dea056a/`.
+
+## 2026-09-28 — native Windows runtime and signed Mac Keychain migration
+
+At `fba6cc3`, CI `36360092796` passed all five jobs. In release run `36360098249`, both native
+Windows architectures passed 177 agent unit and 27 fake-service integration tests. x64 also
+passed both native fixtures: real UI Automation snapshots, SendInput checkbox click and edit
+typing, a nonblank 1024×768 full-runner screenshot, an unchanged sentinel window, and terminal
+child containment across session end, timeout and cancellation. Its ZIP passed GitHub digest,
+CRC, x64 PE, exact five-file payload and license checks; SHA256
+`a3902bdcb05ba5646d6532709ba1afc248218d5c20f7e958c4648a8f0d23be7c`.
+
+ARM64 passed native terminal containment but its window fixture checked foreground immediately
+after requesting asynchronous activation and failed before any driver input call. The test now
+waits up to five seconds for the owned window's message acknowledgement before checking its
+exact HWND/PID, following [Microsoft's documented activation behavior](https://devblogs.microsoft.com/oldnewthing/20161118-00/?p=94745).
+Both architecture cross-checks and strict Clippy pass; the native ARM64 rerun is still required.
+Evidence: `target/windows-ci-assessment/run-36360098249-native-review.json`, the per-architecture
+evidence directories, and `target/release-candidate/ci-fba6cc3c029a7ffef8fc7c6c3b04009d669dbf4b/`.
+Runner proof does not establish Windows banner, recording, physical lock/sleep, UAC or multiple
+display behavior. The fixture fix changes no production driver code.
+
+`e2e/released-agent-keychain.py` passed eight groups using the actual signed 1.0 Mac agent and
+the signed `0159b7a` Mac candidate. Their Developer ID designated requirements match. In a fresh
+loopback-service namespace, 1.0 paired into the native Keychain and reconnected; 1.1 migrated the
+legacy entry to its index and pair entries, deleted the legacy entry, and reconnected again.
+Device identity, server credential digest and the pre-upgrade live session were preserved.
+Native Stop cancelled the owned terminal in 74 ms. No `credential.json` fallback, Keychain prompt,
+ACL/unlock change or autostart mutation occurred. All three exact owned Keychain entries, the
+database, child processes and listener were independently confirmed removed; signed binary hashes
+and signatures were unchanged.
+
+Evidence: `target/desktop-agent-keychain-upgrade-0159b7a-retry/{report.json,cleanup-verification.json}`.
+The first attempt exhausted the shared PostgreSQL connection limit while another suite was
+running and cleaned up; the isolated retry passed in 3.903 seconds. This proves native headless
+Keychain migration with synthetic IAM, not installed GUI replacement, TCC or carried-device linking.
+
+## 2026-09-28 — pairing retry when a test environment becomes full
+
+The older round-2 pairing replay issue was still present: a successful fifth pairing consumed
+its code, so retrying the identical `Idempotency-Key` and body reached the full-environment check
+before the stored response and incorrectly returned `409 test_device_limit`. The fast limit
+check now runs inside the idempotency closure. New claims retain both that precheck and the
+transaction's atomic physical-device limit; authentication and access validation still precede
+the replay.
+
+The new regression fails against the previous code and passes after the fix. It verifies an
+identical `201` response and replay header, a changed-body conflict under the same key, refusal
+of a fresh sixth device, and a final count of five. All eight `devices_gaps` tests pass, including
+concurrent pairing/attachment, pool responsiveness, bounded contention and hosted-device flows.
+Strict service Clippy and formatting pass. Exactly the nine databases created by the negative
+control and passing suite were removed; the pre-existing database set was unchanged.
+Evidence: `target/pairing-replay-verification/`. This service change needs the subsequent final
+CI and service-image build; it changes no native app or CLI implementation.
+
+## 2026-09-28 — final Mac and Linux packages at 0159b7a
+
+CI workflow `36359411111` passed all five jobs at this commit: Rust (including consumer contracts
+and CLI end-to-end), the engine/packaging checks, Android, website/browser and contract lint.
+The six CLI archives and Honeycomb package from release workflow `36359407414` passed ten
+additional static checks, including GitHub digests, architecture, executable modes, licenses and
+exact CLI bytes inside the Honeycomb archive. Its two Windows desktop jobs each passed 176 unit
+tests and failed the same remaining Unix-only attachment-path assertion. Native input and
+process fixtures were not reached, and neither Windows desktop ZIP was uploaded. The assertion
+now compares native path components; the wrapper collects unit/integration and native fixture
+results before failing if either lane fails or the desktop is non-interactive. Mac's affected
+test, both Windows cross-checks, strict Clippy and formatting pass; Windows runtime rerun remains
+required. No Windows product defect was established by that assertion failure.
+
+The Mac candidate was rebuilt from clean commit `0159b7a16d3fbf890be3f87beb9024969be6651e`.
+All 5,068 tracked file hashes were unchanged before and after signing. Apple accepted notary
+submission `3694027e-f5bf-4ec6-9533-189c24c590a6`; thirteen independent checks of a fresh ZIP
+extraction passed, including Developer ID signatures, hardened runtime, entitlements, stapling,
+Gatekeeper, arm64 architecture and the engine runtime stamp. The ZIP is 45,539,198 bytes with
+SHA256 `1b0f7e0ea8a0bcce248aa98f78529dc7c2d9319e94cc3346a886086b6acf44de`.
+Evidence: `target/release-candidate/macos-0159b7a16d3fbf890be3f87beb9024969be6651e/`.
+No installed app, helper, TCC grant or Keychain credential was changed by this build.
+
+The fresh Linux packages from workflow `36359407414` passed four static audit groups: GitHub
+archive digests and CRCs, both ELF architectures, engine runtime stamps, and exact `.deb`/tarball
+equivalence for 601 files including modes. The arm64 `.deb` SHA256 is
+`eb821293fbd9c6ee12721de5afe5669fb7aac8a50e8ea1448abca82e28ca7c06`; x64 is
+`224ca2f6d836dc3c433933c79c9fe13a14e308a6278521510b9e5603677363dc`.
+
+`e2e/linux-release-rehearsal.py` then passed all six groups using that arm64 `.deb` directly,
+without an agent override. The packaged banner measured 420×52, collapsed to 250×44 and restored;
+real dragging and metadata updates preserved its position. The normal announcement expired,
+app/full-screen recordings survived banner/name changes, and collapsed Stop killed the detached
+`setsid` descendant. The exact owned container, database, service and listener were removed.
+Evidence: `target/release-candidate/ci-0159b7a16d3fbf890be3f87beb9024969be6651e/` under
+`linux-audit-report.json`, `LINUX-SHA256SUMS`, `linux-native-rehearsal/` and
+`linux-cleanup-verification.json`. This closes inclusion of the Linux fixes in the package.
+The native fixture remains a Docker X11 arm64 desktop with synthetic providers; physical Linux,
+Wayland and carried-device recording are not established. No package was published.
+
+## 2026-09-28 — physical iPhone capture while locked
+
+The existing opt-in first-screenshot test was run with an explicit physical iPhone 13 mini UDID
+on iOS 27.0 and isolated engine state, claims and leases. Despite its
+`simulator_first_screenshot` test name, this invocation used the physical CoreDevice backend.
+The event trace shows screenshot → `SESSION_NOT_FOUND` → targetless open → screenshot → close.
+No XCTest runner appeared in the device's process list before or after, and the owned daemon
+and listener were stopped. Evidence: `target/ios-physical-first-capture/`.
+
+CoreDevice reported `passcodeRequired: true` before and after. The returned 1125×2436 PNG is
+visually all black: this proves attachment and cleanup on a locked physical phone, not readable
+screen capture or preservation of a visible app. An unlocked-phone check is pending; physical
+iPad capture, reconnection and helper installation remain separate gates.
+
+## 2026-09-28 — retractable Linux wake notifications
+
+The Linux `notify-send` fallback posted a notification without retaining an ID, so later
+redaction or withdrawal could leave the original requester's private name/reason in notification
+history. The fallback is removed. A missing/unavailable D-Bus backend now returns an actionable
+`NotShown` result; existing agent feedback reports `shown: false`, and the request remains
+available in Extend. Successful notifications still use D-Bus replacement and withdrawal.
+
+The regression isolates the real backend in a child with an unavailable session bus and a fake
+successful notification CLI. Both private and redacted attempts must report failure without
+invoking that CLI. The old fallback fails this test; the restored fixed source passes.
+Linux notification tests pass 9/9 with default features and 9/9 without default features; strict
+library Clippy passes both. Mac notification tests pass 8/8 and strict Clippy passes. Evidence:
+`target/linux-native-banner-fix/notify-*.log` and `notify-negative-control-result.json`.
+No user notification service was contacted. Actual GNOME/KDE notification-center behavior is
+still a physical desktop check.
+
+## 2026-09-28 — native Linux banner sizing and recording continuity
+
+The downloaded arm64 CI package reproduced a native banner at 420×200 instead of 420×52 on
+Debian trixie/X11/Openbox. GTK gives a non-resizable WebKit window its 200-pixel natural height.
+The Linux-only fix keeps GTK resizing enabled internally and pins equal minimum/maximum bounds;
+the user still cannot resize the banner. No new dependency or macOS behavior change is involved.
+
+`e2e/linux-release-rehearsal.py` passed six groups with that package's unchanged engine and an
+explicit rebuilt native-agent override. Native geometry is 420×52 expanded, 250×44 collapsed,
+then 420×52 restored. Real pointer dragging moved it from `(430,638)` to `(530,688)`; metadata
+refresh retained that position, and a manual resize request did not change its bounds. The
+normal announcement expired while its session stayed active. Collapsed Stop ended the session
+and killed its detached `setsid` terminal descendant.
+
+Both app and full-screen recordings survived host banner off/name update/banner on, fully
+decoded with changing frames and correct dimensions, and downloaded again with identical hashes.
+This is local-host metadata continuity, not the still-open carried-device attach/driver check.
+Evidence: `target/linux-release-rehearsal-fixed-2/` (report, geometry, screenshots and MP4s).
+Agent override SHA256: `8efd3b4380fd45ddcd62488c2864f03b34c7417f126c512a8db02d3fc098e299`.
+The exact desktop container, service and database were removed.
+
+This fixture uses synthetic local IAM/files/Ting and an owned Docker X11 desktop. Physical
+Linux, GNOME/KDE, Wayland, lock/sleep and multi-monitor behavior are not proved. Fresh release
+packages must include the fix; the original CI package is not a final candidate for Linux.
+
+## 2026-09-28 — release artifact audit and service image smoke
+
+All eleven artifact ZIPs from release workflow `36357336309` match GitHub's SHA256 digests and
+pass ZIP integrity checks. Thirteen static audit groups passed: six CLI architectures and exact
+byte matches within the Honeycomb archive, Windows x64/arm64 package contents and PE architecture,
+and Linux x64/arm64 ELF architecture, independently recomputed engine runtime stamps, and identical
+`.deb`/tarball payloads including file modes. `honeycomb validate` also passed. Evidence and
+checksums: `target/release-candidate/ci-ae9dbdde211732df9f2bc55920e679b3a459a212/`. This static audit
+did not execute downloaded binaries or establish interactive platform behavior.
+
+The ARM64 service image was built from immutable `git archive 1120401` as
+`silicon-extend-candidate:1.1.0-1120401`; local image ID
+`sha256:94b96b16b55cfd28895b1356ec8f5db4dcd07acd8d380b1908388148c79a282a`.
+Six smoke groups passed: production startup refuses missing IAM configuration, an owned local
+development database migrates and reaches readiness, API negotiation reports service 1.1/API v1,
+synthetic Carbon authentication and device listing work, the created world is schema 5, and the
+image is ARM64 with the non-root `extend` user. The exact container/database were removed.
+Evidence: `target/release-candidate/backend-1120401/{artifact-manifest.json,smoke-report.json,
+smoke-service.log,build.log}`. The first smoke assertion expected an array instead of the documented
+paginated device-list envelope; correcting that harness assertion needed no product change.
+This image has not been pushed or deployed and this smoke uses local IAM/files/Ting stand-ins.
+
+## 2026-09-28 — signed Android upgrade and two-Carbon TV checks
+
+Twelve checks passed on the owned Android TV API 34 emulator `ExtendReconnectVerification`
+(`emulator-5640`). The actual published 1.0 APK checksum and release certificate matched;
+`adb install -r` of the permanently signed 1.1 APK reconnected automatically in 1.827 seconds,
+preserving the exact device/instance/owner/pair timestamp and credential digest. A native snapshot
+still worked in the session opened before the upgrade. Native Stop ended that session.
+
+The TV badge was bottom-centre at `[646,912–1273,1000]` on 1920×1080, non-focusable and
+non-touchable, and hid after 10.126 seconds. It is an automatic badge; desktop movement and
+collapse controls are a separate feature. The actual Android sharing UI added a second Carbon
+to the same instance with correct first-pair flags. Concurrent access was refused without leaking
+the other Carbon/Silicon identity; either Carbon could stop the device. Removing the first pair
+left the second pair connected with its native snapshot session working.
+
+Evidence: `target/android-upgrade-verification/{report.json,facts.json,credential-retention.json,
+cleanup.json}`, signature logs, native screenshots and window dumps. The APK copy and manifest
+are in `target/release-candidate/android-0b4e2ab3d47b33090473e95b784a826dfd2b2991/`;
+SHA256 `2cca9a42909d45bf787fec249095396008fa542954e9f59fdf7182a5bb85ea9f`.
+The owned service/database/reverse were removed and the original proxy setting restored. The
+emulator is back on the debug app, unpaired against fake service 8498 with its setup restored.
+
+This used synthetic local IAM and an emulator, not a physical TV or Fire OS. The old app had no
+saved Android-debugging identity, so migration of that separate identity was not exercised.
+No production writes or product changes were needed by this lane.
+
+## 2026-09-28 — released Mac agent upgrade and signed candidate
+
+`e2e/released-agent-compat.py` passed seven groups using the GitHub-checksummed 1.0 Mac
+binary and the current 1.1 native binary against an owned current service/database. The same
+private home retained the exact credential digest, device identity and active terminal session
+through both a 1.0 reconnect and the 1.1 upgrade. The single credential object became an array;
+a synthetic legacy engine-state marker moved to the new directory. Native Stop cancelled an
+owned terminal command in 34 ms. Both Carbon pairs reconnected, the second pair could not use
+terminal, and Stop ended either pair. The user's LaunchAgent bytes and timestamp were unchanged.
+The exact database and owned processes were removed. Evidence:
+`target/desktop-agent-upgrade-release-1/report.json` (source `ae9dbdd`).
+
+This is headless native-agent proof with local synthetic IAM. The engine was disabled, the file
+credential store was explicit, and no UI, Keychain, TCC or installed app was changed. The second
+pair was claimed through the API and loaded into the owned credential file while stopped.
+Carried-device linking, real screen capture and native sharing UI are not proved by this lane.
+
+Separately, `apps/desktop/macos/build-app.sh` produced a Developer ID signed 1.1.0 arm64 candidate
+from clean `ae9dbdde211732df9f2bc55920e679b3a459a212`. All 5,063 tracked source hashes matched
+before/after. Apple accepted submission `acd8fceb-efb9-4f5b-bd0a-5621e24809d4` with zero issues;
+stapling and Gatekeeper passed. An independently extracted final ZIP matched all 781 packaged
+file hashes; app/helper/Node signatures, hardened runtime, entitlements and runtime stamp passed.
+ZIP SHA256: `f09490c3261af845e771143b533efdbb089062d7a4ca0c8405c5ed0b7ec1f8de` (45,539,205 bytes).
+Manifests and logs are in `target/release-candidate/macos-ae9dbdde211732df9f2bc55920e679b3a459a212/`.
+The app was not launched or published by this check.
+
+Release workflow [36357336309](https://github.com/teamofsilicons/silicon-extend/actions/runs/36357336309)
+passed all 11 jobs at that source: six CLI targets, the Honeycomb archive, and Linux/Windows
+desktop packages for x64/arm64. Linux packages installed and Windows packaged agents ran
+`--version` on their native runners. Interactive desktop behavior remains a separate gate.
+
+CI [36357303979](https://github.com/teamofsilicons/silicon-extend/actions/runs/36357303979) passed
+Android, web and contract lint but exposed two failures. The packaging job lacked the browser
+dependencies needed by the banner test; that test now runs in the web job after Chromium install.
+Local verification passed 65 packaging tests and both banner browser tests. The consumer-contract
+harness now waits for persisted device readiness and individual setup steps instead of a 150 ms
+sleep or an already-offline state. Two PostgreSQL row-lock regressions fail with the original
+timing assumptions and pass with the fix; the full contract suite passes 11/11, including frozen
+1.0 fixtures, and strict test-target Clippy passes. No production code changed. A fresh GitHub
+CI run [36358256243](https://github.com/teamofsilicons/silicon-extend/actions/runs/36358256243)
+subsequently passed all five jobs at `b891822`. The later native Linux fixes are verified in
+their own entries and still require a final CI/package run.
+
+## 2026-09-28 — production wake-type registration
+
+The authenticated app-owning Team manager registered `extend.device.wake_requested`,
+`extend.device.woken` and `extend.device.wake_declined` in `tos`. A subsequent production list
+confirmed all four Extend types with their intended descriptions/defaults. This is a production
+catalog preparation step, not a service/app release or a notification send. The live service and
+installed apps remain unchanged. Evidence: `target/release-production-check/production-ting-registration.json`.
+
+## 2026-09-28 — final local suite pass and legacy banner guidance
+
+The full workspace pass completed with 580 Rust tests passing, zero failures and six opt-in tests
+ignored; workspace Clippy with warnings denied and formatting passed. Website validation passed
+170 unit and 58 Chromium tests and a production build. Desktop packaging passed 67 checks; the
+isolated current CLI lane passed 119. Logs and counts: `target/release-production-check/`.
+
+The subsequent banner copy correction reports a saved preference rather than claiming that an
+old/offline app has already changed. Website/CLI guidance explains the device or carrying app needs
+1.1+ and offline devices apply changes on reconnect. The existing browser banner persistence/Stop
+case, CLI suite, web build and formatting pass after that correction. This changes no wire format.
+
+After the separately audited self-notification fix, the combined real IAM/Briefcase/Ting lane
+passed 75 checks with zero failures. Real routed/self-send/wake, global type lookup, genuine
+missing-type fallback, files and Carbon removal still pass. All owned fixture resources were
+removed. Evidence: `target/realiam-1.1-verification/release-audit-final/`.
+
+## 2026-09-28 — self-notification recovery after transient refusal
+
+The release audit found that a generic 401/403/400/422 response on a self-send permanently marked
+self-notifications unsupported for the whole server process. Only explicit stable
+`self_send_not_allowed`/`self_send_unsupported` responses now set that capability cache. A four-case
+HTTP regression proves unrelated failures leave self-send enabled and the next attempt succeeds
+with a fresh IAM proof and unchanged notification body. The OBO suite passed 10/10 and the routed
+actor-chain regression passed 1/1; the service rebuilt and strict Clippy/formatting passed.
+Evidence: `target/ting-self-send-{regression,chain,build,clippy}.log`. The combined real-service
+positive-flow lane subsequently passed 75 checks, as recorded above.
+
+## 2026-09-28 — actual 1.0 website source upgraded against service 1.1
+
+`e2e/web-upgrade-rehearsal.mjs` builds the v1.0.0 tag's website and the current website in owned
+exports, drives them against an isolated current service/database, and changes the bundle on the
+same origin/browser storage. Thirteen checks passed: legacy login, cross-Team own-device lists,
+other-Carbon privacy, empty Team tab, additive detail decoding, deprecated visibility, grants and
+revocation, sessions, takeover Done and Stop. The current bundle retained the legacy login and
+repeated the flows, including the shared banner control. No page errors or external browser
+requests occurred. Source metadata, report, screenshots and logs: `target/web-upgrade-rehearsal-pass/`.
+
+The source bundles use the local build toolchain. IAM/file/Ting providers and the WebSocket device
+are synthetic; this does not prove native device execution, production consent or CDN caching.
+Owned service/preview/browser processes stopped and the exact database was removed.
+
+## 2026-09-28 — deployment runtime controls
+
+The final audit found all five documented 1.1 tuning variables missing from the AWS environment
+renderer allowlist. They would have been silently ignored despite being present in the runtime
+secret, including the owner-at-use emergency switch. The allowlist now includes them. Three tests
+execute the actual embedded renderer and verify values including `false`/`0`, omitted defaults,
+0600 output, temporary-secret cleanup and newline injection rejection. CI runs those tests.
+Existing production helpers still need the documented refresh during release; no production
+helper, secret or running container was changed by this fix.
+
+## 2026-09-28 — copied production schema rollback rehearsal
+
+After AWS SSO renewal, a read-only export captured the live schema plus only its migration-version
+rows; it contains no account/device data. The exact 19,592-byte dump (SHA256
+`f391e09887a14a1dfe5a3c9c7b58c890276924d042852705c359e04ecd9dd628`) imported unchanged into an owned
+PostgreSQL 17.11 container; the source was 17.9. `deploy/rollback/rehearse-schema.py` verified schema
+3→5 with synthetic 1.0 records, followed by three cycles of the actual down script twice and current
+migrations twice. Confirmed credentials, instance identities, first-pair flags, salts, hidden
+indicators and grant metadata survived. 1.0 writes worked and revoked grants stayed revoked.
+
+The opt-in copied-schema test and four standard migration tests passed. The report records input,
+code and image hashes and confirms deletion of every owned database/container. Service formatting,
+migration Clippy and diff checks passed. Evidence: `target/rollback-verification/production-copy/final/`.
+This closes the production-schema-copy rehearsal. It is not a full production-data backup restore;
+the release still takes a fresh database snapshot before changing the live service.
+
+## 2026-09-28 — native Mac banner and focus preservation
+
+The isolated `apps/desktop/macos/banner-native-e2e.py` fixture runs the production UI with a fake
+agent and a process-local AppKit probe. It exposed a real focus bug: Tao's `set_visible(true)`
+made the banner key on every show despite `focused=false`. Banner display now uses AppKit
+`orderFront` on macOS; a sentinel window keeps focus when a session announces itself.
+
+The rebuilt fixture passed 13 native scenarios: expanded/collapsed sizes, restored position,
+screen-edge clamping, new-session expansion, hide/reappear, ten-second timeout and focus retention.
+Three Stop actions reached the correct fake targets. CUA clicks also verified collapse, Stop and
+restore with the native frame retained at (160,220). Rust UI tests passed 17/17, DOM tests 2/2,
+strict Clippy and Python compilation passed. Owned fixture processes exited; installed apps,
+TCC, real sessions and unrelated windows were untouched. Evidence: `target/desktop/banner-native-e2e/`.
+
+Physical dragging remains unverified: CUA's app-targeted drag could move neither the banner nor
+the fixture's standard AppKit title bar, and macOS reported no pressed mouse button. This
+establishes a tool limitation, not a banner drag defect. Multi-monitor movement, Windows/Linux
+native behavior and metadata refresh during recording remain separate checks.
+
+## 2026-09-28 — released 1.0 CLI against service 1.1
+
+The installed, released 1.0.0 CLI (SHA256
+`0f450055fb96ffe5c45f9f2700c1b55c4cb394198eaaff6c1330ccadfa2038fd`) passed the new isolated
+`e2e/released-cli-compat.py` lane against the current 1.1 service. It covers negotiation, login,
+pairing/grants, additive device-response decoding, sessions, commands, screenshots and downloads.
+Switching between actual 1.0 and current CLI binaries preserves the same saved login and connected
+session. Mixed-version takeover/release and Carbon Stop work; the old CLI can resume a session
+saved by 1.1, end it and remove the device. The current full CLI suite then passed all 119 checks
+on the same owned service. Eight lane groups passed; logs/report are in `target/released-cli-compat/`.
+
+The fixture used local IAM/file/Ting implementations and a scripted 1.0 device, not an actual 1.0
+Android/desktop app or website. The owned database/processes were removed. The existing service on
+8480 and installed user logins were untouched. Actual device-app and website upgrade rehearsal
+remains open.
+
+## 2026-09-28 — repeated rollback and old-service banner compatibility
+
+Four migration tests pass on owned local PostgreSQL databases. The rehearsal runs three down/up
+cycles across production-shaped schema5 and schema4/schema5 test worlds, repeating each step twice.
+Instance identities, first-pair markers, salts, confirmed credentials, hidden-banner choices and
+grant metadata survive. Removed and revoked grants stay absent, and 1.0-style writes still work.
+A controlled overlapping-startup test reproduced a missing rollback-stash relation; restoration
+now holds the migration advisory lock and rechecks the catalog inside its transaction. Both
+concurrent restores pass and restore/log each grant once. Owned databases are cleaned on success
+and assertion failure; retained logs were checked for leftovers.
+
+The desktop's internal service reader now distinguishes an omitted old-service banner field from
+an explicit `shown`. A real HTTP/WebSocket regression covers synchronized hidden choices for the
+computer and a carried device, old refresh/attach responses, app restart and reconnect, then an
+explicit 1.1 change back to shown. Public protocol defaults and the public client API are unchanged.
+The full agent suite passes 231 tests with one existing ignored; agent/service Clippy with warnings
+denied, formatting and diff checks pass. Evidence: `target/rollback-verification/`.
+
+This is synthetic database and simulated old-service proof. The production-schema-copy and actual
+1.0 application rehearsal remain separate release gates.
+
+## 2026-09-28 — native TV display through real Briefcase
+
+The repeatable `e2e/real-iam/native_display.py` lane passed 12 checks in 27.24 seconds with local
+real IAM, Briefcase and MinIO and the installed debug app on dedicated Android TV emulator-5640.
+It stored a native screenshot as `si:chef`, verified its Briefcase ownership and Carbon share,
+then displayed it by `file:<UUID>`, bare UUID and private Briefcase URL. Before each replay the TV
+showed a distinct text screen; all four sampled color quadrants then matched exactly at 1920×1080.
+Missing files and another Silicon's private-file access were refused. Damaged image bytes reached
+the native decoder and returned `action_failed`; the next stored-image display recovered.
+
+Evidence is in `target/real-briefcase-native-tv/`: `report.json`, before/after PNGs, command results,
+service logs, logcat and a memory dump. Owned fixture services were removed; the dedicated emulator
+was left unpaired at its prior debug URL. Physical devices and production were untouched. The
+Carbon signs into Briefcase first to satisfy its existing recipient-projection limitation. This
+closes the real-service/native-emulator handoff gate, not the physical-TV or production gate.
+
+## 2026-09-28 — real IAM, Briefcase and Ting 1.1 checks
+
+- The combined local real IAM + Briefcase + Ting run passed 75 checks with zero failures. A fresh
+  IAM + Ting run after the registration fix passed 62 with zero failures. These use the services'
+  actual implementations in owned fixtures, not production accounts or deployment.
+- Verified holder versus Carbon request routing, all wake events in acme/globex, a third Team
+  using globally registered app types, and genuine missing-type refusals after removing the types
+  only in the stopped owned fixture. Ting accepted self-send with HTTP 202. The Silicon's directory
+  lookup of c:bob returned 200, then 404 after real IAM removal; its own lookup stayed 200. In the
+  combined lane c:bob owned a second device granted to that Silicon, so this was a granting Carbon.
+- Ting 0.1.9 resolves types by context and app, independently of delivery Team, and its OBO catalog
+  has no `types.register`. Removed Extend's unsupported calls and corrected service, CLI and web
+  guidance to use the app's owning Team (an explicit quoted placeholder when unknown). Recipient
+  "Turn on" does not falsely clear missing-type errors. No additional OBO scope is required.
+- Focused validation: 121 Rust tests, 170 web unit tests, two Chromium cases, TypeScript, Clippy with
+  warnings denied and formatting passed. All fixture processes and containers were cleaned up.
+- Evidence: `target/realiam-1.1-verification/pre-guidance/` (combined run) and `final/` (fresh run),
+  including report JSON, service logs and focused check logs. Briefcase's unseen-recipient
+  projection remains a recorded dependency gap; the native-TV stored-file handoff is a separate
+  check. Production `tos` subsequently registered the three wake types, as recorded above.
+
+## 2026-09-28 — desktop carried banners and offline choices
+
+Per-carried-device switches, atomic offline preference persistence and delayed-response fencing
+are implemented. Known aliases of one carried device update together and use the correct host
+credential. Setting synchronization cannot block Stop. Restarting the app no longer announces an
+old session for another ten seconds. The new carried-settings endpoint authenticates the exact
+carrying pair and rechecks that relationship under instance locks before changing shared settings.
+
+- Agent: 230 passing tests (204 unit, 26 integration), one existing ignored. Tests cover offline
+  save/restart, slow HTTP versus Stop, remote refresh, two-Carbon aliases and retained live drivers.
+- Service indicator suite: five passing tests, covering authorization, world isolation, invalid
+  inputs, removed/unrelated targets and shared settings.
+- Actual desktop HTML in headless Chromium: two passing tests, covering carried controls, offline
+  messaging, drag IPC, collapse/restore, Stop, takeover Done and escaped names. Clippy and formatting
+  pass. Evidence: `target/desktop-banner-verification/extend-desktop-banner-*.log`.
+- These do not prove actual native window movement, multi-monitor position retention or a banner
+  change during a real native recording. Installed apps and production were not changed.
+
+## 2026-09-28 — direct Android TV element clicks
+
+Android TV apps 1.1+ can receive direct `click` through their existing `screen.read` accessibility
+capability. The service's command list and command gate, Android's local gate and CLI help now
+agree. The TV's advertised capabilities are unchanged: pointer/touch/hover/gesture support is not
+implied. Apps 1.0.0/1.0.2 retain their prior direct-click refusal and `find … click` fallback.
+
+- Two HTTP/WebSocket tests pass, including decoding the actual response with frozen 1.0 models,
+  refusing old TV apps and withdrawing click when accessibility disappears during a session.
+- Protocol 32 tests, CLI 28 existing tests plus one help regression, and 50 focused Android tests
+  passed; scoped Clippy with warnings denied passed. The subsequent full Android app suite has
+  235 passing tests, with lint and APK build passing.
+- Native Android TV 14 emulator-5640: `click @e8` opened Device Preferences using
+  `accessibility_click`; the next snapshot confirmed the destination. Hover, gesture and scroll
+  remained refused. Coordinate, repeated and held clicks still depend on gesture injection;
+  the native proof here is an element click, not those variants or a physical-TV check.
+- Evidence: `target/tv-click-verification/{native-click.json,service-tests.log,android-tests.log,android-final-build.log}`.
+
+## 2026-09-28 — lower screenshot memory on Android TVs
+
+Plain ADB screenshots now stream Android's original PNG from disk, reading only the dimensions
+instead of decoding and recompressing the full TV frame. Cropping, scaling and reference overlays
+still render at the requested resolution; each replaced bitmap is recycled, and the final image
+is encoded to disk and recycled before upload. Uploads use the existing cancellable file stream,
+so PNG compression no longer creates a growing byte buffer plus a second full byte array. The
+accessibility capture releases its hardware bitmap wrapper after copying and recycles screenshots
+that arrive after command cancellation. Allocation failures on Android's callback thread are
+forwarded to the command's error handler. Screenshot scratch directories are deleted in `finally`.
+
+- Android TV 14 emulator-5640, five sequential 1920x1080 screenshots through the fake service:
+  sampled PSS before the change ranged 54,648–64,949 KiB, after 56,143–58,827 KiB. Both measurements
+  began after a background-only app restart. This is one emulator debug-build workload, not a
+  physical-TV baseline or a claim about all app memory. The actual captured resolution remained
+  1920x1080 even with a logical 3840x2160 `wm` override.
+- Real ADB PNG uploads and accessibility plain, 0.5-scale and annotated 0.5-scale uploads all
+  succeed and decode completely with ffmpeg. A missing crop selector still returns
+  `element_not_found`. No screenshot scratch directories remain after success or that failure.
+  Android 9 emulator-5642 also passed real ADB plain and 0.5-scale captures and complete PNG decoding.
+- Android app unit tests, lint and debug build pass. The final accessibility-wrapper change was
+  checked again with native plain, scaled and annotated captures. Final app unit total: 235.
+  Review also corrected reference-overlay coordinates after cropping. The native 74x38 crop of
+  Settings' About label at screen position (1328,210) contains zero annotation-colour pixels without
+  overlays and 2,149 with overlays, proving the reference is drawn within the cropped image.
+- Evidence: `target/adb-reconnect-verification/screenshot-{before,after,variants,final-native,legacy-native,crop-native}.json`,
+  `screenshot-final-build.log` and the PNGs under `service/`. Existing file-upload tests cover the
+  streamed checksum/bytes and cancellation behavior. Further TV memory profiling and physical
+  device verification remain open; no screenshot resolution was reduced by default.
+
+## 2026-09-28 — Android debugging recovery after process death
+
+The existing reconnect implementation passed on two fresh, isolated emulators. After the one-time
+debugging authorization and pairing with an isolated fake service, the lane sends the app Home,
+kills its exact PID with `run-as`, and waits for a real remote `adb shell id -u` result of 2000.
+It does not reopen the activity or press Connect. The foreground service and debugging connection
+return automatically. Restarting that emulator's adbd also restores commands automatically.
+
+| Emulator | Process death | adbd restart | Background PSS after process death |
+| --- | --- | --- | --- |
+| Android TV 14, API 34, `ExtendReconnectVerification`, emulator-5640 | 2.111 s | 14.284 s | 55,967 KiB |
+| Android 9 Google APIs, API 28, TV override, `ExtendReconnectLegacyVerification`, emulator-5642 | 2.119 s | 14.337 s | 29,622 KiB |
+
+API 28's emulator adbd exposes only its emulator pipe. As in the earlier legacy lane, the test
+uses `reverse tcp:5555 tcp:5643` and restores that route after adbd restarts. This verifies the
+app's legacy connection recovery, not a physical TV's daemon or networking. API 34 uses its real
+on-device TCP listener. Both runs used the debug APK and a local fake service, not production.
+The API 28 setup activity retained before process death measured 60,949 KiB PSS in the background;
+this is a profiling baseline, not proof of a memory optimization or a leak.
+
+Added `apps/android/tools/adb-reconnect-lane.py` with explicit emulator selection, matching the
+remote AVD name before process mutation, real shell checks, captured meminfo and logcat. The
+initial instrumentation helper now uses the same 60-second authorization wait as a manual Connect
+and reports the error after the connection attempt. Its native Android 9 run and the instrumentation
+APK build pass. The earlier 8-second helper timed out during first authorization on API 34; that
+was test setup, not evidence of a production reconnect failure.
+
+Evidence: `target/adb-reconnect-verification/{api34,api28}/results.json`, `memory-*.txt`,
+`logcat.txt`, service logs and `build.log`. Neither pre-existing emulator (5620/5622) was changed.
+The reported physical-TV disconnect, manufacturer process restrictions, TLS recovery on that TV,
+reboot behavior and overall memory reduction remain open. No runtime reconnect code was changed.
+
+## 2026-09-28 — display stored Extend files
+
+`display show --image/--video` accepts a bare file UUID, `file:<file_id>`, its stored Briefcase
+link or the service's file-content URL. The service resolves it in the caller's world, reuses the
+normal file visibility check (requesting Silicon, Team and self-destruct time), reads Briefcase as
+that caller, and relays an ordinary attachment. It sends no caller token or OBO proof to the device.
+The same 8-file/8-MiB command attachment budget applies, including existing attachments. Store reads
+enforce the actual byte limit, not only recorded size or Content-Length. File resolution happens
+under the session's command lock, shares the command deadline, and rechecks the session before
+relay so a concurrent Stop/takeover cannot be followed by display. Public media URLs still go to
+the device unchanged. CLI help and implementation docs describe the forms and limit.
+
+- Four real HTTP/WebSocket/PostgreSQL display tests pass: a previous session's own image reaches
+  a 1.0 fake TV app in the existing attachment format; private links and file IDs resolve;
+  other Silicons, other Teams, expired files, wrong types and exceeded budgets are refused before
+  relay. A deliberately oversized local file with small recorded metadata is refused too.
+  A controlled read exercises Stop and command timeout before relay. Log:
+  `/tmp/extend-display-files-service.log`.
+- A fake Briefcase HTTP endpoint verifies the delegated reader/Team and chunked response limit.
+  This is part of the four tests, not live IAM/Briefcase evidence.
+- Service suite: 147 pass, including existing contract/1.0 consumer replay; log:
+  `/tmp/extend-display-files-all-service.log`. Opt-in real-service tests remain disabled.
+- Client/CLI tests: 81 pass across nine result groups, including 1.0 source compatibility;
+  log: `/tmp/extend-display-files-client-cli.log`. Explicit `file:` references stay remote instead
+  of being mistaken for local paths.
+- Workspace Clippy with `-D warnings` passes: `/tmp/extend-display-files-clippy.log`.
+
+The combined real Briefcase → installed native TV emulator path subsequently passed the lane
+recorded above. The physical-TV path and production release remain unverified.
+
+## 2026-09-28 — TV image readiness and memory
+
+Image display now acknowledges decoded content in the foreground, rather than activity startup.
+Corrupt images, HTTP failures and video preparation errors reach the command's failure result.
+Each display request has its own identifier, so an older completion cannot satisfy a newer one.
+Downloads stream to disk with a 32 MiB limit even without Content-Length; decoding runs off the
+main thread and samples to at most 2,073,600 pixels. Replacement, clear, cancellation and activity
+destruction cancel downloads and release video/WebView resources.
+
+- Android unit tests: 234 pass; lint, debug APK and instrumentation APK build pass. Six new JVM
+  tests cover successful download, HTTP rejection, advertised and chunked size limits, sampling,
+  and stale request completion. Log: `/tmp/extend-display-android.log`.
+- Four native `DisplayTest` cases pass on a fresh, dedicated Android TV API 34 emulator
+  (`ExtendDisplayVerification`, port 5640). Actual BitmapFactory decoding rejects a corrupt file;
+  the full `CommandExecutor` returns `action_failed` for it. A delayed local HTTP 404 cannot report
+  success while loading. A valid 3840 × 2160 PNG displays correctly with at most 8,294,400 allocated
+  bitmap bytes. Log: `/tmp/extend-display-native.log`.
+- The instrumentation build caught an older recording test still calling `connectionLost()`
+  without its 1.1 pair identifier. Updated that call to the same empty pair identifier its session
+  uses; the recording runtime lane was not rerun here.
+- The initial command-path test lacked a bound accessibility service after instrumentation
+  restarted the app. The dedicated-emulator test setup now rebinds it and disables UiAutomation's
+  normal suppression of real accessibility services. The final four-case run passes.
+
+These checks do not prove physical TV behavior, overall app memory consumption, debugging
+reconnect, or authenticated display of a Silicon's stored Extend files. Those remain open.
+
+## 2026-09-28 — iPad first screenshot
+
+The hosted iOS driver now responds to the engine's typed `SESSION_NOT_FOUND` on screenshot or
+screenshot-diff by attaching the same session with a bare `open`, then retrying the capture once.
+It never supplies an app target. Existing sessions retain their binding. Attachment failures are
+returned, and waiting for the device, stale-session cleanup, attachment and capture share the
+original command deadline and cancellation token.
+
+- Hosted-driver suite: 78 pass, 4 opt-in native tests ignored; the new regressions exercise first
+  capture, repeated capture, lost daemon state, abandoned setup recovery, attachment failure,
+  cancellation and timeout. Log: `/tmp/extend-ios-attach-tests.log`.
+- `cargo clippy -p extend-hosted --all-targets --locked -- -D warnings` passes; log:
+  `/tmp/extend-ios-attach-clippy.log`.
+- The opt-in `simulator_first_screenshot` test passes through the built engine on a newly created
+  iPad Air 11-inch (M2), iOS 18.4 simulator. Settings was already open via `simctl` before the
+  Extend session. The engine event log records screenshot → `SESSION_NOT_FOUND` → targetless
+  open → successful screenshot → close. The PNG was visually inspected: Settings/General
+  remains visible. No XCTest runner existed before or after. Evidence is under
+  `target/ios-first-capture/` (`before.png`, `capture/screenshot.png`, `events.ndjson`, `test.log`).
+  The test used its own daemon, claims and leases; the daemon was stopped and the temporary
+  simulator was shut down and deleted afterward.
+
+This proves the driver and simulator path, not physical iPad/CoreDevice capture, annotated
+screenshots requiring app accessibility, or an installed/released desktop build. Physical-device
+and release checks remain in `completion-work.md`.
+
+## 2026-09-28 — resumed banner follow-up
+
+Recovered the interrupted Claude working tree on `release/1.1.0` at `505a695` and completed the
+shared banner setting through the service, Rust client/CLI, website, Android notification/badge,
+and desktop banner/icon. Preserved the 1.0 Rust `DevicePatch` struct-literal API by introducing
+`DeviceSettingsPatch`; added consumer fixtures for both new calls and replayed them alongside
+frozen 1.0 consumers. Device settings and the shared indicator now change in one transaction,
+including the version check. Concurrent conditional edits are covered by a service test.
+
+Observed on this Mac, with the existing local PostgreSQL and stand-in IAM; no physical device,
+installed app or production service was changed:
+
+- Android offline Gradle unit tests, lint and debug APK: 228 app + 10 libadb tests pass, lint and
+  assembly pass. The new virtual-time tests cover the exact 10-second boundary, hiding, takeover
+  persistence, session identity across pairs and process-restart announcement suppression. They
+  also assert hiding the badge keeps the session and screen hold alive. Log:
+  `/tmp/extend-resume-android.log`.
+- Real HTTP/WebSocket/PostgreSQL banner tests: 4 pass, including two Carbons sharing the setting,
+  Silicon refusal, carried-device refresh/reconnect, test isolation and competing If-Match edits.
+  Existing device gap tests: 7 pass. Log: `/tmp/extend-banner-service-tests.log`.
+- Client contract generation: 3 pass; real service contract replay: 9 pass, including frozen 1.0.
+  Logs: `/tmp/extend-banner-contract-write.log`, `/tmp/extend-banner-contract-replay.log`.
+- Protocol/client tests and old request-body source compatibility pass:
+  `/tmp/extend-banner-client-tests.log`. CLI behavior tests include exact banner PATCH bodies and
+  argument rejection; desktop tests include independent per-device timers, hidden icons,
+  takeover persistence and Stop availability. `/tmp/extend-banner-rust-tests.log` records those
+  passes before its missing-fixture gate failed; the separate contract run above closes that gate.
+- Website typecheck, 170 unit tests and production build pass. Browser tests exercise the extra
+  setup step and persist the banner setting across reload without stopping the running session.
+  The first run caught outdated setup-step expectations. After updating the successful pairing
+  paths, 57 browser cases passed; the remaining visual-tour case passed separately after changing
+  its expected mobile progress from step 4/6 to step 5/7. Logs:
+  `/tmp/extend-resume-web-e2e.log`, `/tmp/extend-resume-web-restyle.log`. Phone-width device settings
+  screenshot was visually inspected (`web/test-results/screenshots/12-device-page-phone.png`).
+- Workspace Clippy with `-D warnings` passes: `/tmp/extend-resume-clippy.log`.
+- Final `cargo test --workspace --locked`: 559 pass, 4 ignored, 0 failures across 36 test/doc-test
+  result groups (`/tmp/extend-resume-workspace.log`). The migration suite verifies schema 5,
+  default-shown indicators on pre-existing rows, and rollback/roll-forward behavior. Opt-in
+  real-service/native lanes were not enabled; a green harness result does not establish those.
+
+This is local evidence, not proof of Windows/Linux native windows, a physical TV's placement,
+Android's notification rendering, production interoperability or a release. The remaining final
+fixes and runtime/release gates stay in `completion-work.md`.
+
+## 2026-09-27 — 1.1.0 integration
+
+1.1.0 was built by ten groups, each testing its own part, on top of `8da8e2d`; an integration pass
+then ran every suite together on the whole tree (not committed). Same Mac (macOS 27, arm64),
+PostgreSQL in `silicon-extend-postgres`, the local IAM, Briefcase and Ting stand-ins, and no device,
+emulator or simulator. The service ran as its own instance on `:8580`/`:8581` with its own database.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | clean |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | clean |
+| `cargo test --locked -p silicon-extend-client --test contract_fixtures` and `-p extend-service --test contracts` | 3 and 9 passed, including the frozen `v1/client-1.0.0` replay |
+| `cargo test --workspace --locked` | 550 passed, 4 ignored (a sleeper helper in extend-agent; three extend-hosted tests that need a Simulator or pyatv), 0 failed |
+| `bash e2e/cli-e2e.sh http://127.0.0.1:8581` | all 119 checks |
+| `cd web && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm test:e2e:compat && pnpm build` | 161 unit tests; 57 Playwright tests against the mock; the released 1.0.0 website against the 1.1 mock (1 test); build ok |
+| `pnpm test:e2e:real` (`EXTEND_REAL_URL` at the 1.1 service) | 5 passed |
+| `cd vendor/extend-engine && pnpm typecheck && pnpm lint && pnpm format:check && pnpm build && pnpm test:unit` | 1,398 files: 10,692 tests passed, 1 skipped; no test near the slow-test gate |
+| The same `pnpm test:unit` in the `silicon-extend-linux-e2e` image (Debian, arm64, Node 22, as a non-root user with zip) | 10,640 passed, 53 skipped (platform-specific), 0 failed; no test near the slow-test gate |
+| `node --test apps/desktop/*.test.mjs` | 65 passed |
+| `JAVA_HOME=… ./gradlew --offline --rerun-tasks lint testDebugUnitTest assembleDebug` in `apps/android` | lint 0 errors (73 warnings); 226 app and 10 libadb JVM tests; debug APK built |
+| `OUT=<scratch> apps/desktop/macos/build-app.sh` (ad hoc signed) | `Silicon Extend.app` 1.1.0 with `MacOS/Silicon Extend Helper` (identifier `com.teamofsilicons.extend.macos-helper`) and the engine entry `Resources/engine/bin/extend-engine.mjs`; not installed or launched |
+| `npx @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash` | valid, 12 warnings (the same 12 as 1.0.2) |
+
+Not covered here: anything on a physical device, emulator or Simulator, real IAM and Ting, and the
+release gates in `completion-work.md`.
 
 ## 2026-09-27, round 2 — audit fixes
 
@@ -60,7 +1262,7 @@ rebuild at about 03:00; every run cited below is later.
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | exit 0 (macOS host) |
 | `EXTEND_TEST_ADMIN_URL=postgres://extend:extend@127.0.0.1:5440/postgres cargo test --workspace --locked` | exit 0. extend-agent 164 unit + 10 `fake_service`; extend-cli 28 unit + 16 `cli_behaviour` + 8 `device_args` + 2 `json_consumers`; extend-hosted 63 (2 ignored); extend-protocol 9; extend-service 34 unit + 8 `contracts` + 16 `core_gaps` + 7 `devices_gaps` + 4 `e2e` + 6 `obo_requests` + 17 `testenv_gaps` + 1 `real_services` (its body runs only with `EXTEND_REALIAM_STATE` set, so here it returned at once); silicon-extend-client 6 unit + 3 `contract_fixtures` + 2 doc tests; silicon-iam-client 47 + 22 + 2 + 3 doc tests. |
 | `npx -y @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash` | valid, 0 errors, 12 warnings (missing 4xx/2xx responses on `/live`, `/ready`, the WebSocket routes and some list routes, and no `license` in `info`) |
-| `pnpm exec vitest run --project unit-core <the 23 fork test files Extend touched>` in `vendor/agent-device` (the list is in `ci.yml`) | 23 files, 278 tests passed (macOS host) |
+| `pnpm exec vitest run --project unit-core <the 23 fork test files Extend touched>` in the device engine (now `vendor/extend-engine`; the list is in `ci.yml`) | 23 files, 278 tests passed (macOS host) |
 | `node --test apps/desktop/*.test.mjs` | 60/60 (the fork's `dist` was present, so the real-dist completeness case ran) |
 | `JAVA_HOME=… ./gradlew :app:testDebugUnitTest --rerun :libadb:testDebugUnitTest --rerun` in `apps/android` | 138 app + 10 libadb JVM tests, 0 failures |
 | `pnpm install --frozen-lockfile --lockfile-only` on a copy of the fork's manifests | the lockfile matches (checks the `fork` CI job's install) |
@@ -99,7 +1301,7 @@ Every suite run again on the whole round-2 tree, after these fixes:
 | `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
 | `cargo test --workspace --no-fail-fast` | 480 passed, 0 failed, 2 ignored (the 478 above plus the two new tests) |
 | `cargo check -p extend-agent -p extend-hosted --target x86_64-pc-windows-msvc` | exit 0 |
-| `pnpm build`, `pnpm typecheck` and the 23 CI vitest files in `vendor/agent-device` | built; 23 files, 278 tests passed |
+| `pnpm build`, `pnpm typecheck` and the 23 CI vitest files in the device engine (now `vendor/extend-engine`) | built; 23 files, 278 tests passed |
 | `node --test apps/desktop/*.test.mjs` | 60/60 against the rebuilt dist |
 | `bash e2e/cli-e2e.sh` against `:8480` (restarted at 05:35 and 05:38 with this build) | 75/75 |
 | `web`: `pnpm test`, `pnpm build`, `pnpm test:e2e`, `pnpm test:e2e:real` | 112/112; built; 34/34; 5/5 (1 of 5 before the logout fix) |
@@ -165,9 +1367,11 @@ at 5.06 s and 10.06 s. The removed-device reads, the hosted-device path end to e
 full pages with the online filter (also a scratch test with 460 offline devices spanning several
 batches) were checked.
 
-Found and still open: retrying the pairing that filled a test environment, with the same
+Found then: retrying the pairing that filled a test environment, with the same
 `Idempotency-Key` and body, answers `409 test_device_limit` instead of replaying its 201, because
 the early limit check runs before the idempotency lookup (also true before round 2).
+*Corrected 2026-09-28:* fixed and regression-tested in "pairing retry when a test environment
+becomes full" above.
 
 ### Service: test environments (service test environments)
 
@@ -374,11 +1578,11 @@ Checked by the second verifier with the current code:
 
 - `cargo test -p extend-agent` (142 unit + 9 integration, three runs of the dispatch and driver
   tests), clippy with `-D warnings`, and `cargo check --target x86_64-pc-windows-msvc` pass.
-- The real `extend-agent exec` against a logging fake agent-device: 28 `open`/`close` cases with
+- The real `extend-agent exec` against a logging fake device engine: 28 `open`/`close` cases with
   named Mac apps, `--save-script` in every position, and the Spotlight fallback for apps outside
   `/Applications`.
-- Live against the verifier's own service (`:8498`) with a headless agent and a fake agent-device
-  whose cleanup fails: the held-computer report (setup complete, agent-device capabilities under
+- Live against the verifier's own service (`:8498`) with a headless agent and a fake device engine
+  whose cleanup fails: the held-computer report (setup complete, the engine's capabilities under
   `missing` with one reason), a new session and `terminal` while held, `snapshot` refused with exit
   10, background retries forcing only with no session in use, `kill -9` mid-session and restart
   without disturbing the session, the forced release at session end, the hold shown 0.6 s after
@@ -402,7 +1606,7 @@ Checked by the second verifier with the current code:
 - Still open after the CLI rounds: `record start --quality normal`, which `cli.yaml` now documents
   for every platform, fails with `invalid_args` on Mac and Linux (a desktop-agent change, not made).
 
-### Fork (agent-device) — macOS
+### The device engine (fork) — macOS
 
 - Targeted vitest suites 43/43; the wider run 4,842 passed and 5 failed, all 5 attributed to code
   older than this work. An in-memory mutation harness showed the new tests fail against the old
@@ -413,7 +1617,7 @@ Checked by the second verifier with the current code:
   cancel), hiding or quitting an app mid-recording, revoked Screen Recording, a context menu in an
   app screenshot, macOS 13–15.1, two displays.
 
-### Fork (agent-device) — Linux
+### The device engine (fork) — Linux
 
 - In the `silicon-extend-linux-e2e` container: `record-hung-e2e.py` 18/18 with no window manager and
   18/18 with openbox (the previous worker fails 6 of them), `record-e2e.py` all pass, the isolation
@@ -427,7 +1631,7 @@ Checked by the second verifier with the current code:
   SHA-256 `eac81e1a…`). The second-round worker was not run through this lane.
 - An adversarial probe found two remaining leaks (a plain Xlib window with background `None` and no
   `_NET_WM_PING`, left by a cover while hung; a second recorder on an already-redirected window);
-  they are open (`vendor/agent-device/FORK.md`). A frozen Java Swing window did not leak.
+  they are open (`vendor/extend-engine/FORK.md`). A frozen Java Swing window did not leak.
 - Not run: any real Linux desktop.
 
 ### Packaging
@@ -567,7 +1771,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
   present. Deep/strict signature verification and a bundled Node JavaScript execution pass.
 - The bundle is 127 MB and its zip is 43 MB. Node 22.23.3 is checksum verified against pinned
   official release hashes. The fork is rebuilt rather than reusing potentially stale output.
-- A packaged `probe` with PATH limited to `/usr/bin:/bin` finds agent-device 0.21.15 and
+- A packaged `probe` with PATH limited to `/usr/bin:/bin` finds the device engine 0.21.15 and
   reports the new signed identity's missing Accessibility and Screen Recording permissions.
   Those grants must be made through macOS before input/capture validation can proceed.
 - Notarization support is implemented but was not run: an existing notarytool Keychain
@@ -609,7 +1813,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
 ## Session close recovery — 2026-09-26
 
 - Mac recording exercises exposed a retained device claim whose session had been deleted
-  after failed cleanup. The agent-device close path now preserves the session and ownership
+  after failed cleanup. The device engine's close path now preserves the session and ownership
   until teardown succeeds, allowing the same close operation to be retried.
 - The regression failed before the fix (four failures, one pass). After the fix, 29 lifecycle
   tests pass, including failed recording finish, successful retry, device claim release and
@@ -626,7 +1830,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
   daemon, confirming cleanup retry releases a real retained claim. Extend now retries the typed
   `session_cleanup_incomplete` result once on session end and preserves state/artifacts if cleanup
   still fails (*Corrected 2026-09-27:* since 2026-09-27 a failed cleanup is followed by a forced release, and if that
-  fails the computer reports its agent-device capabilities as missing until a retry succeeds; see
+  fails the computer reports its device engine capabilities as missing until a retry succeeds; see
   the 2026-09-27 section). The regression failed before this driver change and passes for recovery, persistent
   cleanup failure and a same-message error with a different reason. All 111 agent unit tests and
   seven fake-service tests pass after this change.
@@ -832,7 +2036,7 @@ frame rate/app-only scope, and physical TV compatibility. These checks do not es
 ### 2026-09-26 — installed Linux package and local-service recording
 
 - Rebuilt the Linux arm64 package with the current runtime and native XComposite helper.
-  The Docker packaging wrapper now rebuilds agent-device first, preventing stale dist reuse.
+  The Docker packaging wrapper now rebuilds the device engine first, preventing stale dist reuse.
   Node 22.23.3 is pinned with official SHA-256 entries for Linux arm64/x64; cached and offline
   tarballs are checked. A deliberately corrupt archive was refused before assembly.
 - Dependency inspection found that the old `.deb` declared no libc minimum despite this build

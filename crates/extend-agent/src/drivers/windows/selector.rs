@@ -1,4 +1,4 @@
-//! agent-device's selector grammar, the subset Extend supports on Windows.
+//! the device engine's selector grammar, the subset Extend supports on Windows.
 //!
 //! A selector is terms separated by spaces, all of which must match: `role="button" label="Save"`.
 //! `key="value"` is a case-insensitive exact match, `key~="a|b"` a case-insensitive "contains any of".

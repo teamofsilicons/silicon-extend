@@ -2,6 +2,7 @@ package com.teamofsilicons.extend.ui
 
 import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -16,6 +17,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.teamofsilicons.extend.Extend
 import com.teamofsilicons.extend.BuildConfig
+import com.teamofsilicons.extend.core.SettingsFinderScan
+import com.teamofsilicons.extend.core.SettingsLauncher
 import com.teamofsilicons.extend.service.ExtendForegroundService
 
 class MainActivity : ComponentActivity() {
@@ -31,7 +34,10 @@ class MainActivity : ComponentActivity() {
         // it is a translucent paper scrim, not a solid strip.
         val paper = Tokens.Paper.toArgb()
         val scrim = Tokens.Paper.copy(alpha = 0.9f).toArgb()
-        enableEdgeToEdge(SystemBarStyle.light(paper, paper), SystemBarStyle.light(scrim, scrim))
+        // Android 8.0 can't draw dark navigation bar icons, so its navigation bar gets an ink scrim
+        // (the second colour) instead of paper with invisible white icons.
+        val inkScrim = Tokens.Ink.copy(alpha = 0.9f).toArgb()
+        enableEdgeToEdge(SystemBarStyle.light(paper, paper), SystemBarStyle.light(scrim, inkScrim))
         super.onCreate(savedInstanceState)
         // Only for a fresh launch: when the activity is recreated (rotation, a density or font
         // change) its launch intent would otherwise re-apply `forget_pair` and unpair the device.
@@ -52,8 +58,17 @@ class MainActivity : ComponentActivity() {
                         extend = extend,
                         state = state,
                         onOpenDeveloperSettings = { showDev = true },
-                        onRequestNotifications = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },
-                        onOpen = { intent -> runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } },
+                        actions = SetupActions(
+                            // POST_NOTIFICATIONS is a runtime permission from Android 13 (the step exists only there).
+                            requestNotifications = { if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                            // A failed step's Retry: the same as the website's (setup_retry).
+                            retry = { key -> extend.connection.retrySetup(key) },
+                            // Every route to the page in turn, as a new task; what opened, or a message when none did.
+                            open = { target -> SettingsLauncher.open(this, target, state.isTv) },
+                            // A screen from a step's "Can't find it?" list, by its component, as a new task.
+                            openCandidate = { candidate -> SettingsLauncher.openCandidate(this, candidate, state.isTv) },
+                            findScreens = { refresh -> SettingsFinderScan.results(applicationContext, refresh) },
+                        ),
                         onOpenLicences = { showLicences = true },
                     )
                 }
@@ -88,8 +103,7 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("service_url")?.let { url ->
             if (url.trimEnd('/') != extend.config.serviceUrl) {
                 extend.config.serviceUrl = url
-                extend.secrets.clearCredential()
-                extend.config.clearPair()
+                extend.connection.forgetPairsLocally()
                 changed = true
             }
         }
@@ -101,8 +115,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (intent.getBooleanExtra("forget_pair", false)) {
-            extend.secrets.clearCredential()
-            extend.config.clearPair()
+            // Every Carbon's pair on this device, as a fresh install would start.
+            extend.connection.forgetPairsLocally()
             changed = true
         }
         if (changed) {

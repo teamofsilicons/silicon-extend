@@ -55,6 +55,24 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
         }
     }
 
+    /**
+     * "Pair with another Carbon" (1.1): a new pairing code for this same device, asked for with the
+     * [credential] of any of its live pairs, so the code pairs into this device. It is then followed
+     * like a first enrollment. A 1.0 service answers 404; a device at its pair limit, 409.
+     */
+    suspend fun createPairEnrollment(credential: String): EnrollmentCreated = io {
+        // No body: the service takes everything it needs from the credential's pair
+        // (contracts/v1/device/android.device.enrollments.create.json).
+        val request = Request.Builder()
+            .url(baseUrl() + "/api/v1/device/enrollments")
+            .header("Authorization", "Extend-Device $credential")
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+        client.newCall(request).execute().use { response ->
+            ExtendJson.decodeFromJsonElement(EnrollmentCreated.serializer(), expectObject(response))
+        }
+    }
+
     suspend fun getEnrollment(id: String, secret: String): EnrollmentState? = io {
         val request = Request.Builder()
             .url(baseUrl() + "/api/v1/enrollments/$id")
@@ -84,7 +102,27 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
         }
     }
 
-    /** Revoke pair. */
+    /**
+     * 1.1: shows or hides the in-use badge or notification on this device ("shown" or "hidden"),
+     * for every pair of it, with any pair's [credential]. Returns the value Extend now has (from
+     * the `device_self` it answers with), or null when the answer didn't say.
+     */
+    suspend fun setInUseIndicator(credential: String, value: String): String? = io {
+        val body = buildJsonObject { put("in_use_indicator", JsonPrimitive(value)) }
+        val request = Request.Builder()
+            .url(baseUrl() + "/api/v1/device")
+            .header("Authorization", "Extend-Device $credential")
+            .patch(body.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw toApiException(response)
+            val obj = Frames.parseObject(response.body?.string().orEmpty()) ?: return@use null
+            val data = obj["data"] as? JsonObject ?: obj
+            (data["in_use_indicator"] as? JsonPrimitive)?.contentOrNull
+        }
+    }
+
+    /** Revoke pair: ends the pair whose [credential] this is, and no other. */
     suspend fun revoke(credential: String) = io {
         val request = Request.Builder()
             .url(baseUrl() + "/api/v1/device")
@@ -94,7 +132,7 @@ class ExtendApi(private val baseUrl: () -> String, val client: OkHttpClient = de
         client.newCall(request).execute().use { expectSuccess(it) }
     }
 
-    /** Stop, for when the socket is down. */
+    /** Stop, for when the socket is down. Any pair's credential stops the device's session. */
     suspend fun stop(credential: String) = io {
         val request = Request.Builder()
             .url(baseUrl() + "/api/v1/device/stop")

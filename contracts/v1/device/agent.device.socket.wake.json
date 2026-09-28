@@ -1,0 +1,176 @@
+{
+  "api_version": 1,
+  "consumer": "extend-agent",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "paired"
+  ],
+  "kind": "device_socket",
+  "operation": "device.socket.wake",
+  "os": "macos",
+  "reads": {
+    "attach": [
+      "device_id",
+      "os",
+      "name"
+    ],
+    "cancel": [
+      "id"
+    ],
+    "command": [
+      "id",
+      "session_id",
+      "command",
+      "timeout_ms",
+      "upload_ids"
+    ],
+    "environment": [],
+    "ping": [
+      "nonce"
+    ],
+    "refresh": [],
+    "session_ended": [
+      "session_id",
+      "reason"
+    ],
+    "session_started": [
+      "session_id",
+      "silicon_id",
+      "since",
+      "side"
+    ],
+    "setup_code": [
+      "device_id",
+      "code"
+    ],
+    "superseded": [],
+    "takeover": [
+      "session_id",
+      "reason",
+      "expires_at"
+    ],
+    "takeover_ended": [
+      "session_id"
+    ],
+    "unpaired": [
+      "reason"
+    ],
+    "wake_request": [
+      "wake_id",
+      "created_at",
+      "expires_at",
+      "alert",
+      "side"
+    ],
+    "wake_request_ended": [
+      "wake_id",
+      "reason"
+    ]
+  },
+  "request": {
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "GET",
+    "path": "/api/v1/device/connect"
+  },
+  "sends": [
+    {
+      "effect": "hello",
+      "frame": {
+        "app_version": "1.1.0",
+        "capabilities": [
+          "screen.read",
+          "screen.capture",
+          "screen.record",
+          "input.pointer",
+          "input.text",
+          "input.keyboard",
+          "apps.launch",
+          "apps.list",
+          "alerts",
+          "clipboard",
+          "logs",
+          "takeover",
+          "terminal"
+        ],
+        "engine_version": "0.21.15",
+        "features": [
+          "setup_retry"
+        ],
+        "missing": [],
+        "model": "MacBookPro18,3",
+        "os": "macos",
+        "os_version": "15.5",
+        "setup": {
+          "state": "complete",
+          "steps": []
+        },
+        "type": "hello"
+      }
+    },
+    {
+      "effect": "awake",
+      "frame": {
+        "awake": false,
+        "run": "0192f3a4-5b6c-7d8e-9f00-112233445566",
+        "seq": 1,
+        "sleep_state": "locked",
+        "type": "awake"
+      }
+    },
+    {
+      "effect": "wake_request_shown",
+      "frame": {
+        "note": "Notifications are off for Silicon Extend on this Mac.",
+        "shown": false,
+        "type": "wake_request_shown",
+        "wake_id": "{wake_id}"
+      }
+    },
+    {
+      "effect": "awake",
+      "frame": {
+        "awake": true,
+        "input_seen": true,
+        "run": "0192f3a4-5b6c-7d8e-9f00-112233445566",
+        "seq": 2,
+        "type": "awake"
+      }
+    },
+    {
+      "effect": "attached",
+      "frame": {
+        "awake": false,
+        "capabilities": [
+          "screen.capture",
+          "input.remote",
+          "nav.system",
+          "apps.launch",
+          "apps.list"
+        ],
+        "device_id": "{attached_id}",
+        "hardware_key": "5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a5f3a",
+        "missing": [],
+        "model": "AppleTV14,1",
+        "online": true,
+        "os_version": "18.0",
+        "setup": {
+          "state": "complete",
+          "steps": []
+        },
+        "sleep_state": "standby",
+        "type": "attached"
+      }
+    },
+    {
+      "effect": "stop",
+      "frame": {
+        "type": "stop"
+      }
+    }
+  ],
+  "source": "docs/device-protocol.md (1.1); crates/extend-agent/src/agent.rs and service.rs (1.1) with crates/extend-protocol/src/frames.rs (AttachedStatus awake, sleep_state, hardware_key from hosted.rs status_from_probe)"
+}
