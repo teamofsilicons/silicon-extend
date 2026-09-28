@@ -146,6 +146,10 @@ pub fn run(
             .unwrap_or(ControlFlow::Wait);
         match event {
             Event::NewEvents(StartCause::Init) => ui.create_tray(),
+            // Spotlight/Finder reopen the running menu-bar app. A visible usage banner must
+            // not prevent the main window from opening, so ignore has_visible_windows.
+            #[cfg(target_os = "macos")]
+            Event::Reopen { .. } => ui.show_main(target),
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => ui.on_status(ui.status.clone(), target),
             Event::UserEvent(UserEvent::Status(s)) => ui.on_status(*s, target),
             Event::UserEvent(UserEvent::Menu(e)) => ui.on_menu(e.id.0.as_str(), target, control_flow),
@@ -654,6 +658,7 @@ impl Ui {
             self.main = Some((window, view));
         }
         if let Some((w, _)) = &self.main {
+            w.set_minimized(false);
             w.set_visible(true);
             w.set_focus();
         }
