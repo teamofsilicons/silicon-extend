@@ -415,21 +415,21 @@ async fn greet(state: &AppState, world: &World, device_id: &str) -> Vec<ServiceF
     {
         frames.push(f);
     }
-    // Hosted devices: re-announce each, with its running session.
-    let hosted: Vec<DeviceRow> = sqlx::query_as(sql!(
-        "{} WHERE d.host_device_id = $1 AND d.removed_at IS NULL",
-        domain::device_select(world)
-    ))
-    .bind(device_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    // Reconcile this exact host pair, including removals it missed while offline. A missing
+    // attach is not a deletion (the greeting query can fail), so existing apps need an explicit
+    // tombstone. Other host pairs' aliases and sessions are never announced on this connection.
+    let hosted: Vec<DeviceRow> = sqlx::query_as(sql!("{} WHERE d.host_device_id = $1", domain::device_select(world)))
+        .bind(device_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
     for h in hosted {
         if h.device_id.parse::<extend_protocol::DeviceId>().is_err() {
             continue;
         }
-        frames.push(h.attach_frame(false));
-        if let Some(f) = session_started(state, world, &h, true).await {
+        let removed = h.removed_at.is_some();
+        frames.push(h.attach_frame(removed));
+        if !removed && let Some(f) = session_started(state, world, &h, true).await {
             frames.push(f);
         }
     }
@@ -721,7 +721,7 @@ async fn handle(
                 let _ = super::sessions::release(state, world, sid, &actor).await;
             }
         }
-        DeviceFrame::Attached(a) => attached(state, world, device_id, a).await,
+        DeviceFrame::Attached(a) => attached(state, world, device_id, conn, a).await,
         DeviceFrame::Pong { .. } => state.hub.pong(conn.key, conn.conn_id).await,
         DeviceFrame::Awake {
             awake,
@@ -888,7 +888,7 @@ async fn wake_request_shown(
 
 /// A host's report on a device it carries: its state, whether it is awake, and the keyed hardware
 /// id that recognises the same physical device across Carbons' pairs.
-async fn attached(state: &Shared, world: &World, device_id: &str, a: AttachedStatus) {
+async fn attached(state: &Shared, world: &World, device_id: &str, conn: &Conn<'_>, a: AttachedStatus) {
     let child = a.device_id.to_string();
     let Ok(Some(d)) = domain::load_device(state, world, &child).await else {
         return;
@@ -898,9 +898,11 @@ async fn attached(state: &Shared, world: &World, device_id: &str, a: AttachedSta
         return;
     }
     let caps = allowed(d.os(), a.capabilities.clone());
-    state
+    if !state
         .hub
         .set_attached(
+            conn.key,
+            conn.conn_id,
             (world.schema.clone(), child.clone()),
             AttachedState {
                 online: a.online,
@@ -908,7 +910,10 @@ async fn attached(state: &Shared, world: &World, device_id: &str, a: AttachedSta
                 missing: a.missing.clone(),
             },
         )
-        .await;
+        .await
+    {
+        return;
+    }
     let _ = sqlx::query(sql!(
         "UPDATE {} SET os_version = COALESCE($2, os_version), model = COALESCE($3, model), capabilities = $4, missing = $5, setup = $6, state = $7,
                 last_seen_at = CASE WHEN $8 THEN now() ELSE last_seen_at END WHERE device_id = $1",

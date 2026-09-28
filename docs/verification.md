@@ -32,6 +32,62 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — carried-device reconnect reconciliation
+
+The final audit confirmed two historical reconnect defects. A host that missed a carried
+removal received no deletion when it returned; the greeting now sends existing `attach
+removed:true` frames for removed children of that exact host pair. Removed aliases never announce
+a sibling's session. Both 1.0 and 1.1 reconnect regressions fail against the old greeting and
+pass with the fix, preserving the other Carbon's live alias, session and commands.
+
+Carried online reports also survived their host socket. Reports now belong to the current
+connection, whose replacement starts empty. A replaced connection cannot publish a new report,
+and its later disconnect cannot erase the replacement's report. Carried online reads check the
+host and child together. The real HTTP/WebSocket regression fails against the old code and
+passes for both host versions; two Hub tests cover connection identity, host/world isolation
+and disconnect cleanup.
+
+The combined full service suite reports **177 passes, zero failures and one explicit ignore** in
+161.074 seconds with two test threads. The real-provider entry returns early without its fixture;
+the captured-schema rehearsal is the explicit ignore. Strict service Clippy and scoped formatting
+pass. All 105 databases belonging to the generated test role, the role and private temporary
+directory were removed; all 825 baseline databases were preserved. Evidence is in
+`target/{carried-reconnect-removal-verification,carried-online-freshness-verification,service-carried-reconnect-verification}/`.
+
+The preceding `1f90579` candidate passed all five CI jobs, a fresh 75/75 provider run and six
+backend smoke groups. These new service changes need their own candidate refresh. Native review
+also reproduced a separate iOS cleanup bug before restored aliases share one driver: removing
+one alias can discard another alias's recording from Record Stop's returned files. That native
+fix and its artifact verification remain in progress; the service fake-device checks do not
+close it.
+
+## 2026-09-28 — API 29 native attempt blocked by emulator storage
+
+The explicit API 29 (Android 10) native requirement remains open. Existing native evidence is for
+API 26, 28, 34 and 36; the API 28/Android 9 results and JVM branches that simulate API 29 do not
+substitute for running API 29.
+
+The official `system-images;android-29;default;arm64-v8a` revision 8 was available and installed
+successfully: 498,049,256 bytes compressed, 3,302,628,690 bytes expanded. SDK Manager reported all
+licenses already accepted; input was closed and every license-file SHA256 stayed unchanged.
+An active disk guard observed at least 5,758,464,000 free bytes during installation.
+
+Only the new `ExtendApi29Verification_fdb4cbfb` AVD was created, on unused emulator port 5660,
+with snapshots disabled and a requested 1 GiB data partition. Emulator 35.5.10 rewrote that to
+6 GiB and refused before boot: `Available: 5958.570312 MB`, `need 7372.800000 MB`. The documented
+source behavior applies a 6 GiB first-boot minimum for API 24+ and a 1.2 space factor
+([Android emulator source](https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp)).
+No app, two-Carbon, wake/privacy, reconnect or device commands ran on API 29. There was no attempt
+to bypass the check, change the emulator, accept a license or delete unrelated data.
+
+The exact new AVD and newly installed API 29 image were removed through `avdmanager`/`sdkmanager`.
+Cleanup restored 9,556,111,360 free bytes (about 8.90 GiB), retained the original SDK images and AVD
+inventory, and left emulators 5620/5622/5640 and services 5327/8480 and 85226/8498 unchanged.
+A retry needs at least 7.2 GiB free after installing the image to pass the emulator's initial
+check, plus enough room to keep the required 4 GiB reserve while userdata grows; the actual
+running footprint was not measured. Evidence: `target/api29-native-verification/` contains the
+official package metadata, installation/license records, exact refusal, report and cleanup.
+
 ## 2026-09-28 — carried rename propagation and membership audit completion
 
 Renaming a carried device sent only `refresh`, which refreshes the host's own pair. Its attached

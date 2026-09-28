@@ -68,11 +68,13 @@ a test-fixture readiness race in Rust. The fixed state/connection barriers and a
 assertion correction now pass all 79 affected tests. CI `36366926600` passed four jobs and the
 21 core-gap tests, then exposed a separate membership audit-completion race in its fixture.
 The bounded completion fix passes all seven membership tests. A carried rename propagation fix
-also passes nine device-gap tests, with an old-code negative control. Fresh CI is required.
-The full service suite reported 172 passes with one explicit ignore (the real-provider entry
-point separately returns early without its fixture); strict Clippy/formatting pass. The dedicated
-real IAM/Briefcase/Ting lane now passes 75/75 at `cc81c37`, retaining the first-time Carbon sharing
-gap. The immutable `a1b180d` backend includes all service fixes and passes all six smoke groups.
+also passes nine device-gap tests, with an old-code negative control. CI `36368306486` at
+`1f90579` then passed all five jobs; the provider lane passed 75/75 and that immutable backend
+passed six smoke groups. The next audit fixed offline carried removals and stale carried online
+reports across reconnects. Their combined full service run reports 177 passes with one explicit
+ignore (the real-provider entry separately returns early without its fixture); strict service
+Clippy and scoped formatting pass. Refresh the candidate for these service changes and the
+separately reproduced native iOS alias-cleanup bug before release.
 No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
@@ -96,6 +98,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   survives six rename-only and six banner updates, with video-content/decode/download and Stop
   checks passing. Physical carried-device capture and hardware linking remain open. Local Linux
   app/full-screen recordings survive host banner/name updates.
+  Native review also reproduced cleanup of one restored iOS alias discarding another alias's
+  recording before their drivers merge. Ownership-aware cleanup and candidate verification are
+  in progress; the earlier metadata-continuity check does not cover this removal ordering.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
@@ -160,15 +165,20 @@ Remaining from the Carbon's final requests, before the release gates below:
   and first-pair-only terminal rules, using an isolated headless file-store fixture.
   The signed Android upgrade and native two-Carbon TV-emulator lane passed twelve checks, with
   pairing/credential/session continuity and the native sharing/Stop/removal behavior recorded.
+  Android credentials stay sealed in the app's Keystore and are not rotated; the shared-computer
+  rotation requirement does not apply to Android.
   A separate signed native Mac Keychain upgrade now passes eight groups, including migration,
   reconnect, saved session and Stop, with exact owned-account cleanup. These do not close
-  physical TV, Android credential rotation, installed Mac GUI upgrade or physical carried-device
-  linking checks.
+  physical TV, installed Mac GUI upgrade or physical carried-device linking checks.
 
 ### Physical devices
 
 - Android: Pixel and Samsung lock screens (what the wake notification shows), an Android TV in
   standby, a Fire TV, the keep-screen-on overlay during a session, API 26, 29, 34 and 36.
+  Existing native emulator evidence covers API 26, 28, 34 and 36; API 28 is Android 9, not the
+  required API 29 (Android 10). API 29 remains unverified: its owned emulator refused first boot
+  because the required userdata storage exceeded the available disk budget. JVM API 29 coverage
+  does not close this native check; the attempted image and AVD were removed afterward.
 - Mac, Windows and Linux: the awake report on lock, unlock and sleep; the wake notification; the
   display kept on during a session and released after; session processes ended at session end
   (including `setsid`/`start`), on macOS 15 and 26, Windows 10 and 11, Ubuntu GNOME and KDE.
@@ -302,12 +312,10 @@ verifiers and not fixed.
   - *Fixed 2026-09-28:* retrying the fifth pairing now replays its stored `201` before the
     test-environment limit check. Changed-body conflicts and refusal of a fresh sixth device are
     regression-tested, alongside all eight device-gap checks.
-  - A host that was offline when a device it carries was removed is never sent `attach
-    removed:true` on reconnecting, so it keeps carrying and probing that device; renaming a carried
-  device sent the host only `refresh` (fixed 2026-09-28: send current carried metadata in `attach`,
-  with an old-code negative control and passing hosted-device regression); the
-    hub keeps a carried device's last online state after its host reconnects, until the host
-    reports again.
+  - *Fixed 2026-09-28:* reconnect greetings now include exact-host carried removals, renames send
+    current carried metadata, and online reports belong to the host connection that sent them.
+    Old-code negative controls and the 177-pass service run cover these service defects. The
+    separate native iOS alias-cleanup issue remains in the current 1.1 engineering list above.
   - There is no route for a host computer to revoke a device it carries (the desktop window sends
     the Carbon to the website instead).
 - **Service: identity.** Extend uses `silicon-iam-client` 4.0.0 from crates.io, and parses IAM 4

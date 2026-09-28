@@ -518,13 +518,14 @@ pub async fn owned_readable_device(
 
 pub async fn is_online(state: &AppState, world: &World, d: &DeviceRow) -> bool {
     let route = d.route(world);
-    if !state.hub.is_connected(&route).await {
-        return false;
-    }
     if d.host_device_id.is_some() {
-        return state.hub.attached(&d.key(world)).await.is_some_and(|a| a.online);
+        return state
+            .hub
+            .attached(&route, &d.key(world))
+            .await
+            .is_some_and(|a| a.online);
     }
-    true
+    state.hub.is_connected(&route).await
 }
 
 /// Who a device view is for.
