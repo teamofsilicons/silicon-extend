@@ -2751,11 +2751,12 @@ esac
         );
     }
 
-    /// Waits until no cleanup is pending (or ~5 s pass).
+    /// Waits until no cleanup is pending and the session's files are gone (or ~5 s pass).
+    /// Removing the pending entry precedes the asynchronous directory deletion.
     #[cfg(unix)]
-    async fn until_released(driver: &AgentDeviceDriver) -> bool {
+    async fn until_released(driver: &AgentDeviceDriver, session_id: &str) -> bool {
         for _ in 0..100 {
-            if driver.cleanups.lock().unwrap().pending.is_empty() {
+            if driver.cleanups.lock().unwrap().pending.is_empty() && !driver.session_dir(session_id).exists() {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2778,7 +2779,7 @@ esac
         assert!(!driver.cleanups.lock().unwrap().pending.is_empty());
         // The close still fails, but the device engine's daemon can be stopped now.
         std::fs::remove_file(state.join("daemon-stop-fails")).unwrap();
-        assert!(until_released(&driver).await, "{:?}", calls(&state));
+        assert!(until_released(&driver, "a3f").await, "{:?}", calls(&state));
         assert_eq!(
             calls(&state).iter().filter(|c| *c == "daemon stop").count(),
             2,
@@ -2896,12 +2897,7 @@ esac
         assert!(driver.cleanups.lock().unwrap().pending.contains_key("a3f"));
         // the device engine recovers on its own; the background retry closes the session (no force).
         std::fs::write(state.join("close"), "ok").unwrap();
-        for _ in 0..100 {
-            if driver.cleanups.lock().unwrap().pending.is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        assert!(until_released(&driver, "a3f").await, "{:?}", calls(&state));
         assert!(
             driver.cleanups.lock().unwrap().pending.is_empty(),
             "{:?}",
