@@ -32,6 +32,34 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — session and attachment response replay
+
+Session creation checked the device's live busy/readiness/online state before its stored response;
+a successful start therefore blocked its own keyed retry. Attachment retries similarly failed
+after the host disconnected or the first attachment filled a test environment. These new-work
+checks now run inside the idempotent operation. Authentication, device visibility and ownership,
+owner membership and structural input validation still run before replay.
+
+Negative controls reproduced all three failures: `device_in_use`, `device_offline`, and
+`test_device_limit` instead of the stored 201. All nine `devices_gaps` and two new `idempotency`
+checks pass, covering repeated session creation before/after end and disconnect, revoked access,
+one attach frame/one child device, a full environment, changed-body conflict and fresh-operation
+refusals. Existing concurrent capacity and hosted-device tests remain green. Strict service
+Clippy and formatting pass. Sixteen exact test databases across the negative/fixed runs were
+removed with the original database set preserved. Evidence:
+`target/session-attachment-replay-verification/`. Generic same-key concurrency is a separate pass.
+
+CI `36362460118` passed all five jobs at `b2ac122`, whose refreshed backend image also passed all
+six smoke groups. Windows run `36362498227` repeated x64 success but exposed that the ARM64
+fixture's built-in STATIC top-level class returns `HTTRANSPARENT`: its caption guard refused the
+click before injecting input or calling the product driver. The fixture now registers a real
+application class with `DefWindowProcW`, retaining owned-window/sentinel guards and cleanup.
+Both Windows cross-checks, strict Clippy and independent review pass; a native rerun is required.
+The added Windows LibraryLoader feature is a test-only dev-dependency. Evidence:
+`target/windows-ci-assessment/run-36362498227-native-review.json`,
+`target/release-candidate/ci-b2ac122cf7ddefb172b3ae2e594f7cd8f3342dc8/`, and
+`target/release-candidate/backend-b2ac122/`.
+
 ## 2026-09-28 — preserve sessions when IAM cannot confirm membership
 
 A refused login could end an existing session as `left_team` when the membership lookup returned

@@ -427,41 +427,6 @@ pub async fn start(
         auth.sel.as_ref(),
     )
     .await?;
-    let online = domain::is_online(&state, &auth.world, &d).await;
-    if !online {
-        let seen = d
-            .last_seen_at
-            .map(|t| format!(" It was last seen {t}."))
-            .unwrap_or_default();
-        return Err(AppError::new(
-            ErrorCode::DeviceOffline,
-            format!("{} is offline, so it can't be used right now.{seen}", d.name),
-        )
-        .hint(offline_hint(&d, &team)));
-    }
-    if !d.is_ready() {
-        let left: Vec<String> = domain::setup_of(&state, &auth.world, &d)
-            .await
-            .steps
-            .into_iter()
-            .filter(|s| s.status != extend_protocol::model::StepStatus::Done)
-            .map(|s| match s.error {
-                Some(e) => format!("{} ({e})", s.title),
-                None => s.title,
-            })
-            .collect();
-        return Err(AppError::new(
-            ErrorCode::DeviceNotReady,
-            format!("{} hasn't finished setup. Steps left: {}.", d.name, left.join("; ")),
-        )
-        .hint(format!(
-            "{} can finish them on the device; watch with `extend --team {team} device setup {device_id}`.",
-            d.owner_id
-        )));
-    }
-    if d.in_use_session.is_some() {
-        return Err(in_use_error(&d, &team, auth.p.id()));
-    }
     let hash = hash_json(&input);
     let world = auth.world.clone();
     let st = state.clone();
@@ -469,6 +434,42 @@ pub async fn start(
     let sel = auth.sel.clone();
     let isi = auth.isi.clone();
     idempotent(&state, &auth.world, auth.p.id(), &format!("sessions:{team}"), &headers, &hash, || async move {
+        // Replay an already-created session before checking state changed by that creation.
+        let online = domain::is_online(&st, &world, &d).await;
+        if !online {
+            let seen = d
+                .last_seen_at
+                .map(|t| format!(" It was last seen {t}."))
+                .unwrap_or_default();
+            return Err(AppError::new(
+                ErrorCode::DeviceOffline,
+                format!("{} is offline, so it can't be used right now.{seen}", d.name),
+            )
+            .hint(offline_hint(&d, &team)));
+        }
+        if !d.is_ready() {
+            let left: Vec<String> = domain::setup_of(&st, &world, &d)
+                .await
+                .steps
+                .into_iter()
+                .filter(|s| s.status != extend_protocol::model::StepStatus::Done)
+                .map(|s| match s.error {
+                    Some(e) => format!("{} ({e})", s.title),
+                    None => s.title,
+                })
+                .collect();
+            return Err(AppError::new(
+                ErrorCode::DeviceNotReady,
+                format!("{} hasn't finished setup. Steps left: {}.", d.name, left.join("; ")),
+            )
+            .hint(format!(
+                "{} can finish them on the device; watch with `extend --team {team} device setup {device_id}`.",
+                d.owner_id
+            )));
+        }
+        if d.in_use_session.is_some() {
+            return Err(in_use_error(&d, &team, p.id()));
+        }
         let mut tx = st.pool.begin().await?;
         // The lock order: the whole lock group's instances first, so a revoke (which takes the
         // instance first too) either sees this session or this start sees no grant.

@@ -550,6 +550,46 @@ async fn pairing_retry_replays_success_after_filling_the_test_environment() {
     );
 }
 
+#[tokio::test]
+async fn attachment_retry_replays_success_after_filling_the_test_environment() {
+    let env = start().await;
+    let t = test_environment(&env).await;
+    let alice = login(&t, "c:alice").await;
+    let host = FakeDevice::pair(&t, "c:alice", DeviceOs::Macos, "host", &[]).await;
+    for i in 0..3 {
+        pair_offline(&t, &alice, DeviceOs::Linux, &format!("existing {i}")).await;
+    }
+    let body = serde_json::json!({"type": "attachment", "data": {
+        "os": "tvos", "name": "fifth", "address": "192.0.2.1"
+    }});
+    let http = reqwest::Client::new();
+    let send = |key: &str, body: serde_json::Value| {
+        http.post(format!("{}/api/v1/devices/{}/attachments", env.base, host.id))
+            .bearer_auth(&alice)
+            .header("x-org-id", "acme")
+            .header(extend_protocol::TESTING_SECRET_HEADER, t.testing_secret().unwrap())
+            .header("idempotency-key", key)
+            .json(&body)
+            .send()
+    };
+    let first = send("attachment-fifth", body.clone()).await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first = first.json::<serde_json::Value>().await.unwrap();
+    let replay = send("attachment-fifth", body.clone()).await.unwrap();
+    assert_eq!(replay.status(), 201, "{}", replay.text().await.unwrap_or_default());
+    assert_eq!(replay.headers()["idempotency-replayed"], "true");
+    assert_eq!(replay.json::<serde_json::Value>().await.unwrap(), first);
+    let mut changed = body.clone();
+    changed["data"]["name"] = "different body".into();
+    let conflict = send("attachment-fifth", changed).await.unwrap();
+    assert_eq!(conflict.status(), 409);
+    assert_eq!(conflict.json::<serde_json::Value>().await.unwrap()["data"]["code"], "conflict");
+    let full = send("attachment-sixth", body).await.unwrap();
+    assert_eq!(full.status(), 409);
+    assert_eq!(full.json::<serde_json::Value>().await.unwrap()["data"]["code"], "test_device_limit");
+    assert_eq!(t.authed(&alice, Some("acme")).devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
+}
+
 /// Eight devices added at once to a test environment that has three: exactly two get in, whether
 /// they arrive by pairing code or through a host computer.
 #[tokio::test]

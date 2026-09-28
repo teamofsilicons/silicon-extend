@@ -1018,34 +1018,8 @@ pub async fn attach(
         ))
         .hint("Attach the device to the computer instead: `extend device attach <host_device_id> …`."));
     }
-    if !state.hub.is_connected(&host.key(&auth.world)).await {
-        return Err(AppError::new(
-            ErrorCode::DeviceOffline,
-            format!(
-                "{} is offline; it has to be online to set up a device through it.",
-                host.name
-            ),
-        )
-        .hint("Open the Extend app on that computer and make sure it's connected."));
-    }
     let name = clean_name(&input.name)?;
     let ttl = check_ttl(input.pair_ttl_days)?;
-    // In a test environment at its limit, a carried device may be one another Carbon already
-    // carries through this same computer: it is accepted provisionally, counts nothing, and is
-    // removed if the computer doesn't recognise it as that device within the link window.
-    let candidate: bool = sqlx::query_scalar(sql!(
-        "SELECT EXISTS (SELECT 1 FROM {d} c JOIN {d} h ON h.device_id = c.host_device_id
-                         WHERE h.instance_id = $1 AND c.os = $2 AND c.owner_id <> $3 AND c.removed_at IS NULL)",
-        d = auth.world.t("devices")
-    ))
-    .bind(host.instance_id)
-    .bind(input.os.as_str())
-    .bind(auth.p.id())
-    .fetch_one(&state.pool)
-    .await?;
-    if !candidate {
-        test_limit(&state, &auth.world).await?;
-    }
     let hash = hash_json(&input);
     let world = auth.world.clone();
     let p = auth.p.clone();
@@ -1058,6 +1032,33 @@ pub async fn attach(
         &headers,
         &hash,
         || async move {
+            // Existing attachments replay even when their host disconnected or capacity filled.
+            if !st.hub.is_connected(&host.key(&world)).await {
+                return Err(AppError::new(
+                    ErrorCode::DeviceOffline,
+                    format!(
+                        "{} is offline; it has to be online to set up a device through it.",
+                        host.name
+                    ),
+                )
+                .hint("Open the Extend app on that computer and make sure it's connected."));
+            }
+            // In a test environment at its limit, a carried device may be one another Carbon already
+            // carries through this same computer: it is accepted provisionally, counts nothing, and is
+            // removed if the computer doesn't recognise it as that device within the link window.
+            let candidate: bool = sqlx::query_scalar(sql!(
+                "SELECT EXISTS (SELECT 1 FROM {d} c JOIN {d} h ON h.device_id = c.host_device_id
+                                 WHERE h.instance_id = $1 AND c.os = $2 AND c.owner_id <> $3 AND c.removed_at IS NULL)",
+                d = world.t("devices")
+            ))
+            .bind(host.instance_id)
+            .bind(input.os.as_str())
+            .bind(p.id())
+            .fetch_one(&st.pool)
+            .await?;
+            if !candidate {
+                test_limit(&st, &world).await?;
+            }
             let mut add = begin_device_add(&st, &world).await?;
             let provisional_until = if world.is_test() && add.paired_before >= TEST_DEVICE_LIMIT {
                 if !candidate {

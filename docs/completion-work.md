@@ -52,11 +52,13 @@ Linux/Windows desktop packages built successfully in release workflow `363573363
 1.1 CI run exposed consumer-contract setup races and a misplaced browser test. Both are fixed;
 CI `36358256243` passed all five jobs at `b891822`. At `0159b7a`, refreshed Mac signing/notarization
 and Linux static/native package checks pass, including the banner and wake-notification fixes.
-CI `36359411111`, `36360092796` and `36361278876` passed all five jobs. Release workflow `36359407414` built all
+CI `36359411111`, `36360092796`, `36361278876` and `36362460118` passed all five jobs. Release workflow `36359407414` built all
 six CLI targets, Honeycomb and both Linux packages. The Windows path assertion is fixed; run
 `36360098249` passed unit/integration and native terminal checks on both architectures, and real
 input/capture on x64. Run `36361296700` repeated x64 success but showed ARM64's activation is
-denied, rather than merely delayed; its owned-window bootstrap needs a rerun. The service
+denied, rather than merely delayed. Run `36362498227` showed the STATIC fixture class rejects
+hit testing, so the fixture now uses a real application window class; native verification needs
+another run. The service
 pairing-replay fix is included in green CI and a six-group backend-image smoke check at `a9bede4`.
 Subsequent service fixes still need final CI and inclusion in a refreshed deployment image.
 No 1.1 publication or deployment has run.
@@ -103,8 +105,8 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Re-run the final feature and requirements audit and integration checks after those fixes;
   reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
   publish/deploy and verify the release. None of this checkpoint updates installed apps.
-  The audit fixed full-test-environment pairing retries, device-request response replay, and
-  sessions incorrectly ending when IAM cannot confirm Team membership;
+  The audit fixed full-test-environment pairing retries, device-request/session/attachment response
+  replay, and sessions incorrectly ending when IAM cannot confirm Team membership;
   negative controls and passing service checks are recorded in `verification.md`. Concurrent
   duplicate device requests and concurrent idempotency-key reservation remain open. Include all
   final service changes in CI and the deployment image.
