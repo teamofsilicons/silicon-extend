@@ -5,9 +5,12 @@
 # 1.1.0 draft (2026-09-27), for the Carbon's approval: devices belong to the Carbons who paired them, several Carbons can
 # pair one device, waking a device, setup retry, and the device engine named Silicon Extend. It follows UNDERSTANDING.md
 # as the Carbon edited it on 2026-09-27 and the Carbon's decisions of that day (logout, requests routed to a Carbon,
-# the terminal on shared computers, Ting types per Team). API v1 stays additive: no path, method, required field or
+# the terminal on shared computers, visible Ting setup guidance). API v1 stays additive: no path, method, required field or
 # error code changed, and a 1.0 client ignores every new field.
 # Wire names `org_id` and `X-Org-ID` are Silicon IAM's names for a Team handle and are kept as IAM defines them.
+
+# Review copy reconciled with the 1.1 implementation on 2026-09-28; originals are unchanged.
+# Includes shared banner controls, stored display media, TV element clicks and verified Ting type semantics.
 
 openapi: 3.1.0
 info:
@@ -77,7 +80,7 @@ tags:
   - {name: Commands, description: 'Device engine commands and Extend additions, run inside a session'}
   - {name: Requests, description: 'A Silicon asking for a device in use, delivered through Ting to the Silicon using it or to the Carbon who gave that Silicon access'}
   - {name: Waking, description: 'A Silicon asking its Carbon to wake a device, and the Carbon answering (1.1)'}
-  - {name: Ting, description: 'Whether Extend''s Tings reach a member, per Team, and which of Extend''s Ting types a Team lacks (1.1)'}
+  - {name: Ting, description: 'Recipient registration per Team, and missing app/context notification types observed on delivery (1.1)'}
   - {name: Activity, description: Every action taken on a device}
   - {name: Files, description: 'Screenshots, recordings, logs and replay scripts, stored in Briefcase'}
   - {name: Device app, description: 'Endpoints used only by a paired Extend app, with its device credential'}
@@ -1009,11 +1012,15 @@ paths:
     patch:
       tags: [Devices]
       operationId: updateDevice
-      summary: Rename, or change how long it stays paired without activity
+      summary: Rename, change the pairing lifetime, or show/hide the shared in-use banner
       description: |
         Owner only: the name and lifetime are this Carbon's pair's own, so another Carbon who paired the same device
         keeps theirs. Send only the fields that change. `visibility` is accepted and ignored (1.1): every device is
-        personal, and the answer says so.
+        personal, and the answer says so. `in_use_indicator` is `shown` or `hidden` (1.1), and unlike the name and
+        lifetime belongs to the physical device: every Carbon's pair shares the choice. Only a Carbon who owns a live
+        pair may change it; a Silicon gets `403 carbon_only`. The current owner does not need every other owner's
+        approval. Changed values refresh the live pair connections, or update every carried alias through its host.
+        A 1.0 app may ignore the setting; its service-side value is still saved.
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -1035,6 +1042,7 @@ paths:
                     name: {$ref: '#/components/schemas/DeviceName'}
                     visibility: {$ref: '#/components/schemas/Visibility'}
                     pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+                    in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
       responses:
         '200':
           description: Updated
@@ -1535,6 +1543,27 @@ paths:
         `permanent: true` keeps them. Small inputs a command reads from the caller's machine (a replay script, an
         image to show on a TV, an APK to install) travel in `attachments`: at most 8 and 8 MiB in total.
 
+        For `display show --image` or `--video`, a 1.1 service also resolves `file:<file_id>`, a bare file UUID, the
+        stored Extend content link, or the exact Briefcase permanent URL recorded by Extend. These name files Extend
+        already stored for the calling Silicon in this session's Team and world; they do not authorize arbitrary
+        Briefcase entries. Expired, unknown or another Silicon's files give `404 file_not_found`. The recorded content
+        type must match image/video. Extend reads bounded bytes from Briefcase on the Silicon's behalf, checks visibility
+        again after the read and checks that the session is still active before forwarding. The resulting ordinary
+        attachment shares the same 8-file/8-MiB total with local inputs. No credentials or private media URL go to the
+        device. Unrelated public media URLs stay device-side URLs; this is not a service URL-fetch endpoint.
+        This resolution is for display media only; install, replay and screenshot baselines still require local inputs.
+
+        On Android TV apps 1.1 or later, a primary element `click` (`@ref` or selector) needs `screen.read`, rather than
+        pointer/touch injection. The service keeps the old requirement for apps older than 1.1 or with an unknown app
+        version. Coordinates, held/repeated or secondary clicks still need the corresponding native injection support;
+        no new pointer/touch capability is advertised. A missing/damaged image on the native TV returns a failed command
+        result (`action_failed`), rather than success while a blank image remains.
+
+        On a carried iPhone/iPad, the first plain screenshot binds an engine session to the current device with a bare
+        `open` when necessary, then retries the capture within the same command deadline. It launches no app and starts
+        no runner for a plain capture. Ref overlays or selector cropping may need the runner. This does not make the
+        device's lock state detectable or change the existing capture permission/setup requirements.
+
         A file that can't be kept doesn't fail the command: `ok` is unchanged and `warnings` gets one entry per
         problem, each saying what happened, why and what to do (a file the device listed under an upload id not issued
         for this command, or never uploaded; Briefcase refused to store it; it was stored but not shared with the
@@ -1669,8 +1698,8 @@ paths:
         world (no running session needed); an attempt with no login held doesn't count. After 6 counted attempts or 24
         hours it becomes `failed` with `last_error` saying why and to send it again, and the device's activity log gets
         `request_failed`. A recipient who turned Extend's Tings off stops the retries until they turn them on again
-        (`PUT /api/v1/ting-registration`). When Ting doesn't know the type `extend.device.requested` in that Team,
-        `last_error` says so and gives the command a Team's Ting manager runs to register it. The requester's side sees
+        (`PUT /api/v1/ting-registration`). When Ting doesn't know `extend.device.requested` for this app/context,
+        `last_error` says so and gives the command the app-owning Team's Ting manager runs to register it. The requester's side sees
         a routed request's `last_error` only as "Not delivered yet; it is retried." or "It couldn't be delivered.".
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
@@ -1813,7 +1842,8 @@ paths:
         Team every 15 minutes (a later ask's `ting` is `covered`, with `ting_covered_by`); at most 6 wake Tings per
         Carbon per hour, beyond which the ask is still accepted and its Ting waits for the hour's window (`deferred`,
         which the Silicon sees as `pending`). An ask is never refused because of what other Teams did. When Ting doesn't
-        know `extend.device.wake_requested` in T, `ting_last_error` says so and gives the register command.
+        know `extend.device.wake_requested` for the app/context, `ting_last_error` names the missing type and gives
+        the app-owning Team manager's register command, not the delivery Team T.
       parameters:
         - {$ref: '#/components/parameters/TeamHeader'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -2003,7 +2033,7 @@ paths:
     get:
       tags: [Ting]
       operationId: tingRegistration
-      summary: Whether Extend's Tings reach you in a Team, and which of Extend's Ting types it lacks (`extend ting status`)
+      summary: Recipient registration in a Team, and missing app types observed there (`extend ting status`)
       description: |
         Any signed-in member, about themselves. `?team=<handle>` answers one `ting_registration`; `?team=any` (Carbons)
         answers a list: every Team the Carbon's login reaches, plus the Teams of their grants (a Team outside their
@@ -2015,14 +2045,17 @@ paths:
         grant there, a claim, or their first signed-in call after 1.1) and a Silicon at session start and when it asks
         to wake a device.
 
-        `missing_types` lists Extend's Ting types that Ting doesn't know in that Team, by full name. Ting keeps types per
-        environment, Team and app, and only a Team's Ting manager can register them. Where the signed-in Carbon is that
-        Team's Ting manager and Ting accepts the registration on their behalf, Extend registers the missing types with
-        the Carbon's own login (the Carbon's decision of 2026-09-27); otherwise clients show the command for a Ting
-        manager of that Team, for example
-        `ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to
-        wake a device'`. The next successful Ting of a type in that Team clears it. See
-        docs/requests/ting-app-level-types.md for the change asked of Ting.
+        `missing_types` records full type names that Ting reported missing while sending in this Team. It is a
+        delivery-status cache, not a per-Team type catalog. Ting 0.1.9 resolves types by context (production/test
+        environment) and app, across delivery Teams. Register Extend's four types once through the app-owning Team's
+        authorized Ting manager in each used context. The delivery Team is not necessarily the owning Team.
+        When the owner is not known, clients show an explicit, shell-quoted placeholder, for example
+        `ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its
+        Carbon to wake a device'`, and explain that the manager replaces it with Extend's owning Team.
+        Ting's published OBO catalog has no `types.register` endpoint. Extend does not attempt automatic type registration.
+        Reading this status or turning recipient registration on does not clear a missing-type warning. The next
+        successful delivery of that type in this Team clears the corresponding observation; pending errors stay visible
+        while normal retry rules apply. Recipients, grants and actual deliveries remain scoped to their Team/context.
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -2059,9 +2092,9 @@ paths:
       summary: Turn on Extend's Tings for you in a Team (`extend ting on`, Settings' "Turn on")
       description: |
         Registers the caller with Ting in `team` again, with their own login authorized for that Team (so it also undoes
-        an "off" they chose in Ting), and sends the Tings waiting for them there at once. Where the caller is that Team's
-        Ting manager and Ting accepts it on their behalf, it also registers Extend's missing Ting types there. The login must reach the Team
-        (`403 not_a_team_member` otherwise). Answers the registration as it is now.
+        an "off" they chose in Ting), and retries the Tings waiting for them there. This registers the recipient only;
+        it neither registers notification types nor clears their missing-type observations. The login must reach the
+        Team (`403 not_a_team_member` otherwise). Answers the registration as it is now.
       parameters:
         - {$ref: '#/components/parameters/TeamHeaderOptional'}
         - {$ref: '#/components/parameters/TestingSecret'}
@@ -2323,9 +2356,10 @@ paths:
         set only when the session runs through this pair. 1.1 adds `instance_id` (the physical device; every pair of it
         shares one), `hardware_salt` (computer pairs only: the world's key for `hardware_key` on carried devices) and
         `first_pair` (true for the pair made by the app's first enrollment, whose Silicons get the terminal on a
-        computer several Carbons paired).
+        computer several Carbons paired). `in_use_indicator` is the physical device's shared banner choice, with
+        `shown` as the default when absent. A 1.1 app preserves its saved local choice when a 1.0 service omits the field.
 
-        Every device endpoint (this one, `DELETE`, `/stop`, `/enrollments`, `/connect`, `/artifacts/…`) finds the device's world from its
+        Every device endpoint (this one, `PATCH`, `DELETE`, `/attachments/{device_id}`, `/stop`, `/enrollments`, `/connect`, `/artifacts/…`) finds the device's world from its
         credential. For a device in a test environment that is disabled, being prepared or restored, or being cleaned,
         they answer `503 testing_environment_not_ready`, not 401: the pair is kept, and the hint says the app reconnects
         by itself once the environment is open again (a clean unpairs every device in it). If the request also sends
@@ -2358,7 +2392,28 @@ paths:
                       instance_id: {type: string, format: uuid, description: '1.1: the physical device; every pair of it shares one'}
                       hardware_salt: {type: string, description: '1.1, computer pairs only: the same for every computer in the world'}
                       first_pair: {type: boolean, description: '1.1: made by the app''s first enrollment (the Carbon who installed Silicon Extend on the device)'}
+                      in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
         '401': {$ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
+    patch:
+      tags: [Device app]
+      operationId: updateDeviceSelf
+      summary: Show or hide this physical device's in-use banner
+      description: |
+        Any live pair credential can change the shared physical device preference. The envelope is `device_self`;
+        a bare data object is also accepted. Send `in_use_indicator: shown|hidden`. No If-Match is needed. The setting
+        does not end a session, release the screen hold, hide takeover requests, or remove Stop from the app/website.
+        Changed values refresh every live pair. A 1.0 service has no PATCH handler; 1.1 native apps retain their local
+        choice and report that synchronization is unavailable or pending instead of treating an omitted GET field as
+        an instruction to reset it.
+      security:
+        - deviceCredential: []
+      requestBody:
+        $ref: '#/components/requestBodies/DeviceIndicatorPatch'
+      responses:
+        '200': {$ref: '#/paths/~1api~1v1~1device/get/responses/200'}
+        '401': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
         '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
     delete:
       tags: [Device app]
@@ -2375,6 +2430,29 @@ paths:
       responses:
         '204': {description: Unpaired; the credential no longer works}
         '401': {$ref: '#/components/responses/Error'}
+        '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
+  /api/v1/device/attachments/{device_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    patch:
+      tags: [Device app]
+      operationId: updateAttachedDeviceIndicator
+      summary: A host app shows or hides a carried device's shared in-use banner
+      description: |
+        Uses the computer's live pair credential. The target must be carried by that exact host pair in the same
+        world and remain live after authorization is re-checked under the instance locks. Another Carbon's host pair,
+        an unrelated target or a removed target gets `404 device_not_found`. The response is the target's device_self.
+        The physical device preference updates every carried alias/host through attach frames without replacing a
+        live driver, session or recording. The native app may save an offline choice and synchronize it later.
+      security:
+        - deviceCredential: []
+      requestBody:
+        $ref: '#/components/requestBodies/DeviceIndicatorPatch'
+      responses:
+        '200': {$ref: '#/paths/~1api~1v1~1device/get/responses/200'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
         '503': {description: testing_environment_not_ready (the pair is kept), $ref: '#/components/responses/Error'}
   /api/v1/device/stop:
     post:
@@ -2878,6 +2956,19 @@ components:
           # one: "Device 7c1e09ab (Living room TV) is in use. Only one Silicon can use a device at a time.", hint
           # 'Ask for it: extend --team labs request send 7c1e09ab --reason "..."', details {in_use: {hidden: true}}.
 
+  requestBodies:
+    DeviceIndicatorPatch:
+      required: true
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - type: object
+                required: [type, data]
+                properties:
+                  type: {const: device_self}
+                  data: {$ref: '#/components/schemas/DeviceSelfPatch'}
+              - {$ref: '#/components/schemas/DeviceSelfPatch'}
   schemas:
     Error:
       type: object
@@ -2898,6 +2989,22 @@ components:
     PairingCodeInput: {type: string, pattern: '^[0-9A-Fa-f]{6}$', example: 4f9c2a, description: Case-insensitive}
     DeviceIdValue: {type: string, pattern: '^[0-9a-f]{8}$', example: 7c1e09ab}
     SessionIdValue: {type: string, pattern: '^[0-9a-f]{3,}$', example: a3f, description: '3 hexadecimal characters, growing to 4 and more once every shorter id is used; never reused'}
+    InUseIndicator:
+      type: string
+      enum: [shown, hidden]
+      default: shown
+      description: |
+        1.1: shared by every pair of a physical device. Shown displays the in-use banner/notification for 10 seconds
+        per session (the desktop icon stays changed until the session ends); hidden suppresses those announcements
+        and icon changes. Takeover requests remain until answered and Stop remains in the app and website. Android's
+        quiet running notification, Apple's Automation Running banner and test-environment disclosure are separate.
+        Old responses omit this field; readers default to shown unless preserving an explicit saved native choice.
+        A future unknown value is read as shown; writes accept only shown or hidden.
+    DeviceSelfPatch:
+      type: object
+      required: [in_use_indicator]
+      properties:
+        in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
     CarbonId: {type: string, pattern: '^c:', example: 'c:alice'}
     SiliconId: {type: string, pattern: '^si:', example: 'si:chef'}
     DeviceName: {type: string, minLength: 1, maxLength: 64, example: Saket's Pixel}
@@ -3006,6 +3113,7 @@ components:
         open_wake_requests: {type: integer, minimum: 0, description: '1.1: open wake requests the viewer may see (every Team''s on the owner''s pair; a Silicon''s own)'}
         wake_requests: {type: array, items: {$ref: '#/components/schemas/WakeRequest'}, description: '1.1, single reads: those open requests'}
         wake_muted: {type: boolean, description: '1.1, owner: wake requests are turned off for this pair'}
+        in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
         paired_by_others: {type: boolean, description: '1.1, owner: another Carbon also paired this device. Never says who.'}
         same_device: {type: array, items: {$ref: '#/components/schemas/DeviceIdValue'}, description: '1.1, Silicon views: other Carbons'' pairs of this same physical device that the Silicon has access to in the same Team'}
 
@@ -3302,7 +3410,7 @@ components:
           enum: [pending, deferred, delivered, failed, covered]
           description: 'The Ting to the Carbon. covered: an earlier Ting for the same pair and Team covers it (ting_covered_by). A Silicon sees deferred as pending.'
         ting_covered_by: {type: string, format: uuid}
-        ting_last_error: {type: string, description: 'Why the Ting isn''t delivered yet; for a type Ting doesn''t know in the Team, the register command'}
+        ting_last_error: {type: string, description: 'Why the Ting isn''t delivered yet; for a missing app/context type, the owning-Team manager''s register command'}
         answer_ting: {type: string, enum: [pending, deferred, delivered, failed, covered], description: The Ting back to the Silicon once woken or declined}
         answer_ting_last_error: {type: string}
         host: {$ref: '#/components/schemas/HostDevice'}
@@ -3357,7 +3465,7 @@ components:
           type: array
           items: {type: string}
           example: [extend.device.wake_requested]
-          description: Extend's Ting types Ting doesn't know in this Team, by full name; a Team's Ting manager registers them
+          description: 'Missing app/context types observed during delivery in this Team, by full name; the app-owning Team manager registers them. Recipient Turn on does not clear these observations.'
 
     TestingEnvironment:
       type: object

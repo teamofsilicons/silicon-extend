@@ -13,6 +13,7 @@
 #   api:     the endpoint in api.yaml it calls. The CLI has no feature the client crate does not.
 
 name: extend
+# Reconciled review copy, 2026-09-28: banner, stored display media, TV clicks and Ting semantics.
 summary: Let a Silicon use the devices a Carbon has paired, and let the Carbon manage them.
 install: honeycomb install 'extend'
 links:
@@ -320,6 +321,13 @@ commands:
     who: carbon (owner)
     api: PATCH /api/v1/devices/{device_id}
 
+  - usage: extend device banner <device_id> on|off
+    who: carbon (owner)
+    summary: 'Show or hide the in-use banner, notification and desktop icon change. One choice applies to every Carbon''s pair of the physical device, including carried aliases.'
+    behaviour: 'On shows the banner for 10 seconds per session; off suppresses in-use announcements. Takeover prompts remain until answered and the app and website retain Stop. Android''s quiet running notification, Apple''s Automation Running banner and the test-environment label remain. Native desktop banners are movable and collapsible, with their position retained. Native offline choices are saved locally and synchronized when possible. A 1.0 device app may ignore the shared setting.'
+    gives: {text: 'Saved in-use banner off for Living room TV. This applies to every Carbon''s pair of this device. The device app, or the computer it pairs through, needs Silicon Extend 1.1 or later; offline devices apply it when they reconnect.', json: '{Device, including in_use_indicator: shown|hidden}'}
+    api: PATCH /api/v1/devices/{device_id}
+
   - usage: extend device visibility <device_id> team|personal
     who: carbon (owner)
     summary: 'Deprecated (1.1): exits 2 with "Visibility is gone in Extend 1.1: a device is only visible to the Carbons who paired it." Nothing is sent.'
@@ -352,7 +360,7 @@ commands:
   - usage: extend device access grant <device_id> <silicon_id>... [--team <team>]
     who: carbon (owner)
     summary: 'Give one or more Silicons access, in --team (or your default team). 1.1: the Team can be any Team you are a member of whose Extend login you hold; each Silicon must be in it. A Silicon may hold one grant per Team.'
-    gives: {text: 'Granted si:scout access to 0d44e1f2 in labs. When Extend''s Ting types are missing in that Team, a warning on stderr first: "Ting doesn''t know one of Extend''s notification types in labs (extend.device.wake_requested), so those Tings won''t arrive there until a Ting manager of labs registers it:" and each missing type''s `ting --org labs types register …` command.'}
+    gives: {text: 'Granted si:scout access to 0d44e1f2 in labs. When delivery found a missing app/context type, stderr names it and explains that Extend''s app-owning Team manager must register it; commands use the quoted `<owning-team>` placeholder when that Team is unknown, never the delivery Team as a guess.'}
     errors: 'not_a_team_member (exit 4): your Extend login doesn''t reach that Team; the hint says to sign in and select it. invalid_input (exit 2): the Silicon isn''t in that Team.'
     api: PUT /api/v1/devices/{device_id}/access/{silicon_id}, GET /api/v1/ting-registration
 
@@ -385,7 +393,7 @@ commands:
         Refresh: "Asked again (ask 2); the request now expires at 10:37."
         Can't tell: "Extend can't tell when Saket's iPhone wakes; its Carbon will say so."
         Delivery: "Its Carbon was told through Ting" / "Its Carbon will be told through Ting shortly" / "Ting doesn't know
-        Extend's wake notifications in labs yet; a labs Ting manager runs: ting --org labs types register …"
+        Extend's wake notification type yet; the app-owning Team's manager runs: ting --org '<owning-team>' types register …"
         Carried device: "Studio Mac, which it pairs through, must be awake too."
       json: '{WakeRequest}'
     exit: '0 asked; 2 usage; 4 no access; 5 not found; 6 in use by another Silicon, already awake, or its Carbon turned wake requests off; 12 asked less than 5 minutes ago'
@@ -399,14 +407,14 @@ commands:
 
   - usage: extend ting status [--all-teams] | extend ting on [--all-teams]
     who: both
-    summary: 'Whether Extend''s Tings reach you in your --team Team (or every Team with --all-teams), and which of Extend''s Ting types Ting lacks there (1.1). on: "Turn on" registers you with Ting again there, and sends what was waiting.'
+    summary: 'Whether Extend''s Tings reach you in your --team Team (or every Team with --all-teams), and missing app/context types observed while delivering there (1.1). on registers only the recipient again and retries waiting deliveries; it does not register types or clear their errors. Types are shared across delivery Teams for the app/context; an owning-Team manager registers them with Ting''s supported CLI.'
     gives:
       text: |
         TEAM  STATUS   MISSING TYPES
         acme  on       —
         labs  pending  extend.device.wake_requested (Sign in to Extend for labs)
-        Then, for each missing type, the command a Ting manager of that Team runs:
-        ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'
+        Then, for each missing type, the command Extend's app-owning Team manager runs, replacing the quoted placeholder:
+        ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'
       json: '{items: [TingRegistration]}'
     api: GET /api/v1/ting-registration, PUT /api/v1/ting-registration
 
@@ -462,7 +470,7 @@ commands:
     who: silicon
     summary: 'Ask for a device another Silicon is using, delivered through Ting with the reason exactly as written. When that Silicon is in your Team and was given access by the same Carbon, it goes to that Silicon. Otherwise (1.1) it goes to the Carbon who gave that Silicon access, who sees your id and reason and can stop the session; you never see which Carbon or Silicon.'
     takes: {--reason: '1–300 characters not counting the spaces and line breaks around it (at most 1,000 with them), sent exactly as written; required'}
-    gives: {text: '"Sent to si:sous (using 7c1e09ab in session a3f). Delivery: delivered." or "Sent to the Carbon who gave access to the Silicon using it; it''s in use by a Silicon you can''t see. Delivery: <delivered | pending, retried | …>." When Ting lacks the type in that Team, the delivery line gives the register command.', json: '{Request}'}
+    gives: {text: '"Sent to si:sous (using 7c1e09ab in session a3f). Delivery: delivered." or "Sent to the Carbon who gave access to the Silicon using it; it''s in use by a Silicon you can''t see. Delivery: <delivered | pending, retried | …>." When Ting lacks the app/context type, the delivery line keeps the error visible and gives the app-owning Team manager''s register command.', json: '{Request}'}
     errors: [device_not_in_use, no_access]
     api: POST /api/v1/devices/{device_id}/requests
 
@@ -560,18 +568,20 @@ device_commands:
     gives: {exit: '0 when met; 1 with reason wait_target_absent or wait_target_present when not'}
   - usage: extend screenshot [<name>] [--scale <0.01-1>] [--overlay-refs] [--crop-on <selector>] [--fullscreen]
     capability: screen.capture
+    behaviour: 'On a carried iPhone/iPad, the first plain screenshot attaches to the current screen with a bare open if needed; it launches no app or runner. Attachment, stale-session recovery and capture share one command deadline. Ref overlays or selector cropping may require the runner; lock state remains unknown.'
     gives: {text: 'Briefcase link and size', json: '{files: [File], width, height}'}
-  - usage: extend diff screenshot --baseline <file_id|path> [<current>] [--overlay-refs]
+  - usage: extend diff screenshot --baseline <path> [<current>] [--overlay-refs]
     capability: screen.capture
     gives: {text: 'Changed pixels percentage and a Briefcase link to the diff image'}
   - usage: extend record start [<name>] [--scope app|device] [--fps <n>] [--quality normal|high] | extend record stop
     capability: screen.record
-    takes: {--quality: 'normal (the default) or high, on every platform. Linux records at one quality: normal there is the same as leaving it out, and high is refused.'}
+    takes: {--quality: 'normal (the default) or high. The agent maps normal to medium export quality; Linux encodes normal at 8 Mbit/s and high at 20 Mbit/s.'}
     gives: {text: 'On stop: Briefcase link to the video. Stops on its own at 30 minutes or 1 GiB.'}
 
   # Act
   - usage: extend click <@ref|selector> [--button primary|secondary]
-    capability: input.pointer or input.touch
+    capability: input.pointer or input.touch; Android TV app >=1.1 uses screen.read for a primary element click
+    behaviour: 'Android TV element clicks use accessibility without advertising pointer/touch. Apps older than 1.1, or of unknown version, keep the old gate. Coordinate, secondary, held and repeated clicks still need native injection support.'
   - usage: extend press <x> <y> [--count <n>] [--hold-ms <ms>] [--interval-ms <ms>] | extend press <@ref|selector>
     capability: input.touch or input.pointer
   - usage: extend longpress <x> <y> [<ms>]
@@ -629,9 +639,9 @@ device_commands:
     gives: {text: 'On stop: Briefcase link to the saved log'}
 
   # Replay
-  - usage: extend replay <script.ad|file_id> [--from <n> --plan-digest <sha256>] [--keep-session]
+  - usage: extend replay <script.ad> [--from <n> --plan-digest <sha256>] [--keep-session]
     capability: replay
-    summary: Run saved steps again. The script is read locally or from Briefcase and sent with the request.
+    summary: Run saved steps again. The script is read locally and sent as an attachment; stored-file resolution is limited to display images/videos.
   - usage: extend test <path|glob> [--retries <0-3>]
     capability: replay
     summary: Run several .ad scripts in order. (The device engine's `test`, not the --test flag.)
@@ -662,6 +672,9 @@ device_commands:
   - usage: extend display show --url <url> | --image <path|url|file_id> | --video <path|url|file_id> | --text <text>
     capability: display
     summary: 'Put something full screen on the TV. It stays until `extend display clear` or someone presses back. Apple TV: images and videos only.'
+    takes:
+      --image/--video: 'A local file, public media URL, file:<file_id>, bare Extend file UUID, or exact stored Extend/Briefcase link. A 1.1 service resolves only the calling Silicon''s unexpired files in the current Team/world, reads Briefcase as that Silicon and forwards an ordinary attachment. Local and stored inputs share the 8-file/8-MiB total. Arbitrary private Briefcase files and other Silicons'' files are refused.'
+    behaviour: 'Use a 1.1 service for stored media; an older service does not resolve the reference. Native Android TV image loading completes before success, with missing/unsupported/damaged images returning a failed command result. Stored media does not raise attachment size limits.'
   - usage: extend display clear
     capability: display
 

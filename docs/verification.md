@@ -130,9 +130,15 @@ This static, short recording does not prove animation, the 60-second idle policy
 carried service routing or reconnect. The iPhone remains locked in the fresh one-shot readiness
 check at `target/physical-iphone-cf43/run-8727983fa23d/`; no capture or helper was launched there.
 
+The Carbon subsequently approved and the prepared API/CLI/technical patch was applied exactly.
+Both original and resulting hashes match its manifest; both YAML files parse with unique keys,
+446 local API references resolve and all 64 operation IDs are unique. The human-owned
+`UNDERSTANDING.md` was unchanged. The generic IAM membership-read/Briefcase first-file design
+was also approved for implementation, with the coordinated OBO cutover still required.
+
 Windows ARM64 still requires a prepared desktop after the privacy-setup overlay blocked the
-owned fixture with zero input sent. Protected contract review, first-time Briefcase recipient
-review and the remaining physical matrix remain open. Production remains 1.0.0; no 1.1
+owned fixture with zero input sent. First-time Briefcase implementation and the remaining
+physical matrix remain open. Production remains 1.0.0; no 1.1
 deployment or publication is claimed.
 
 ## 2026-09-28 — shared iOS runner idle deadline

@@ -19,12 +19,13 @@ setup retry, the device engine named Silicon Extend) is built, with integrated c
 fixes recorded in `verification.md`; its design is
 `extend-publish-drafts/release-1.1.0/design.json` with the Carbon's decisions of 2026-09-27.
 
-### Needs the Carbon
+The Carbon approved the prepared API/CLI/technical contract patch on 2026-09-28. It is applied
+exactly as reviewed; original/resulting hashes, YAML uniqueness, 446 local API references and
+64 unique operation IDs were verified. `UNDERSTANDING.md` was not changed by this pass.
+The generic IAM membership-read and Briefcase first-file design is also approved for implementation;
+its coordinated reusable-OBO migration and real first-recipient verification remain engineering work.
 
-- **Review the concrete contract patch** for `understanding/TECHNICAL.md`, `api.yaml` and `cli.yaml`:
-  `../extend-publish-drafts/release-1.1.0/contracts/REVIEW.md` from the repository root. The copies
-  and patch are validated; their protected-file edit approval is pending. `UNDERSTANDING.md`
-  changes are already committed (`3fe0347`, `5326b68`) and are not being requested again.
+### Needs the Carbon
 - **Physical device access** is needed for remaining checks. The iPad became available and
   passed a runner-free connection and readable screenshot with the exact `cf43b53` packaged
   runtime. The current helper subsequently built, installed and started successfully. A nine-second
