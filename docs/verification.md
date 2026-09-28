@@ -34,6 +34,14 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
 
 ## 2026-09-28 — fold simultaneous device requests atomically
 
+After integrating all replay/reservation/folding fixes, the full service suite reported 172
+passed, zero failed and one explicitly ignored in 164 seconds. The real-provider entry point
+returns without running when its fixture variable is absent; it is not fresh real-provider
+evidence. The ignored production-schema rehearsal also needs its separate captured-schema lane.
+Strict all-targets service Clippy and service formatting pass. All 102 retained databases created
+by this full run were identified from the before/after inventory, confirmed idle and dropped by
+exact name; the prior inventory is unchanged. Evidence: `target/service-final-verification/`.
+
 Different keys, or no key, could create duplicate same-reason requests and notifications when
 two service instances checked for a recent request before either inserted it. The check and
 insert now share a short transaction and an advisory lock scoped to world, device, Team,

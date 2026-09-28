@@ -583,11 +583,25 @@ async fn attachment_retry_replays_success_after_filling_the_test_environment() {
     changed["data"]["name"] = "different body".into();
     let conflict = send("attachment-fifth", changed).await.unwrap();
     assert_eq!(conflict.status(), 409);
-    assert_eq!(conflict.json::<serde_json::Value>().await.unwrap()["data"]["code"], "conflict");
+    assert_eq!(
+        conflict.json::<serde_json::Value>().await.unwrap()["data"]["code"],
+        "conflict"
+    );
     let full = send("attachment-sixth", body).await.unwrap();
     assert_eq!(full.status(), 409);
-    assert_eq!(full.json::<serde_json::Value>().await.unwrap()["data"]["code"], "test_device_limit");
-    assert_eq!(t.authed(&alice, Some("acme")).devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
+    assert_eq!(
+        full.json::<serde_json::Value>().await.unwrap()["data"]["code"],
+        "test_device_limit"
+    );
+    assert_eq!(
+        t.authed(&alice, Some("acme"))
+            .devices(DeviceQuery::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        5
+    );
 }
 
 /// Eight devices added at once to a test environment that has three: exactly two get in, whether
