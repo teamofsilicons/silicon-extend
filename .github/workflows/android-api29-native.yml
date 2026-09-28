@@ -7,6 +7,7 @@ on:
     branches: [release/1.1.0]
     paths:
       - .github/workflows/android-api29-native.yml
+      - .github/android-sdk-licenses/android-sdk-preview-license
       - e2e/api29-native-runner.py
 permissions:
   contents: read
@@ -68,7 +69,8 @@ jobs:
           names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
           hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names if name}
           aggregate = hashlib.sha256(''.join(name + '\0' + hashes[name] + '\n' for name in sorted(hashes)).encode()).hexdigest()
-          adapter = ['e2e/api29-native-runner.py', '.github/workflows/android-api29-native.yml']
+          adapter = ['e2e/api29-native-runner.py', '.github/workflows/android-api29-native.yml',
+                     '.github/android-sdk-licenses/android-sdk-preview-license']
           report = {'source_head': head, 'tracked_file_count': len(hashes), 'tracked_hashes': hashes,
                     'aggregate_sha256': aggregate, 'adapter_commit': git('rev-parse', 'HEAD', cwd=harness),
                     'adapter_hashes': {name: hashlib.sha256((harness / name).read_bytes()).hexdigest() for name in adapter},
@@ -95,6 +97,26 @@ jobs:
           printf '%s\n' "ImageOS=${ImageOS:-unknown}" "ImageVersion=${ImageVersion:-unknown}" > "$EXTEND_API29_OUT/runner-image.txt"
           df -k / "$RUNNER_TEMP" > "$EXTEND_API29_OUT/disk-before.txt"
           python3 -c 'import os,shutil; assert shutil.disk_usage(os.environ["RUNNER_TEMP"]).free >= 18*1024**3, "Need 18 GiB before SDK/build/AVD work"'
+      - name: Reuse the release owner's previously accepted TV SDK license
+        if: matrix.profile == 'tv'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This exact record already exists in the release owner's SDK. Android documents
+          # copying accepted licenses to build machines; no new terms are accepted here.
+          python3 - <<'PYTHON'
+          import hashlib, os, pathlib
+          accepted = pathlib.Path('harness/.github/android-sdk-licenses/android-sdk-preview-license').read_bytes()
+          assert hashlib.sha256(accepted).hexdigest() == 'c6cc28fe55c00a86dbe57488393190915403695044e1173c4a28105e2db84407'
+          entry = accepted.strip()
+          assert entry == b'84831b9409646a918e30573bab4c9c91346d8abd'
+          destination = pathlib.Path(os.environ['ANDROID_HOME']) / 'licenses/android-sdk-preview-license'
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          existing = destination.read_bytes() if destination.exists() else b''
+          if entry not in {line.strip() for line in existing.splitlines()}:
+              destination.write_bytes(existing + b'\n' + entry)
+          print('Reused the exact previously accepted TV SDK license; existing entries preserved.')
+          PYTHON
       - name: Official SDK tools and selected pinned API 29 image revision
         timeout-minutes: 15
         shell: bash
@@ -102,7 +124,7 @@ jobs:
           set -euo pipefail
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           test -x "$SDKMANAGER"
-          # Use licenses already accepted by the runner image; never accept new terms here.
+          # Use only runner licenses and the exact reused TV license; never accept new terms.
           python3 - <<'PYTHON'
           import hashlib, json, os, pathlib
           licenses = pathlib.Path(os.environ['ANDROID_HOME']) / 'licenses'

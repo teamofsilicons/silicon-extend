@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 
 SOURCE = "cf43b539c5d9ae91e363172436bb8d1d677d2441"
 PKG = "com.teamofsilicons.extend"
+ACCESSIBILITY_COMPONENT = PKG + "/" + PKG + ".a11y.ExtendAccessibilityService"
 TEST_RUNNER = PKG + ".test/androidx.test.runner.AndroidJUnitRunner"
 CASES = (("phone", "default", "x86_64", 8, 5560, 8490, 42),
          ("tv", "android-tv", "x86", 3, 5562, 8491, 35))
@@ -158,6 +159,38 @@ def tcp_listeners(text):
     return listeners
 
 
+def accessibility_unbound(text, component=ACCESSIBILITY_COMPONENT):
+    """Read API29's framework state, not just the asynchronous secure setting."""
+    assert "ACCESSIBILITY MANAGER" in text, "Missing accessibility framework dump"
+    users = list(re.finditer(r"User state\[attributes:\{id=(\d+), currentUser=(true|false)\b", text))
+    current = [(index, match) for index, match in enumerate(users) if match[2] == "true"]
+    assert len(current) == 1 and current[0][1][1] == "0", "Expected the owned AVD's current user0"
+    index, start = current[0]
+    section = text[start.end():users[index+1].start() if index+1 < len(users) else len(text)]
+    wanted_package, wanted_class = component.split("/", 1)
+    wanted_class = wanted_package + wanted_class if wanted_class.startswith(".") else wanted_class
+    present = False
+    for label in ("Bound", "Enabled", "Binding"):
+        markers = list(re.finditer(r"^\s*" + label + r" services:\{", section, re.M))
+        assert len(markers) == 1, f"Missing or ambiguous {label} services in framework dump"
+        begin = markers[0].end()
+        depth, end = 1, begin
+        while end < len(section) and depth:
+            depth += (section[end] == "{") - (section[end] == "}")
+            end += 1
+        assert depth == 0, f"Truncated {label} services in framework dump"
+        for package, class_name in re.findall(r"([A-Za-z0-9_.$]+)/([A-Za-z0-9_.$]+)", section[begin:end-1]):
+            class_name = package + class_name if class_name.startswith(".") else class_name
+            present |= (package, class_name) == (wanted_package, wanted_class)
+    return not present
+
+
+def heap_bytes(value):
+    match = re.fullmatch(r"([1-9][0-9]*)([kKmMgG]?)", value)
+    assert match, f"Cannot establish runtime heap limit from {value!r}"
+    return int(match[1]) * {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[match[2].lower()]
+
+
 class Lane:
     def __init__(self, args, run_id, avds):
         self.root, self.sdk, self.out = args.root.resolve(), args.sdk.resolve(), args.out.resolve()
@@ -266,6 +299,9 @@ class Lane:
         self.flush()
 
     def instrument(self, cls, method, timeout=150, authorize=False):
+        self.reset_instrumentation_accessibility(cls + "-" + method)
+        if method == "outputLargerThanTheHeapIsStreamedNotQueued":
+            self.verify_heap()
         full = PKG + "." + cls
         logfile = self.caseout / f"{cls}-{method}.log"
         argv = [self.adb_bin, "-s", self.serial, "shell", "am", "instrument", "-w", "-r",
@@ -276,6 +312,84 @@ class Lane:
         parse_instrumentation(logfile.read_text(), full, method)
         self.case["instrumentation"].append({"class": cls, "method": method, "result": "passed"})
         self.flush()
+
+    def reset_instrumentation_accessibility(self, label):
+        # Android10 instrumentation kills the process without the full package-restarted
+        # cleanup. A formerly bound service can stay in the framework's Binding list,
+        # where quick null->enabled settings writes cannot rebind it. Explicit force-stop
+        # sends that cleanup broadcast; await completion before unchanged test setup.
+        # This helper is never called during the separate reconnect recovery checks.
+        self.assert_avd()
+        prefix = self.caseout / ("accessibility-" + label)
+        prefix.with_suffix(".before.txt").write_text(self.adb("shell", "dumpsys", "accessibility", timeout=5))
+        self.adb("shell", "am", "force-stop", "--user", "0", PKG)
+        def cleared():
+            snapshot = self.adb("shell", "dumpsys", "accessibility", timeout=5)
+            prefix.with_suffix(".after.txt").write_text(snapshot)
+            return accessibility_unbound(snapshot)
+        self.until("owned accessibility Bound/Enabled/Binding cleanup before " + label, cleared, 30)
+
+    def verify_heap(self):
+        properties = {name: self.adb("shell", "getprop", name) for name in
+                      ("dalvik.vm.heapsize", "dalvik.vm.heapgrowthlimit")}
+        limits = {"dalvik.vm.heapsize": heap_bytes(properties["dalvik.vm.heapsize"])}
+        if properties["dalvik.vm.heapgrowthlimit"]:
+            limits["dalvik.vm.heapgrowthlimit"] = heap_bytes(properties["dalvik.vm.heapgrowthlimit"])
+        self.case["heap_prerequisite"] = {"properties": properties,
+            "max_heap_bytes": limits["dalvik.vm.heapsize"], "limits_bytes": limits,
+            "runtime_assertion": "Unchanged native test also requires Runtime.maxMemory <250000000 before transfers"}
+        self.flush()
+        assert all(value < 250_000_000 for value in limits.values()), "Guest heap would invalidate the native streaming regression"
+
+    def configure_owned_heap(self):
+        # Current emulator versions raise vm.heapSize to at least RAM/4. On this
+        # disposable debug image, set volatile ART properties while zygote is
+        # stopped, then restore shell-UID ADB before installing or exercising the app.
+        self.assert_avd()
+        evidence = {"debuggable": self.adb("shell", "getprop", "ro.debuggable"),
+                    "build_type": self.adb("shell", "getprop", "ro.build.type"),
+                    "heap_before": self.adb("shell", "getprop", "dalvik.vm.heapsize")}
+        assert evidence["debuggable"] == "1" and evidence["build_type"] in {"userdebug", "eng"}, "Owned image must support debug-only heap setup"
+        old_pids = self.adb("shell", "pidof", "zygote64", "zygote", check=False).split()
+        assert old_pids and all(pid.isdigit() for pid in old_pids), "Cannot identify running owned zygotes"
+        evidence["zygote_pids_before"] = old_pids
+        try:
+            self.adb("root")
+            self.until("owned debug adbd UID0", lambda: self.adb("shell", "id", "-u", timeout=5) == "0", 30)
+            self.adb("shell", "stop")
+            try:
+                self.until("owned zygotes stopped", lambda: not self.adb("shell", "pidof", "zygote64", "zygote", check=False, timeout=5), 30)
+                for prop in ("dalvik.vm.heapsize", "dalvik.vm.heapgrowthlimit"):
+                    self.adb("shell", "setprop", prop, "192m")
+                    assert self.adb("shell", "getprop", prop) == "192m", f"Owned image rejected {prop}"
+            finally:
+                self.adb("shell", "start")
+            def restarted():
+                pids = self.adb("shell", "pidof", "zygote64", "zygote", check=False, timeout=5).split()
+                if not pids or not all(pid.isdigit() for pid in pids) or set(pids) & set(old_pids):
+                    return None
+                if self.adb("shell", "am", "get-current-user", timeout=5) != "0":
+                    return None
+                return pids
+            evidence["zygote_pids_after"] = self.until("new owned zygotes and framework user0", restarted, 90)
+            self.verify_heap()
+            evidence["properties"] = self.case["heap_prerequisite"]["properties"]
+            evidence["configured"] = True
+        except BaseException as error:
+            evidence["setup_error"] = str(error)
+            raise
+        finally:
+            try:
+                self.adb("unroot")
+                self.until("owned adbd restored to shell UID2000", lambda: self.adb("shell", "id", "-u", timeout=5) == "2000", 30)
+                evidence["unrooted_uid"] = "2000"
+            except BaseException as error:
+                evidence["unroot_error"] = str(error)
+                raise
+            finally:
+                self.case["heap_setup"] = evidence
+                write_json(self.caseout / "heap-setup.json", evidence)
+                self.flush()
 
     def assert_avd(self):
         assert self.adb("shell", "getprop", "ro.kernel.qemu") == "1"
@@ -469,6 +583,7 @@ class Lane:
             self.adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
             self.adb("shell", "wm", "dismiss-keyguard")
             self.adb("shell", "settings", "put", "system", "screen_off_timeout", "1800000")
+            self.configure_owned_heap()
             for apk in (self.apk, self.test_apk):
                 self.adb("install", "-r", "-g", str(apk), timeout=120)
             self.adb("tcpip", "5555")
@@ -567,7 +682,7 @@ def export_evidence(out):
     top = {"report.json", "cleanup.json", "verified-images.json", "runner-image.txt", "disk-before.txt",
            "sdk-installed.txt", "sdk-license-inventory.json", "emulator-version.txt", "acceleration.txt", "adb-version.txt",
            "provenance.json", "source-before.sha256", "source-after.sha256", "source-before.json", "source-after.json", "adapter.sha256", "ffmpeg-version.txt"}
-    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini"}
+    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json"}
     copied = []
     for path in sorted(out.rglob("*")):
         if not path.is_file() or public in path.parents:
@@ -576,6 +691,7 @@ def export_evidence(out):
         allow = len(relative.parts) == 1 and path.name in top
         allow = allow or (len(relative.parts) == 2 and relative.parts[0] in {"phone", "tv"} and (
             path.name in native or re.fullmatch(r"(?:DisplayTest|LocalAdbTest|RecordingTest)-[A-Za-z]+\.log", path.name)
+            or re.fullmatch(r"accessibility-(?:DisplayTest|LocalAdbTest|RecordingTest)-[A-Za-z]+\.(?:before|after)\.txt", path.name)
             or re.fullmatch(r"(?:initial|after-adbd-restart)-guest-tcp\.txt", path.name)
             or re.fullmatch(r"memory-[a-z-]+\.txt", path.name)
             or re.fullmatch(r"(?:duration|still|burst|long)-recording-proof-(?:first|middle|last)\.png", path.name)))
