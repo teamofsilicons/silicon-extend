@@ -99,6 +99,9 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Re-run the final feature and requirements audit and integration checks after those fixes;
   reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
   publish/deploy and verify the release. None of this checkpoint updates installed apps.
+  The audit confirmed and fixed the older full-test-environment pairing retry bug; its negative
+  control and eight passing service checks are recorded in `verification.md`. Include this service
+  change in final CI and the deployment image.
 
 
 - The 1.1 real IAM/Ting lane now covers wake events and routing across Teams, genuine missing-type
@@ -269,10 +272,9 @@ verifiers and not fixed.
     verbatim (`extend adb shell tool --session x` is refused).
   - Timestamps are serialised with microseconds, where `TECHNICAL.md` §1 says milliseconds.
 - **Service: devices.**
-  - *(verifier)* Retrying the pairing that filled a test environment, with the same
-    `Idempotency-Key` and body, answers `409 test_device_limit` instead of replaying its 201: the
-    early limit check runs before the idempotency lookup. Move it inside, after the replay, with a
-    test.
+  - *Fixed 2026-09-28:* retrying the fifth pairing now replays its stored `201` before the
+    test-environment limit check. Changed-body conflicts and refusal of a fresh sixth device are
+    regression-tested, alongside all eight device-gap checks.
   - A host that was offline when a device it carries was removed is never sent `attach
     removed:true` on reconnecting, so it keeps carrying and probing that device; renaming a carried
     device sends the host only `refresh`, so the host shows the old name until it reconnects; the

@@ -32,6 +32,24 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — pairing retry when a test environment becomes full
+
+The older round-2 pairing replay issue was still present: a successful fifth pairing consumed
+its code, so retrying the identical `Idempotency-Key` and body reached the full-environment check
+before the stored response and incorrectly returned `409 test_device_limit`. The fast limit
+check now runs inside the idempotency closure. New claims retain both that precheck and the
+transaction's atomic physical-device limit; authentication and access validation still precede
+the replay.
+
+The new regression fails against the previous code and passes after the fix. It verifies an
+identical `201` response and replay header, a changed-body conflict under the same key, refusal
+of a fresh sixth device, and a final count of five. All eight `devices_gaps` tests pass, including
+concurrent pairing/attachment, pool responsiveness, bounded contention and hosted-device flows.
+Strict service Clippy and formatting pass. Exactly the nine databases created by the negative
+control and passing suite were removed; the pre-existing database set was unchanged.
+Evidence: `target/pairing-replay-verification/`. This service change needs the subsequent final
+CI and service-image build; it changes no native app or CLI implementation.
+
 ## 2026-09-28 — final Mac and Linux packages at 0159b7a
 
 CI workflow `36359411111` passed all five jobs at this commit: Rust (including consumer contracts
@@ -774,9 +792,11 @@ at 5.06 s and 10.06 s. The removed-device reads, the hosted-device path end to e
 full pages with the online filter (also a scratch test with 460 offline devices spanning several
 batches) were checked.
 
-Found and still open: retrying the pairing that filled a test environment, with the same
+Found then: retrying the pairing that filled a test environment, with the same
 `Idempotency-Key` and body, answers `409 test_device_limit` instead of replaying its 201, because
 the early limit check runs before the idempotency lookup (also true before round 2).
+*Corrected 2026-09-28:* fixed and regression-tested in "pairing retry when a test environment
+becomes full" above.
 
 ### Service: test environments (service test environments)
 

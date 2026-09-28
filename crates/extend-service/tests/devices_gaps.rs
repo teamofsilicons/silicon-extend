@@ -492,6 +492,64 @@ async fn test_environment_with_id(env: &Env) -> (Client, Uuid) {
     (client, envid)
 }
 
+/// Retrying the successful fifth pairing must replay it before checking the new-device limit.
+#[tokio::test]
+async fn pairing_retry_replays_success_after_filling_the_test_environment() {
+    let env = start().await;
+    let t = test_environment(&env).await;
+    let alice = login(&t, "c:alice").await;
+    for i in 0..4 {
+        pair_offline(&t, &alice, DeviceOs::Linux, &format!("existing {i}")).await;
+    }
+    let code = t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code;
+    let body = serde_json::json!({"type": "pairing", "data": claim(&code, "fifth", &[])});
+    let http = reqwest::Client::new();
+    let send = |body: serde_json::Value| {
+        http.post(format!("{}/api/v1/pairings", env.base))
+            .bearer_auth(&alice)
+            .header("x-org-id", "acme")
+            .header(extend_protocol::TESTING_SECRET_HEADER, t.testing_secret().unwrap())
+            .header("idempotency-key", "pairing-fifth-device")
+            .json(&body)
+            .send()
+    };
+    let first = send(body.clone()).await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first = first.json::<serde_json::Value>().await.unwrap();
+    let retry = send(body.clone()).await.unwrap();
+    assert_eq!(retry.status(), 201, "{}", retry.text().await.unwrap_or_default());
+    assert_eq!(retry.headers()["idempotency-replayed"], "true");
+    assert_eq!(retry.json::<serde_json::Value>().await.unwrap(), first);
+    let mut changed = body;
+    changed["data"]["name"] = "different body".into();
+    let conflict = send(changed).await.unwrap();
+    assert_eq!(conflict.status(), 409);
+    let conflict = conflict.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(conflict["data"]["code"], "conflict");
+    assert!(
+        conflict["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Idempotency-Key")
+    );
+    let fresh = t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap();
+    let full = t
+        .authed(&alice, Some("acme"))
+        .pair(&claim(&fresh.pairing_code, "sixth", &[]))
+        .await
+        .unwrap_err();
+    assert_eq!(full.api().unwrap().code, ErrorCode::TestDeviceLimit);
+    assert_eq!(
+        t.authed(&alice, Some("acme"))
+            .devices(DeviceQuery::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        5
+    );
+}
+
 /// Eight devices added at once to a test environment that has three: exactly two get in, whether
 /// they arrive by pairing code or through a host computer.
 #[tokio::test]

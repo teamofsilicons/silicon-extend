@@ -391,15 +391,17 @@ pub async fn claim(
     let ttl = check_ttl(input.pair_ttl_days)?;
     // `visibility` is accepted and ignored: every device is personal.
     check_silicons(&state, &auth.p, auth.sel.as_ref(), &input.silicon_ids).await?;
-    if !joins_device(&state, &auth.world, &code).await? {
-        test_limit(&state, &auth.world).await?;
-    }
     let world = auth.world.clone();
     let hash = hash_json(&input);
     let sel = auth.sel.clone();
     let p = auth.p.clone();
     let st = state.clone();
     idempotent(&state, &auth.world, auth.p.id(), "pairings", &headers, &hash, || async move {
+        // A successful fifth claim must replay before the now-full environment rejects new
+        // devices. New claims still get the fast precheck and the transaction's atomic limit.
+        if !joins_device(&st, &world, &code).await? {
+            test_limit(&st, &world).await?;
+        }
         // Until commit, everything runs on the add's own transaction: in a test environment this
         // request holds the environment's turn, and others wait for it.
         let mut add = begin_device_add(&st, &world).await?;
