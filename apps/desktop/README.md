@@ -42,7 +42,7 @@ SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' NOTARY_PROFILE=exte
 
 ```
 Silicon Extend.app/Contents/
-  Info.plist                    LSUIElement (menu-bar only), usage descriptions, com.teamofsilicons.extend,
+  Info.plist                    regular Dock/app-switcher app, usage descriptions, com.teamofsilicons.extend,
                                 CFBundleIconFile AppIcon
   MacOS/extend-agent            the app
   MacOS/Silicon Extend Helper   the engine's macOS helper, built here and signed with the app
@@ -56,6 +56,11 @@ Silicon Extend.app/Contents/
   Resources/node/bin/node       Node 22 (official build, downloaded and cached in target/desktop/.cache)
   Resources/node/LICENSE        Node.js's licence file
 ```
+
+The Mac app has its own Dock icon, app-switcher entry, and app and Window menus. Closing its
+window keeps the agent connected in the background; opening it from the Dock, Spotlight, or
+Finder shows and restores the same window. A manual launch also shows the window after Quit;
+the login entry's explicit `run` command starts quietly. Quit Silicon Extend stops the app and its agent.
 
 What 1.1 asks for on the Carbon's Mac, besides Accessibility and Screen Recording: permission to
 show notifications (the first start asks once; a Silicon's request to wake the Mac shows as one),
