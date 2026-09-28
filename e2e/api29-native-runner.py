@@ -191,6 +191,25 @@ def heap_bytes(value):
     return int(match[1]) * {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[match[2].lower()]
 
 
+def avd_memory(profile):
+    assert profile in {"phone", "tv"}, "Unknown owned AVD profile"
+    # The official API29 TV image is a non-debuggable user build. The supported
+    # -lowram option removes the emulator's normal RAM floor; 768 MiB gives a
+    # RAM/4 heap of 192 MiB. Runtime properties and the native test still verify it.
+    return ({"hw.ramSize": "768" if profile == "tv" else "2048", "vm.heapSize": "192"},
+            ["-lowram"] if profile == "tv" else [])
+
+
+def inapplicable_test(profile, cls, method):
+    if profile == "phone" and cls == "DisplayTest" and method == "corruptImageReturnsACommandFailure":
+        return "The display command is unsupported on phones; its command-path decoding failure is tested on actual TV"
+    if profile == "tv" and cls == "RecordingTest" and method == "aSessionTheDeviceGaveUpOnExplainsItsLostRecording":
+        return "The public record command is unsupported on TV; its session-loss explanation is tested on phone"
+    if profile == "tv" and cls == "RecordingTest" and method == "rotationContinuesInASecondFile":
+        return "Android TV has a fixed landscape display; phone orientation transition tested in phone case"
+    return None
+
+
 class Lane:
     def __init__(self, args, run_id, avds):
         self.root, self.sdk, self.out = args.root.resolve(), args.sdk.resolve(), args.out.resolve()
@@ -340,6 +359,26 @@ class Lane:
             "runtime_assertion": "Unchanged native test also requires Runtime.maxMemory <250000000 before transfers"}
         self.flush()
         assert all(value < 250_000_000 for value in limits.values()), "Guest heap would invalidate the native streaming regression"
+
+    def verify_owned_tv_heap(self):
+        self.assert_avd()
+        evidence = {"strategy": "TV-only supported -lowram with 768 MiB AVD RAM and 192 MiB configured heap; no root or zygote changes",
+                    "avd_memory": avd_memory("tv")[0], "emulator_flags": avd_memory("tv")[1]}
+        try:
+            evidence["image_properties"] = {name: self.adb("shell", "getprop", name) for name in
+                ("ro.debuggable", "ro.build.type", "ro.config.low_ram", "ro.kernel.qemu.dalvik.vm.heapsize")}
+            evidence["shell_uid"] = self.adb("shell", "id", "-u")
+            assert evidence["shell_uid"] == "2000", "Owned TV must use shell UID2000 before APK installation"
+            self.verify_heap()
+            evidence["properties"] = self.case["heap_prerequisite"]["properties"]
+            evidence["verified"] = True
+        except BaseException as error:
+            evidence["setup_error"] = str(error)
+            raise
+        finally:
+            self.case["heap_setup"] = evidence
+            write_json(self.caseout / "heap-setup.json", evidence)
+            self.flush()
 
     def configure_owned_heap(self):
         # Current emulator versions raise vm.heapSize to at least RAM/4. On this
@@ -561,14 +600,16 @@ class Lane:
         self.cmd([self.avdmanager, "create", "avd", "--name", self.avd, "--package", self.case["package"]], timeout=60, input="no\n")
         config = self.avds / (self.avd + ".avd/config.ini")
         properties = sdk_properties(config)
-        properties.update({"hw.ramSize": "2048", "vm.heapSize": "192", "disk.dataPartition.size": "6G",
+        memory, emulator_flags = avd_memory(name)
+        properties.update({**memory, "disk.dataPartition.size": "6G",
                            "hw.lcd.width": "720" if name == "phone" else "1280",
                            "hw.lcd.height": "1280" if name == "phone" else "720",
                            "hw.lcd.density": "320" if name == "phone" else "213", "showDeviceFrame": "no"})
         config.write_text("".join(f"{key}={value}\n" for key,value in properties.items()))
         shutil.copy2(config, self.caseout / "avd-config.ini")
         emulator = self.spawn([self.sdk / "emulator/emulator", "-avd", self.avd, "-port", str(console_port), "-no-window",
-                               "-no-audio", "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect", "-accel", "on"], self.caseout / "emulator.log")
+                               "-no-audio", "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect", "-accel", "on",
+                               *emulator_flags], self.caseout / "emulator.log")
         case_error = None
         try:
             self.until("owned API29 emulator boot", lambda: emulator.poll() is None and self.adb("shell", "getprop", "sys.boot_completed", check=False) == "1", 360)
@@ -583,7 +624,10 @@ class Lane:
             self.adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
             self.adb("shell", "wm", "dismiss-keyguard")
             self.adb("shell", "settings", "put", "system", "screen_off_timeout", "1800000")
-            self.configure_owned_heap()
+            if name == "tv":
+                self.verify_owned_tv_heap()
+            else:
+                self.configure_owned_heap()
             for apk in (self.apk, self.test_apk):
                 self.adb("install", "-r", "-g", str(apk), timeout=120)
             self.adb("tcpip", "5555")
@@ -603,8 +647,10 @@ class Lane:
             self.flush()
             for cls, methods in (("DisplayTest", DISPLAY), ("LocalAdbTest", LOCAL), ("RecordingTest", RECORDING)):
                 for method in methods:
-                    if name == "tv" and method == "rotationContinuesInASecondFile":
-                        self.case["skips"].append({"class": cls, "method": method, "reason": "Android TV has a fixed landscape display; phone orientation transition tested in phone case"})
+                    reason = inapplicable_test(name, cls, method)
+                    if reason:
+                        self.case["skips"].append({"class": cls, "method": method, "reason": reason})
+                        self.flush()
                         continue
                     timeout = 660 if method == "outputLargerThanTheHeapIsStreamedNotQueued" else 260 if method == "beyondNativeLimit" else 180
                     self.instrument(cls, method, timeout)
