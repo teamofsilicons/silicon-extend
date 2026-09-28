@@ -9,9 +9,14 @@ use std::time::{Duration, Instant};
 use extend_agent::drivers::{terminal, windows::WindowsDriver};
 use extend_driver::{Driver, Invocation, Output, cancel::CancelToken};
 use serde_json::{Value, json};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, WAIT_TIMEOUT, WPARAM};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+};
+use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEINPUT, SendInput, VK_LBUTTON,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
@@ -30,6 +35,18 @@ fn opt_in() -> PathBuf {
 
 fn save(path: impl AsRef<Path>, value: &Value) {
     std::fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+}
+
+fn mouse_input(flags: MOUSE_EVENT_FLAGS) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dwFlags: flags,
+                ..Default::default()
+            },
+        },
+    }
 }
 
 fn fixture_command(test: &str, dir: &Path) -> Command {
@@ -107,6 +124,9 @@ impl OwnedWindow {
         let hwnd = self.handle("window");
         unsafe {
             let requested = SetForegroundWindow(hwnd).as_bool();
+            // Some runner images deny programmatic activation. Bootstrap through an actual
+            // click on our own title bar, never by changing Windows' global focus policy.
+            let bootstrap = (!requested && GetForegroundWindow() != hwnd).then(|| self.click_title_bar());
             // Cross-process activation is asynchronous. WM_NULL acknowledges the fixture's
             // message queue before we inspect focus; it never changes another window.
             // https://devblogs.microsoft.com/oldnewthing/20161118-00/?p=94745
@@ -130,6 +150,7 @@ impl OwnedWindow {
                     "requested": requested, "acknowledged": acknowledged,
                     "expected_window": hwnd.0 as usize, "expected_pid": self.process.id(),
                     "foreground_window": foreground.0 as usize, "foreground_pid": foreground_pid,
+                    "title_bar_bootstrap": bootstrap,
                 }),
             );
             assert!(
@@ -141,6 +162,157 @@ impl OwnedWindow {
                 foreground, hwnd,
                 "owned fixture must have input focus (request accepted: {requested})"
             );
+        }
+    }
+
+    fn click_title_bar(&self) -> Value {
+        let hwnd = self.handle("window");
+        let log = self
+            .evidence
+            .join(format!("focus-bootstrap-{}.json", uuid::Uuid::new_v4()));
+        // This guard restores only our window's topmost flag and the pointer even if a
+        // fixture assertion panics. The owning Child guard subsequently closes the window.
+        struct Restore<'a> {
+            hwnd: HWND,
+            cursor: POINT,
+            cursor_safe: &'a std::cell::Cell<bool>,
+        }
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = SetWindowPos(
+                        self.hwnd,
+                        Some(HWND_NOTOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                    if self.cursor_safe.get() {
+                        let _ = SetCursorPos(self.cursor.x, self.cursor.y);
+                    }
+                }
+            }
+        }
+        struct ReleaseClick {
+            pending: bool,
+            log: PathBuf,
+        }
+        impl Drop for ReleaseClick {
+            fn drop(&mut self) {
+                if self.pending {
+                    // A partial SendInput result can have inserted only LEFTDOWN. This guard
+                    // drops before Restore, so release it while the pointer is still over the
+                    // owned title bar. Do not panic again if failure evidence cannot be saved.
+                    let sent =
+                        unsafe { SendInput(&[mouse_input(MOUSEEVENTF_LEFTUP)], std::mem::size_of::<INPUT>() as i32) };
+                    let evidence = json!({"cleanup_sent_mouse_up": sent, "accepted": sent == 1,
+                        "cursor_restored": false, "reason": "leave cursor in place on an incomplete click; fixture teardown follows"});
+                    let _ = std::fs::write(&self.log, evidence.to_string());
+                    eprintln!("owned title-bar mouse-up cleanup: {evidence}");
+                }
+            }
+        }
+        unsafe {
+            let mut cursor = POINT::default();
+            GetCursorPos(&mut cursor).unwrap();
+            let cursor_safe = std::cell::Cell::new(true);
+            let _restore = Restore {
+                hwnd,
+                cursor,
+                cursor_safe: &cursor_safe,
+            };
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+            .unwrap();
+            let mut title = TITLEBARINFO {
+                cbSize: std::mem::size_of::<TITLEBARINFO>() as u32,
+                ..Default::default()
+            };
+            GetTitleBarInfo(hwnd, &mut title).unwrap();
+            let rect = title.rcTitleBar;
+            assert!(
+                rect.right > rect.left && rect.bottom > rect.top,
+                "owned title bar must be visible"
+            );
+            let point = POINT {
+                x: rect.left + (rect.right - rect.left) / 2,
+                y: rect.top + (rect.bottom - rect.top) / 2,
+            };
+            let hit = WindowFromPoint(point);
+            let mut hit_pid = 0;
+            GetWindowThreadProcessId(hit, Some(&mut hit_pid));
+            let packed = LPARAM(((point.x as u32 & 0xffff) | ((point.y as u32 & 0xffff) << 16)) as isize);
+            let title_bar = message(hwnd, WM_NCHITTEST, WPARAM(0), packed);
+            let mut evidence = json!({"expected_window": hwnd.0 as usize, "expected_pid": self.process.id(),
+                "hit_window": hit.0 as usize, "hit_pid": hit_pid, "hit_test": title_bar,
+                "x": point.x, "y": point.y, "sent_inputs": 0});
+            save(&log, &evidence);
+            assert_eq!(
+                hit, hwnd,
+                "only our exact top-level window may receive the bootstrap click"
+            );
+            assert_eq!(
+                hit_pid,
+                self.process.id(),
+                "bootstrap point must belong to our fixture process"
+            );
+            assert_eq!(title_bar, HTCAPTION as usize, "bootstrap point must be the title bar");
+            assert_eq!(self.handle("window"), hwnd, "fixture ownership must remain unchanged");
+            SetCursorPos(point.x, point.y).unwrap();
+            let mut actual = POINT::default();
+            GetCursorPos(&mut actual).unwrap();
+            assert_eq!(
+                (actual.x, actual.y),
+                (point.x, point.y),
+                "pointer must reach the verified point"
+            );
+            assert_eq!(
+                WindowFromPoint(actual),
+                hwnd,
+                "recheck the hit immediately before input"
+            );
+            let mut release = ReleaseClick {
+                pending: false,
+                log: log.with_extension("cleanup.json"),
+            };
+            let sent = SendInput(
+                &[mouse_input(MOUSEEVENTF_LEFTDOWN), mouse_input(MOUSEEVENTF_LEFTUP)],
+                std::mem::size_of::<INPUT>() as i32,
+            );
+            release.pending = sent > 0;
+            cursor_safe.set(sent == 0);
+            evidence["sent_inputs"] = json!(sent);
+            save(&log, &evidence);
+            assert_eq!(sent, 2, "Windows must accept both owned-title-bar input events");
+            let until = Instant::now() + Duration::from_secs(5);
+            let mouse_down = || GetAsyncKeyState(i32::from(VK_LBUTTON.0)) as u16 & 0x8000 != 0;
+            while (GetForegroundWindow() != hwnd || mouse_down()) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            evidence["foreground_window"] = json!(GetForegroundWindow().0 as usize);
+            evidence["mouse_button_released"] = json!(!mouse_down());
+            save(&log, &evidence);
+            assert_eq!(
+                GetForegroundWindow(),
+                hwnd,
+                "owned title-bar click must activate the fixture"
+            );
+            assert!(
+                !mouse_down(),
+                "bootstrap mouse-up must be processed before restoring the pointer"
+            );
+            release.pending = false;
+            cursor_safe.set(true);
+            evidence
         }
     }
 
@@ -265,6 +437,11 @@ async fn run(driver: &WindowsDriver, session: &str, dir: &Path, command: &str, a
 async fn owned_window_snapshot_click_type_and_capture() {
     let out = opt_in().join(format!("window-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&out).unwrap();
+    // Match the driver's coordinate space before fixture hit testing. This affects this
+    // disposable test process only, never Windows' global display or focus settings.
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
     let sentinel = OwnedWindow::start(&out.join("sentinel")).await;
     let target = OwnedWindow::start(&out.join("target")).await;
     target.foreground();

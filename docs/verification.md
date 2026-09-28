@@ -62,8 +62,13 @@ native tests on x64. Its ZIP passed static audit with SHA256
 `2c5d8e42ddbace9b59315fa2ee7a6c322bfcd00ce7286e062e6224609b5eb9e3`.
 ARM64 passed unit/integration and terminal containment, but programmatic window activation was
 denied even though its message queue acknowledged the request; no product-driver input ran.
-This corrects the earlier asynchronous-focus hypothesis below. An owned-title-bar bootstrap is
-being prepared for a rerun. Evidence: `target/windows-ci-assessment/run-36361296700-native-review.json`
+This corrects the earlier asynchronous-focus hypothesis below. The fixture now bootstraps denied
+activation by clicking its actual title-bar rectangle, verifying the exact HWND/PID and caption
+hit before input. Partial-click cleanup releases the button before any cursor restoration;
+incomplete clicks leave the cursor in place for fixture teardown. Product-driver and sentinel
+assertions remain unchanged. Both Windows cross-checks, strict x64 Clippy and independent review
+pass; native ARM64 verification still needs a rerun. Evidence:
+`target/windows-ci-assessment/run-36361296700-native-review.json`
 and `target/release-candidate/ci-a9bede490e55fa0494e6c9a8674fc0f74dea056a/`.
 
 ## 2026-09-28 — native Windows runtime and signed Mac Keychain migration
