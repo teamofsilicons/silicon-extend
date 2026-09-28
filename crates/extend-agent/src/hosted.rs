@@ -797,6 +797,128 @@ mod tests {
         assert!(reg.driver(&bob).is_ok());
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn removing_unprobed_ios_alias_preserves_other_alias_recording() {
+        // Only device discovery and the external engine are simulated. Recording ownership,
+        // saved sessions, artifact collection and detach cleanup use the production iOS driver.
+        struct ReportedIos {
+            inner: Box<dyn Driver>,
+            udid: String,
+        }
+        #[async_trait]
+        impl Driver for ReportedIos {
+            async fn probe(&self) -> Probe {
+                Probe {
+                    os: DeviceOs::Ios,
+                    os_version: None,
+                    model: None,
+                    capabilities: vec![Capability::ScreenRecord],
+                    missing: vec![],
+                    setup: Setup::complete(),
+                    engine_version: None,
+                    online: true,
+                    awake: None,
+                    sleep_state: None,
+                    hardware_id: Some(self.udid.clone()),
+                }
+            }
+            async fn run(&self, inv: Invocation<'_>) -> Output {
+                self.inner.run(inv).await
+            }
+            async fn session_ended(&self, session: &str) {
+                self.inner.session_ended(session).await;
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("engine.sh");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+root=$(dirname "$0")
+printf '%s\n' "$*" >> "$root/calls.log"
+if [ "$1" = record ] && [ "$2" = start ]; then
+  printf 'owned-bob-recording' > "$3"
+fi
+echo '{"success":true,"data":{"message":"ok"}}'
+"#,
+        )
+        .unwrap();
+        // Unique synthetic physical-style UDID: no real device or runner can match it.
+        let udid = format!("00008110-{:016X}", Uuid::new_v4().as_u128() as u64);
+        let alice: DeviceId = "0000aaaa".parse().unwrap();
+        let bob: DeviceId = "0000bbbb".parse().unwrap();
+        let records = [
+            record(alice.as_str(), DeviceOs::Ios, "Alice", Some(&udid), Some("7c1e09ab")),
+            record(bob.as_str(), DeviceOs::Ios, "Bob", Some(&udid), Some("0d44e1f2")),
+        ];
+        std::fs::write(dir.path().join("attached.json"), serde_json::to_vec(&records).unwrap()).unwrap();
+        let factory: DriverFactory = Arc::new(|device| {
+            Ok(Box::new(ReportedIos {
+                udid: device.address.clone().unwrap(),
+                inner: extend_hosted::driver_for(device)?,
+            }))
+        });
+        let reg = HostedRegistry::new(
+            factory,
+            dir.path().to_owned(),
+            vec!["/bin/sh".into(), script.to_string_lossy().into_owned()],
+        );
+        reg.restore();
+        reg.probe_these(std::slice::from_ref(&bob), true).await;
+        let bob_driver = reg.driver(&bob).unwrap();
+        assert!(!Arc::ptr_eq(&reg.driver(&alice).unwrap(), &bob_driver));
+        let work = dir.path().join("work");
+        let start = vec!["start".into(), "kept".into()];
+        let invocation = Invocation {
+            id: Uuid::new_v4(),
+            session_id: "b0b",
+            command: "record",
+            args: &start,
+            attachments: &[],
+            workdir: &work,
+            timeout: Duration::from_secs(5),
+            cancel: extend_driver::cancel::CancelToken::new(),
+        };
+        assert!(bob_driver.run(invocation.clone()).await.ok);
+        let recording = dir.path().join("0000bbbb/recordings/extend-b0b/kept.mp4");
+        assert!(recording.is_file());
+        assert!(!dir.path().join("0000aaaa/ios.json").exists());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("0000bbbb/ios.json")).unwrap()).unwrap();
+        assert!(saved["sessions"]["extend-b0b"].is_object());
+
+        // Exactly the agent's removed:true branch, before Alice's probe can merge the drivers.
+        if let Some(driver) = reg.remove(&alice) {
+            driver.session_ended("").await;
+        }
+        assert!(Arc::ptr_eq(&bob_driver, &reg.driver(&bob).unwrap()));
+        let stop = vec!["stop".into()];
+        let result = bob_driver
+            .run(Invocation {
+                args: &stop,
+                ..invocation
+            })
+            .await;
+        assert!(result.ok, "{:?}", result.error);
+        let video = result
+            .files
+            .iter()
+            .find(|f| f.kind == extend_protocol::model::FileKind::Recording);
+        assert!(
+            video.is_some(),
+            "removing Alice lost Bob's recording artifact: {result:?}"
+        );
+        assert_eq!(std::fs::read(&video.unwrap().path).unwrap(), b"owned-bob-recording");
+        let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+        assert!(
+            !calls
+                .lines()
+                .any(|line| line.starts_with("close ") && line.contains("extend-b0b"))
+        );
+        bob_driver.session_ended("b0b").await;
+    }
+
     #[tokio::test]
     async fn a_wake_request_is_watched_until_it_ends_or_expires() {
         let dir = tempfile::tempdir().unwrap();

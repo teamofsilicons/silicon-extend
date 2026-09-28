@@ -12,16 +12,17 @@
 //!
 //! While the runner runs, iOS shows "Automation Running" on the device, so the runner runs only
 //! while a Silicon is working on the device: setup closes the session `prepare` ran in, every session
-//! end closes the session's device-engine session and makes sure the runner is gone, and a runner no
-//! command has used for a minute is stopped, inside a live session too (see "The runner" below).
+//! end closes the session's device-engine session and stops the runner once no other driver owner is
+//! active. A runner no command has used for a minute is stopped, inside a live session too (see
+//! "The runner" below).
 //!
 //! Development only: with `EXTEND_HOSTED_ALLOW_SIMULATOR=1`, a Simulator UDID is accepted in place
 //! of a physical device, so the command path can be exercised without an iPhone.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -927,8 +928,8 @@ pub(crate) fn to_output(command: &str, stdout: &str, stderr: &str, exit_ok: bool
 // While the device engine's XCTest runner runs on an iPhone or iPad, iOS shows "Automation Running" on
 // it. Apple draws that for every XCTest UI automation, and nothing may hide it, so Extend keeps
 // the runner to the time a Silicon is working on the device: setup stops the runner `prepare`
-// starts, every session end closes the session's device-engine session (which stops the runner) and
-// makes sure the runner is gone, and every driver looks after its device every 20 s, connected or
+// starts, every session end closes the session's device-engine session and stops the runner once no
+// other driver owner is active, and every driver looks after its device every 20 s, connected or
 // not: a runner no command has used for a minute is stopped (inside a live session too), as is any
 // runner with no session live. A runner the device engine is still starting is never stopped: the device engine
 // would take that for a failed start and build and start another, with no session to close it.
@@ -1358,9 +1359,12 @@ struct DeviceShared {
     guard: Arc<tokio::sync::Mutex<()>>,
     /// When the last command on the device finished (none yet in this run of Extend: `None`).
     last_command: Mutex<Option<Instant>>,
-    /// Recording path per session, from `record start` to `record stop`. The runner records, so
-    /// it keeps running while a recording does.
-    recordings: Mutex<HashMap<String, PathBuf>>,
+    /// Recording path per driver state directory and engine session. Aliases (and worlds) can
+    /// reuse a session id; ending one must not discard another owner's recording.
+    recordings: Mutex<HashMap<(PathBuf, String), PathBuf>>,
+    /// Drivers restored for one UDID can be distinct until discovery merges their aliases.
+    /// Weak references let removed/dropped owners disappear without keeping a runner alive.
+    owners: Mutex<Vec<Weak<Inner>>>,
 }
 
 impl DeviceShared {
@@ -1374,7 +1378,47 @@ impl DeviceShared {
     }
 
     fn recording(&self) -> bool {
-        !self.recordings.lock().unwrap().is_empty()
+        let owners = self.live_owners();
+        let dirs: HashSet<_> = owners.iter().map(|owner| &owner.device.state_dir).collect();
+        let mut recordings = self.recordings.lock().unwrap();
+        recordings.retain(|(owner, _), _| dirs.contains(owner));
+        !recordings.is_empty()
+    }
+
+    fn remember(&self, owner: &Arc<Inner>) {
+        let weak = Arc::downgrade(owner);
+        let mut owners = self.owners.lock().unwrap();
+        owners.retain(|o| o.strong_count() > 0);
+        if !owners.iter().any(|o| o.ptr_eq(&weak)) {
+            owners.push(weak);
+        }
+    }
+
+    fn live_owners(&self) -> Vec<Arc<Inner>> {
+        let mut owners = self.owners.lock().unwrap();
+        owners.retain(|o| o.strong_count() > 0);
+        owners.iter().filter_map(Weak::upgrade).collect()
+    }
+
+    /// Called while holding the UDID guard, never while holding the owner-list mutex across
+    /// saved-state reads. Recent sessions or an in-progress setup retain the shared runner;
+    /// stale saved sessions and dropped drivers cannot block cleanup indefinitely.
+    fn another_owner_active(&self, owner_dir: &Path) -> bool {
+        let owners = self.live_owners();
+        let mut active = HashMap::new();
+        for owner in owners {
+            if owner.device.state_dir == owner_dir {
+                continue;
+            }
+            // Rebuilt drivers for the same saved state are one resource owner. An in-progress
+            // setup can belong to either live driver, so combine that state instead of taking
+            // whichever weak reference happened to be registered first.
+            let busy = active
+                .entry(owner.device.state_dir.clone())
+                .or_insert_with(|| owner.has_live_sessions());
+            *busy |= matches!(*owner.prepare.lock().unwrap(), Prepare::Running);
+        }
+        active.values().any(|active| *active)
     }
 }
 
@@ -1516,6 +1560,9 @@ impl IosDriver {
             version: Mutex::new(None),
             runner_seen: Mutex::new(None),
         });
+        if let Some(udid) = inner.udid() {
+            shared(&udid).remember(&inner);
+        }
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let me = Arc::downgrade(&inner);
             rt.spawn(async move {
@@ -1769,6 +1816,11 @@ impl Inner {
                 false
             }
         };
+        shared(udid)
+            .recordings
+            .lock()
+            .unwrap()
+            .remove(&(self.device.state_dir.clone(), name.to_owned()));
         let _ = std::fs::remove_dir_all(self.device.state_dir.join("recordings").join(name));
         if answered {
             self.update_saved(|s| {
@@ -1778,11 +1830,10 @@ impl Inner {
         answered
     }
 
-    /// Ends Extend sessions on this device: `session_id`'s, or, when it is empty, every one this
-    /// driver has open (the device is no longer carried, or the service has no session on it).
-    /// Closes their device-engine sessions (which finishes a running recording first and, on an
-    /// iPhone or iPad, stops the runner) and makes sure the runner is gone. The caller holds the
-    /// device's guard.
+    /// Ends this driver's Extend sessions: `session_id`'s, or, when it is empty, every one this
+    /// driver owns (its carried pair was removed, or the service has no session on that pair).
+    /// Closes their device-engine sessions and recordings, then stops the runner only when no
+    /// other driver owner is active. The caller holds the device's guard.
     async fn end_sessions(&self, udid: &str, session_id: &str) {
         let saved = self.read_saved();
         let names: Vec<String> = if session_id.is_empty() {
@@ -1795,16 +1846,16 @@ impl Inner {
             let dev = shared(udid);
             let mut recordings = dev.recordings.lock().unwrap();
             if session_id.is_empty() {
-                recordings.clear();
+                recordings.retain(|(owner, _), _| owner != &self.device.state_dir);
             } else {
-                recordings.remove(session_id);
+                recordings.remove(&(self.device.state_dir.clone(), session_name(session_id)));
             }
         }
         for name in &names {
             self.close_session(udid, name).await;
         }
-        // The device is no longer carried (or has no session): a setup session an interrupted
-        // install left open goes too, since no later look after the device may come.
+        // This driver's pair is no longer carried (or has no session): a setup session its
+        // interrupted install left open goes too, since this driver may not tend the device again.
         if session_id.is_empty()
             && self.read_saved().setup_open
             && self
@@ -1814,15 +1865,16 @@ impl Inner {
         {
             self.update_saved(|s| s.setup_open = false);
         }
-        // the device engine's close already stopped an iPhone's runner; a Simulator's it keeps warm on
-        // purpose, and here it goes too, as on the device, unless it is still starting (then the
-        // next look after the device stops it).
+        // The engine may keep a Simulator's runner warm. Stop any remaining runner only when no
+        // other driver owner needs it; a runner still starting is left for the next tend pass.
         let wait = if used_runner && !is_simulator_udid(udid) {
             RUNNER_EXIT_WAIT
         } else {
             Duration::ZERO
         };
-        stop_runner(udid, wait).await;
+        if !shared(udid).another_owner_active(&self.device.state_dir) {
+            stop_runner(udid, wait).await;
+        }
     }
 
     /// Looks after the device, every [`TEND_EVERY`] whether or not the Mac is connected, and only
@@ -1860,7 +1912,9 @@ impl Inner {
             self.close_session(&udid, name).await;
         }
         let live = !self.read_saved().sessions.is_empty();
-        if runner_should_stop(live, dev.unused_for(), dev.recording()) {
+        if runner_should_stop(live, dev.unused_for(), dev.recording())
+            && !dev.another_owner_active(&self.device.state_dir)
+        {
             stop_runner(&udid, Duration::ZERO).await;
         }
     }
@@ -2108,6 +2162,7 @@ impl Inner {
             );
         };
         let udid = dev.udid.clone();
+        shared(&udid).remember(self);
         let details = devicectl(&["device", "info", "details", "--device", &udid, "--timeout", "15"]).await;
         let (online, devmode) = match &details {
             Ok(v) => (true, parse_developer_mode(v)),
@@ -2248,6 +2303,7 @@ impl Driver for IosDriver {
             Err(e) => return invalid(e),
         };
         let dev = shared(&udid);
+        dev.remember(me);
         let _held = tokio::select! {
             biased;
             _ = inv.cancel.cancelled() => {
@@ -2301,10 +2357,14 @@ impl Driver for IosDriver {
             dev.recordings
                 .lock()
                 .unwrap()
-                .insert(inv.session_id.to_owned(), path.clone());
+                .insert((me.device.state_dir.clone(), session.clone()), path.clone());
         }
         if plan.record_stop
-            && let Some(src) = dev.recordings.lock().unwrap().remove(inv.session_id)
+            && let Some(src) = dev
+                .recordings
+                .lock()
+                .unwrap()
+                .remove(&(me.device.state_dir.clone(), session))
         {
             move_recording(&src, inv.workdir);
         }
@@ -2331,9 +2391,9 @@ impl Driver for IosDriver {
         out
     }
 
-    /// A session ended (an empty id: every session on the device, which is no longer carried or
-    /// has no session live). Its device-engine session is closed and the runner is made sure to be
-    /// gone, so "Automation Running" leaves the device with the session.
+    /// A session ended (an empty id: every session owned by this driver). Its device-engine
+    /// session is closed; the shared runner stops once no other driver owner is active, so
+    /// removing one carried pair cannot interrupt another pair's work on the same device.
     async fn session_ended(&self, session_id: &str) {
         let me = &self.inner;
         let Some(udid) = me.udid() else { return };
@@ -3242,6 +3302,8 @@ for word in "$@"; do
   previous="$word"
 done
 case "$command" in
+  record)
+    if [ "$2" = start ]; then printf 'owned-recording' > "$3"; fi ;;
   open)
     if [ -f '{root}/slow-open' ]; then exec sleep 60; fi
     if [ -f '{root}/open-error.json' ]; then cat '{root}/open-error.json'; exit 1; fi
@@ -3306,13 +3368,24 @@ echo '{{"success":true,"data":{{"message":"ok"}}}}'
         }
 
         async fn run(&self, session: &str, command: &'static str, args: &[&str]) -> Output {
+            self.run_driver(&self.driver, session, command, args).await
+        }
+
+        fn alias(&self, name: &str) -> IosDriver {
+            let mut device = self.driver.inner.device.clone();
+            device.device_id = name.into();
+            device.state_dir = self.dir.path().join(name);
+            IosDriver::new(device)
+        }
+
+        async fn run_driver(&self, driver: &IosDriver, session: &str, command: &'static str, args: &[&str]) -> Output {
             let work = self
                 .dir
                 .path()
                 .join("work")
                 .join(uuid::Uuid::new_v4().simple().to_string());
             let args = s(args);
-            self.driver
+            driver
                 .run(Invocation {
                     id: uuid::Uuid::new_v4(),
                     session_id: session,
@@ -3461,6 +3534,93 @@ echo '{{"success":true,"data":{{"message":"ok"}}}}'
         // A session that ran nothing is still closed when it ends.
         fake.driver.session_ended("d4").await;
         assert_eq!(fake.calls().last(), Some(&call("close", "extend-d4")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn alias_cleanup_closes_owned_work_and_preserves_other_owners_recordings() {
+        let bob = FakeAgentDevice::new();
+        let alice = bob.alias("alice");
+        let unrelated = FakeAgentDevice::new();
+        assert!(bob.run("live", "record", &["start", "bob"]).await.ok);
+        assert!(bob.run_driver(&alice, "stale", "record", &["start", "alice"]).await.ok);
+        assert!(unrelated.run("live", "record", &["start", "elsewhere"]).await.ok);
+        alice.inner.update_saved(|s| s.setup_open = true);
+        let alice_file = alice.inner.record_dir("stale").join("alice.mp4");
+        let bob_file = bob.driver.inner.record_dir("live").join("bob.mp4");
+        assert!(alice_file.is_file() && bob_file.is_file());
+
+        alice.session_ended("").await;
+        assert!(alice.inner.read_saved().sessions.is_empty());
+        assert!(!alice.inner.read_saved().setup_open);
+        assert!(!alice_file.exists());
+        assert!(bob_file.exists());
+        assert!(bob.open_sessions().contains_key("extend-live"));
+        assert!(bob.calls().contains(&call("close", "extend-stale")));
+        assert!(bob.calls().contains(&call("close", SETUP_SESSION)));
+        assert!(!bob.calls().contains(&call("close", "extend-live")));
+        let dev = shared(&bob.udid);
+        {
+            let _held = dev.guard.lock().await;
+            assert!(dev.recording());
+            assert!(dev.another_owner_active(&alice.inner.device.state_dir));
+        }
+        for fake in [&bob, &unrelated] {
+            let out = fake.run("live", "record", &["stop"]).await;
+            assert!(out.ok, "{:?}", out.error);
+            let video = out.files.iter().find(|f| f.kind == FileKind::Recording).unwrap();
+            assert_eq!(std::fs::read(&video.path).unwrap(), b"owned-recording");
+            fake.driver.session_ended("").await;
+            assert!(fake.open_sessions().is_empty());
+            assert!(!shared(&fake.udid).recording());
+        }
+        let _held = dev.guard.lock().await;
+        assert!(!dev.another_owner_active(&alice.inner.device.state_dir));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runner_ownership_includes_nonrecording_sessions_but_expires_and_drops() {
+        let bob = FakeAgentDevice::new();
+        let alice = bob.alias("alice");
+        assert!(bob.run("live", "open", &["Settings"]).await.ok);
+        let dev = shared(&bob.udid);
+        {
+            let _held = dev.guard.lock().await;
+            assert!(!dev.recording());
+            assert!(dev.another_owner_active(&alice.inner.device.state_dir));
+        }
+        alice.session_ended("").await;
+        assert!(bob.open_sessions().contains_key("extend-live"));
+        assert!(!bob.calls().contains(&call("close", "extend-live")));
+
+        let _held = dev.guard.lock().await;
+        bob.driver.inner.update_saved(|s| {
+            s.sessions.get_mut("extend-live").unwrap().last_used_ms =
+                now_ms().saturating_sub(STALE_SESSION_AFTER.as_millis() as u64 + 1);
+        });
+        assert!(!dev.another_owner_active(&alice.inner.device.state_dir));
+        // A rebuilt driver's setup is live work even when an earlier driver's saved session is
+        // stale. An abandoned setup_open marker alone is not an unbounded runner lease.
+        let rebuilt = IosDriver::new(bob.driver.inner.device.clone());
+        *rebuilt.inner.prepare.lock().unwrap() = Prepare::Running;
+        assert!(dev.another_owner_active(&alice.inner.device.state_dir));
+        *rebuilt.inner.prepare.lock().unwrap() = Prepare::Done;
+        bob.driver.inner.update_saved(|s| s.setup_open = true);
+        assert!(!dev.another_owner_active(&alice.inner.device.state_dir));
+        bob.driver.inner.note_session("extend-live", true);
+        assert!(dev.another_owner_active(&alice.inner.device.state_dir));
+        drop(_held);
+        drop(rebuilt);
+        assert!(bob.run("live", "record", &["start", "orphan"]).await.ok);
+        let _held = dev.guard.lock().await;
+        assert!(dev.recording());
+        drop(bob.driver);
+        assert!(!dev.another_owner_active(&alice.inner.device.state_dir));
+        assert!(
+            !dev.recording(),
+            "a dropped owner cannot leave a permanent recording lease"
+        );
     }
 
     #[cfg(unix)]

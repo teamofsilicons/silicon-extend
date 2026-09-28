@@ -32,6 +32,27 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — restored iOS alias cleanup
+
+Removing an unprobed restored alias could discard another alias's recording before their drivers
+merged. A deterministic regression using the production HostedRegistry and IosDriver failed on
+the old code: Record Stop returned no video even though the second alias's recording file existed.
+Only external engine execution and discovery were simulated; this is not physical iOS proof.
+
+Recordings now belong to a driver state directory and engine session. Weak references track
+other live driver owners for the same UDID, preserving their recent sessions, recordings and
+active setup when an alias ends. Dropped drivers and expired saved sessions do not retain the
+runner indefinitely. Cleanup still closes the removed owner's sessions and setup. Existing
+merged-driver alias behavior is unchanged.
+
+The full hosted library passed 80 tests with four existing ignores, the agent library passed
+205 with one existing ignore, and the fake-service integration passed 27: **312 distinct passes,
+zero failures**. Strict all-target Clippy for both crates, workspace formatting and diff checks
+passed. The owned temporary fixtures and processes were cleaned; no database, AVD or physical
+device was used. Evidence and source hashes are in `target/ios-alias-cleanup-verification/`.
+The changed native source requires refreshed desktop artifacts before release; earlier signed
+Mac and Linux/Windows packages must not be described as built from this source.
+
 ## 2026-09-28 — carried-device reconnect reconciliation
 
 The final audit confirmed two historical reconnect defects. A host that missed a carried
@@ -54,12 +75,14 @@ pass. All 105 databases belonging to the generated test role, the role and priva
 directory were removed; all 825 baseline databases were preserved. Evidence is in
 `target/{carried-reconnect-removal-verification,carried-online-freshness-verification,service-carried-reconnect-verification}/`.
 
-The preceding `1f90579` candidate passed all five CI jobs, a fresh 75/75 provider run and six
-backend smoke groups. These new service changes need their own candidate refresh. Native review
-also reproduced a separate iOS cleanup bug before restored aliases share one driver: removing
-one alias can discard another alias's recording from Record Stop's returned files. That native
-fix and its artifact verification remain in progress; the service fake-device checks do not
-close it.
+The preceding `1f90579` candidate passed all five CI jobs. The refreshed immutable backend from
+`d8ce933` passed six startup/authentication/schema/non-root smoke groups; its image digest is
+`sha256:e8d5b4f28d77c8895494e209fb009532d4ec24c87e370e2b96db9d7958d0a83d`.
+A fresh pinned IAM/Briefcase/Ting run at the same commit passed **75/75**, with all exact-owned
+containers, network, database, process and ports cleaned. Baseline resources were preserved.
+Evidence is in `target/release-candidate/backend-d8ce933/` and
+`target/realiam-1.1-verification/d8ce933-final/`. The separate native alias cleanup is recorded
+above; service fake-device checks do not substitute for it. No candidate has been deployed.
 
 ## 2026-09-28 — API 29 native attempt blocked by emulator storage
 

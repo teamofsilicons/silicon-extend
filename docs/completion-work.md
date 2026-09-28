@@ -73,8 +73,9 @@ also passes nine device-gap tests, with an old-code negative control. CI `363683
 passed six smoke groups. The next audit fixed offline carried removals and stale carried online
 reports across reconnects. Their combined full service run reports 177 passes with one explicit
 ignore (the real-provider entry separately returns early without its fixture); strict service
-Clippy and scoped formatting pass. Refresh the candidate for these service changes and the
-separately reproduced native iOS alias-cleanup bug before release.
+Clippy and scoped formatting pass. The immutable `d8ce933` backend passed all six smoke groups,
+and its fresh provider run passed 75/75. The separately reproduced native iOS alias-cleanup bug
+is fixed with 312 relevant tests passing; refresh affected desktop artifacts before release.
 No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
@@ -99,8 +100,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   checks passing. Physical carried-device capture and hardware linking remain open. Local Linux
   app/full-screen recordings survive host banner/name updates.
   Native review also reproduced cleanup of one restored iOS alias discarding another alias's
-  recording before their drivers merge. Ownership-aware cleanup and candidate verification are
-  in progress; the earlier metadata-continuity check does not cover this removal ordering.
+  recording before their drivers merge. Ownership-aware cleanup now passes the old-code negative
+  control and 312 relevant tests, with strict Clippy and formatting. Candidate verification is
+  pending; the earlier metadata-continuity check does not cover this removal ordering.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
@@ -315,7 +317,8 @@ verifiers and not fixed.
   - *Fixed 2026-09-28:* reconnect greetings now include exact-host carried removals, renames send
     current carried metadata, and online reports belong to the host connection that sent them.
     Old-code negative controls and the 177-pass service run cover these service defects. The
-    separate native iOS alias-cleanup issue remains in the current 1.1 engineering list above.
+    separate native iOS alias-cleanup fix passes 312 relevant tests; desktop artifact refresh and
+    the physical gates remain in the current 1.1 engineering list above.
   - There is no route for a host computer to revoke a device it carries (the desktop window sends
     the Carbon to the website instead).
 - **Service: identity.** Extend uses `silicon-iam-client` 4.0.0 from crates.io, and parses IAM 4
