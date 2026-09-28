@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 use extend_agent::drivers::{terminal, windows::WindowsDriver};
 use extend_driver::{Driver, Invocation, Output, cancel::CancelToken};
 use serde_json::{Value, json};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WAIT_TIMEOUT, WPARAM};
+use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, GetSysColorBrush};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
 };
@@ -339,6 +341,33 @@ fn message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> usize {
     result
 }
 
+unsafe extern "system" fn fixture_window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_DESTROY {
+        unsafe { PostQuitMessage(0) };
+        return LRESULT(0);
+    }
+    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+}
+
+struct FixtureClass {
+    name: PCWSTR,
+    instance: HINSTANCE,
+    window: Option<HWND>,
+}
+
+impl Drop for FixtureClass {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(hwnd) = self.window
+                && IsWindow(Some(hwnd)).as_bool()
+            {
+                let _ = DestroyWindow(hwnd);
+            }
+            let _ = UnregisterClassW(self.name, Some(self.instance));
+        }
+    }
+}
+
 #[test]
 #[ignore = "child fixture, launched only by the opt-in owned-window test"]
 fn fixture_window() {
@@ -349,9 +378,32 @@ fn fixture_window() {
     // Standard Win32 controls expose real UI Automation providers. A separate process is used
     // because the production driver deliberately excludes its own windows from app snapshots.
     unsafe {
+        // A STATIC top-level control returns HTTRANSPARENT, so Windows deliberately skips it
+        // during mouse hit testing. Use a real application class with DefWindowProc's caption
+        // handling; the child EDIT and BUTTON keep their standard accessibility providers.
+        // https://learn.microsoft.com/en-us/windows/win32/controls/about-static-controls
+        let class_name = w!("ExtendNativeFixtureWindow");
+        let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(fixture_window_proc),
+            hInstance: instance,
+            lpszClassName: class_name,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+            hbrBackground: GetSysColorBrush(COLOR_WINDOW),
+            ..Default::default()
+        };
+        let class_atom = RegisterClassW(&class);
+        assert_ne!(class_atom, 0, "register the owned fixture window class");
+        // The name is a static UTF-16 literal and the delegate is a function in this process;
+        // both outlive the window. On forced Child cleanup Windows reclaims this local class.
+        let mut registered = FixtureClass {
+            name: class_name,
+            instance,
+            window: None,
+        };
         let window = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
+            class_name,
             PCWSTR(wide.as_ptr()),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             80,
@@ -360,10 +412,11 @@ fn fixture_window() {
             300,
             None,
             None,
-            None,
+            Some(instance),
             None,
         )
         .unwrap();
+        registered.window = Some(window);
         let edit = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
@@ -403,6 +456,7 @@ fn fixture_window() {
             &json!({
                 "pid": std::process::id(), "title": title,
                 "window": window.0 as usize, "edit": edit.0 as usize, "check": check.0 as usize,
+                "window_class": "ExtendNativeFixtureWindow", "class_atom": class_atom,
                 "foreground_requested": foreground_requested, "parent_foreground_allowed": parent_allowed,
             }),
         );
