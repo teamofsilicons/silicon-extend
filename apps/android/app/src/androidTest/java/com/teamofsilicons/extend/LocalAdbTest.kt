@@ -267,7 +267,9 @@ class LocalAdbTest {
             delay(2000)
             val recording = withTimeout(15000) { executor.execute("s1", AdbCommand.Record("stop"), emptyList()).artifacts.single() }
             assertTrue("MP4 must contain real frames", recording.file.length() > 1000)
-            assertEquals("ftyp", recording.file.inputStream().use { it.readNBytes(8).copyOfRange(4, 8).toString(Charsets.US_ASCII) })
+            val header = ByteArray(8)
+            DataInputStream(recording.file.inputStream()).use { it.readFully(header) }
+            assertEquals("ftyp", header.copyOfRange(4, 8).toString(Charsets.US_ASCII))
             executor.delivered("s1", recording)
 
             android.util.Log.i("ExtendAdbTest", "session end")
