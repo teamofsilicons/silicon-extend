@@ -171,6 +171,48 @@ def parse_instrumentation(text, class_name, method):
     assert "INSTRUMENTATION_FAILED" not in text and "FAILURES!!!" not in text
 
 
+def completed_native_assertion(text, class_name, method):
+    """Only a completed, isolated test-body assertion may leave later tests runnable."""
+    cls = class_name.removeprefix(PKG + ".")
+    # These tests release their native resources in finally/@After. The silent
+    # connection test closes its TestManager only on success, so it stays fatal.
+    audited = ((cls == "DisplayTest" and method in DISPLAY) or
+               (cls == "RecordingTest" and method in RECORDING) or
+               (cls == "LocalAdbTest" and method in {"anImpostorDaemonIsRefused", "realLocalDaemon"}))
+    if not audited or "INSTRUMENTATION_FAILED" in text:
+        return False
+    statuses = re.findall(r"(?m)^INSTRUMENTATION_STATUS_CODE: (-?\d+)$", text)
+    if statuses != ["1", "-2"] or not re.search(r"(?m)^INSTRUMENTATION_CODE: -1$", text):
+        return False
+    if not re.search(r"(?m)^Tests run: 1,\s+Failures: 1$", text):
+        return False
+    for field, value in (("class", class_name), ("test", method)):
+        if re.findall(r"(?m)^INSTRUMENTATION_STATUS: " + field + r"=(.*)$", text) != [value, value]:
+            return False
+    stack = re.findall(r"(?ms)^INSTRUMENTATION_STATUS: stack=(.*?)(?=^INSTRUMENTATION_STATUS:|\Z)", text)
+    if len(stack) != 1 or not stack[0].startswith("java.lang.AssertionError"):
+        return False
+    # This previously observed body assertion is inside realLocalDaemon's
+    # try/finally. Its earlier connection/setup assertions remain fatal.
+    if cls == "LocalAdbTest" and method == "realLocalDaemon" and not stack[0].startswith(
+            "java.lang.AssertionError: The detached process carries its session's tag\n"):
+        return False
+    if re.search(r"Suppressed:|Caused by:|\.(?:setUp|tearDown)\(|Timeout|timed out|Connection failed|Stream closed", stack[0]):
+        return False
+    return bool(re.search(re.escape(class_name) + r"(?:\$|\.)" + re.escape(method) + r"(?:\$|\()", stack[0]))
+
+
+def multi_result(text, returncode, expected):
+    summaries = re.findall(r"(?m)^(?:\d\d:\d\d:\d\d )?SCENARIO DONE: (\d+) passed, (\d+) failed$", text)
+    assert len(summaries) == 1 and returncode in (0, 1), "Multi fixture did not finish normally"
+    passed, failed = map(int, summaries[0])
+    assert "scenario crashed" not in text, "Multi fixture setup/transport failed"
+    assert (returncode == 0) == (failed == 0), "Multi exit status disagrees with its checks"
+    result = "passed" if passed == expected and failed == 0 else "failed"
+    assert result != "passed" or "FAIL" not in text, "Multi output contains an uncounted failure"
+    return {"passed": passed, "failed": failed, "expected": expected, "returncode": returncode, "result": result}
+
+
 def tcp_listeners(text):
     assert "local_address" in text, "Cannot prove whether guest adbd listens; no speculative bridge"
     listeners = []
@@ -609,7 +651,7 @@ class Lane:
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL); process.wait(timeout=5)
 
-    def wait(self, process, timeout, authorize=False):
+    def wait(self, process, timeout, authorize=False, check=True):
         end = time.monotonic() + timeout
         next_prompt = 0
         while process.poll() is None:
@@ -621,7 +663,8 @@ class Lane:
                 self.allow_owned_adb_dialog(end)
                 next_prompt = time.monotonic() + 2
             time.sleep(min(.25, max(0, end - time.monotonic())))
-        assert process.returncode == 0, f"Owned child failed with exit{process.returncode}"
+        if check:
+            assert process.returncode == 0, f"Owned child failed with exit{process.returncode}"
 
     def until(self, label, predicate, timeout=30):
         end = time.monotonic() + timeout
@@ -718,7 +761,21 @@ class Lane:
                 "-e", "long_recording", "true", TEST_RUNNER]
         process = self.spawn(argv, logfile)
         self.wait(process, timeout, authorize)
-        parse_instrumentation(logfile.read_text(), full, method)
+        text = logfile.read_text()
+        try:
+            parse_instrumentation(text, full, method)
+        except AssertionError:
+            if not completed_native_assertion(text, full, method):
+                raise
+            # The runner completed @After/finally normally; still require the
+            # same live owned emulator before attempting any independent test.
+            self.assert_avd()
+            assert self.adb("shell", "id", "-u", timeout=5) == "2000", "Lost native test transport"
+            self.case["instrumentation"].append({"class": cls, "method": method, "result": "failed",
+                                                  "failure": "Completed JUnit assertion; see exact native log",
+                                                  "continuation": "Audited finally/@After completed; next test force-stops and unbinds the owned app"})
+            self.flush()
+            return
         self.case["instrumentation"].append({"class": cls, "method": method, "result": "passed"})
         self.flush()
 
@@ -1044,12 +1101,11 @@ class Lane:
             multi_out = self.caseout / "multi"
             multi = self.spawn(["sh", self.harness_root / MULTI_FIXTURE_FILES[0], "multi"], self.caseout / "multi.log",
                                {"SERIAL": self.serial, "ANDROID_SERIAL": self.serial, "PORT": str(port), "OUT": str(multi_out),
-                                "APK": str(self.apk), "ADB": self.adb_bin, "FORCE_TV": "0"})
-            self.wait(multi, 480)
+                                "APK": str(self.apk), "ADB": self.adb_bin, "FORCE_TV": "0",
+                                "EXTEND_NATIVE_CORRELATION_DIR": str(self.caseout)})
+            self.wait(multi, 480, check=False)
             text = (self.caseout / "multi.log").read_text()
-            assert f"SCENARIO DONE: {multi_checks} passed, 0 failed" in text, text[-4000:]
-            assert "FAIL" not in text, text[-4000:]
-            self.case["multi"] = {"passed": multi_checks, "failed": 0}
+            self.case["multi"] = multi_result(text, multi.returncode, multi_checks)
             self.flush()
             for cls, methods in (("DisplayTest", DISPLAY), ("LocalAdbTest", LOCAL), ("RecordingTest", RECORDING)):
                 for method in methods:
@@ -1060,13 +1116,20 @@ class Lane:
                         continue
                     timeout = 660 if method == "outputLargerThanTheHeapIsStreamedNotQueued" else 260 if method == "beyondNativeLimit" else 180
                     self.instrument(cls, method, timeout)
-            self.media()
+            media_methods = {"nativeDurationLimit", "stillScreenSegmentsKeepTheirWallClockLength",
+                             "burstThenStillKeepsLaterSegmentsInPlace", "beyondNativeLimit"}
+            if all(any(item["class"] == "RecordingTest" and item["method"] == method and item["result"] == "passed"
+                       for item in self.case["instrumentation"]) for method in media_methods):
+                self.media()
+            else:
+                self.case["recording_media"] = {"result": "not_run", "reason": "A required native recording producer failed; no stale media accepted"}
             # Native tests change the process; reset only its a11y binding, then start the
             # separately paired reconnect fixture. Never launch or reconnect during recovery.
             self.adb("shell", "settings", "put", "secure", "enabled_accessibility_services", "null")
             self.adb("shell", "settings", "put", "secure", "enabled_accessibility_services", f"{PKG}/{PKG}.a11y.ExtendAccessibilityService")
             self.adb("shell", "settings", "put", "secure", "accessibility_enabled", "1")
             self.reconnect()
+            assert self.case["multi"]["result"] == "passed" and all(item["result"] == "passed" for item in self.case["instrumentation"]), "Recorded multi/native assertion failures remain release failures"
             self.case["result"] = "passed"
         except BaseException as error:
             case_error = error
@@ -1134,7 +1197,7 @@ def export_evidence(out):
     top = {"report.json", "cleanup.json", "verified-images.json", "runner-image.txt", "disk-before.txt",
            "sdk-installed.txt", "sdk-license-inventory.json", "emulator-version.txt", "acceleration.txt", "adb-version.txt",
            "provenance.json", "source-before.sha256", "source-after.sha256", "source-before.json", "source-after.json", "adapter.sha256", "ffmpeg-version.txt"}
-    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt", "tcp-control.log", "install-results.json", "host-adb-lifecycle.jsonl"}
+    native = {"native-screen.png", "emulator.log", "multi.log", "multi-transition.json", "multi-transition.png", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt", "tcp-control.log", "install-results.json", "host-adb-lifecycle.jsonl"}
     copied = []
     for path in sorted(out.rglob("*")):
         if not path.is_file() or public in path.parents:

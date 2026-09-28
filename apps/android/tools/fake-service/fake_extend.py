@@ -37,6 +37,7 @@ import base64
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import secrets
 import struct
@@ -68,6 +69,64 @@ async def adb(*args):
     p = await asyncio.create_subprocess_exec(exe, "-s", serial, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     out, _ = await p.communicate()
     return out
+
+
+async def transition_diagnostic(snapshot, click, snapshot_at):
+    """Observe a failed transition on the disposable CI emulator; never act or retry."""
+    directory = os.environ.get("EXTEND_NATIVE_CORRELATION_DIR")
+    serial = os.environ.get("ANDROID_SERIAL")
+    if not directory:
+        return
+    if os.environ.get("GITHUB_ACTIONS") != "true" or serial not in {"emulator-5560", "emulator-5562"}:
+        log("diagnostic unavailable: not the owned API29 CI fixture")
+        return
+    out = Path(directory)
+    if not out.is_absolute() or not out.is_dir():
+        log("diagnostic unavailable: output directory was not prepared by the fixture")
+        return
+    evidence = {"snapshot_at_unix_s": snapshot_at, "started_at_unix_s": time.time(),
+                "scope": "Read-only correlation after the original failed check; no input or test retry",
+                "snapshot": {key: snapshot.get(key) for key in ("ok", "text", "output", "error")},
+                "click": {key: click.get(key) for key in ("ok", "text", "output", "error")}}
+
+    async def read(name, args, limit):
+        process = None
+        item = {"started_at_unix_s": time.time()}
+        try:
+            exe = os.environ["ADB"]
+            process = await asyncio.create_subprocess_exec(exe, "-s", serial, *args,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            data, error = await asyncio.wait_for(process.communicate(), 5)
+            item.update(returncode=process.returncode, bytes=len(data), stderr=error.decode(errors="replace")[:500])
+            if process.returncode != 0 or len(data) > limit:
+                item["error"] = "Read failed or exceeded the diagnostic limit"
+            elif name == "pixels":
+                assert data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24, "Invalid screenshot"
+                width, height = struct.unpack(">II", data[16:24])
+                assert 0 < width <= 1280 and 0 < height <= 1280
+                (out / "multi-transition.png").write_bytes(data)
+                item.update(width=width, height=height, sha256=hashlib.sha256(data).hexdigest())
+            else:
+                item["focus"] = [line.strip() for line in data.decode(errors="replace").splitlines()
+                    if re.search(r"mCurrentFocus=|mFocusedApp=|mTopFocusedDisplayId=|mInputMethodTarget=", line)]
+        except Exception as error:
+            item["error"] = type(error).__name__ + ": " + str(error)[:500]
+        finally:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.communicate()
+            item["ended_at_unix_s"] = time.time()
+            item["host_child_reaped"] = process is None or process.returncode is not None
+        return name, item
+
+    try:
+        evidence.update(await asyncio.gather(read("pixels", ("exec-out", "screencap", "-p"), 4*1024*1024),
+                                            read("window", ("shell", "dumpsys", "window", "windows"), 512*1024)))
+        evidence["finished_at_unix_s"] = time.time()
+        (out / "multi-transition.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    except Exception as error:
+        # Diagnostics must never replace the original scenario failure.
+        log("transition diagnostic failed:", type(error).__name__)
 
 
 # ───────────────────────────── WebSocket ─────────────────────────────
@@ -196,6 +255,7 @@ class State:
         self.failures = 0
         self.passes = 0
         self.scenario_started = False
+        self.diagnostic_tasks = []
 
     @property
     def live(self):
@@ -1034,7 +1094,11 @@ async def multi_scenario(sc: Scenario):
     await sc.cmd("wait", ["1000"])
     snap = await sc.cmd("snapshot")
     t = snap.get("text") or ""
-    sc.check("the shared-device note comes first", "Silicons any Carbon gives access to can use this whole device, including what others leave on it" in t, t)
+    note_present = sc.check("the shared-device note comes first", "Silicons any Carbon gives access to can use this whole device, including what others leave on it" in t, t)
+    if not note_present and os.environ.get("EXTEND_NATIVE_CORRELATION_DIR"):
+        # Runs beside the original next actions; no extra input, sleep, snapshot,
+        # or deadline extension can turn the failed assertion into a pass.
+        st.diagnostic_tasks.append(asyncio.create_task(transition_diagnostic(snap, r, time.time())))
     await sc.drain_events()
     r = await sc.cmd("find", ["Show a pairing code", "click"])
     sc.check("tap Show a pairing code", r["ok"], r)
@@ -1209,6 +1273,8 @@ async def run_scenario(st: State):
         st.failures += 1
         log("FAIL scenario crashed:", e)
     log(f"SCENARIO DONE: {st.passes} passed, {st.failures} failed")
+    if st.diagnostic_tasks:
+        await asyncio.gather(*st.diagnostic_tasks, return_exceptions=True)
     await asyncio.sleep(0.5)
     os._exit(1 if st.failures else 0)
 
