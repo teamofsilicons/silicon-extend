@@ -15,6 +15,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -22,7 +23,8 @@ import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
-SOURCE = "cf43b539c5d9ae91e363172436bb8d1d677d2441"
+SOURCE = "2a1dbad43f1997e6f8c7dd38df92e38c6f075a33"
+RUNTIME_REFERENCE = "cf43b539c5d9ae91e363172436bb8d1d677d2441"
 MULTI_FIXTURE_FILES = tuple("apps/android/tools/fake-service/" + name for name in
                             ("run-emulator-test.sh", "fake_extend.py", "make_test_png.py"))
 PKG = "com.teamofsilicons.extend"
@@ -230,6 +232,15 @@ def inapplicable_test(profile, cls, method):
     return None
 
 
+def tv_tcp_trace_command(console_port):
+    assert console_port == next(case[4] for case in CASES if case[0] == "tv")
+    # IPv4 loopback Ethernet/IP/TCP base headers total54 bytes. Never retain
+    # packet payload, TCP options beyond that cap, a PCAP, or promiscuous traffic.
+    control = (f"ip and host 127.0.0.1 and tcp port {console_port + 1} and "
+               "(tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0)")
+    return ["/usr/bin/tcpdump", "-i", "lo", "-p", "-nn", "-tt", "-l", "-s", "54", "-c", "256", control]
+
+
 class Lane:
     def __init__(self, args, run_id, avds):
         self.root, self.sdk, self.out = args.root.resolve(), args.sdk.resolve(), args.out.resolve()
@@ -243,7 +254,8 @@ class Lane:
         avds.mkdir(mode=0o700)
         self.state = {"run_id": run_id, "avd_home": str(avds), "avd_home_created": True, "processes": []}
         self.handles, self.logs = [], []
-        self.report = {"source_head": SOURCE, "adapter_commit": os.environ.get("GITHUB_SHA"), "cases": [],
+        self.report = {"source_head": SOURCE, "runtime_reference": RUNTIME_REFERENCE,
+                       "adapter_commit": os.environ.get("GITHUB_SHA"), "cases": [],
                        "qualification": "Native debug APKs on API29 phone and actual Android TV emulators; no signed-upgrade or physical-device claim"}
         self.flush()
 
@@ -308,6 +320,56 @@ class Lane:
                                        "public_log": "Lifecycle lines only; raw packet payloads excluded"}
         self.flush()
         return ["-debug", ",".join(tags)]
+
+    def start_tv_tcp_trace(self):
+        if self.case["name"] != "tv":
+            return None
+        evidence = {"started_at_unix_s": time.time(), "scope": "Owned IPv4 loopback emulator ADB port only; SYN/FIN/RST headers",
+                    "payload_or_pcap": False, "snaplen": 54, "packet_limit": 256}
+        self.case["tcp_control_trace"] = evidence
+        process = None
+        try:
+            assert os.environ.get("GITHUB_ACTIONS") == "true" and platform.system() == "Linux"
+            assert os.geteuid() != 0, "Capture must run as the normal owned runner process"
+            executable = Path("/usr/bin/tcpdump")
+            metadata = executable.stat()
+            assert not executable.is_symlink() and stat.S_ISREG(metadata.st_mode)
+            assert metadata.st_uid == 0 and not metadata.st_mode & 0o022
+            capability = self.cmd(["getcap", executable], timeout=5).stdout.strip()
+            assert capability == "/usr/bin/tcpdump cap_net_raw=ep", capability
+            version = self.cmd([executable, "--version"], timeout=5)
+            evidence.update(executable=str(executable), sha256=digest(executable), capability=capability,
+                            version=(version.stdout + version.stderr).strip(), command=tv_tcp_trace_command(self.console_port))
+            assert re.search(r"tcpdump version \d+\.\d+", evidence["version"])
+            log = self.caseout / "tcp-control.log"
+            process = self.spawn(evidence["command"], log)
+            def listening():
+                text = log.read_text(errors="replace")
+                return process.poll() is None and "listening on lo" in text and "EN10MB" in text
+            self.until("owned passive IPv4 loopback trace readiness", listening, 5)
+            evidence["ready"] = True
+            return process
+        except (AssertionError, OSError, subprocess.SubprocessError, TimeoutError) as error:
+            evidence["diagnostic_error"] = str(error)
+            self.stop_tv_tcp_trace(process)
+            return None
+        finally:
+            self.flush()
+
+    def stop_tv_tcp_trace(self, process):
+        if process is None:
+            return
+        evidence = self.case["tcp_control_trace"]
+        try:
+            self.stop(process)
+            text = (self.caseout / "tcp-control.log").read_text(errors="replace")
+            evidence.update(stopped_at_unix_s=time.time(), stopped=process.poll() is not None, returncode=process.returncode,
+                            counters=[line for line in text.splitlines() if re.fullmatch(r"\d+ packets? (?:captured|received by filter|dropped by kernel)", line)],
+                            packet_limit_reached=bool(re.search(r"(?m)^256 packets captured$", text)))
+        except (OSError, subprocess.SubprocessError) as error:
+            evidence["stop_diagnostic_error"] = str(error)
+        finally:
+            self.flush()
 
     def spawn(self, command, logfile, extra_env=None):
         log = logfile.open("w"); self.logs.append(log)
@@ -700,12 +762,16 @@ class Lane:
                 self.adb("install", "-r", "-g", str(apk), timeout=120)
             self.adb("tcpip", "5555")
             self.until("legacy adb control", lambda: self.adb("shell", "id", "-u") == "2000")
-            self.transport("initial")
-            self.tv_adb_key_metadata("before-initial-authorization")
+            tcp_trace = self.start_tv_tcp_trace()
             try:
-                self.instrument("LocalAdbTest", "connectLocalForService", timeout=90, authorize=True)
+                self.transport("initial")
+                self.tv_adb_key_metadata("before-initial-authorization")
+                try:
+                    self.instrument("LocalAdbTest", "connectLocalForService", timeout=90, authorize=True)
+                finally:
+                    self.tv_adb_key_metadata("after-initial-authorization")
             finally:
-                self.tv_adb_key_metadata("after-initial-authorization")
+                self.stop_tv_tcp_trace(tcp_trace)
             # Existing multi harness grants required access and checks the actual product frames.
             multi_out = self.caseout / "multi"
             multi = self.spawn(["sh", self.harness_root / MULTI_FIXTURE_FILES[0], "multi"], self.caseout / "multi.log",
@@ -800,7 +866,7 @@ def export_evidence(out):
     top = {"report.json", "cleanup.json", "verified-images.json", "runner-image.txt", "disk-before.txt",
            "sdk-installed.txt", "sdk-license-inventory.json", "emulator-version.txt", "acceleration.txt", "adb-version.txt",
            "provenance.json", "source-before.sha256", "source-after.sha256", "source-before.json", "source-after.json", "adapter.sha256", "ffmpeg-version.txt"}
-    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt"}
+    native = {"native-screen.png", "emulator.log", "multi.log", "logcat.txt", "reconnect-results.json", "avd-config.ini", "heap-setup.json", "emulator-debug-tags.txt", "tcp-control.log"}
     copied = []
     for path in sorted(out.rglob("*")):
         if not path.is_file() or public in path.parents:

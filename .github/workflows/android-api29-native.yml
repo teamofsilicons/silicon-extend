@@ -27,8 +27,9 @@ jobs:
           - {profile: phone, image: 'system-images;android-29;default;x86_64'}
           - {profile: tv, image: 'system-images;android-29;android-tv;x86'}
     env:
-      # Product source stays fixed; the separate harness checkout records its own commit.
-      EXTEND_API29_SOURCE: cf43b539c5d9ae91e363172436bb8d1d677d2441
+      # Native test source includes the API29 assertion fix; runtime is equivalent to cf43.
+      EXTEND_API29_SOURCE: 2a1dbad43f1997e6f8c7dd38df92e38c6f075a33
+      EXTEND_API29_RUNTIME_REF: cf43b539c5d9ae91e363172436bb8d1d677d2441
       EXTEND_API29_PROFILE: ${{ matrix.profile }}
       EXTEND_API29_IMAGE: ${{ matrix.image }}
     steps:
@@ -48,7 +49,9 @@ jobs:
       - name: Exact product and native test source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: cf43b539c5d9ae91e363172436bb8d1d677d2441
+          ref: 2a1dbad43f1997e6f8c7dd38df92e38c6f075a33
+          # Include the exact runtime ancestor for the equivalence guard below.
+          fetch-depth: 8
           path: source
           persist-credentials: false
       - uses: actions/setup-java@v4
@@ -67,6 +70,30 @@ jobs:
           head = git('rev-parse', 'HEAD')
           assert head == os.environ['EXTEND_API29_SOURCE']
           assert git('status', '--porcelain=v1') == ''
+          runtime_ref = os.environ['EXTEND_API29_RUNTIME_REF']
+          assert runtime_ref == 'cf43b539c5d9ae91e363172436bb8d1d677d2441'
+          assert head == '2a1dbad43f1997e6f8c7dd38df92e38c6f075a33'
+          agent = 'crates/extend-agent/src/drivers/agent_device.rs'
+          native_test = 'apps/android/app/src/androidTest/java/com/teamofsilicons/extend/LocalAdbTest.kt'
+          added = {'.github/android-sdk-licenses/android-sdk-preview-license',
+                   '.github/workflows/android-api29-native.yml', 'e2e/api29-native-runner.py'}
+          fixtures = {native_test, 'apps/android/tools/fake-service/fake_extend.py'}
+          def tree(ref):
+              rows = subprocess.check_output(['git', 'ls-tree', '-r', '-z', ref], cwd=root).split(b'\0')
+              return {path.decode(): meta.decode() for row in rows if row for meta, path in [row.split(b'\t', 1)]}
+          base_tree, source_tree = tree(runtime_ref), tree(head)
+          changed = {p for p in base_tree.keys() | source_tree.keys() if base_tree.get(p) != source_tree.get(p)}
+          assert changed == added | fixtures | {agent}
+          assert source_tree.keys() - base_tree.keys() == added and not base_tree.keys() - source_tree.keys()
+          assert all(source_tree[p].startswith('100644 blob ') for p in changed)
+          assert all(base_tree[p].startswith('100644 blob ') for p in fixtures | {agent})
+          marker = b'#[cfg(test)]\nmod tests'
+          blobs = [subprocess.check_output(['git', 'show', f'{ref}:{agent}'], cwd=root) for ref in (runtime_ref, head)]
+          assert all(blob.count(marker) == 1 for blob in blobs)
+          assert blobs[0].split(marker)[0] == blobs[1].split(marker)[0]
+          runtime_prefix_sha256 = hashlib.sha256(blobs[0].split(marker)[0]).hexdigest()
+          native_test_sha256 = hashlib.sha256((root / native_test).read_bytes()).hexdigest()
+          assert native_test_sha256 == '8aad38682fd142d609f32513d1736ef075f97887d21ad2fb25dbffc82218b2fc'
           names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
           hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names if name}
           aggregate = hashlib.sha256(''.join(name + '\0' + hashes[name] + '\n' for name in sorted(hashes)).encode()).hexdigest()
@@ -76,6 +103,8 @@ jobs:
                      'apps/android/tools/fake-service/fake_extend.py',
                      'apps/android/tools/fake-service/make_test_png.py']
           report = {'source_head': head, 'tracked_file_count': len(hashes), 'tracked_hashes': hashes,
+                    'runtime_reference': runtime_ref, 'runtime_source_equivalent': True,
+                    'runtime_prefix_sha256': runtime_prefix_sha256, 'native_test_sha256': native_test_sha256,
                     'aggregate_sha256': aggregate, 'adapter_commit': git('rev-parse', 'HEAD', cwd=harness),
                     'adapter_hashes': {name: hashlib.sha256((harness / name).read_bytes()).hexdigest() for name in adapter},
                     'github_run_id': os.environ['GITHUB_RUN_ID'], 'github_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -101,6 +130,21 @@ jobs:
           printf '%s\n' "ImageOS=${ImageOS:-unknown}" "ImageVersion=${ImageVersion:-unknown}" > "$EXTEND_API29_OUT/runner-image.txt"
           df -k / "$RUNNER_TEMP" > "$EXTEND_API29_OUT/disk-before.txt"
           python3 -c 'import os,shutil; assert shutil.disk_usage(os.environ["RUNNER_TEMP"]).free >= 18*1024**3, "Need 18 GiB before SDK/build/AVD work"'
+      - name: Prepare TV-only passive loopback diagnostics
+        if: matrix.profile == 'tv'
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_OS" = Linux
+          sudo apt-get install -y tcpdump libcap2-bin
+          # Only this disposable VM's distro executable can open raw sockets. The
+          # normal-user owned child uses no promiscuous mode or NET_ADMIN capability.
+          test -f /usr/bin/tcpdump
+          test ! -L /usr/bin/tcpdump
+          sudo setcap cap_net_raw=ep /usr/bin/tcpdump
+          test "$(getcap /usr/bin/tcpdump)" = '/usr/bin/tcpdump cap_net_raw=ep'
       - name: Reuse the release owner's previously accepted TV SDK license
         if: matrix.profile == 'tv'
         shell: bash
