@@ -32,6 +32,22 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — preserve sessions when IAM cannot confirm membership
+
+A refused login could end an existing session as `left_team` when the membership lookup returned
+`Unknown`, for example because no other signed-in Team member could read the directory. Extend
+now ends these sessions only after a definite `Gone` answer. The refused call remains refused;
+uncertainty preserves the existing session and grant, and confirmed membership loss still ends
+the session and removes the grant after the existing second-reader check.
+
+The regression fails against the old guard (`ended` instead of `active`). All seven membership
+tests pass after the fix. The same session stays active, runs a command with its original valid
+login after the uncertain refusal, and subsequently ends when membership loss is confirmed.
+Strict service Clippy, formatting and diff checks pass. All eight exact test databases were
+removed and the pre-existing database set was unchanged. Evidence:
+`target/left-team-unknown-verification/`. This changes Extend's handling of IAM responses, not
+IAM's authorization policy or API.
+
 ## 2026-09-28 — device-request retries and final-candidate checks
 
 `request_send` previously folded a recent same-reason request before checking its idempotency key.

@@ -134,10 +134,10 @@ async fn on_refused(state: &Shared, parts: &mut Parts, err: AppError) -> AppErro
     }
 }
 
-/// IAM still accepts the Silicon's login but it no longer reaches `team`. Unless IAM says it is
-/// still an active member there, its sessions in `team` end (on doubt, as before). Its grants in
-/// `team` are deleted only when IAM definitely says it left and a second reader confirms
-/// (crate::membership): a Silicon that signed in with another Team selected keeps them.
+/// IAM still accepts the Silicon's login but it no longer reaches `team`. Its sessions there end
+/// only when IAM definitely says it left; a missing reader or unclear answer ends nothing. Its
+/// grants are deleted only once a second reader confirms (crate::membership). A login approved
+/// for another Team still gets its original refusal, without ending an existing session.
 async fn left_team(
     state: &Shared,
     world: &World,
@@ -156,14 +156,12 @@ async fn left_team(
         .iam
         .membership(team, silicon, reader.as_ref().map(|(p, _)| p), sel)
         .await;
-    if answer == crate::iam::Membership::Active {
-        // Still a member: this login just doesn't reach the team (another team was selected when
-        // approving it). The Silicon fixes that by signing in again; nothing ends.
+    if answer != crate::iam::Membership::Gone {
+        // A login's Team reach is not proof of membership loss. Active and unknown answers keep
+        // existing sessions and grants; the refused call itself remains refused.
         return err;
     }
-    if answer == crate::iam::Membership::Gone
-        && let Some((r, _)) = &reader
-    {
+    if let Some((r, _)) = &reader {
         let (st, world, silicon, team, first) = (
             state.clone(),
             world.clone(),

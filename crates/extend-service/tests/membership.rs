@@ -201,7 +201,7 @@ async fn the_sweep_needs_two_answers_ten_minutes_apart() {
 }
 
 #[tokio::test]
-async fn a_refused_login_ends_sessions_on_doubt_but_deletes_only_on_a_confirmed_gone() {
+async fn a_refused_login_keeps_sessions_on_doubt_and_ends_them_only_when_gone() {
     let env = start().await;
     let iam = env.state.local_iam.clone().unwrap();
     let alice = login(&env, "c:alice").await;
@@ -226,12 +226,12 @@ async fn a_refused_login_ends_sessions_on_doubt_but_deletes_only_on_a_confirmed_
     .await;
     assert_eq!(st, 403);
     assert_eq!(end_reason(&env, &alice, "acme", &sid).await, None);
-    // Nobody can tell (strict readers, no other member of globex signed in): the session ends on
-    // doubt, and the grant stays.
+    // Nobody can tell (strict readers, no other member of globex signed in): the call is still
+    // refused, but neither the existing session nor its grant ends on doubt.
     iam.set_reader_mode(ReaderMode::Strict);
     env.state.auth_cache.forget(&[]).await;
     let _ = api(&env, "GET", "/api/v1/auth/me", &acme_only, Some("acme"), None).await;
-    let (st, _) = api(
+    let (st, refusal) = api(
         &env,
         "GET",
         &format!("/api/v1/sessions/{sid}"),
@@ -241,16 +241,39 @@ async fn a_refused_login_ends_sessions_on_doubt_but_deletes_only_on_a_confirmed_
     )
     .await;
     assert_eq!(st, 403);
+    assert_eq!(refusal["data"]["code"], "not_a_team_member");
+    let (st, current) = api(
+        &env,
+        "GET",
+        &format!("/api/v1/sessions/{sid}"),
+        &alice,
+        Some("acme"),
+        None,
+    )
+    .await;
+    assert_eq!(st, 200);
+    assert_eq!(current["data"]["state"], "active");
+    assert!(current["data"]["end_reason"].is_null());
+    assert!(!refusal["data"]["message"].as_str().unwrap().contains("left_team"));
+    assert_eq!(grants(&env, &d).await, vec![("si:chef".into(), "globex".into())]);
+    // The same live session still accepts its original login, which reaches globex.
+    let (st, result) = api(
+        &env,
+        "POST",
+        &format!("/api/v1/sessions/{sid}/commands"),
+        &chef,
+        Some("globex"),
+        Some(json!({"type": "command", "data": {"command": "screenshot", "args": []}})),
+    )
+    .await;
+    assert_eq!(st, 200, "{result}");
     assert_eq!(
-        end_reason(&env, &alice, "acme", &sid).await.as_deref(),
-        Some("left_team")
+        result["data"]["ok"], true,
+        "the preserved session must still execute commands: {result}"
     );
-    assert_eq!(grants(&env, &d).await.len(), 1);
-    // chef really left globex, and two readers say so: the grant goes.
+    // chef really left globex, and two readers say so: the same session ends and the grant goes.
     iam.set_reader_mode(ReaderMode::Open);
     let both = login(&env, "si:chef").await;
-    let (_, s) = session(&env, &both, "globex", &d).await;
-    let sid = s["data"]["session_id"].as_str().unwrap().to_owned();
     let carol = login(&env, "c:carol").await;
     let _ = api(&env, "GET", "/api/v1/auth/me", &carol, Some("globex"), None).await;
     let _ = api(&env, "GET", "/api/v1/auth/me", &alice, Some("globex"), None).await;

@@ -103,7 +103,8 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Re-run the final feature and requirements audit and integration checks after those fixes;
   reconcile the proposed API/CLI/technical drafts, build/sign/notarize the final artifacts, then
   publish/deploy and verify the release. None of this checkpoint updates installed apps.
-  The audit fixed full-test-environment pairing retries and device-request response replay;
+  The audit fixed full-test-environment pairing retries, device-request response replay, and
+  sessions incorrectly ending when IAM cannot confirm Team membership;
   negative controls and passing service checks are recorded in `verification.md`. Concurrent
   duplicate device requests and concurrent idempotency-key reservation remain open. Include all
   final service changes in CI and the deployment image.
@@ -258,11 +259,9 @@ verifiers and not fixed.
     runs only the files Extend touched; `check:affected` and the layering gates can't run from this
     nested checkout.
 - **Service: sessions, requests, files.**
-  - *(verifier)* A `not_a_team_member` refusal ends the Silicon's sessions in that team as
-    `left_team` whenever IAM doesn't confirm membership, including when IAM can't answer (no other
-    member's login held, or it expired); a Silicon still in the team whose login was approved for
-    another team would lose its sessions with the wrong reason. End only when IAM says "not a
-    member", as the logout path already does.
+  - *(Corrected 2026-09-28)* A `not_a_team_member` refusal now ends existing sessions only when
+    IAM confirms membership is gone. Unknown answers preserve sessions and grants while keeping
+    the current call refused; seven membership checks and the old-code negative control verify it.
   - *(Corrected 2026-09-28)* `request_send` now checks the idempotency key before repeat folding
     and live-holder validation. Sequential retries replay the stored status/body even after the
     holder changes. Concurrent identical sends and same-key reservation are still not serialized.
