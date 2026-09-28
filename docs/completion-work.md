@@ -15,8 +15,8 @@ first.*
 ## 1.1.0
 
 1.1.0 (devices belong to the Carbons who paired them, several Carbons per device, waking a device,
-setup retry, the device engine named Silicon Extend) is built and its automated suites pass together
-(`verification.md`, "1.1.0 integration"); its design is
+setup retry, the device engine named Silicon Extend) is built, with integrated checks and later
+fixes recorded in `verification.md`; its design is
 `extend-publish-drafts/release-1.1.0/design.json` with the Carbon's decisions of 2026-09-27.
 
 ### Needs the Carbon
@@ -37,7 +37,9 @@ setup retry, the device engine named Silicon Extend) is built and its automated 
 - The obsolete Ting request is now marked superseded in `docs/requests/ting-app-level-types.md`.
   No maintainer message was sent; the unsupported per-Team premise is not a release dependency.
 - **A Carbon's logout** uses the accepted `access_removed` behavior (`TECHNICAL.md` C9 and the
-  saved design); verification remains required, but the reason does not need another decision.
+  saved design). The service tests for direct logout and the IAM logout event pass, including
+  ending only that Carbon's side. No new Carbon decision is needed; native terminal-process
+  cleanup across the physical OS matrix remains a separate verification gate below.
 
 ### Release access checked on 2026-09-28
 
@@ -63,7 +65,10 @@ identify Windows' initial privacy-setup screen in WWAHost.exe covering the fixtu
 ownership guard sent zero input; native ARM64 GUI verification requires a prepared runner.
 CI `36363764146` passed all five jobs. Run `36365195398` at `cc81c37` passed four jobs but exposed
 a test-fixture readiness race in Rust. The fixed state/connection barriers and a separate privacy
-assertion correction now pass all 79 affected tests; fresh CI is required.
+assertion correction now pass all 79 affected tests. CI `36366926600` passed four jobs and the
+21 core-gap tests, then exposed a separate membership audit-completion race in its fixture.
+The bounded completion fix passes all seven membership tests. A carried rename propagation fix
+also passes nine device-gap tests, with an old-code negative control. Fresh CI is required.
 The full service suite reported 172 passes with one explicit ignore (the real-provider entry
 point separately returns early without its fixture); strict Clippy/formatting pass. The dedicated
 real IAM/Briefcase/Ting lane now passes 75/75 at `cc81c37`, retaining the first-time Carbon sharing
@@ -87,8 +92,10 @@ Remaining from the Carbon's final requests, before the release gates below:
   GNOME/KDE behavior remains open. TV bottom-centre placement and
   ten-second hiding pass on the owned API 34 emulator; physical TV verification remains.
   Carried-device controls, durable offline choices, shared aliases and restart timing are built;
-  a metadata-only attach preserves the live driver, but still needs a carried-device
-  real-recording check. Local Linux app/full-screen recordings survive host banner/name updates.
+  a metadata-only attach preserves the live driver. A real hosted iPad-simulator recording now
+  survives six rename-only and six banner updates, with video-content/decode/download and Stop
+  checks passing. Physical carried-device capture and hardware linking remain open. Local Linux
+  app/full-screen recordings survive host banner/name updates.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
@@ -147,14 +154,16 @@ Remaining from the Carbon's final requests, before the release gates below:
   the schema-only rehearsal does not prove restoring actual production data from a full backup.
 - The released 1.0 CLI/current CLI rehearsal passes, including shared saved logins and sessions,
   mixed-version takeover/Stop and all 119 current CLI checks. The actual 1.0 website-source/current
-  website rehearsal also passes 13 checks on one origin with the login retained. The actual Mac
-  1.0 native agent/current agent rehearsal passes seven groups: saved identity/credential/session,
-  native Stop and two-Carbon terminal rules, using an isolated headless file-store fixture.
+  website rehearsal also passes 13 checks on one origin with the login retained. The signed
+  1.0/signed 1.1 Mac native-agent rehearsal now passes ten groups: saved identity/session,
+  native Stop, both Carbon links' credential rotation and reconnect, cleared fallback credentials,
+  and first-pair-only terminal rules, using an isolated headless file-store fixture.
   The signed Android upgrade and native two-Carbon TV-emulator lane passed twelve checks, with
   pairing/credential/session continuity and the native sharing/Stop/removal behavior recorded.
   A separate signed native Mac Keychain upgrade now passes eight groups, including migration,
   reconnect, saved session and Stop, with exact owned-account cleanup. These do not close
-  physical TV, installed Mac GUI upgrade, credential rotation or carried-device linking checks.
+  physical TV, Android credential rotation, installed Mac GUI upgrade or physical carried-device
+  linking checks.
 
 ### Physical devices
 
@@ -295,7 +304,8 @@ verifiers and not fixed.
     regression-tested, alongside all eight device-gap checks.
   - A host that was offline when a device it carries was removed is never sent `attach
     removed:true` on reconnecting, so it keeps carrying and probing that device; renaming a carried
-    device sends the host only `refresh`, so the host shows the old name until it reconnects; the
+  device sent the host only `refresh` (fixed 2026-09-28: send current carried metadata in `attach`,
+  with an old-code negative control and passing hosted-device regression); the
     hub keeps a carried device's last online state after its host reconnects, until the host
     reports again.
   - There is no route for a host computer to revoke a device it carries (the desktop window sends

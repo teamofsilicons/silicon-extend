@@ -113,10 +113,16 @@ async fn a_missed_webhook_is_caught_at_the_next_use() {
     .await
     .unwrap();
     assert_eq!(state, "gone");
-    eventually("the second reader confirming, and the grants going", || async {
+    // Grant deletion commits before the asynchronous confirmation writes its activity entry.
+    eventually("the grants going and their revocation being logged", || async {
         grants(&env, &d).await.is_empty()
+            && activity(&env, &d)
+                .await
+                .iter()
+                .any(|a| a.0 == "access_revoked" && a.2["reason"] == "left_team")
     })
     .await;
+    assert!(grants(&env, &d).await.is_empty());
     let log = activity(&env, &d).await;
     assert!(
         log.iter()

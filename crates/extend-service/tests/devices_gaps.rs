@@ -1009,6 +1009,40 @@ async fn hosted_device_end_to_end() {
         "{f:?}"
     );
 
+    // A carried rename reaches the host immediately with the carried device's metadata. Refresh
+    // alone only makes an app re-read its own pair, leaving the carried name stale until reconnect.
+    let renamed = a
+        .update_device(
+            &atv_id,
+            None,
+            &DevicePatch {
+                name: Some("Renamed TV".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.name, "Renamed TV");
+    let updated = host
+        .expect(
+            "renamed attachment",
+            |f| matches!(f, ServiceFrame::Attach { device_id, .. } if *device_id == atv.device_id),
+        )
+        .await;
+    assert_eq!(
+        updated,
+        ServiceFrame::Attach {
+            device_id: atv.device_id.clone(),
+            os: DeviceOs::Tvos,
+            name: "Renamed TV".into(),
+            address: Some("192.168.1.40".into()),
+            removed: false,
+            in_use_indicator: InUseIndicator::Shown,
+        }
+    );
+    assert_eq!(c.session(tv_sid.as_str()).await.unwrap().state, SessionState::Active);
+    assert_eq!(s.session(mac_sid.as_str()).await.unwrap().state, SessionState::Active);
+
     // A command on the TV travels to the host with target set, and the host's answer comes back.
     let tv_sid_s = tv_sid.to_string();
     let run = tokio::spawn({

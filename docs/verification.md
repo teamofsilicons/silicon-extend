@@ -32,6 +32,74 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — carried rename propagation and membership audit completion
+
+Renaming a carried device sent only `refresh`, which refreshes the host's own pair. Its attached
+status and Done/Stop labels kept the old name until reconnect or a banner change. The service now
+sends a fresh `attach` to that pair's existing host route after a name/TTL update. Ordinary device
+updates retain `refresh`; another Carbon's pair is not renamed.
+
+The hosted-device regression fails against the old service with only `[Refresh]` received. With
+the fix, all nine device-gap tests pass, including exact updated attachment metadata, both host
+and carried sessions remaining active, routed input and targeted Stop. Strict service all-target
+Clippy, workspace formatting and diff checks pass. Ten exact owned databases and temporary
+directories from the negative control and passing suite were removed; the pre-existing set was
+preserved. Evidence: `target/carried-rename-verification/`.
+
+The current service and headless Mac agent, with the previously notarized candidate engine, also
+passed a real hosted iPad-simulator recording lane. The same native recorder survived six
+rename-only updates (observed before each banner change) and six separate banner updates. The
+9.947-second MP4 has 599 packets with strictly increasing DTS, frames beyond the last update,
+changing background colours/counter/position, and a full decode with no errors. Creator and
+Carbon downloads are byte-identical. Carbon Stop ended the session, recorder and recording
+directory. The one owned simulator, database and processes were removed; all 825 baseline
+databases, other simulators and protected service processes were preserved.
+
+Evidence: `target/carried-recording-verification/summary.json` and `run-5a78337152ea/` beneath it.
+Earlier harness attempts are retained, including a rejected static-animation fixture; they are
+not counted as passing video-content proof. This closes carried metadata/recording continuity
+through the real hosted driver on a simulator. Physical iOS capture, hardware-key linking across
+hosts and native banner placement remain separate gates.
+
+CI `36366926600` at `43dd9e6` passed four jobs and all 21 core-gap tests, but the Rust membership
+test observed grant deletion before the asynchronous confirmation finished writing its audit
+entry. The bounded fixture wait now requires both empty grants and the exact `access_revoked` /
+`left_team` activity before retaining the explicit assertions. All seven membership tests pass;
+the dedicated database role, its seven databases and private temporary directories were cleaned.
+Awaited HTTP revocation/webhook tests do not have this ordering gap. Evidence:
+`target/membership-audit-barrier-verification/` and `target/release-candidate/ci-43dd9e6*/`.
+A new complete CI result is still required.
+
+## 2026-09-28 — signed Mac upgrade and two-Carbon credential rotation
+
+`e2e/released-agent-compat.py` passed 10/10 groups in 4.082 seconds using the actual published
+signed 1.0 Mac executable and signed `0159b7a` 1.1 candidate against an owned local service.
+Both signatures had the same Developer ID designated requirement; executable hashes and
+signatures were unchanged afterward. The retained source comparison at `43dd9e6` confirms no
+Mac runtime changes since that candidate; the service binary matches the final provider lane.
+
+The private file store retained identity and the active session through upgrade. After Stop,
+both Carbon links persisted new credentials and acknowledged them: server digests were confirmed
+before API reads, then each old credential returned 401 and each new credential returned 200.
+Restart reconnected both links, cleared their fallback credentials and preserved device,
+instance, owner and first-pair identity. Terminal remained available only to the first pair;
+native Stop cancelled the owned terminal in 30 ms. Autostart bytes and timestamps were unchanged.
+
+Evidence: `target/desktop-agent-rotation-upgrade-0159b7a-retry/report.json` and
+`target/desktop-agent-rotation-verification/{provenance.json,verified-summary.json,native-retry.log}`.
+The first attempt exposed a harness assumption: Stop's service `409 session_ended` can win the
+race against the native cancellation result. The check now accepts only those specific stopped
+outcomes and still requires an ended session and no escaped terminal work. Both attempts' exact
+databases, processes, ports and synthetic credential files were independently confirmed cleaned.
+This is headless file-store proof with synthetic IAM and disabled engines. It does not test
+installed GUI replacement, Keychain rotation, TCC, Android rotation or physical carried-device
+linking; the second pair is API-claimed and loaded into the owned file store while stopped.
+
+The service logout checks `a_carbons_logout_ends_only_their_side` and
+`a_carbons_logout_by_iam_event_ends_their_side` also pass, with the accepted `access_removed`
+reason (`target/service-final-verification/tests.log`). Their service-level session evidence
+does not replace native process-cleanup verification across the physical OS matrix.
+
 ## 2026-09-28 — service fixture readiness under CI load
 
 CI `36365195398` passed contracts, web, fork and Android, but Rust's request-reason test started

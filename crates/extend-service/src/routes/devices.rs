@@ -858,8 +858,17 @@ pub async fn update(
             serde_json::Value::Object(changes),
         )
         .await;
-        // Only this pair's connection re-reads: another Carbon's name for the device is theirs.
-        let _ = state.hub.send(&d.route(&auth.world), ServiceFrame::Refresh).await;
+        // Only this pair's connection learns the change: another Carbon's name is theirs.
+        // Refresh makes a host re-read its own pair, so carried metadata needs an Attach frame.
+        let frame = if d.host_device_id.is_some() {
+            domain::load_device(&state, &auth.world, &device_id)
+                .await?
+                .ok_or_else(|| domain::device_not_found(&device_id))?
+                .attach_frame(false)
+        } else {
+            ServiceFrame::Refresh
+        };
+        let _ = state.hub.send(&d.route(&auth.world), frame).await;
     }
     if banner_changed {
         domain::notify_in_use_indicator(
