@@ -32,6 +32,35 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
 
+## 2026-09-28 — shared iOS runner idle deadline
+
+The first alias-ownership fix preserved recordings, but a focused review found that two owners
+with recent saved sessions could mutually veto the runner's normal 60-second idle shutdown.
+Saved-session expiry is 2,565 seconds. A concrete supported path uses simulator aliases, which
+never merge by hardware ID: recovering a stale engine claim can leave another alias's saved
+session behind even though only one engine claim remains active.
+
+The production idle predicate now aggregates live sessions before applying the existing global
+idle deadline. Recording and any current, other or rebuilt driver's active setup still prevent
+an idle stop. Immediate cleanup respects another owner's recent work. The end-session ownership
+guard and external engine behavior are unchanged.
+
+A faithful extraction of the old `tend` predicate fails the new past-60-second assertion. The
+fixed two-owner regressions pass, using actual IosDriver owners and saved state with fake external
+engine calls. The full hosted library passes **82 tests**, agent library **205**, and fake-service
+integration **27**: **314 distinct passes**, zero failures and five existing ignores. Strict
+all-target Clippy for both crates, workspace formatting and diff checks pass. No database,
+physical device or AVD was used; temporary fixtures and processes were cleaned. Evidence:
+`target/ios-idle-owner-verification/`. This proves the shared idle decision, not physical runner
+termination.
+
+The preceding `9564044` source passed all five CI jobs, a fresh notarized Mac artifact with 13
+independent checks, ten signed credential-rotation upgrade groups and eight Keychain migration
+groups. Both Linux architectures and Windows x64 packages passed content/runtime audits, with
+206 Windows tests passing. Evidence is under `target/release-candidate/` in the `ci-956404…`,
+`macos-956404…`, `desktop-9564044` and `equivalence-956404…` folders. The idle correction requires
+a fresh desktop candidate; those passing artifacts retain their original source attribution.
+
 ## 2026-09-28 — restored iOS alias cleanup
 
 Removing an unprobed restored alias could discard another alias's recording before their drivers

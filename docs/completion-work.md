@@ -75,7 +75,11 @@ reports across reconnects. Their combined full service run reports 177 passes wi
 ignore (the real-provider entry separately returns early without its fixture); strict service
 Clippy and scoped formatting pass. The immutable `d8ce933` backend passed all six smoke groups,
 and its fresh provider run passed 75/75. The separately reproduced native iOS alias-cleanup bug
-is fixed with 312 relevant tests passing; refresh affected desktop artifacts before release.
+is fixed with 312 relevant tests passing. CI `36370875672` then passed all five jobs at `9564044`;
+that Mac candidate passed notarization and 18 signed upgrade groups, and remote Linux/Windows
+x64 packages passed their audits. A focused post-build review found the new ownership veto could
+delay the runner's normal 60-second idle shutdown. The correction passes 314 relevant tests and
+strict Clippy; refresh the affected candidate once more before release.
 No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
@@ -101,8 +105,10 @@ Remaining from the Carbon's final requests, before the release gates below:
   app/full-screen recordings survive host banner/name updates.
   Native review also reproduced cleanup of one restored iOS alias discarding another alias's
   recording before their drivers merge. Ownership-aware cleanup now passes the old-code negative
-  control and 312 relevant tests, with strict Clippy and formatting. Candidate verification is
-  pending; the earlier metadata-continuity check does not cover this removal ordering.
+  control. A follow-up correction restores the global 60-second idle deadline when two restored
+  aliases retain recent saved sessions, while recordings and active setup remain protected.
+  All 314 relevant tests, strict Clippy and formatting pass; refresh candidate artifacts for the
+  idle correction. The earlier metadata-continuity check does not cover alias removal ordering.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
@@ -317,7 +323,7 @@ verifiers and not fixed.
   - *Fixed 2026-09-28:* reconnect greetings now include exact-host carried removals, renames send
     current carried metadata, and online reports belong to the host connection that sent them.
     Old-code negative controls and the 177-pass service run cover these service defects. The
-    separate native iOS alias-cleanup fix passes 312 relevant tests; desktop artifact refresh and
+    separate native iOS alias-cleanup and idle-deadline fixes pass 314 relevant tests; artifact refresh and
     the physical gates remain in the current 1.1 engineering list above.
   - There is no route for a host computer to revoke a device it carries (the desktop window sends
     the Carbon to the website instead).

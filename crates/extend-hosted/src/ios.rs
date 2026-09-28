@@ -1420,6 +1420,24 @@ impl DeviceShared {
         }
         active.values().any(|active| *active)
     }
+
+    /// The idle-stop decision, called while holding the UDID guard. Any owner's live session
+    /// protects a recently used runner, but saved sessions cannot extend the device-wide idle
+    /// deadline. Recording and any in-progress setup still veto an idle stop.
+    fn should_stop_idle_runner(&self, owner: &Inner) -> bool {
+        let owners = self.live_owners();
+        // Include the current driver even if it has not been registered, and every rebuilt
+        // driver for the same state directory: any of them can be preparing the helper.
+        if matches!(*owner.prepare.lock().unwrap(), Prepare::Running)
+            || owners
+                .iter()
+                .any(|other| matches!(*other.prepare.lock().unwrap(), Prepare::Running))
+        {
+            return false;
+        }
+        let live = owner.has_live_sessions() || owners.iter().any(|other| other.has_live_sessions());
+        runner_should_stop(live, self.unused_for(), self.recording())
+    }
 }
 
 fn shared(udid: &str) -> Arc<DeviceShared> {
@@ -1911,10 +1929,7 @@ impl Inner {
             tracing::info!(session = %name, "closing a device-engine session no command has used for a long time");
             self.close_session(&udid, name).await;
         }
-        let live = !self.read_saved().sessions.is_empty();
-        if runner_should_stop(live, dev.unused_for(), dev.recording())
-            && !dev.another_owner_active(&self.device.state_dir)
-        {
+        if dev.should_stop_idle_runner(self) {
             stop_runner(&udid, Duration::ZERO).await;
         }
     }
@@ -3621,6 +3636,82 @@ echo '{{"success":true,"data":{{"message":"ok"}}}}'
             !dev.recording(),
             "a dropped owner cannot leave a permanent recording lease"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shared_runner_idle_expiry_overrides_other_alias_session_leases() {
+        let bob = FakeAgentDevice::new();
+        let alice = bob.alias("alice");
+        assert!(bob.run_driver(&alice, "alice", "open", &["Settings"]).await.ok);
+        assert!(bob.run("bob", "open", &["Settings"]).await.ok);
+        // An engine claim recovered by another alias can leave both saved sessions recent.
+        // The fake engine supplies the commands; the saved state and shared idle policy are real.
+        assert!(alice.inner.has_live_sessions() && bob.driver.inner.has_live_sessions());
+        let dev = shared(&bob.udid);
+        let age_runner = || {
+            *dev.last_command.lock().unwrap() = Some(Instant::now() - RUNNER_IDLE_STOP - Duration::from_secs(1));
+        };
+        {
+            let _held = dev.guard.lock().await;
+            assert!(!dev.should_stop_idle_runner(&alice.inner));
+            assert!(!dev.should_stop_idle_runner(&bob.driver.inner));
+            age_runner();
+            assert!(
+                dev.should_stop_idle_runner(&alice.inner),
+                "Bob's recent saved session must not veto the device-wide idle deadline"
+            );
+            assert!(dev.should_stop_idle_runner(&bob.driver.inner));
+        }
+
+        assert!(bob.run("bob", "record", &["start", "kept"]).await.ok);
+        {
+            let _held = dev.guard.lock().await;
+            age_runner();
+            assert!(dev.recording());
+            assert!(!dev.should_stop_idle_runner(&alice.inner));
+            assert!(!dev.should_stop_idle_runner(&bob.driver.inner));
+        }
+        let stopped = bob.run("bob", "record", &["stop"]).await;
+        assert!(stopped.ok && stopped.files.iter().any(|f| f.kind == FileKind::Recording));
+        let _held = dev.guard.lock().await;
+        age_runner();
+        assert!(dev.should_stop_idle_runner(&alice.inner));
+        for owner in [&alice.inner, &bob.driver.inner] {
+            *owner.prepare.lock().unwrap() = Prepare::Running;
+            assert!(!dev.should_stop_idle_runner(&alice.inner));
+            assert!(!dev.should_stop_idle_runner(&bob.driver.inner));
+            *owner.prepare.lock().unwrap() = Prepare::Done;
+        }
+        let rebuilt = IosDriver::new(bob.driver.inner.device.clone());
+        *rebuilt.inner.prepare.lock().unwrap() = Prepare::Running;
+        assert!(!dev.should_stop_idle_runner(&alice.inner));
+        assert!(!dev.should_stop_idle_runner(&bob.driver.inner));
+        drop(rebuilt);
+        assert!(dev.should_stop_idle_runner(&alice.inner));
+        assert!(dev.should_stop_idle_runner(&bob.driver.inner));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shared_runner_immediate_cleanup_respects_other_live_owners() {
+        let bob = FakeAgentDevice::new();
+        let alice = bob.alias("alice");
+        assert!(bob.run("bob", "open", &["Settings"]).await.ok);
+        assert!(alice.inner.read_saved().sessions.is_empty());
+        let dev = shared(&bob.udid);
+        let _held = dev.guard.lock().await;
+        assert!(!dev.should_stop_idle_runner(&alice.inner));
+        bob.driver.inner.update_saved(|s| {
+            s.sessions.get_mut("extend-bob").unwrap().last_used_ms =
+                now_ms().saturating_sub(STALE_SESSION_AFTER.as_millis() as u64 + 1);
+            s.setup_open = true;
+        });
+        assert!(dev.should_stop_idle_runner(&alice.inner));
+        bob.driver.inner.note_session("extend-bob", true);
+        assert!(!dev.should_stop_idle_runner(&alice.inner));
+        drop(bob.driver);
+        assert!(dev.should_stop_idle_runner(&alice.inner));
     }
 
     #[cfg(unix)]
