@@ -25,8 +25,12 @@ fixes recorded in `verification.md`; its design is
   `../extend-publish-drafts/release-1.1.0/contracts/REVIEW.md` from the repository root. The copies
   and patch are validated; their protected-file edit approval is pending. `UNDERSTANDING.md`
   changes are already committed (`3fe0347`, `5326b68`) and are not being requested again.
-- **Physical TV and iPad availability** is needed for their remaining checks. The iPad is
-  unavailable and no physical TV is connected through ADB in the latest local inventory.
+- **Physical device access** is needed for remaining checks. The iPad became available and
+  passed a runner-free connection and readable screenshot with the exact `cf43b53` packaged
+  runtime. Recording preparation stopped when it locked; after it unlocked, Safari foreground
+  ownership could not be established. The requested Safari screen is still needed before
+  recording. No current helper was installed or launched. The iPhone is locked, and no physical TV is
+  connected through ADB in the latest local inventory.
   Technical questions 16–20 introduce no new product decision: accepted first-pair terminal and
   routed-request behavior is retained, the Ting premise is corrected, and iOS awake-state evidence
   remains a physical verification task. Transferring terminal ownership would be a separate change.
@@ -79,7 +83,12 @@ is fixed with 312 relevant tests passing. CI `36370875672` then passed all five 
 that Mac candidate passed notarization and 18 signed upgrade groups, and remote Linux/Windows
 x64 packages passed their audits. A focused post-build review found the new ownership veto could
 delay the runner's normal 60-second idle shutdown. The correction passes 314 relevant tests and
-strict Clippy; refresh the affected candidate once more before release.
+strict Clippy. Refreshed `cf43b53` Mac/Linux/Windows x64 candidates are now verified: the Mac
+passed Apple notarization and 13 independent checks, Linux package audits passed, and Windows
+passed 206 checks. General CI at `d187051` also passed all five jobs. Subsequent verification
+changes leave product runtime unchanged; native source `571868a` includes an Android 10 test
+compatibility correction and bounded failure diagnostics. Its source equivalence is enforced
+by the API29 workflow.
 No 1.1 publication or deployment has run.
 
 ### Engineering left for 1.1.0
@@ -107,8 +116,9 @@ Remaining from the Carbon's final requests, before the release gates below:
   recording before their drivers merge. Ownership-aware cleanup now passes the old-code negative
   control. A follow-up correction restores the global 60-second idle deadline when two restored
   aliases retain recent saved sessions, while recordings and active setup remain protected.
-  All 314 relevant tests, strict Clippy and formatting pass; refresh candidate artifacts for the
-  idle correction. The earlier metadata-continuity check does not cover alias removal ordering.
+  All 314 relevant tests, strict Clippy and formatting pass; refreshed `cf43b53` candidates are
+  verified. Physical runner termination and alias removal during recording remain unverified.
+  The earlier metadata-continuity check does not cover alias removal ordering.
 - Reproduce the reported debugging disconnect on the physical TV and inspect its logs. Fresh
   Android TV 14 and Android 9 (TV-mode) emulators recover automatically after app process death
   and adbd restart; the repeatable lane and timings are in `verification.md`. No production
@@ -118,7 +128,11 @@ Remaining from the Carbon's final requests, before the release gates below:
   images from disk, with immediate bitmap cleanup; see the measured workload in `verification.md`.
 - iPhone/iPad: first-screenshot attachment is implemented and verified through the real engine on
   an isolated iPad simulator, preserving the current screen without launching an app or a runner.
-  Verify it on a physical iPad as well (including disconnect/reconnect and a new session).
+  A physical iPad now passes bare connection and a readable 3180-by-2384 screenshot using the
+  exact packaged `cf43b53` engine, without a helper or input. Session/daemon/claim cleanup and
+  unchanged protected resources were verified. Physical disconnect/reconnect, carried routing,
+  recording and helper lifecycle remain open. Recording preparation awaits the requested
+  foreground app; no helper build, installation or runner launch was performed.
   A locked physical iPhone completed attachment and cleanup, but Apple returned an all-black PNG;
   readable capture still needs an unlocked phone and does not substitute for the iPad checks.
 - TV image failures now reach the command result; bounded downloads, downsampling and asynchronous
@@ -184,9 +198,14 @@ Remaining from the Carbon's final requests, before the release gates below:
 - Android: Pixel and Samsung lock screens (what the wake notification shows), an Android TV in
   standby, a Fire TV, the keep-screen-on overlay during a session, API 26, 29, 34 and 36.
   Existing native emulator evidence covers API 26, 28, 34 and 36; API 28 is Android 9, not the
-  required API 29 (Android 10). API 29 remains unverified: its owned emulator refused first boot
-  because the required userdata storage exceeded the available disk budget. JVM API 29 coverage
-  does not close this native check; the attempted image and AVD were removed afterward.
+  required API 29 (Android 10). A separate disposable remote lane now runs API29 phone and
+  actual TV, avoiding the local disk limit. Phone passes 42 multi-session checks and six native
+  methods. Run `36379963836` passed the corrected MP4 header assertion, then failed to observe
+  a detached process's session tag; bounded child/scan diagnostics are prepared. TV reaches a
+  verified 192 MiB heap. Its latest controller timed out reading the authorization dialog before
+  approval; a bounded polling correction is prepared, and the earlier post-authorization close
+  remains unexplained. Native recording and reconnect coverage remain open until they pass;
+  source integrity and owned cleanup passed. See the current verification entry for provenance.
 - Mac, Windows and Linux: the awake report on lock, unlock and sleep; the wake notification; the
   display kept on during a session and released after; session processes ended at session end
   (including `setsid`/`start`), on macOS 15 and 26, Windows 10 and 11, Ubuntu GNOME and KDE.

@@ -9,9 +9,10 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
 
 ## Where the evidence is
 
-- **Nothing here is committed evidence.** Each result was observed by the agent that ran it; its
-  logs, videos and screenshots stayed on this Mac, outside version control. The record itself is
-  the only durable account.
+- **Raw evidence is not committed.** Local reports, logs, videos and screenshots remain outside
+  version control. Recent remote runs also publish sanitized, retention-limited GitHub artifacts;
+  their downloaded copies and hash checks are retained under `target/` on this Mac. The committed
+  record preserves run IDs, source attribution and proof limits, rather than the raw evidence.
 - **Gone.** The 2026-09-26 record cites logs under `/tmp/extend-*.log` and ignored folders under
   `target/`. On 2026-09-27 no `/tmp/extend-*` file exists any more, and neither do
   `target/desktop/macos/`, `target/desktop/linux/verification.json`,
@@ -31,6 +32,74 @@ the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
 - Lanes that now write their evidence under `target/`: `apps/desktop/linux-e2e/record-service-e2e.py`
   (`summary.txt`), `RECORD_LANE=record-hung-e2e.py` (`cover-recording-*`), `e2e/android-recording.sh`
   and `e2e/android-recording-service.py`.
+
+## 2026-09-28 — final candidates, API29 fixtures and physical iPad capture
+
+Product runtime `cf43b53` passed all five CI jobs in `36372182254` and the desktop workflow
+`36372228330`. Both Linux package architectures passed content/runtime audits. Windows x64
+passed 206 checks and its package audit. The signed Mac passed Apple notarization
+(`8b5103f1-d252-46dd-bce4-0233a7289cb1`), stapling/Gatekeeper and 13 independent archive/runtime
+checks. Its archive SHA256 is
+`1983267cc8288fbfab0f8cd6f20db15d25bf1a41c530d6f3216bf2861fc0fac3`.
+Evidence: `target/release-candidate/desktop-cf43b53/` and
+`target/release-candidate/macos-cf43b539c5d9ae91e363172436bb8d1d677d2441/`.
+The 18 signed upgrade groups retain their earlier `9564044` attribution; their relevant code
+is unchanged, but they were not rerun on the refreshed artifact.
+
+General CI `36378347424` at `a91975a` and `36379967434` at `d187051` passed all five jobs.
+Later changes are verification only:
+a bounded sleep-state wait prevents sampling an intermediate lock event, and the native MP4
+header test uses `DataInputStream.readFully` because `readNBytes` is unavailable on Android 10.
+The latter retains the exact header and short-file checks and passes 13 focused assertions.
+Source `2a1dbad` differs from `cf43b53` only in three test files and three verification additions;
+5074 existing file contents/modes and the Rust driver's 76102-byte runtime prefix are identical.
+The workflow rejects runtime or mode drift before building. Evidence:
+`target/api29-readfully-verification/`, `target/release-candidate/runtime-equivalence-cf43-2a1dbad/`
+and `target/api29-remote-plan/final-pin-validation/` (36 adapter tests plus guard negative cases).
+
+The preceding native run `36378339315` passed all 42 phone multi-session checks and six native
+methods, then stopped at the incompatible test API. Actual TV runs at a verified 192 MiB heap
+with shell UID2000; its first ADB connection closes immediately after authorization. The key-save
+permission warning follows the closure and is not an established cause. Both jobs passed source
+integrity and owned cleanup. Run `36379963836` used native source `2a1dbad`, runtime reference
+`cf43b53` and harness `d187051`. Phone passed the corrected MP4 header assertion, then failed
+to observe its detached process's session tag within five seconds. Android 10's exact toybox
+source supports the grep flags being used; a product or fixture cause is not established.
+Test-only diagnostics at `571868a` retain the launch result and inspect a captured PID with a
+start-time fence, without logging environment values or changing the assertion. Extracted
+Kotlin compilation, nine diagnostic cases and three shell syntax cases passed. Printing the PID
+can affect timing; a subsequent pass alone would not establish the cause. Evidence:
+`target/api29-session-tag-diagnostics/`.
+
+TV's passive metadata-only SYN/FIN/RST trace was ready: five control packets, zero kernel drops
+and clean owned-process termination. This attempt stopped on an uncaught eight-second UI dump
+timeout before authorization; the app connection had no FIN/RST before forced cleanup, so it
+does not explain the earlier authorized connection's closure. The poll correction waits for
+any previous guest UI dump runner to exit, records read timeouts and retries within the existing
+90-second controller/60-second native deadlines. It preserves exact dialog/button guards and
+passes 41 adapter checks, including an old-code negative control and actual host-child reaping.
+Evidence: `target/api29-remote-plan/run-36379963836/` and
+`target/api29-remote-plan/tv-auth-poll-validation/`. Both latest jobs passed source/provenance
+and owned cleanup. Required counts remain 20 phone/19 TV native methods and 42/35 multi-session
+checks, with explicit capability exclusions. Later recording/decode/timestamps and reconnect
+checks remain open until observed.
+
+The physical iPad Air passed bare connection and a plain, visually verified 3180-by-2384 screenshot
+using the exact signed candidate's bundled engine. No helper was installed or launched and no
+input was sent. Exact owned session/daemon/claim cleanup passed; protected services and device
+runner state were unchanged. The capture remains private under
+`target/physical-ipad-cf43/run-c7cca8f27b77/`. This proves direct packaged-engine capture only,
+not carried service routing, recording or physical reconnect. The iPad subsequently locked;
+recording preparation stopped before any build/install/launch. A later unlocked capture could
+not establish that the requested Safari app was foreground, so preparation remains paused.
+That capture was also cleaned up. The exact packaged prepare command has no build-only mode;
+it also starts and health-checks the helper. Reports are under
+`target/physical-ipad-recording-cf43/run-8e1de6dff35e/`.
+
+Windows ARM64 still requires a prepared desktop after the privacy-setup overlay blocked the
+owned fixture with zero input sent. Protected contract review, first-time Briefcase recipient
+review and the remaining physical matrix remain open. Production remains 1.0.0; no 1.1
+deployment or publication is claimed.
 
 ## 2026-09-28 — shared iOS runner idle deadline
 
@@ -58,8 +127,8 @@ The preceding `9564044` source passed all five CI jobs, a fresh notarized Mac ar
 independent checks, ten signed credential-rotation upgrade groups and eight Keychain migration
 groups. Both Linux architectures and Windows x64 packages passed content/runtime audits, with
 206 Windows tests passing. Evidence is under `target/release-candidate/` in the `ci-956404…`,
-`macos-956404…`, `desktop-9564044` and `equivalence-956404…` folders. The idle correction requires
-a fresh desktop candidate; those passing artifacts retain their original source attribution.
+`macos-956404…`, `desktop-9564044` and `equivalence-956404…` folders. The subsequent `cf43b53`
+candidate refresh is recorded above; earlier artifacts retain their original source attribution.
 
 ## 2026-09-28 — restored iOS alias cleanup
 

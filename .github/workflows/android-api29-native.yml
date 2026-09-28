@@ -27,8 +27,8 @@ jobs:
           - {profile: phone, image: 'system-images;android-29;default;x86_64'}
           - {profile: tv, image: 'system-images;android-29;android-tv;x86'}
     env:
-      # Native test source includes the API29 assertion fix; runtime is equivalent to cf43.
-      EXTEND_API29_SOURCE: 2a1dbad43f1997e6f8c7dd38df92e38c6f075a33
+      # Native tests include API29 compatibility and diagnostics; runtime matches cf43.
+      EXTEND_API29_SOURCE: 571868a501945efb3c80d4302218d43981080d8c
       EXTEND_API29_RUNTIME_REF: cf43b539c5d9ae91e363172436bb8d1d677d2441
       EXTEND_API29_PROFILE: ${{ matrix.profile }}
       EXTEND_API29_IMAGE: ${{ matrix.image }}
@@ -49,9 +49,9 @@ jobs:
       - name: Exact product and native test source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2a1dbad43f1997e6f8c7dd38df92e38c6f075a33
+          ref: 571868a501945efb3c80d4302218d43981080d8c
           # Include the exact runtime ancestor for the equivalence guard below.
-          fetch-depth: 8
+          fetch-depth: 10
           path: source
           persist-credentials: false
       - uses: actions/setup-java@v4
@@ -72,7 +72,7 @@ jobs:
           assert git('status', '--porcelain=v1') == ''
           runtime_ref = os.environ['EXTEND_API29_RUNTIME_REF']
           assert runtime_ref == 'cf43b539c5d9ae91e363172436bb8d1d677d2441'
-          assert head == '2a1dbad43f1997e6f8c7dd38df92e38c6f075a33'
+          assert head == '571868a501945efb3c80d4302218d43981080d8c'
           agent = 'crates/extend-agent/src/drivers/agent_device.rs'
           native_test = 'apps/android/app/src/androidTest/java/com/teamofsilicons/extend/LocalAdbTest.kt'
           added = {'.github/android-sdk-licenses/android-sdk-preview-license',
@@ -93,7 +93,7 @@ jobs:
           assert blobs[0].split(marker)[0] == blobs[1].split(marker)[0]
           runtime_prefix_sha256 = hashlib.sha256(blobs[0].split(marker)[0]).hexdigest()
           native_test_sha256 = hashlib.sha256((root / native_test).read_bytes()).hexdigest()
-          assert native_test_sha256 == '8aad38682fd142d609f32513d1736ef075f97887d21ad2fb25dbffc82218b2fc'
+          assert native_test_sha256 == '54fabe687acc74b111e4584aebfcc8d046672ee8c443a6b33fec7dd85b538129'
           names = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
           hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names if name}
           aggregate = hashlib.sha256(''.join(name + '\0' + hashes[name] + '\n' for name in sorted(hashes)).encode()).hexdigest()

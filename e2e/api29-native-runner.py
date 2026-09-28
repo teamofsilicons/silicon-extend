@@ -23,7 +23,7 @@ import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
-SOURCE = "2a1dbad43f1997e6f8c7dd38df92e38c6f075a33"
+SOURCE = "571868a501945efb3c80d4302218d43981080d8c"
 RUNTIME_REFERENCE = "cf43b539c5d9ae91e363172436bb8d1d677d2441"
 MULTI_FIXTURE_FILES = tuple("apps/android/tools/fake-service/" + name for name in
                             ("run-emulator-test.sh", "fake_extend.py", "make_test_png.py"))
@@ -232,6 +232,22 @@ def inapplicable_test(profile, cls, method):
     return None
 
 
+def active_uiautomator_pids(text):
+    lines = text.splitlines()
+    assert lines and lines[0].split() in (["PID", "ARGS"], ["PID", "COMMAND"]), "Unrecognized guest process listing"
+    pids = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        match = re.fullmatch(r"\s*([1-9][0-9]*)\s+(.+)", line)
+        assert match, "Incomplete guest process listing"
+        tokens = match[2].split()
+        if any(token.rsplit("/", 1)[-1] == "uiautomator" or
+               token == "com.android.commands.uiautomator.Launcher" for token in tokens):
+            pids.append(int(match[1]))
+    return pids
+
+
 def tv_tcp_trace_command(console_port):
     assert console_port == next(case[4] for case in CASES if case[0] == "tv")
     # IPv4 loopback Ethernet/IP/TCP base headers total54 bytes. Never retain
@@ -398,9 +414,9 @@ class Lane:
                 self.stop(process)
                 raise TimeoutError(f"Owned child exceeded {timeout}s")
             if authorize and time.monotonic() >= next_prompt:
-                self.allow_owned_adb_dialog()
+                self.allow_owned_adb_dialog(end)
                 next_prompt = time.monotonic() + 2
-            time.sleep(.25)
+            time.sleep(min(.25, max(0, end - time.monotonic())))
         assert process.returncode == 0, f"Owned child failed with exit{process.returncode}"
 
     def until(self, label, predicate, timeout=30):
@@ -416,14 +432,50 @@ class Lane:
             time.sleep(.5)
         raise TimeoutError(label)
 
-    def allow_owned_adb_dialog(self):
-        # Only during the explicit initial local-debugging setup, never concurrently with
-        # DisplayTest's UiAutomation. Exact dialog text/package guards precede every tap.
-        result = self.cmd([self.adb_bin, "-s", self.serial, "shell", "uiautomator", "dump", "/sdcard/api29-adb-dialog.xml"],
-                          timeout=8, check=False)
-        if result.returncode:
+    def allow_owned_adb_dialog(self, deadline):
+        # Only during explicit initial authorization. A host adb timeout does not
+        # prove its guest Java runner exited; do not launch an overlapping dump.
+        def diagnostic(kind, **details):
+            entries = self.case.setdefault("authorization_poll_diagnostics", [])
+            entries.append({"at_unix_s": time.time(), "kind": kind, **details})
+            del entries[:-20]
+            self.flush()
+
+        def read(label, command, limit):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                return self.cmd([self.adb_bin, "-s", self.serial, "shell", *command],
+                                timeout=min(limit, remaining), check=False)
+            except subprocess.TimeoutExpired as error:
+                # subprocess.run kills and reaps its host child before raising.
+                # Guest readiness is established afresh by the process read below.
+                diagnostic("read_timeout", operation=label, timeout_s=error.timeout,
+                           host_adb_child_reaped=True)
+                return None
+
+        processes = read("guest_runner_readiness", ["ps", "-A", "-o", "PID,ARGS"], 3)
+        if processes is None:
             return
-        raw = self.adb("shell", "cat", "/sdcard/api29-adb-dialog.xml", check=False)
+        if processes.returncode:
+            diagnostic("guest_runner_readiness_failed", returncode=processes.returncode)
+            return
+        try:
+            running = active_uiautomator_pids(processes.stdout)
+        except AssertionError:
+            diagnostic("guest_runner_readiness_unrecognized")
+            return
+        if running:
+            diagnostic("guest_runner_still_active", pids=running)
+            return
+        result = read("dialog_dump", ["uiautomator", "dump", "/sdcard/api29-adb-dialog.xml"], 8)
+        if result is None or result.returncode:
+            return
+        document = read("dialog_read", ["cat", "/sdcard/api29-adb-dialog.xml"], 8)
+        if document is None or document.returncode:
+            return
+        raw = document.stdout
         try:
             nodes = list(ET.fromstring(raw).iter("node"))
         except ET.ParseError:
@@ -435,16 +487,21 @@ class Lane:
             bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
             assert bounds
             x1, y1, x2, y2 = map(int, bounds.groups())
-            self.adb("shell", "input", "tap", str((x1+x2)//2), str((y1+y2)//2))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.adb("shell", "input", "tap", str((x1+x2)//2), str((y1+y2)//2), timeout=min(45, remaining))
+            return True
         for node in nodes:
             if node.get("text") == "Always allow from this computer" and node.get("checked") == "false":
-                tap(node)
+                if not tap(node):
+                    return
         buttons = [n for n in nodes if n.get("resource-id") == "android:id/button1" and n.get("text", "").casefold() in {"allow", "ok"}]
         assert len(buttons) == 1, "Do not guess which dialog button authorizes the owned emulator"
         (self.caseout / "owned-adb-authorization.xml").write_text(raw)
-        tap(buttons[0])
-        self.case["owned_adb_prompt_approved"] = True
-        self.flush()
+        if tap(buttons[0]):
+            self.case["owned_adb_prompt_approved"] = True
+            self.flush()
 
     def instrument(self, cls, method, timeout=150, authorize=False):
         self.reset_instrumentation_accessibility(cls + "-" + method)
