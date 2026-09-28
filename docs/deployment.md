@@ -1,10 +1,11 @@
 # Deployment
 
-How the pieces ship. 1.0.0 is live: the service on the AWS stack in
+How the pieces ship: the service on the AWS stack in
 [`deploy/aws/README.md`](../deploy/aws/README.md) (`deploy/aws/standalone.yaml`: one ARM64 EC2 host
 with Caddy in front and a private RDS PostgreSQL 17, with its first-deploy, release and rollback
 steps), the website on Vercel, the CLI through Honeycomb, and the apps on the releases page. 1.1.0
-follows the order in [Releasing 1.1.0](#releasing-110) below; nothing of 1.1.0 is deployed.
+follows the service-first order in [Releasing 1.1.0](#releasing-110) below. Its behavior changes and
+disclosed coverage gaps are in [the release notes](releases/1.1.0.md).
 
 ## Service (`backend.extend.teamofsilicons.com`)
 

@@ -1,5 +1,14 @@
 # Open gates
 
+**1.1 release decision, 2026-09-28:** the Carbon directed publication after the final diagnostic
+round, with IAM/OBO unchanged and remaining coverage gaps disclosed. That round is complete:
+42/42 Android 10 multi-Carbon checks and 18/20 native methods passed; the two failed assertions,
+incomplete recovery/media checks and other platform gaps remain in the
+[release notes](releases/1.1.0.md). The backend, website, Rust crates and Honeycomb CLI are now
+1.1.0. The ten app/CLI assets and checksums are verified for GitHub publication. The detailed
+open-check list below is retained as follow-up work, not a claim that every check passed or an
+additional release prerequisite.
+
 The current list of what stands between this checkout and a released Silicon Extend 1.1.0,
 updated on 2026-09-28. The Carbon-owned
 [`understanding/UNDERSTANDING.md`](../understanding/UNDERSTANDING.md) is the product authority;
@@ -93,7 +102,9 @@ passed 206 checks. General CI at `d187051` and `0ccafb8` also passed all five jo
 changes leave product runtime unchanged; native source `571868a` includes an Android 10 test
 compatibility correction and bounded failure diagnostics. Its source equivalence is enforced
 by the API29 workflow.
-No 1.1 publication or deployment has run.
+The final publication pass deployed the service and website and published both Rust crates and
+the Honeycomb CLI at 1.1.0. Exact app assets and publication checks are retained under
+`target/release-publication/1.1.0/`; the GitHub release is the public download record.
 
 ### Engineering left for 1.1.0
 

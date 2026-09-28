@@ -7,6 +7,43 @@ later work showed it wrong (marked *Corrected 2026-09-27*). Rerun the automated 
 `e2e/run-all.sh`. The device engine is named as it is from 1.1 (it lived in another directory when
 the 1.0 checks ran). Only the 1.1.0 section covers 1.1.
 
+## Release publication checks — 2026-09-28
+
+General CI at `1fb7f9b` passed all five jobs in run `36386435484`, including generated approved
+website references and contract lint. Earlier runs `36385649314` and `36386082662` also passed.
+Windows ARM64 run `36386077370` at `49e683d` passed 205 selected checks: 177 unit, 27 fake-service
+and one exact native terminal check. Its explicit manual terminal-only mode records
+`gui_verified:false`; the runner's privacy setup overlay still blocks GUI verification. Both
+Windows packages, both Linux tarballs and Debian packages, signed/notarized Mac, signed Android,
+and the six-platform Honeycomb archive retain verified hashes and original source labels.
+All ten release asset checksums pass locally. Native/CLI/Android source equivalence is verified
+through `1fb7f9b`; website references are separately built from the approved contracts.
+
+The production database snapshot `extend-pre-1-1-0-20260928-062212-af873a` was available before
+backend deployment. The retained ARM64 image was pushed to ECR without rebuilding and deployed
+by immutable digest. SSM command `592793d0-4786-4bf1-8788-4525df3c7aff` completed successfully;
+the service is healthy at 1.1.0/API1. A read-only query verified production schema5 and no active
+test environments. The original host and IAM/OBO/provider contracts were retained. The website
+was deployed from its 73-file prebuilt output and aliased to `extend.teamofsilicons.com`.
+Both `silicon-extend-protocol` and `silicon-extend-client` 1.1.0 were built/verified and published
+to crates.io. Honeycomb accepted 1.1.0 as a public production release at configuration revision1,
+without a new permission approval requirement. Public download and fresh-install checks are
+recorded separately from local artifact verification.
+
+## Final API 29 diagnostic round — 2026-09-28
+
+Run [36385642679](https://github.com/teamofsilicons/silicon-extend/actions/runs/36385642679) tested the phone profile only. Harness `7dc8f9d4702374e7afe94f88e407104bc8fe73b1` used native-test source `571868a501945efb3c80d4302218d43981080d8c`, whose runtime matches signed candidate `cf43b539c5d9ae91e363172436bb8d1d677d2441`. The stock API 29 TV image remains blocked by its observed ADB authorization/controller-reset behavior; this run makes no TV pass claim.
+
+The phone multi-Carbon scenario passed **42/42**. All **20 applicable native methods executed: 18 passed, 2 failed**. Passing checks include direct display decoding/error behavior, impostor-daemon refusal, streaming output larger than the app heap, recording duration limit, still-screen segments, rotation, malformed-segment handling, retained/low-space recordings, offline discard, ownership-loop cleanup, and recording past the native 180-second limit. The long-recording output reported **187,251 ms** and contained a frame after 182 seconds; **192.948 seconds** was the complete test execution time.
+
+Two native assertions remain failed, not waived: (1) the detached-process global session-tag enumeration counted zero despite the exact owned PID remaining alive and its exact tag probe succeeding; detached-process cleanup on this image is not verified; (2) a burst-then-still recording reported **5,900 ms** for **8,272 ms** wall-clock capture, outside the existing ±1,500 ms tolerance. Retained logs show source frame counts 73+1 and combined output 74 plus EOS, so dropped captured frames/content is not established. Without the MP4 and segment timing evidence, VFR/end-frame metadata behavior versus timeline placement is unresolved. No assertion or deadline was relaxed.
+
+Independent native checks continued after ordinary completed assertions. Reconnect's baseline UID/AVD command passed; the fixture's exact-owned `run-as ... kill -9` then returned exit 1, before process-death recovery or adbd-restart checks. Those recovery checks remain incomplete. External video decode/DTS and preview-frame checks were not run because a required recording producer failed; there are no new video previews to inspect. The earlier phone UI mismatch was not reproduced (42/42 passed), and no failure-triggered transition capture was needed.
+
+Both APK installs and the bounded host ADB lifecycle collector succeeded. The GitHub archive digest (`8fb4cb1d0b64f06c1f0804d281f6d23122ccaae9e3cff8641a216c059d776ade`) and all public file hashes were verified. All 5,080 native source-file hashes and six harness hashes match their recorded commits; source stayed clean and unchanged. All 24 owned remote processes and the owned AVD home were removed. No physical device, installed user app, production service, signing material, or real credentials were used. No additional diagnostic run was started.
+
+Evidence: `target/api29-remote-plan/run-36385642679/verification.json`, the retained sanitized artifact, native method logs, and `reconnect-results.json`. These are disclosed API 29 limitations; the retained evidence does not establish a new severe release-critical defect requiring an additional diagnostic cycle.
+
 ## Where the evidence is
 
 - **Raw evidence is not committed.** Local reports, logs, videos and screenshots remain outside
