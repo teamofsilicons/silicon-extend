@@ -4675,6 +4675,16 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
         for f in &files {
             text.push_str(&format!("\n{}", file_line(f)));
         }
+        if result.ok
+            && name == "snapshot"
+            && !req
+                .args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| arg == "--raw")
+        {
+            text.push_str("\nRun --raw to get the entire accessibility tree.");
+        }
         if !text.trim().is_empty() {
             outln!("{}", text.trim_end());
         }

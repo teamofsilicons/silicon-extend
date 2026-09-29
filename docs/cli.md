@@ -28,6 +28,7 @@ extend device show 7c1e09ab               # what works there now, and what's mis
 extend session new 7c1e09ab --connect     # start, connect; prints the session id
 extend --help                             # now lists only commands that work on that device
 extend snapshot -i                        # @refs for the interactive elements
+extend snapshot --raw                     # entire accessibility tree exposed by the device
 extend click @e2                          # act; refs stay valid until the next snapshot
 extend fill @e3 "hello"                   # typed text is redacted in the activity log
 extend screenshot --ttl 7d --out shot.png # stored in Briefcase; self-destructs in 7 days; also downloaded here
@@ -36,6 +37,11 @@ extend tv-remote press select             # TVs only
 extend takeover --reason "Approve Face ID" # hand the device to its Carbon; commands wait until Done
 extend session end                        # free the device (it also ends after 5 idle minutes)
 ```
+
+Successful text snapshots without `--raw` end with: "Run --raw to get the entire accessibility
+tree." Use `extend snapshot --raw` to inspect nodes omitted by the normal or interactive view.
+The tree contains what the device exposes; it cannot reveal controls the app or Android withholds.
+Depth and scope options still limit the output when supplied. JSON output has no footer.
 
 When another Silicon is using the device, `extend session new` exits 6. It tells you who and since
 when only when that Silicon is on your side (your Team, given access by the same Carbon); otherwise

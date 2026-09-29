@@ -21,7 +21,7 @@ on:
         options: [full, terminal-only]
         default: full
   push:
-    tags: ['v*']
+    tags: ['v*', 'cli-v*']
 permissions:
   contents: read
 jobs:
@@ -41,6 +41,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: rustup target add ${{ matrix.target }}
+      - name: Check CLI release
+        if: matrix.package == 'linux-x86_64'
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked -p silicon-extend-cli --all-targets -- -D warnings
+          cargo test --locked -p silicon-extend-cli
       - run: cargo build --locked --release -p silicon-extend-cli --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
@@ -61,9 +67,13 @@ jobs:
           python3 - <<'PY'
           import os, tomllib
           from pathlib import Path
-          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          workspace_version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          cli_version = tomllib.loads(Path('crates/extend-cli/Cargo.toml').read_text())['package']['version']
+          version = cli_version if isinstance(cli_version, str) else workspace_version
           if os.environ['GITHUB_REF_TYPE'] == 'tag':
-              assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Release tag and app version differ'
+              prefix = 'cli-v' if os.environ['GITHUB_REF_NAME'].startswith('cli-v') else 'v'
+              expected = version if prefix == 'cli-v' else workspace_version
+              assert os.environ['GITHUB_REF_NAME'] == f'{prefix}{expected}', 'Release tag and app version differ'
           PY
       - name: Install Honeycomb packager
         run: cargo install silicon-honeycomb-cli --locked --version 0.5.0
@@ -78,7 +88,7 @@ jobs:
           if-no-files-found: error
   # Build and verify Linux/Windows desktop apps: no secrets, nothing published from here.
   desktop-linux:
-    if: ${{ inputs.windows_only != true }}
+    if: ${{ inputs.windows_only != true && !startsWith(github.ref, 'refs/tags/cli-v') }}
     strategy:
       fail-fast: false
       matrix:
@@ -112,6 +122,7 @@ jobs:
             target/desktop/linux/*.deb
           if-no-files-found: error
   desktop-windows:
+    if: ${{ !startsWith(github.ref, 'refs/tags/cli-v') }}
     env:
       EXTEND_WINDOWS_VERIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_verification || 'full' }}
     strategy:
