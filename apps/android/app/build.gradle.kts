@@ -122,6 +122,9 @@ dependencies {
     implementation("org.conscrypt:conscrypt-android:2.5.3")
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
 
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("junit:junit:4.13.2")

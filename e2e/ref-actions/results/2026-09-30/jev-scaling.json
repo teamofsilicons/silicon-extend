@@ -1,0 +1,518 @@
+{
+  "both_correct_median_speedup": null,
+  "both_correct_pairs": 0,
+  "boundary": "Model selection only, from identical frozen observations; excludes live capture, device execution, and task completion. No provider-cost estimate.",
+  "corpus": "e2e/ref-actions/scaling.json",
+  "jev": {
+    "abstentions": 0,
+    "accuracy": 1.0,
+    "all_attempts_p50_ms": 404.436458,
+    "all_attempts_p95_ms": 612.990958,
+    "attempts": 20,
+    "correct": 20,
+    "correct_only_p50_ms": 404.436458,
+    "errors": 0
+  },
+  "kind": "single_provider_ref_selection",
+  "llm": null,
+  "performance_measured": true,
+  "repeats": 5,
+  "rows": [
+    {
+      "case": "scale-8-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 399.804125,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e5",
+        "usage": {
+          "input_tokens": 1688,
+          "output_tokens": 240
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 400.02470800000003
+    },
+    {
+      "case": "scale-32-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 334.71554199999997,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e17",
+        "usage": {
+          "input_tokens": 4391,
+          "output_tokens": 720
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 335.224417
+    },
+    {
+      "case": "scale-128-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 415.91625,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e65",
+        "usage": {
+          "input_tokens": 15413,
+          "output_tokens": 2698
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 417.466208
+    },
+    {
+      "case": "scale-254-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.98,
+        "model": "jev-1.13.0",
+        "model_ms": 562.583375,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e128",
+        "usage": {
+          "input_tokens": 30404,
+          "output_tokens": 5472
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 565.3000000000001
+    },
+    {
+      "case": "scale-8-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 380.8705,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e5",
+        "usage": {
+          "input_tokens": 1688,
+          "output_tokens": 240
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 380.98208300000005
+    },
+    {
+      "case": "scale-32-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 304.11041700000004,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e17",
+        "usage": {
+          "input_tokens": 4391,
+          "output_tokens": 720
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 304.68600000000004
+    },
+    {
+      "case": "scale-128-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 437.56600000000003,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e65",
+        "usage": {
+          "input_tokens": 15413,
+          "output_tokens": 2698
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 439.013375
+    },
+    {
+      "case": "scale-254-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 579.683584,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e128",
+        "usage": {
+          "input_tokens": 30404,
+          "output_tokens": 5472
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 584.897833
+    },
+    {
+      "case": "scale-8-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 278.165875,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e5",
+        "usage": {
+          "input_tokens": 1688,
+          "output_tokens": 240
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 278.28033400000004
+    },
+    {
+      "case": "scale-32-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 363.75012499999997,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e17",
+        "usage": {
+          "input_tokens": 4391,
+          "output_tokens": 720
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 364.222334
+    },
+    {
+      "case": "scale-128-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 401.878042,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e65",
+        "usage": {
+          "input_tokens": 15413,
+          "output_tokens": 2698
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 404.436458
+    },
+    {
+      "case": "scale-254-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 595.256,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e128",
+        "usage": {
+          "input_tokens": 30404,
+          "output_tokens": 5472
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 598.183
+    },
+    {
+      "case": "scale-8-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 285.53554199999996,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e5",
+        "usage": {
+          "input_tokens": 1688,
+          "output_tokens": 240
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 285.73204200000004
+    },
+    {
+      "case": "scale-32-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 407.942375,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e17",
+        "usage": {
+          "input_tokens": 4391,
+          "output_tokens": 720
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 408.578375
+    },
+    {
+      "case": "scale-128-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 413.056541,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e65",
+        "usage": {
+          "input_tokens": 15413,
+          "output_tokens": 2698
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 414.87104200000005
+    },
+    {
+      "case": "scale-254-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.98,
+        "model": "jev-1.13.0",
+        "model_ms": 631.469958,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e128",
+        "usage": {
+          "input_tokens": 30404,
+          "output_tokens": 5472
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 634.685167
+    },
+    {
+      "case": "scale-8-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 332.08408299999996,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e5",
+        "usage": {
+          "input_tokens": 1688,
+          "output_tokens": 240
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 332.41125
+    },
+    {
+      "case": "scale-32-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 300.97775,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e17",
+        "usage": {
+          "input_tokens": 4391,
+          "output_tokens": 720
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 301.3695
+    },
+    {
+      "case": "scale-128-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 511.837584,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e65",
+        "usage": {
+          "input_tokens": 15413,
+          "output_tokens": 2698
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 513.317
+    },
+    {
+      "case": "scale-254-refs",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.98,
+        "model": "jev-1.13.0",
+        "model_ms": 610.2502079999999,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e128",
+        "usage": {
+          "input_tokens": 30404,
+          "output_tokens": 5472
+        }
+      },
+      "platform": "schema_only",
+      "provenance": "synthetic candidate-count latency fixture, not a device capture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 612.990958
+    }
+  ],
+  "speedup_measured": false,
+  "valid_no_provider_errors": true,
+  "warmups": [
+    {
+      "error": null,
+      "provider": "jev",
+      "response": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 404.34675,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e5",
+        "usage": {
+          "input_tokens": 1688,
+          "output_tokens": 240
+        }
+      },
+      "wall_ms": 404.452125
+    }
+  ],
+  "run_metadata": {
+    "started_utc": "2026-09-29T21:14:22.488728+00:00",
+    "host": "Darwin arm64",
+    "build": "release",
+    "key_class": "test",
+    "threshold": 0.7,
+    "corpus_sha256": "a3c4868c28b263b170f3574925ab8d58894b9b552d6b9f4afa1e7bb2fc307295",
+    "source_sha256": {
+      "crates/silicon-extend-client/src/ref_actions/mod.rs": "4fd4ae077019036fee2d951d3c99a3cc94a9e3242ed62b5f03c9d3a587728083",
+      "crates/silicon-extend-client/src/ref_actions/provider.rs": "dac61932cfe39addf6cd9f3b9ee4407f21a850e4183f51337ff3de655caaca34",
+      "crates/silicon-extend-client/examples/ref_benchmark.rs": "6ff51e1928fe09a7f2f26a4803467e78158ad4d226c43229b65313142aa2e4d2"
+    }
+  }
+}

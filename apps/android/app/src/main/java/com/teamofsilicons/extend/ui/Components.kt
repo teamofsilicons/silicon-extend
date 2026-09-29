@@ -66,7 +66,7 @@ fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = Tokens.M
 /** A page title: Source Serif, written as a sentence that ends in a period. */
 @Composable
 fun Title(text: String, modifier: Modifier = Modifier) {
-    Text(sentence(text), style = Type.title(LocalScale.current), modifier = modifier.semantics { heading() })
+    Text(sentence(text), style = Type.title(LocalScale.current), modifier = modifier.tvReadingFocus().semantics { heading() })
 }
 
 @Composable
@@ -183,7 +183,7 @@ fun ExtendButton(
     leading: (@Composable () -> Unit)? = null,
 ) {
     val s = LocalScale.current
-    val hPad = if (s.tv) 24.dp else 18.dp
+    val hPad = 18.dp
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val (container, content) = when (tone) {
@@ -223,7 +223,7 @@ fun ExtendButton(
         modifier = modifier
             // Not on TV: there a focused quiet button shows its container, which must stay inside the column.
             .then(if (flushEnd && !s.tv) Modifier.offset(x = hPad) else Modifier)
-            .heightIn(min = if (s.tv) 56.dp else 48.dp)
+            .heightIn(min = 48.dp)
             .widthIn(min = 48.dp)
             .focusRing(focused),
     ) {
@@ -319,10 +319,10 @@ fun TopBar(context: String?, trailing: @Composable () -> Unit = {}) {
     Column(Modifier.fillMaxWidth()) {
         PageColumn(Modifier.padding(top = s.overscanTop)) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = if (s.tv) 68.dp else 56.dp),
+                Modifier.fillMaxWidth().heightIn(min = if (s.tv) 48.dp else 56.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Mark(if (s.tv) 30.dp else 26.dp)
+                Mark(26.dp)
                 Spacer(Modifier.width(10.dp))
                 Text("extend", style = Type.body(s).copy(fontWeight = FontWeight.Medium))
                 if (context != null) {
@@ -380,7 +380,7 @@ fun ExtendTextField(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(min = if (s.tv) 56.dp else 48.dp)
+                        .heightIn(min = 48.dp)
                         .background(if (enabled) Tokens.Paper else Tokens.Surface, Radius)
                         .border(if (focused) 1.5.dp else 1.dp, if (focused) Tokens.Cobalt else Tokens.LineStrong, Radius)
                         .padding(horizontal = 14.dp, vertical = 10.dp),

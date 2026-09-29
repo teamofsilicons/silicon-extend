@@ -1,6 +1,7 @@
 package com.teamofsilicons.extend.ui
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -124,6 +126,10 @@ fun AppScreen(
         AddPairScreen(extend, state, adding)
         return
     }
+    if (state.phase == Phase.PAIRED && state.isTv) {
+        TvDeviceScreen(extend, state, actions, footer)
+        return
+    }
     // Each phase opens at the top, with the Silicon using the device first.
     val scroll = rememberScrollState()
     LaunchedEffect(state.phase) { scroll.scrollTo(0) }
@@ -165,9 +171,15 @@ fun ScrollingPage(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
     ) {
         topBar()
-        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll)) {
-            PageColumn(Modifier.padding(vertical = if (s.tv) 28.dp else 22.dp), content = content)
-            Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.safeDrawing))
+        if (s.tv) {
+            TvScrollPane(scroll, Modifier.weight(1f).padding(horizontal = s.gutter)) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), content = content)
+            }
+        } else {
+            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll)) {
+                PageColumn(Modifier.padding(vertical = 22.dp), content = content)
+                Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.safeDrawing))
+            }
         }
     }
 }
@@ -250,11 +262,7 @@ private fun Footer(state: UiState, onOpenDeveloperSettings: () -> Unit, onOpenLi
         ) {
             Mono("${DeviceInfo.appName(state.isTv)} ${BuildConfig.VERSION_NAME}")
         }
-        // On the TV pairing screen (nothing else to press) the remote starts on the licences link,
-        // not on the hidden developer-settings trigger. Paired screens keep focus at the top.
-        val licences = remember { FocusRequester() }
-        if (state.isTv && state.phase == Phase.UNPAIRED) LaunchedEffect(Unit) { runCatching { licences.requestFocus() } }
-        ExtendButton("Open-source licences", onOpenLicences, tone = Tone.Quiet, modifier = Modifier.focusRequester(licences))
+        ExtendButton("Open-source licences", onOpenLicences, tone = Tone.Quiet)
     }
 }
 
@@ -423,9 +431,11 @@ private fun ErrorNote(text: String) {
 
 /** TV: a poster. A dithered cobalt field on the left, the code across the paper on the right. */
 @Composable
-private fun TvPairingScreen(state: UiState, footer: @Composable () -> Unit) {
+internal fun TvPairingScreen(state: UiState, footer: @Composable () -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { first.requestFocus() }
     Row(Modifier.fillMaxSize().paperGrain()) {
-        Box(Modifier.fillMaxHeight().weight(0.3f)) {
+        Box(Modifier.fillMaxHeight().weight(0.22f)) {
             GrainField(Modifier.fillMaxSize(), Dissolve.RIGHT, cell = 6.dp, seed = 2.1f)
             Column(Modifier.fillMaxHeight().padding(start = 40.dp, top = 40.dp, bottom = 36.dp)) {
                 Mark(40.dp, tint = Color.White)
@@ -435,22 +445,18 @@ private fun TvPairingScreen(state: UiState, footer: @Composable () -> Unit) {
                 Eyebrow("TV", color = Color.White)
             }
         }
-        Column(
-            Modifier
-                .weight(0.7f)
-                .fillMaxHeight()
-                .verticalScroll(rememberScrollState())
-                // Android TV's overscan-safe margins: 48 dp at the sides, 27 dp top and bottom.
-                .padding(start = 32.dp, end = 56.dp, top = 36.dp, bottom = 27.dp),
+        TvScrollPane(
+            rememberScrollState(),
+            Modifier.weight(0.78f).fillMaxHeight().padding(start = 24.dp, end = 48.dp, top = 27.dp),
         ) {
             state.environment?.let { EnvironmentBanner(it.name) }
             Eyebrow("${DeviceInfo.TV_APP_NAME} · Pairing")
             Gap(8.dp)
-            Title("Pair this TV")
+            Title("Pair this TV", Modifier.focusRequester(first))
             Gap(8.dp)
             Muted("On extend.teamofsilicons.com, choose Add a device and enter this code.")
             Gap(10.dp)
-            PosterCode(state.pairing.code, maxSp = 168f)
+            PosterCode(state.pairing.code, maxSp = 96f)
             Gap(6.dp)
             CodeExpiry(state)
             state.pairing.error?.let {
@@ -500,6 +506,20 @@ private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) 
     Gap(22.dp)
     InUseCard(extend, state)
     WakeRequestsCard(state)
+    IndicatorSettings(extend, state)
+
+    DeviceSetup(state, actions)
+
+    // The Carbons before Android debugging: on a TV the remote reaches Pair with another Carbon and
+    // Revoke pair without passing the debugging card's text fields (which open the keyboard).
+    CarbonsCard(extend, state)
+    AndroidDebuggingCard(extend, state)
+}
+
+@Composable
+private fun IndicatorSettings(extend: Extend, state: UiState) {
+    val tv = state.isTv
+    val noun = if (tv) "TV" else "device"
     Gap(22.dp)
     CardTitle("In-use banner")
     Gap(8.dp)
@@ -509,12 +529,18 @@ private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) 
     else Muted("Requests that need your help still appear.")
     state.indicatorNote?.let { Muted(it) }
 
+}
+
+@Composable
+private fun DeviceSetup(state: UiState, actions: SetupActions) {
+    val tv = state.isTv
+    val noun = if (tv) "TV" else "device"
     val report = state.report
     if (report != null) {
         val setup = report.setup
         val (required, optional) = report.items.partition { it.required }
         val done = required.count { it.step.status == "done" }
-        Gap(34.dp)
+        Gap(if (tv) 14.dp else 34.dp)
         Eyebrow(if (setup.state == "complete") "Setup" else "Setup · $done of ${required.size} allowed")
         Gap(6.dp)
         CardTitle(if (setup.state == "complete") "Setup is done" else "Finish setting up")
@@ -536,10 +562,61 @@ private fun PairedScreen(extend: Extend, state: UiState, actions: SetupActions) 
         }
     }
 
-    // The Carbons before Android debugging: on a TV the remote reaches Pair with another Carbon and
-    // Revoke pair without passing the debugging card's text fields (which open the keyboard).
-    CarbonsCard(extend, state)
-    AndroidDebuggingCard(extend, state)
+}
+
+/** Short TV pages keep settings reachable without traversing every setup step. */
+@Composable
+private fun TvDeviceScreen(extend: Extend, state: UiState, actions: SetupActions, footer: @Composable () -> Unit) {
+    var selected by rememberSaveable { mutableIntStateOf(0) }
+    val labels = listOf("Overview", "Setup", "Sharing", "Debugging", "Settings")
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { first.requestFocus() }
+    BackHandler(enabled = selected != 0) { selected = 0; first.requestFocus() }
+    val scroll = rememberScrollState()
+    LaunchedEffect(selected) { scroll.scrollTo(0) }
+    ScrollingPage(
+        topBar = {
+            TopBar("TV", trailing = { StatusPill(state) })
+            PageColumn(Modifier.padding(top = 8.dp, bottom = 8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    labels.forEachIndexed { index, label ->
+                        ExtendButton(label, { selected = index },
+                            tone = if (selected == index) Tone.Primary else Tone.Quiet,
+                            modifier = Modifier.weight(1f).then(if (index == 0) Modifier.focusRequester(first) else Modifier))
+                    }
+                }
+            }
+        },
+        scroll = scroll,
+    ) {
+        key(selected) {
+            state.environment?.let { EnvironmentBanner(it.name) }
+            when (selected) {
+                0 -> {
+                    Title(state.pairs.firstOrNull()?.name ?: "This TV")
+                    Gap(8.dp)
+                    Muted(pairedToLine(state.pairs))
+                    Gap(6.dp)
+                    LinkStatus(state)
+                    if (state.pairs.size <= 1 && (state.link == Link.SUPERSEDED || state.link == Link.UPGRADE_REQUIRED)) {
+                        Gap(10.dp)
+                        ExtendButton("Reconnect", { extend.connection.reconnect() }, tone = Tone.Secondary)
+                    }
+                    Gap(14.dp)
+                    InUseCard(extend, state)
+                    WakeRequestsCard(state)
+                    if (state.report?.setup?.state != "complete") {
+                        Gap(14.dp)
+                        ExtendButton("Finish setting up", { selected = 1 }, tone = Tone.Secondary)
+                    }
+                }
+                1 -> { Title("TV setup"); DeviceSetup(state, actions) }
+                2 -> { Title("Sharing this TV"); CarbonsCard(extend, state) }
+                3 -> { Title("Android debugging"); AndroidDebuggingCard(extend, state) }
+                4 -> { Title("TV settings"); IndicatorSettings(extend, state); Gap(24.dp); Hairline(); Gap(8.dp); footer() }
+            }
+        }
+    }
 }
 
 /**
@@ -699,7 +776,7 @@ private fun AddPairScreen(extend: Extend, state: UiState, adding: com.teamofsili
         ) {
             Eyebrow("Pairing code for another Carbon")
             Gap(6.dp)
-            PosterCode(adding.pairing.code, maxSp = if (tv) 168f else 120f)
+            PosterCode(adding.pairing.code, maxSp = if (tv) 96f else 120f)
             Gap(10.dp)
             Hairline()
             Gap(10.dp)
@@ -856,7 +933,7 @@ private fun StepList(items: List<SetupItem>, first: Int, tv: Boolean, devOptions
 private fun StepRow(index: Int, item: SetupItem, tv: Boolean, devOptions: Boolean, actions: SetupActions) {
     val s = LocalScale.current
     val step = item.step
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp)) {
+    Row(Modifier.fillMaxWidth().tvReadingFocus().padding(horizontal = 16.dp, vertical = if (tv) 12.dp else 16.dp)) {
         Mono("%02d".format(index), modifier = Modifier.width(if (s.tv) 40.dp else 30.dp).padding(top = 2.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.Top) {

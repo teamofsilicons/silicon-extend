@@ -841,3 +841,35 @@ phones' in-use notifications and TVs' badges hide after 10 seconds; requests wai
 stay until answered. The quiet foreground-service notification remains on phones. TV setup no
 longer requires the phone-only background battery exemption. A separate transparent accessibility
 window maintains the screen hold even after the TV badge hides.
+
+### TV layout and remote navigation follow-up (2026-09-28)
+
+TV screens use a compact 30 sp title / 17 sp body scale, 48 dp buttons and the
+existing 48 dp side / 27 dp vertical safe margins. The paired screen has persistent
+Overview, Setup, Sharing, Debugging and Settings sections; Back returns to Overview.
+The banner preference and app information live in Settings. Phones retain their
+single-page layout and type scale.
+
+The pairing page starts on its heading, with a code capped at 96 sp; the footer
+no longer takes initial focus and pulls the code offscreen. Headings and setup rows
+are remote focus targets. Scrollable TV pages have a separate focusable scroll bar:
+move to it with the remote, then Up/Down scrolls without jumping between controls,
+including across paragraphs taller than the viewport. Left returns to the controls.
+The bar appears only when the page overflows; the navigation hint stays visible.
+
+`TvNavigationTest` exercises real key events for scrolling a long passage down and
+back to the top, leaving the scroll bar, returning from the pairing footer, reaching
+every section, and Back to Overview. It also renders a cramped 640 dp TV viewport
+and enlarged text. Run it on a dedicated TV emulator:
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+adb -s <tv-emulator> install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s <tv-emulator> install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s <tv-emulator> shell am instrument -w -e class com.teamofsilicons.extend.TvNavigationTest \
+  com.teamofsilicons.extend.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The signed local TV fix retains version 1.1.0 / code 4 and the production signing
+key so it can update the existing installation. It is not a new published release.
+Physical maker-TV installation and remote behavior still need verification on that TV.

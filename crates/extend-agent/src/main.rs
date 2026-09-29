@@ -135,6 +135,9 @@ fn real_main(cli: Cli) -> Result<i32> {
         download_url: cli.download_url.clone(),
     };
     let config = Config::load(&overrides)?;
+    // Finder/Spotlight launches the app without a subcommand; the login entry explicitly
+    // uses `run`, which should keep the main window hidden until the app is opened.
+    let show_on_start = cfg!(target_os = "macos") && cli.command.is_none();
     let default_run = Command::Run {
         headless: false,
         autostart: false,
@@ -151,7 +154,7 @@ fn real_main(cli: Cli) -> Result<i32> {
                 (_, true) => extend_agent::autostart::RunFlag::Off,
                 _ => extend_agent::autostart::RunFlag::Unset,
             };
-            run(config, headless, flag, cli.verbose)
+            run(config, headless, flag, cli.verbose, show_on_start)
         }
         Command::Status { json } => {
             let s = status::read_status_file(&config.status_path());
@@ -382,7 +385,13 @@ fn apply_autostart_flag(config: &Config, flag: extend_agent::autostart::RunFlag,
     }
 }
 
-fn run(config: Config, headless: bool, autostart: extend_agent::autostart::RunFlag, verbose: bool) -> Result<i32> {
+fn run(
+    config: Config,
+    headless: bool,
+    autostart: extend_agent::autostart::RunFlag,
+    verbose: bool,
+    show_on_start: bool,
+) -> Result<i32> {
     init_logging(&config, verbose, true);
     let Some(_lock) = single_instance(&config)? else {
         let s = status::read_status_file(&config.status_path());
@@ -444,11 +453,11 @@ fn run(config: Config, headless: bool, autostart: extend_agent::autostart::RunFl
         });
         return Ok(0);
     }
-    run_with_ui(agent, handle, &config)
+    run_with_ui(agent, handle, &config, show_on_start)
 }
 
 #[cfg(feature = "tray")]
-fn run_with_ui(agent: Agent, handle: AgentHandle, config: &Config) -> Result<i32> {
+fn run_with_ui(agent: Agent, handle: AgentHandle, config: &Config, show_on_start: bool) -> Result<i32> {
     let rt = runtime()?;
     let rt_handle = rt.handle().clone();
     {
@@ -478,12 +487,13 @@ fn run_with_ui(agent: Agent, handle: AgentHandle, config: &Config) -> Result<i32
     let context = extend_agent::ui::Context {
         state_dir: config.state_dir.clone(),
         download_url: config.download_url.to_string(),
+        show_on_start,
     };
     extend_agent::ui::run(handle, rt_handle, agent_thread, context)
 }
 
 #[cfg(not(feature = "tray"))]
-fn run_with_ui(_agent: Agent, _handle: AgentHandle, _config: &Config) -> Result<i32> {
+fn run_with_ui(_agent: Agent, _handle: AgentHandle, _config: &Config, _show_on_start: bool) -> Result<i32> {
     anyhow::bail!("this build has no tray icon; run with --headless")
 }
 

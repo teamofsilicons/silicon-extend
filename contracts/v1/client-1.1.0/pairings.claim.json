@@ -1,0 +1,107 @@
+{
+  "api_version": 1,
+  "call": "Authed::pair",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "enrollment"
+  ],
+  "operation": "pairings.claim",
+  "request": {
+    "body": {
+      "data": {
+        "name": "Pixel",
+        "pair_ttl_days": 14,
+        "pairing_code": "{pairing_code}",
+        "silicon_ids": [
+          "{silicon_id}"
+        ],
+        "visibility": "team"
+      },
+      "type": "pairing"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/pairings"
+  },
+  "response": {
+    "non_null": [
+      "/device_id",
+      "/in_use/paused",
+      "/in_use/session_id",
+      "/in_use/silicon_id",
+      "/in_use/since",
+      "/in_use_by_other",
+      "/in_use_by_other_carried",
+      "/kind",
+      "/missing/*/capability",
+      "/missing/*/reason",
+      "/name",
+      "/online",
+      "/os",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/state",
+      "/visibility",
+      "/wake_requests/*/asks",
+      "/wake_requests/*/created_at",
+      "/wake_requests/*/device_id",
+      "/wake_requests/*/device_notice",
+      "/wake_requests/*/expires_at",
+      "/wake_requests/*/from",
+      "/wake_requests/*/host/device_id",
+      "/wake_requests/*/host/name",
+      "/wake_requests/*/host/online",
+      "/wake_requests/*/last_asked_at",
+      "/wake_requests/*/reason",
+      "/wake_requests/*/state",
+      "/wake_requests/*/team",
+      "/wake_requests/*/to",
+      "/wake_requests/*/wake_detectable",
+      "/wake_requests/*/wake_id"
+    ],
+    "required": [
+      "/device_id",
+      "/in_use/session_id",
+      "/in_use/silicon_id",
+      "/in_use/since",
+      "/kind",
+      "/missing/*/capability",
+      "/missing/*/reason",
+      "/name",
+      "/online",
+      "/os",
+      "/owner",
+      "/owner/id",
+      "/owner/type",
+      "/state",
+      "/visibility",
+      "/wake_requests/*/asks",
+      "/wake_requests/*/created_at",
+      "/wake_requests/*/device_id",
+      "/wake_requests/*/device_notice",
+      "/wake_requests/*/expires_at",
+      "/wake_requests/*/from",
+      "/wake_requests/*/host/device_id",
+      "/wake_requests/*/host/name",
+      "/wake_requests/*/host/online",
+      "/wake_requests/*/last_asked_at",
+      "/wake_requests/*/reason",
+      "/wake_requests/*/state",
+      "/wake_requests/*/team",
+      "/wake_requests/*/to",
+      "/wake_requests/*/wake_detectable",
+      "/wake_requests/*/wake_id"
+    ],
+    "status": "2xx",
+    "type": "device"
+  }
+}

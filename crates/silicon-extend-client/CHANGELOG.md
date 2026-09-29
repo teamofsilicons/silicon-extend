@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+Adds the experimental `ref_actions` module for selecting an existing device ref with TypeSafe
+Jev or a configured OpenAI-compatible model. `Observation` normalizes nested and flat snapshots,
+limits choices to supported operations, and validates selected refs. `ModelClient` returns a
+decision; callers retain responsibility for screen revalidation and command execution.
+
+Jev evaluates operation and target questions in one request, with confidence-gated abstention.
+Exact fill text stays with the caller. The `ref_benchmark` example measures either one provider
+or paired providers on recorded observations. API v1 and protocol 1.1.0 remain unchanged.
+
 ## 1.1.0
 
 Devices belong to the Carbons who paired them, several Carbons can pair one device, Silicons can

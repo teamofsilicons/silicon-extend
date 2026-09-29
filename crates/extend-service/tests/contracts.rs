@@ -2219,6 +2219,11 @@ async fn client_1_0_0_fixtures_still_replay() {
 }
 
 #[tokio::test]
+async fn client_1_1_0_fixtures_still_replay() {
+    replay("client-1.1.0").await;
+}
+
+#[tokio::test]
 async fn device_app_fixtures_still_replay() {
     replay("device").await;
 }

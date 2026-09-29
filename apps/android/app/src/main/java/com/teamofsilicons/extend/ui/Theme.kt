@@ -106,9 +106,9 @@ data class Scale(
 ) {
     companion object {
         val Phone = Scale(false, title = 32.sp, cardTitle = 21.sp, body = 15.sp, small = 13.sp, eyebrow = 11.sp, button = 15.sp, gutter = 20.dp, column = 640.dp, overscanTop = 0.dp)
-        // A TV is 960 dp wide: the column fills it between the 48 dp overscan gutters, the same
-        // edges the corner badge keeps, so the badge, top bar and cards share one right edge.
-        val Tv = Scale(true, title = 44.sp, cardTitle = 28.sp, body = 20.sp, small = 17.sp, eyebrow = 14.sp, button = 19.sp, gutter = 48.dp, column = 864.dp, overscanTop = 27.dp)
+        // Keep TV text readable without consuming most of a 540 dp-tall screen.
+        // Preserve overscan margins; wide displays can use more of their available width.
+        val Tv = Scale(true, title = 30.sp, cardTitle = 22.sp, body = 17.sp, small = 15.sp, eyebrow = 11.sp, button = 16.sp, gutter = 48.dp, column = 1100.dp, overscanTop = 27.dp)
     }
 }
 
@@ -120,12 +120,12 @@ object Type {
     const val CARD_TITLE_TRACKING_EM = -0.025f
     fun title(s: Scale) = TextStyle(fontFamily = SourceSerif, fontSize = s.title, lineHeight = s.title * 1.15, letterSpacing = TITLE_TRACKING_EM.em, color = Tokens.Ink)
     fun cardTitle(s: Scale) = TextStyle(fontFamily = SourceSerif, fontSize = s.cardTitle, lineHeight = s.cardTitle * 1.3, letterSpacing = CARD_TITLE_TRACKING_EM.em, color = Tokens.Ink)
-    fun body(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.body, lineHeight = s.body * 1.6, color = Tokens.Ink)
-    fun muted(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.small, lineHeight = s.small * 1.7, color = Tokens.Muted)
+    fun body(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.body, lineHeight = s.body * if (s.tv) 1.4f else 1.6f, color = Tokens.Ink)
+    fun muted(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.small, lineHeight = s.small * if (s.tv) 1.45f else 1.7f, color = Tokens.Muted)
     fun eyebrow(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.eyebrow, lineHeight = s.eyebrow * 1.5, letterSpacing = 0.12.em, color = Tokens.Muted)
     fun mono(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.small, lineHeight = s.small * 1.6, color = Tokens.Muted)
     /** A form field holding a URL or an id: body size, IBM Plex Mono. */
-    fun monoField(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.body * 0.94f, lineHeight = s.body * 1.6, color = Tokens.Ink)
+    fun monoField(s: Scale) = TextStyle(fontFamily = PlexMono, fontSize = s.body * 0.94f, lineHeight = s.body * if (s.tv) 1.4f else 1.6f, color = Tokens.Ink)
     fun label(s: Scale) = TextStyle(fontFamily = PlexSans, fontSize = s.button, fontWeight = FontWeight.Medium, lineHeight = s.button * 1.4)
 }
 

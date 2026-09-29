@@ -1,0 +1,26 @@
+{
+  "api_version": 1,
+  "call": "Client::revoke_pair",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "device.revoke",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "DELETE",
+    "path": "/api/v1/device"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

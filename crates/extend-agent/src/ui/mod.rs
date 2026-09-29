@@ -50,6 +50,8 @@ pub struct Context {
     pub state_dir: PathBuf,
     /// Where "Download the update" goes (`Config::download_url`).
     pub download_url: String,
+    /// A manual app launch opens its window; login startup stays in the background.
+    pub show_on_start: bool,
 }
 
 /// Start at login as the window shows it.
@@ -80,9 +82,13 @@ pub fn run(
     #[cfg(target_os = "macos")]
     {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS as _};
-        // A menu-bar app: no Dock icon, no app menu.
-        event_loop.set_activation_policy(ActivationPolicy::Accessory);
+        // A regular app with a Dock icon and Command-Tab presence. Closing the window
+        // only hides it; the agent keeps running until Quit.
+        event_loop.set_activation_policy(ActivationPolicy::Regular);
+        event_loop.set_activate_ignoring_other_apps(false);
     }
+    #[cfg(target_os = "macos")]
+    let _app_menu = create_app_menu();
     let proxy = event_loop.create_proxy();
 
     // Status changes wake the UI.
@@ -145,7 +151,16 @@ pub fn run(
             .map(ControlFlow::WaitUntil)
             .unwrap_or(ControlFlow::Wait);
         match event {
-            Event::NewEvents(StartCause::Init) => ui.create_tray(),
+            Event::NewEvents(StartCause::Init) => {
+                ui.create_tray();
+                if ui.context.show_on_start {
+                    ui.show_main(target);
+                }
+            }
+            // Spotlight/Finder/Dock reopen the running app. A visible usage banner must
+            // not prevent the main window from opening, so ignore has_visible_windows.
+            #[cfg(target_os = "macos")]
+            Event::Reopen { .. } => ui.show_main(target),
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => ui.on_status(ui.status.clone(), target),
             Event::UserEvent(UserEvent::Status(s)) => ui.on_status(*s, target),
             Event::UserEvent(UserEvent::Menu(e)) => ui.on_menu(e.id.0.as_str(), target, control_flow),
@@ -167,6 +182,56 @@ pub fn run(
             _ => {}
         }
     })
+}
+
+#[cfg(target_os = "macos")]
+fn create_app_menu() -> Menu {
+    use tray_icon::menu::{
+        Submenu,
+        accelerator::{Accelerator, Code, Modifiers},
+    };
+
+    let app = Submenu::with_items(
+        "Silicon Extend",
+        true,
+        &[
+            &PredefinedMenuItem::hide(Some("Hide Silicon Extend")),
+            &PredefinedMenuItem::hide_others(None),
+            &PredefinedMenuItem::show_all(None),
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id(
+                "quit",
+                "Quit Silicon Extend",
+                true,
+                Some(Accelerator::new(Modifiers::META, Code::KeyQ)),
+            ),
+        ],
+    )
+    .expect("valid app menu");
+    let window = Submenu::with_items(
+        "Window",
+        true,
+        &[
+            &MenuItem::with_id("show", "Show Silicon Extend", true, None),
+            &MenuItem::with_id(
+                "window_minimize",
+                "Minimize",
+                true,
+                Some(Accelerator::new(Modifiers::META, Code::KeyM)),
+            ),
+            &MenuItem::with_id(
+                "window_close",
+                "Close Window",
+                true,
+                Some(Accelerator::new(Modifiers::META, Code::KeyW)),
+            ),
+        ],
+    )
+    .expect("valid window menu");
+    let menu = Menu::with_items(&[&app, &window]).expect("valid macOS menu");
+    menu.init_for_nsapp();
+    window.set_as_windows_menu_for_nsapp();
+    menu
 }
 
 struct Ui {
@@ -654,6 +719,7 @@ impl Ui {
             self.main = Some((window, view));
         }
         if let Some((w, _)) = &self.main {
+            w.set_minimized(false);
             w.set_visible(true);
             w.set_focus();
         }
@@ -779,6 +845,16 @@ impl Ui {
             "stop" => self.send(UiAction::Stop { target: None }),
             "takeover_done" => self.send(UiAction::TakeoverDone { target: None }),
             "show" => self.show_main(target),
+            "window_minimize" => {
+                if let Some((window, _)) = &self.main {
+                    window.set_minimized(true);
+                }
+            }
+            "window_close" => {
+                if let Some((window, _)) = &self.main {
+                    window.set_visible(false);
+                }
+            }
             "banner_restore" => {
                 let now = Instant::now();
                 for b in banner_sessions(&self.status) {

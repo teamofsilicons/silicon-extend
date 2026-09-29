@@ -66,6 +66,7 @@ fn main() {
         Context {
             state_dir: directory,
             download_url: "https://example.invalid/fixture".into(),
+            show_on_start: std::env::var_os("EXTEND_FIXTURE_SHOW_ON_START").is_some(),
         },
     );
 }

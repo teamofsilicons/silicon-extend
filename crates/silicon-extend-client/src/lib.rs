@@ -19,6 +19,8 @@
 use std::time::Duration;
 
 pub mod attachments;
+/// Opt-in reference selection experiment; does not alter device commands or authorization.
+pub mod ref_actions;
 pub use extend_protocol as protocol;
 use extend_protocol::envelope::Page;
 use extend_protocol::model::*;
