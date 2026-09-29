@@ -105,6 +105,10 @@ workspace/client/protocol versions unchanged. Publish only `silicon-extend-cli` 
 Create its GitHub release with `--latest=false` so the website's latest desktop/Android downloads
 continue pointing at the full app release.
 
+CLI/client 1.2.0 uses this same `cli-v` archive lane. Its client crate has an independent 1.2.0
+version, and the workspace dependency points to it. Publish `silicon-extend-client` before
+`silicon-extend-cli`; service, protocol and device-app versions remain 1.1.0.
+
 ## Device apps
 
 Android: `apps/android` builds the APK, package `com.teamofsilicons.extend` (1.1.0: `versionName`

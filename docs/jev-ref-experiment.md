@@ -77,6 +77,14 @@ scope. Ref-based execution remains subject to the quality and completeness of th
 session lookup). `selected` means dry-run only; `executed` means the device command succeeded,
 not that a larger user task was verified. `blocked`, `stale`, and `execution_failed` exit nonzero.
 
+Jev is optional. Ordinary snapshot and ref commands have no model dependency and remain usable
+after API failures, timeouts, invalid responses, absent credentials or abstentions. Selection
+errors carry `error.details.normal_ref_fallback`; blocked/stale outputs carry `normal_ref_fallback`.
+This tells the calling agent to take a fresh snapshot in the same session and continue using normal
+ref commands. It is a handoff to the existing planner, not an automatic guess at the intended ref.
+An explicitly configured `--fallback llm` can instead recover during selection. Execution failures
+do not provide this retry handoff because an action may have already affected the device.
+
 ## Benchmark
 
 The paired runner uses the production selection implementation for both providers, alternates

@@ -122,7 +122,10 @@ fn ref_act_changed_screen_and_low_confidence_never_execute() {
         assert!(!out.status.success());
         let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
         assert_eq!(doc["status"], expected);
+        assert_eq!(doc["normal_ref_fallback"]["mode"], "normal_refs");
         assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), count);
+        let regular = cli(&format!("{name}-regular"), &f).run(&["click", "@e1", "--json"]);
+        assert!(regular.status.success(), "{}", stderr(&regular));
     }
 }
 
@@ -133,8 +136,69 @@ fn ref_act_explicit_fallback_is_measured_and_device_failure_is_not_retried() {
     assert!(!out.status.success());
     let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(doc["status"], "execution_failed");
+    assert!(doc["normal_ref_fallback"].is_null());
     assert_eq!(doc["attempts"].as_array().unwrap().len(), 2);
     assert_eq!(doc["decision"]["provider"], "llm");
     assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), 3);
+    assert_eq!(f.requests("POST", "/llm").len(), 1);
+}
+
+#[test]
+fn ref_act_provider_failures_leave_normal_commands_working() {
+    for failure in ["http", "malformed", "timeout", "missing-key"] {
+        let f = fake(false, false, false);
+        let model = Fake::start(move |_| {
+            if failure == "timeout" {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+            Some(Resp {
+                status: if failure == "http" { 503 } else { 200 },
+                headers: vec![],
+                body: b"not json".to_vec(),
+            })
+        });
+        let c = cli(&format!("ref-fail-{failure}"), &f)
+            .env("EXTEND_JEV_URL", &format!("{}/jev", model.url))
+            .env(
+                "TYPESAFE_API_KEY",
+                if failure == "missing-key" { "" } else { "model-only-key" },
+            );
+        let out = c.run(&["act", "Click Save", "--timeout", "1000", "--json"]);
+        assert!(!out.status.success(), "{failure}");
+        let doc: Value = serde_json::from_str(&stderr(&out)).unwrap();
+        assert_eq!(
+            doc["error"]["details"]["normal_ref_fallback"]["mode"], "normal_refs",
+            "{doc}"
+        );
+        assert_eq!(doc["error"]["details"]["action_executed"], false);
+        let calls = f.requests("POST", "/api/v1/sessions/a3f/commands");
+        assert!(calls.iter().all(|r| r.body["data"]["command"] == "snapshot"));
+        let count = model.requests("POST", "/jev").len();
+        for argv in [vec!["snapshot", "-i", "--json"], vec!["click", "@e1", "--json"]] {
+            let out = c.run(&argv);
+            assert!(out.status.success(), "{failure}: {}", stderr(&out));
+        }
+        assert_eq!(model.requests("POST", "/jev").len(), count);
+    }
+}
+
+#[test]
+fn ref_act_explicit_llm_fallback_recovers_from_jev_http_failure() {
+    let f = fake(false, false, false);
+    let model = Fake::start(|_| {
+        Some(Resp {
+            status: 503,
+            headers: vec![],
+            body: vec![],
+        })
+    });
+    let out = cli("ref-http-fallback", &f)
+        .env("EXTEND_JEV_URL", &format!("{}/jev", model.url))
+        .run(&["act", "Click Save", "--fallback", "llm", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["status"], "executed");
+    assert_eq!(doc["decision"]["provider"], "llm");
+    assert_eq!(model.requests("POST", "/jev").len(), 1);
     assert_eq!(f.requests("POST", "/llm").len(), 1);
 }

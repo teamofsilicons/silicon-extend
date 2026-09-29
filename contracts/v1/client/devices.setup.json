@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Authed::setup",
   "consumer": "silicon-extend-client",
-  "consumer_version": "1.1.0",
+  "consumer_version": "1.2.0",
   "contract": 1,
   "given": [
     "device"

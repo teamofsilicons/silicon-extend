@@ -16,6 +16,11 @@ extend click @e2
 extend session end
 ```
 
+Version 1.2 adds opt-in `extend act 'Click Save'` with TypeSafe Jev. Configure `TYPESAFE_API_KEY`
+locally; `--dry-run --json` reports a decision without executing it. Ordinary snapshot and ref
+commands work independently of Jev, including when its API fails. See the
+[ref-action guide](https://github.com/teamofsilicons/silicon-extend/blob/main/docs/jev-ref-experiment.md).
+
 `extend --help` is a tree of documentation. The CLI is built only on
 [`silicon-extend-client`](https://crates.io/crates/silicon-extend-client). Reference:
 [extend.teamofsilicons.com/docs/cli](https://extend.teamofsilicons.com/docs/cli). MIT licensed.

@@ -22,7 +22,7 @@ pub const NODES: &[Node] = &[
     Node {
         path: "act",
         usage: "extend act <instruction> [--text <exact-value>] [--provider jev|llm] [--fallback llm] [--dry-run]",
-        purpose: "Experimental: choose and run one action using existing element refs. Sends structured screen text to the configured model provider. Opt-in per command; normal ref commands are unchanged.",
+        purpose: "Experimental: choose and run one action using existing element refs. Sends structured screen text to the configured model provider. Opt-in per command; normal ref commands work without Jev, including after provider failures.",
         used_with: "Connect a session first. Requires snapshot plus click/fill/focus/get support. Set TYPESAFE_API_KEY for Jev. For an LLM baseline/fallback set EXTEND_REF_LLM_URL (full chat-completions URL), EXTEND_REF_LLM_KEY, EXTEND_REF_LLM_MODEL. No screenshots, coordinates, generated selectors, or generated field values. A fresh snapshot must match before execution; failures are never retried as actions. Use ordinary commands for scrolling and multi-step planning.",
         flags: &[
             (

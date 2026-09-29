@@ -7,12 +7,20 @@ use silicon_extend_client::ref_actions::{ModelClient, ModelConfig, Observation, 
 
 use crate::{Args, CliError, CommandRequest, CommandResult, Ctx, ErrorCode, R};
 
+fn normal_ref_fallback() -> Value {
+    json!({"mode":"normal_refs","requires_fresh_snapshot":true,
+        "snapshot":{"command":"snapshot","args":["-i","--force-full"]},
+        "instructions":"Continue in the same session using the normal agent: read a fresh snapshot, choose an observed ref, then run the ordinary device command. These commands do not require Jev."})
+}
+
 fn model_error(e: RefError) -> CliError {
     let code = match e {
         RefError::Invalid(_) => ErrorCode::InvalidInput,
         RefError::Provider(_) => ErrorCode::CommandFailed,
     };
-    CliError::new(code, e.to_string()).hint("See `extend act --help`. No selected action was executed.")
+    CliError::new(code, e.to_string())
+        .hint("No selected action was executed. Continue with `extend snapshot -i --force-full` and normal ref commands; Jev is optional.")
+        .details(json!({"action_executed":false,"normal_ref_fallback":normal_ref_fallback()}))
 }
 
 async fn command(ctx: &mut Ctx, sid: &str, name: &str, args: Vec<String>) -> R<CommandResult> {
@@ -174,7 +182,8 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
     let ok = matches!(status, "selected" | "executed");
     ctx.emit(
         json!({"experimental":true,"ok":ok,"status":status,"decision":decision,"attempts":attempts,
-        "result":result,"timings":{"snapshot_ms":snapshot_ms,"selection_ms":selection_ms,
+        "result":result,"normal_ref_fallback":if matches!(status,"blocked"|"stale") {normal_ref_fallback()} else {Value::Null},
+        "timings":{"snapshot_ms":snapshot_ms,"selection_ms":selection_ms,
         "revalidate_ms":revalidate_ms,"execution_ms":execution_ms,"total_ms":started.elapsed().as_secs_f64()*1000.0}}),
         || {
             format!(
@@ -183,8 +192,8 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
                 decision.target.as_deref().unwrap_or(""),
                 selection_ms,
                 started.elapsed().as_secs_f64() * 1000.0,
-                if status == "stale" {
-                    " Screen changed; rerun the instruction after inspecting it."
+                if matches!(status,"blocked"|"stale") {
+                    " Continue with a fresh snapshot and normal ref commands; Jev is optional."
                 } else {
                     ""
                 }

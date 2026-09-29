@@ -1,0 +1,39 @@
+{
+  "api_version": 1,
+  "call": "Authed::setup",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "devices.setup",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/devices/{device_id}/setup"
+  },
+  "response": {
+    "non_null": [
+      "/state",
+      "/steps",
+      "/steps/*/key",
+      "/steps/*/status",
+      "/steps/*/title"
+    ],
+    "required": [
+      "/state",
+      "/steps",
+      "/steps/*/key",
+      "/steps/*/status",
+      "/steps/*/title"
+    ],
+    "status": "2xx",
+    "type": "setup"
+  }
+}

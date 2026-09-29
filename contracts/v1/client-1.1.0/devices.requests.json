@@ -1,0 +1,47 @@
+{
+  "api_version": 1,
+  "call": "Authed::device_requests",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "devices.requests",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/devices/{device_id}/requests?limit=20"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/created_at",
+      "/items/*/delivery",
+      "/items/*/device_id",
+      "/items/*/from",
+      "/items/*/from_hidden",
+      "/items/*/reason",
+      "/items/*/request_id",
+      "/items/*/to",
+      "/items/*/to_hidden"
+    ],
+    "required": [
+      "/items",
+      "/items/*/created_at",
+      "/items/*/delivery",
+      "/items/*/device_id",
+      "/items/*/from",
+      "/items/*/reason",
+      "/items/*/request_id",
+      "/items/*/to"
+    ],
+    "status": "2xx",
+    "type": "requests"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "api_version": 1,
+  "call": "Authed::send_request",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.1.0",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "operation": "requests.send",
+  "request": {
+    "body": {
+      "data": {
+        "reason": "Need it for an OTP, 2 minutes"
+      },
+      "type": "request"
+    },
+    "headers": {
+      "authorization": "Bearer {other_silicon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/devices/{device_id}/requests"
+  },
+  "response": {
+    "non_null": [
+      "/created_at",
+      "/delivery",
+      "/device_id",
+      "/from",
+      "/from_hidden",
+      "/reason",
+      "/request_id",
+      "/to",
+      "/to_hidden"
+    ],
+    "required": [
+      "/created_at",
+      "/delivery",
+      "/device_id",
+      "/from",
+      "/reason",
+      "/request_id",
+      "/to"
+    ],
+    "status": "2xx",
+    "type": "request"
+  }
+}
