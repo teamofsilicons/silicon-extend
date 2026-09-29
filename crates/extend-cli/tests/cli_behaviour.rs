@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
+#[path = "cases/ref_actions.rs"]
+mod ref_actions;
+
 #[derive(Debug, Clone)]
 struct Req {
     method: String,
