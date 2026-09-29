@@ -1,0 +1,1438 @@
+{
+  "both_correct_median_speedup": null,
+  "both_correct_pairs": 0,
+  "boundary": "Model selection only, from identical frozen observations; excludes live capture, device execution, and task completion. No provider-cost estimate.",
+  "corpus": "e2e/ref-actions/cases.json",
+  "jev": {
+    "abstentions": 25,
+    "accuracy": 1.0,
+    "all_attempts_p50_ms": 322.726875,
+    "all_attempts_p95_ms": 391.920459,
+    "attempts": 60,
+    "correct": 60,
+    "correct_only_p50_ms": 322.726875,
+    "errors": 0
+  },
+  "kind": "single_provider_ref_selection",
+  "llm": null,
+  "performance_measured": true,
+  "repeats": 5,
+  "rows": [
+    {
+      "case": "android-save",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 314.37850000000003,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1031,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 314.692792
+    },
+    {
+      "case": "android-tv-settings",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 391.739667,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 995,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android_tv",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 391.920459
+    },
+    {
+      "case": "fire-tv-search",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 296.933209,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 175
+        }
+      },
+      "platform": "fire_os",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 297.127166
+    },
+    {
+      "case": "ios-email",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 300.948875,
+        "operation": "fill",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1384,
+          "output_tokens": 202
+        }
+      },
+      "platform": "ios",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 301.13570899999996
+    },
+    {
+      "case": "ipados-price",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 306.709417,
+        "operation": "get_text",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1037,
+          "output_tokens": 133
+        }
+      },
+      "platform": "ipados",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 306.81404200000003
+    },
+    {
+      "case": "macos-discard",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 375.912875,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1009,
+          "output_tokens": 132
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 376.34920900000003
+    },
+    {
+      "case": "linux-focus",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.92,
+        "model": "jev-1.13.0",
+        "model_ms": 322.5105,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1238,
+          "output_tokens": 175
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 322.726875
+    },
+    {
+      "case": "windows-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.85,
+        "model": "jev-1.13.0",
+        "model_ms": 297.24175,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1041,
+          "output_tokens": 134
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 297.365542
+    },
+    {
+      "case": "ambiguous-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.64,
+        "model": "jev-1.13.0",
+        "model_ms": 292.145542,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 740,
+          "output_tokens": 80
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 292.2475
+    },
+    {
+      "case": "missing-target",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 311.77225,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 746,
+          "output_tokens": 80
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 311.877208
+    },
+    {
+      "case": "read-only-session",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.97,
+        "model": "jev-1.13.0",
+        "model_ms": 346.3265,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 689,
+          "output_tokens": 73
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 346.420792
+    },
+    {
+      "case": "fill-needs-text",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 327.226666,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 177
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 0,
+      "wall_ms": 327.483833
+    },
+    {
+      "case": "android-save",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 324.859125,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1031,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 324.96575
+    },
+    {
+      "case": "android-tv-settings",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 397.418666,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 995,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android_tv",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 397.539708
+    },
+    {
+      "case": "fire-tv-search",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 325.01725,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 175
+        }
+      },
+      "platform": "fire_os",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 325.144542
+    },
+    {
+      "case": "ios-email",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.94,
+        "model": "jev-1.13.0",
+        "model_ms": 297.519166,
+        "operation": "fill",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1384,
+          "output_tokens": 202
+        }
+      },
+      "platform": "ios",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 297.66425000000004
+    },
+    {
+      "case": "ipados-price",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 293.714459,
+        "operation": "get_text",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1037,
+          "output_tokens": 133
+        }
+      },
+      "platform": "ipados",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 293.822
+    },
+    {
+      "case": "macos-discard",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 303.75875,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1009,
+          "output_tokens": 132
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 303.880875
+    },
+    {
+      "case": "linux-focus",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 355.369459,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1238,
+          "output_tokens": 175
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 355.54225
+    },
+    {
+      "case": "windows-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.8,
+        "model": "jev-1.13.0",
+        "model_ms": 315.231042,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1041,
+          "output_tokens": 134
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 315.329042
+    },
+    {
+      "case": "ambiguous-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.62,
+        "model": "jev-1.13.0",
+        "model_ms": 327.356542,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 740,
+          "output_tokens": 80
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 327.44825
+    },
+    {
+      "case": "missing-target",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 403.4215,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 746,
+          "output_tokens": 80
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 403.530791
+    },
+    {
+      "case": "read-only-session",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 380.581,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 689,
+          "output_tokens": 73
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 380.683917
+    },
+    {
+      "case": "fill-needs-text",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 284.810417,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 177
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 1,
+      "wall_ms": 285.03916699999996
+    },
+    {
+      "case": "android-save",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 379.58266699999996,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1031,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 379.692333
+    },
+    {
+      "case": "android-tv-settings",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 303.246459,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 995,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android_tv",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 303.364042
+    },
+    {
+      "case": "fire-tv-search",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 327.135583,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 175
+        }
+      },
+      "platform": "fire_os",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 327.201417
+    },
+    {
+      "case": "ios-email",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.93,
+        "model": "jev-1.13.0",
+        "model_ms": 419.781667,
+        "operation": "fill",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1384,
+          "output_tokens": 202
+        }
+      },
+      "platform": "ios",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 419.880833
+    },
+    {
+      "case": "ipados-price",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 362.238042,
+        "operation": "get_text",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1037,
+          "output_tokens": 133
+        }
+      },
+      "platform": "ipados",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 362.3585
+    },
+    {
+      "case": "macos-discard",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 308.122792,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1009,
+          "output_tokens": 132
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 308.21416600000003
+    },
+    {
+      "case": "linux-focus",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 366.37133300000005,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1238,
+          "output_tokens": 175
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 366.53125
+    },
+    {
+      "case": "windows-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.77,
+        "model": "jev-1.13.0",
+        "model_ms": 298.50795800000003,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1041,
+          "output_tokens": 134
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 298.62012500000003
+    },
+    {
+      "case": "ambiguous-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.75,
+        "model": "jev-1.13.0",
+        "model_ms": 313.562167,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 740,
+          "output_tokens": 80
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 313.60445799999997
+    },
+    {
+      "case": "missing-target",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 295.044667,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 746,
+          "output_tokens": 80
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 295.103417
+    },
+    {
+      "case": "read-only-session",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 303.03775,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 689,
+          "output_tokens": 73
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 303.130416
+    },
+    {
+      "case": "fill-needs-text",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 363.024,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 177
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 2,
+      "wall_ms": 363.15391600000004
+    },
+    {
+      "case": "android-save",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 373.64191600000004,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1031,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 373.712708
+    },
+    {
+      "case": "android-tv-settings",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 308.13962499999997,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 995,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android_tv",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 308.16945899999996
+    },
+    {
+      "case": "fire-tv-search",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 366.04675,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 175
+        }
+      },
+      "platform": "fire_os",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 366.083417
+    },
+    {
+      "case": "ios-email",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 293.75570899999997,
+        "operation": "fill",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1384,
+          "output_tokens": 202
+        }
+      },
+      "platform": "ios",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 293.7915
+    },
+    {
+      "case": "ipados-price",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 305.077041,
+        "operation": "get_text",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1037,
+          "output_tokens": 133
+        }
+      },
+      "platform": "ipados",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 305.133166
+    },
+    {
+      "case": "macos-discard",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 355.02612500000004,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1009,
+          "output_tokens": 132
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 355.12525
+    },
+    {
+      "case": "linux-focus",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 313.659542,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1238,
+          "output_tokens": 175
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 313.690958
+    },
+    {
+      "case": "windows-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.75,
+        "model": "jev-1.13.0",
+        "model_ms": 312.656708,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1041,
+          "output_tokens": 134
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 312.730208
+    },
+    {
+      "case": "ambiguous-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.54,
+        "model": "jev-1.13.0",
+        "model_ms": 350.451208,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 740,
+          "output_tokens": 80
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 350.504334
+    },
+    {
+      "case": "missing-target",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 365.060875,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 746,
+          "output_tokens": 80
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 365.08375
+    },
+    {
+      "case": "read-only-session",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 323.892334,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 689,
+          "output_tokens": 73
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 323.911958
+    },
+    {
+      "case": "fill-needs-text",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 345.501375,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 177
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 3,
+      "wall_ms": 345.541083
+    },
+    {
+      "case": "android-save",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 337.33925,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1031,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 337.38383300000004
+    },
+    {
+      "case": "android-tv-settings",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 367.339584,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 995,
+          "output_tokens": 132
+        }
+      },
+      "platform": "android_tv",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 367.431542
+    },
+    {
+      "case": "fire-tv-search",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.96,
+        "model": "jev-1.13.0",
+        "model_ms": 332.28075,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 175
+        }
+      },
+      "platform": "fire_os",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 332.493125
+    },
+    {
+      "case": "ios-email",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.94,
+        "model": "jev-1.13.0",
+        "model_ms": 303.10029199999997,
+        "operation": "fill",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1384,
+          "output_tokens": 202
+        }
+      },
+      "platform": "ios",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 303.275125
+    },
+    {
+      "case": "ipados-price",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 280.993625,
+        "operation": "get_text",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1037,
+          "output_tokens": 133
+        }
+      },
+      "platform": "ipados",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 281.12525
+    },
+    {
+      "case": "macos-discard",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 306.72729100000004,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1009,
+          "output_tokens": 132
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 306.878875
+    },
+    {
+      "case": "linux-focus",
+      "correct": true,
+      "decision": {
+        "accepted": true,
+        "confidence": 0.94,
+        "model": "jev-1.13.0",
+        "model_ms": 349.57149999999996,
+        "operation": "focus",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e1",
+        "usage": {
+          "input_tokens": 1238,
+          "output_tokens": 175
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 349.72866600000003
+    },
+    {
+      "case": "windows-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.79,
+        "model": "jev-1.13.0",
+        "model_ms": 316.46891700000003,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1041,
+          "output_tokens": 134
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 316.611959
+    },
+    {
+      "case": "ambiguous-save",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.55,
+        "model": "jev-1.13.0",
+        "model_ms": 339.16745799999995,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 740,
+          "output_tokens": 80
+        }
+      },
+      "platform": "macos",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 339.267541
+    },
+    {
+      "case": "missing-target",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 390.66650000000004,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 746,
+          "output_tokens": 80
+        }
+      },
+      "platform": "android",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 390.77187499999997
+    },
+    {
+      "case": "read-only-session",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.95,
+        "model": "jev-1.13.0",
+        "model_ms": 321.653625,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 689,
+          "output_tokens": 73
+        }
+      },
+      "platform": "linux",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 321.74683300000004
+    },
+    {
+      "case": "fill-needs-text",
+      "correct": true,
+      "decision": {
+        "accepted": false,
+        "confidence": 0.99,
+        "model": "jev-1.13.0",
+        "model_ms": 298.679083,
+        "operation": "BLOCKED",
+        "provider": "jev",
+        "reason": "no_match",
+        "target": null,
+        "usage": {
+          "input_tokens": 1254,
+          "output_tokens": 177
+        }
+      },
+      "platform": "windows",
+      "provenance": "synthetic schema fixture",
+      "provider": "jev",
+      "repeat": 4,
+      "wall_ms": 299.36375
+    }
+  ],
+  "speedup_measured": false,
+  "valid_no_provider_errors": true,
+  "warmups": [
+    {
+      "error": null,
+      "provider": "jev",
+      "response": {
+        "accepted": true,
+        "confidence": 1.0,
+        "model": "jev-1.13.0",
+        "model_ms": 500.404417,
+        "operation": "click",
+        "provider": "jev",
+        "reason": "selected",
+        "target": "@e2",
+        "usage": {
+          "input_tokens": 1031,
+          "output_tokens": 132
+        }
+      },
+      "wall_ms": 500.45291700000007
+    }
+  ],
+  "run_metadata": {
+    "started_utc": "2026-09-29T21:14:01.671452+00:00",
+    "host": "Darwin arm64",
+    "build": "release",
+    "key_class": "test",
+    "threshold": 0.7,
+    "corpus_sha256": "8302a9c1a02d6097f31b22b1eab9e08c00a69f1ba4705597ecadc386f0e44726",
+    "source_sha256": {
+      "crates/silicon-extend-client/src/ref_actions/mod.rs": "4fd4ae077019036fee2d951d3c99a3cc94a9e3242ed62b5f03c9d3a587728083",
+      "crates/silicon-extend-client/src/ref_actions/provider.rs": "dac61932cfe39addf6cd9f3b9ee4407f21a850e4183f51337ff3de655caaca34",
+      "crates/silicon-extend-client/examples/ref_benchmark.rs": "6ff51e1928fe09a7f2f26a4803467e78158ad4d226c43229b65313142aa2e4d2"
+    }
+  }
+}

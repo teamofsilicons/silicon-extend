@@ -1,0 +1,271 @@
+{
+  "kind": "fresh_process_vs_reused_connection",
+  "started_utc": "2026-09-29T21:15:21.462945+00:00",
+  "case": {
+    "id": "android-save",
+    "provenance": "synthetic schema fixture",
+    "platform": "android",
+    "instruction": "Click Save",
+    "commands": [
+      "click",
+      "fill",
+      "get"
+    ],
+    "snapshot": {
+      "nodes": [
+        {
+          "children": [
+            {
+              "ref": "@e1",
+              "role": "button",
+              "text": "Cancel",
+              "enabled": true
+            },
+            {
+              "ref": "@e2",
+              "role": "button",
+              "text": "Save",
+              "enabled": true
+            }
+          ]
+        }
+      ]
+    },
+    "expected_operation": "click",
+    "expected_target": "@e2"
+  },
+  "samples": 5,
+  "boundary": "Selection only. First request includes connection setup; excludes executable startup, capture and device execution. This compares connection reuse, not models.",
+  "rows": [
+    {
+      "process_index": 0,
+      "cold_connection": {
+        "error": null,
+        "provider": "jev",
+        "response": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 680.2649160000001,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "wall_ms": 680.3227499999999
+      },
+      "cold_correct": true,
+      "reused_connection": {
+        "case": "android-save",
+        "correct": true,
+        "decision": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 320.403917,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "platform": "android",
+        "provenance": "synthetic schema fixture",
+        "provider": "jev",
+        "repeat": 0,
+        "wall_ms": 320.52245800000003
+      }
+    },
+    {
+      "process_index": 1,
+      "cold_connection": {
+        "error": null,
+        "provider": "jev",
+        "response": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 517.9183750000001,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "wall_ms": 517.9707500000001
+      },
+      "cold_correct": true,
+      "reused_connection": {
+        "case": "android-save",
+        "correct": true,
+        "decision": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 298.931792,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "platform": "android",
+        "provenance": "synthetic schema fixture",
+        "provider": "jev",
+        "repeat": 0,
+        "wall_ms": 299.052208
+      }
+    },
+    {
+      "process_index": 2,
+      "cold_connection": {
+        "error": null,
+        "provider": "jev",
+        "response": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 448.9875,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "wall_ms": 449.071958
+      },
+      "cold_correct": true,
+      "reused_connection": {
+        "case": "android-save",
+        "correct": true,
+        "decision": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 314.797083,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "platform": "android",
+        "provenance": "synthetic schema fixture",
+        "provider": "jev",
+        "repeat": 0,
+        "wall_ms": 314.953709
+      }
+    },
+    {
+      "process_index": 3,
+      "cold_connection": {
+        "error": null,
+        "provider": "jev",
+        "response": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 511.652458,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "wall_ms": 511.7136249999999
+      },
+      "cold_correct": true,
+      "reused_connection": {
+        "case": "android-save",
+        "correct": true,
+        "decision": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 313.350833,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "platform": "android",
+        "provenance": "synthetic schema fixture",
+        "provider": "jev",
+        "repeat": 0,
+        "wall_ms": 313.441125
+      }
+    },
+    {
+      "process_index": 4,
+      "cold_connection": {
+        "error": null,
+        "provider": "jev",
+        "response": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 508.2736249999999,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "wall_ms": 508.40454199999994
+      },
+      "cold_correct": true,
+      "reused_connection": {
+        "case": "android-save",
+        "correct": true,
+        "decision": {
+          "accepted": true,
+          "confidence": 1.0,
+          "model": "jev-1.13.0",
+          "model_ms": 374.62975,
+          "operation": "click",
+          "provider": "jev",
+          "reason": "selected",
+          "target": "@e2",
+          "usage": {
+            "input_tokens": 1031,
+            "output_tokens": 132
+          }
+        },
+        "platform": "android",
+        "provenance": "synthetic schema fixture",
+        "provider": "jev",
+        "repeat": 0,
+        "wall_ms": 374.760208
+      }
+    }
+  ]
+}

@@ -81,10 +81,18 @@ fn disabled_hidden_and_password_nodes_are_not_sent_to_the_model() {
 
 #[test]
 fn capabilities_and_exact_text_limit_the_action_space() {
+    assert_eq!(
+        observation().request("Fill Email").unwrap()["state"]["caller_supplied_fill_text"],
+        true
+    );
     let o = Observation::from_snapshot(&screen(), &["get".into()], false).unwrap();
     assert_eq!(o.targets.keys().cloned().collect::<Vec<_>>(), vec!["get_text"]);
     let o = Observation::from_snapshot(&screen(), &commands(), false).unwrap();
     assert!(!o.targets.contains_key("fill"));
+    assert_eq!(
+        o.request("Fill Email").unwrap()["state"]["caller_supplied_fill_text"],
+        false
+    );
     assert!(Observation::from_snapshot(&screen(), &["tv-remote".into()], false).is_err());
     assert!(Observation::from_snapshot(&json!({"image":"screenshot"}), &commands(), false).is_err());
 }

@@ -1,4 +1,4 @@
-//! Paired decision benchmark. Fixtures/captured snapshots are replayed, never executed on devices.
+//! Decision benchmark, paired by default. Snapshots are replayed, never executed on devices.
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -48,17 +48,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let input = args
         .next()
-        .ok_or("Usage: ref_benchmark <cases.json> [--repeats N] [--out report.json] [--validate-only]")?;
+        .ok_or("Usage: ref_benchmark <cases.json> [--provider both|jev|llm] [--repeats N] [--out report.json] [--validate-only]")?;
     let mut repeats = 3usize;
     let mut out = None;
     let mut validate = false;
+    let mut provider = String::from("both");
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--repeats" => repeats = args.next().ok_or("--repeats needs a value")?.parse()?,
             "--out" => out = Some(args.next().ok_or("--out needs a path")?),
             "--validate-only" => validate = true,
+            "--provider" => provider = args.next().ok_or("--provider needs a value")?,
             _ => return Err(format!("Unknown argument {arg}").into()),
         }
+    }
+    if !matches!(provider.as_str(), "both" | "jev" | "llm") {
+        return Err("Provider must be both, jev, or llm".into());
     }
     if !(1..=100).contains(&repeats) {
         return Err("Repeats must be 1–100".into());
@@ -95,11 +100,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    let jev = ModelClient::new(ModelConfig::from_env(Provider::Jev, 0.7, Duration::from_secs(30))?)?;
-    let llm = ModelClient::new(ModelConfig::from_env(Provider::Llm, 0.7, Duration::from_secs(30))?)?;
+    let mut clients = vec![];
+    for (name, kind) in [("jev", Provider::Jev), ("llm", Provider::Llm)] {
+        if provider == "both" || provider == name {
+            clients.push((
+                name,
+                ModelClient::new(ModelConfig::from_env(kind, 0.7, Duration::from_secs(30))?)?,
+            ));
+        }
+    }
     // Warmups are recorded separately, including failures, and never mixed into measured rows.
     let mut warmups = vec![];
-    for (name, client) in [("jev", &jev), ("llm", &llm)] {
+    for (name, client) in &clients {
         let start = Instant::now();
         let response = client.choose(&observations[0], &cases[0].instruction).await;
         warmups.push(json!({"provider":name,"wall_ms":start.elapsed().as_secs_f64()*1000.0,
@@ -108,11 +120,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rows = vec![];
     for repeat in 0..repeats {
         for (index, (case, observation)) in cases.iter().zip(&observations).enumerate() {
-            let order = if (repeat + index) % 2 == 0 {
-                [("jev", &jev), ("llm", &llm)]
-            } else {
-                [("llm", &llm), ("jev", &jev)]
-            };
+            let mut order: Vec<_> = clients.iter().collect();
+            if (repeat + index) % 2 != 0 {
+                order.reverse();
+            }
             for (name, client) in order {
                 let start = Instant::now();
                 let result = client.choose(observation, &case.instruction).await;
@@ -148,11 +159,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    let jev_summary = summary(&rows, "jev");
-    let llm_summary = summary(&rows, "llm");
+    let jev_summary = if provider != "llm" {
+        summary(&rows, "jev")
+    } else {
+        Value::Null
+    };
+    let llm_summary = if provider != "jev" {
+        summary(&rows, "llm")
+    } else {
+        Value::Null
+    };
     let mut matched = vec![];
     for pair in rows.as_chunks::<2>().0 {
-        if pair.iter().all(|r| r["correct"] == true) {
+        if provider == "both" && pair.iter().all(|r| r["correct"] == true) {
             let j = pair.iter().find(|r| r["provider"] == "jev").unwrap()["wall_ms"]
                 .as_f64()
                 .unwrap();
@@ -165,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let valid = rows.iter().all(|r| r.get("error").is_none());
-    let report = json!({"kind":"paired_ref_selection","performance_measured":true,"valid_no_provider_errors":valid,
+    let report = json!({"kind":if provider=="both" {"paired_ref_selection"}else{"single_provider_ref_selection"},"performance_measured":true,"speedup_measured":provider=="both" && !matched.is_empty(),"valid_no_provider_errors":valid,
         "boundary":"Model selection only, from identical frozen observations; excludes live capture, device execution, and task completion. No provider-cost estimate.",
         "corpus":input,"repeats":repeats,"jev":jev_summary,"llm":llm_summary,
         "both_correct_pairs":matched.len(),"both_correct_median_speedup":percentile(matched,0.5),

@@ -90,6 +90,10 @@ cargo run -p silicon-extend-client --example ref_benchmark -- \
 
 cargo run --release -p silicon-extend-client --example ref_benchmark -- \
   e2e/ref-actions/cases.json --repeats 5 --out /tmp/extend-ref-benchmark.json
+
+# Measure Jev alone while the baseline is unavailable; this cannot establish speedup.
+cargo run --release -p silicon-extend-client --example ref_benchmark -- \
+  e2e/ref-actions/cases.json --provider jev --repeats 5 --out /tmp/extend-jev-benchmark.json
 ```
 
 The bundled 12 cases are **synthetic schema/decision fixtures**, not captured device sessions.
@@ -112,9 +116,20 @@ normalization, decision validation, CLI orchestration, and benchmark accounting.
 with warnings denied. All 12 synthetic benchmark cases validated without model calls or device
 actions. These checks validate the integration logic, not Jev's decision quality.
 
-Live performance is **not measured**: no TypeSafe or baseline credentials were present in the process environment;
-the installed Extend CLI reported not signed in; ADB had no attached devices and no iOS simulator
-was booted. Local stub timings are not Jev latency, and fixture assertions are not model accuracy.
+Live Jev API measurements now exist using the supplied **test** key and pinned `jev-1.13.0`:
+the corrected 12-case smoke corpus, repeated five times, produced 60/60 expected decisions,
+323 ms median and 392 ms p95 selection latency with a reused connection. At 254 refs the median
+was 598 ms. Five fresh-connection probes had a 512 ms median, versus 315 ms for their subsequent
+requests. These numbers include the network round trip, not capture or device execution.
+
+The initial run exposed a fill-context omission: the model was not explicitly told that the
+caller already supplied the text. The request now carries that fact without transmitting the
+literal field value. Initial results, including five fill refusals and one HTTP 520, remain in
+the evidence. The corrected corpus is a development smoke test, not a held-out accuracy test.
+
+See [full measurements and raw reports](jev-ref-results-2026-09-30.md). Native end-to-end timing
+is still unmeasured: the installed Extend CLI reported not signed in, ADB had no attached devices,
+and no iOS simulator was booted. The user dropped the LLM comparison; no comparative speedup is claimed.
 
 ## References
 
