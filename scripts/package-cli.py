@@ -55,7 +55,8 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     cargo = tomllib.loads((root / 'Cargo.toml').read_text())
-    version = cargo['workspace']['package']['version']
+    cli = tomllib.loads((root / 'crates/extend-cli/Cargo.toml').read_text())['package']
+    version = cli['version'] if isinstance(cli['version'], str) else cargo['workspace']['package']['version']
     manifest = (root / 'honeycomb.yaml').read_text()
     if f'version: "{version}"' not in manifest:
         parser.error('honeycomb.yaml version must match the CLI app release version')

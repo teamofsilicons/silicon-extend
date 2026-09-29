@@ -92,12 +92,18 @@ A static Vite build (`web/dist`), deployed like the sibling sites on Vercel with
 
 ## CLI
 
-`.github/workflows/release.yml` builds the six targets on tag `v<version>`, and
+`.github/workflows/release.yml` builds the six CLI targets on tag `v<version>` or `cli-v<version>`, and
 `scripts/package-cli.py` validates and packs the Honeycomb archive (`honeycomb.yaml`, and in each
 target's root the executable and `licences/`; `honeycomb pack` drops anything outside the target
 roots). `python3 -m unittest discover -s scripts -p 'test_*.py'` runs it with stand-in executables
 when `honeycomb` is installed. Then upload the archive with `honeycomb releases upload` from a
 Carbon session, like the sibling apps.
+
+For a CLI-only patch, set the version in `crates/extend-cli/Cargo.toml` and `honeycomb.yaml`,
+update `Cargo.lock`, and tag `cli-v<version>`. This skips desktop app builds and leaves the
+workspace/client/protocol versions unchanged. Publish only `silicon-extend-cli` to crates.io.
+Create its GitHub release with `--latest=false` so the website's latest desktop/Android downloads
+continue pointing at the full app release.
 
 ## Device apps
 
