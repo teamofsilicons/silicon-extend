@@ -44,7 +44,8 @@ member-id logins and plain-http public URLs):
 Optional, for API versioning (TECHNICAL.md section 10): `EXTEND_DEPRECATED_API_VERSIONS` (a comma
 list of majors to deprecate, applied at start; never the newest one this build serves),
 `EXTEND_API_V{n}_CLIENT_CRATE` and `EXTEND_API_V{n}_CLI` (the compatible version ranges the matrix
-reports, default `>=n.0.0, <n+1.0.0`), and `EXTEND_DEVICE_APP_MIN_VERSION` (default `1.0.0`).
+reports; API v1 defaults to `>=1.0.0, <3.0.0` for ordinary operations), and
+`EXTEND_DEVICE_APP_MIN_VERSION` (default `1.0.0`).
 `EXTEND_REPORT_RECIPIENTS` overrides where bug reports go. Optional since 1.1: `EXTEND_MAX_PAIRS_PER_DEVICE`,
 `EXTEND_MEMBERSHIP_SWEEP_HOURS`, `EXTEND_OWNER_CHECK_CACHE_S`, `EXTEND_OWNER_CHECK_AT_USE` and
 `EXTEND_TEST_LINK_WINDOW_S` ([operations.md](operations.md#settings-added-in-11)); the defaults are
