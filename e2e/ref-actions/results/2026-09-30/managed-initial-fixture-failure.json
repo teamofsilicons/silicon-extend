@@ -1,0 +1,24 @@
+{
+  "api_url": "http://127.0.0.1:18487",
+  "environment_id": null,
+  "fixture": "synthetic fake device",
+  "byok_present": false,
+  "runs": [],
+  "cleanup": {
+    "session_ended": true,
+    "device_unpaired": true,
+    "carbon_logged_out": true,
+    "silicon_logged_out": true
+  },
+  "device_id": "367d4f39",
+  "session_id": "261",
+  "failure": {
+    "stage": "first click dry run",
+    "observed_cli_status": "blocked",
+    "attempt_count": 2,
+    "cause": "Harness snapshot used unsupported name fields; Observation normalizes label/text but does not copy name, so the selector correctly received unlabeled targets. Fixed fixture to use label.",
+    "timings_recorded": false,
+    "decision_body_recorded": false,
+    "cleanup_completed": true
+  }
+}

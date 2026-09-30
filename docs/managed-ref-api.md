@@ -9,7 +9,7 @@ authorization, client version and team/test selection headers.
   "type": "ref_selection",
   "data": {
     "instruction": "Click Save",
-    "snapshot": {"nodes": [{"ref": "@e1", "role": "button", "name": "Save"}]},
+    "snapshot": {"nodes": [{"ref": "@e1", "role": "button", "label": "Save"}]},
     "has_text": false,
     "threshold": 0.7
   }

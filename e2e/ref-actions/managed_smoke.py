@@ -139,10 +139,19 @@ def run(args):
             if result.returncode and check:
                 # Provider/credential-bearing bodies must never become smoke output.
                 try:
-                    code = json.loads(result.stderr).get("error", {}).get("code", "unknown")
-                except json.JSONDecodeError:
+                    raw = result.stderr[result.stderr.index("{"):]
+                    error, _ = json.JSONDecoder().raw_decode(raw)
+                    code = error.get("error", {}).get("code", "unknown")
+                except (json.JSONDecodeError, ValueError):
                     code = "non_json_error"
-                raise SmokeError(f"CLI {parts[0]} failed ({code}); no response body was logged.")
+                try:
+                    output = json.loads(result.stdout)
+                    status = output.get("status", "unknown")
+                    if parts[0] == "act":
+                        report["failed_selection"] = {k: output.get(k) for k in ("status", "decision", "timings")}
+                except json.JSONDecodeError:
+                    status = "no_result"
+                raise SmokeError(f"CLI {parts[0]} failed ({code}, status={status}); no response body was logged.")
             if not check:
                 return result.returncode == 0
             return json.loads(result.stdout) if result.stdout.strip() else None
@@ -151,8 +160,8 @@ def run(args):
             command("carbon", "login", state["carbon_id"])
             command("silicon", "login", state["silicon_id"])
             snapshot = {"appName": "Managed Jev smoke", "nodes": [
-                {"ref": "@e1", "role": "button", "name": "Save", "enabled": True},
-                {"ref": "@e2", "role": "textbox", "name": "Search", "editable": True, "enabled": True},
+                {"ref": "@e1", "role": "button", "label": "Save", "enabled": True},
+                {"ref": "@e2", "role": "textbox", "label": "Search", "editable": True, "enabled": True},
             ]}
             fixture = work / "snapshot.json"
             private_json(fixture, snapshot)
