@@ -165,6 +165,12 @@ data class SetupReport(
             else -> "Core device control is ready. Android debugging below adds ${list(debuggingAdds)}."
         }
 
+    /** Shown with the optional steps and the connection card, including before setup is complete. */
+    val debuggingBenefits: String
+        get() = "Recommended for agents: Android debugging helps with more apps and controls" +
+            (if (debuggingAdds.isEmpty()) "." else ", plus ${list(debuggingAdds)}.") +
+            " You can skip it and finish setup."
+
     companion object {
         fun compute(context: Context, config: Config): SetupReport = build(SetupSignals.read(context, config))
 

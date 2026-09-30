@@ -1,8 +1,8 @@
 import { For, Show } from "solid-js";
-import { CHECKSUMS, DOWNLOADS, RELEASE_VERSION, RELEASES_URL, releaseAsset, type Platform } from "../config";
+import { DOWNLOADS, releaseAsset, type Platform } from "../config";
 import { Link } from "../lib/router";
 
-/** The files for one platform from the latest release; configured in src/config.ts. */
+/** The files and release details for one platform; configured in src/config.ts. */
 export default function Download(props: { platform: string }) {
   const download = () => DOWNLOADS[props.platform as Platform];
   return (
@@ -22,7 +22,7 @@ export default function Download(props: { platform: string }) {
         {(d) => (
           <>
             <p class="eyebrow" data-testid="download-version">
-              Download · version {RELEASE_VERSION}
+              Download · version {d().release.version}
             </p>
             <h1 class="page-title">{d().app}.</h1>
             <p class="lead">{d().note}</p>
@@ -45,15 +45,15 @@ export default function Download(props: { platform: string }) {
                   <div class="download-files" data-testid="download-files">
                     <For each={files()}>
                       {(f) => (
-                        <a class="button primary" href={releaseAsset(f.name)} data-testid="download-file">
+                        <a class="button primary" href={releaseAsset(d().release, f.name)} data-testid="download-file">
                           {f.label}
                         </a>
                       )}
                     </For>
                   </div>
                   <p class="fine">
-                    From the <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer">latest release</a>. Check a file against its{" "}
-                    <a href={CHECKSUMS}>SHA-256 checksum</a> with <code>shasum -a 256</code>.
+                    See the <a href={d().release.url} target="_blank" rel="noopener noreferrer">release notes</a>. Check a file against its{" "}
+                    <a href={releaseAsset(d().release, "SHA256SUMS")}>SHA-256 checksum</a> with <code>shasum -a 256</code>.
                   </p>
                 </>
               )}

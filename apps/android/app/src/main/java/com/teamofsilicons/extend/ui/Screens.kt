@@ -552,7 +552,9 @@ private fun DeviceSetup(state: UiState, actions: SetupActions) {
         StepList(required, 1, tv, devOptions, actions)
         if (optional.isNotEmpty()) {
             Gap(22.dp)
-            Eyebrow("Optional")
+            Eyebrow("Optional · Android debugging")
+            Gap(6.dp)
+            Muted(report.debuggingBenefits)
             Gap(8.dp)
             StepList(optional, required.size + 1, tv, devOptions, actions)
         }
@@ -1306,6 +1308,10 @@ private fun AndroidDebuggingCard(extend: Extend, state: UiState) {
         Gap(6.dp)
         CardTitle("Android debugging")
         Gap(4.dp)
+        state.report?.debuggingBenefits?.let { benefits ->
+            Muted(benefits)
+            Gap(8.dp)
+        }
         Muted(
             DebuggingCardCopy.text(
                 connected, enabled, wirelessOff, sdk, state.isTv, state.isFireTv, Build.VERSION.RELEASE ?: "$sdk",

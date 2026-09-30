@@ -43,6 +43,14 @@ tree." Use `extend snapshot --raw` to inspect nodes omitted by the normal or int
 The tree contains what the device exposes; it cannot reveal controls the app or Android withholds.
 Depth and scope options still limit the output when supplied. JSON output has no footer.
 
+On Android, a visible control can be absent even from the raw tree. A keyboard can also be visible
+while its focused field is unavailable to accessibility. With Android debugging connected, `type`
+can send supported text to that field and explicitly reports that readback is unavailable;
+without debugging it reports `text_input_unavailable` and sends no text. Inspect a fresh screenshot
+before retrying. Plain coordinate taps use Extend's existing Android debugging connection when
+connected, otherwise accessibility gestures. Debugging must be connected inside the Extend app; a computer's USB ADB
+connection is separate. See [Android input limitations](../apps/android/README.md#controls-hidden-from-accessibility).
+
 When another Silicon is using the device, `extend session new` exits 6. It tells you who and since
 when only when that Silicon is on your side (your Team, given access by the same Carbon); otherwise
 it just says the device is in use. Ask for it with `extend request send <device_id> --reason "..."`
