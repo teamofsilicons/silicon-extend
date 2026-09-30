@@ -1,0 +1,39 @@
+{
+  "api_version": 1,
+  "call": "Authed::me",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.2.0",
+  "contract": 1,
+  "given": [],
+  "operation": "auth.me.options",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "silicon-extend-api-version": "1",
+      "x-extend-telemetry": "off",
+      "x-org-id": "{team}",
+      "x-silicon-isi": "{isi}"
+    },
+    "method": "GET",
+    "path": "/api/v1/auth/me"
+  },
+  "response": {
+    "non_null": [
+      "/authenticated",
+      "/member",
+      "/member/id",
+      "/member/type",
+      "/teams"
+    ],
+    "required": [
+      "/authenticated",
+      "/member",
+      "/member/id",
+      "/member/type",
+      "/teams"
+    ],
+    "status": "2xx",
+    "type": "me"
+  }
+}

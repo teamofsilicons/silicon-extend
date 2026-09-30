@@ -15,6 +15,9 @@
 //! Needs a PostgreSQL the tests can create databases on:
 //! `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+#[path = "common/jev.rs"]
+mod jev;
+
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -78,6 +81,7 @@ fn config(database_url: String, addr: SocketAddr, device_app_min: &str) -> Confi
         ting: TingMode::Local,
         honeycomb_service_token: Some(HONEYCOMB_TOKEN.into()),
         postmark_token: None,
+        jev: Default::default(),
         report_recipients: vec!["bugs@example.test".into()],
         device_app_min_version: device_app_min.into(),
         local_members: vec![
@@ -97,6 +101,7 @@ struct Svc {
     pool: sqlx::PgPool,
     versions: Arc<Registry>,
     http: reqwest::Client,
+    _jev: jev::JevMock,
 }
 
 impl Svc {
@@ -104,12 +109,16 @@ impl Svc {
         let url = database().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
+        let jev = jev::JevMock::start().await;
+        let mut cfg = config(url, addr, device_app_min);
+        cfg.jev = jev.config();
+        let state = extend_service::build(cfg).await.unwrap();
         let pool = state.pool.clone();
         let versions = Registry::start_with_clock(pool.clone(), policy, clock).await.unwrap();
         tokio::spawn(extend_service::serve_versioned(listener, state, versions.clone()));
         Svc {
             base: format!("http://{addr}"),
+            _jev: jev,
             pool,
             versions,
             http: reqwest::Client::builder()
@@ -584,6 +593,7 @@ const STATES: &[(&str, &[&str])] = &[
     ("enrollment", &["enrollment_id", "enrollment_secret", "pairing_code"]),
     ("device", &["device_id", "device_credential", "device_version"]),
     ("session", &["session_id"]),
+    ("managed_jev", &[]),
     ("takeover", &[]),
     ("file", &["file_id"]),
     ("upload", &["upload_id"]),
@@ -1081,6 +1091,7 @@ impl<'a> Provider<'a> {
             }
             let base = self.svc.base.clone();
             match state {
+                "managed_jev" => {} // The fixture service owns its loopback model server.
                 "refresh_token" => {
                     let s = self.client.login("c:alice").await.unwrap();
                     self.vars.insert("refresh_token".into(), s.refresh_token);
@@ -2221,6 +2232,11 @@ async fn client_1_0_0_fixtures_still_replay() {
 #[tokio::test]
 async fn client_1_1_0_fixtures_still_replay() {
     replay("client-1.1.0").await;
+}
+
+#[tokio::test]
+async fn client_1_2_0_fixtures_still_replay() {
+    replay("client-1.2.0").await;
 }
 
 #[tokio::test]

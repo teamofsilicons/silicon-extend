@@ -30,3 +30,7 @@ MIT licensed.
 The experimental `ref_actions` module selects one existing ref with TypeSafe Jev or a configured
 OpenAI-compatible model. It does not execute device actions; callers own revalidation and fallback
 to their normal planner. See [configuration and benchmarks](https://github.com/teamofsilicons/silicon-extend/blob/main/docs/jev-ref-experiment.md).
+
+Version 1.3 adds `Authed::select_ref` for Silicon-managed Jev through the existing Extend login,
+without a personal TypeSafe key. It requires service 1.2.0 and an active authorized session.
+Direct `ref_actions::ModelClient` calls still support your own provider key.

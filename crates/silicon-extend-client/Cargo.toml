@@ -1,7 +1,7 @@
 [package]
 name = "silicon-extend-client"
 description = "Official Rust client for Silicon Extend: let a Silicon use a Carbon's paired devices"
-version = "1.2.0"
+version = "1.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

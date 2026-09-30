@@ -235,6 +235,7 @@ impl Cli {
             .env("EXTEND_TELEMETRY", "off")
             .env_remove("EXTEND_SESSION")
             .env_remove("EXTEND_TEST_SECRET")
+            .env_remove("TYPESAFE_API_KEY")
             .env_remove("NO_COLOR");
         for (k, v) in &self.env {
             c.env(k, v);

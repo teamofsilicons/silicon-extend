@@ -50,6 +50,14 @@ documented tuning variables, including `EXTEND_OWNER_CHECK_AT_USE=false`. Run
 `python3 deploy/aws/test_render_env.py` before deployment; verify the selected non-secret settings
 in the rendered environment afterward. Absent overrides continue using service defaults.
 
+Service 1.2.0 adds managed Jev selection for CLI/client 1.3.0. Add `EXTEND_JEV_API_KEY` and
+`EXTEND_JEV_TEST_API_KEY` to the runtime secret and refresh the host renderer from this template
+before running `extend-release`. The optional allowlist also includes `EXTEND_JEV_URL` and
+`EXTEND_JEV_MODEL`. Never put provider keys in images, CLI archives, repository files, deployment
+logs, or SSM command text. Verify only that the two rendered key settings are present, not their
+values. Test worlds never use the production key. Deploy the backend before publishing the CLI;
+this update has no database migration and leaves device applications at 1.1.0.
+
 Keep the existing stop-old-container/start-new-container order for the idempotency update. Old
 writers do not reserve keys before running an operation, so overlapping old and new writers would
 not provide the new concurrency guarantee. Reservations use the existing table and a valid 503

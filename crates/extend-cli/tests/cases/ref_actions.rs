@@ -10,6 +10,15 @@ fn provider_response(body: Value) -> Resp {
 }
 
 fn fake(stale: bool, low_confidence: bool, fail_action: bool) -> Fake {
+    fake_with_managed_failure(stale, low_confidence, fail_action, None)
+}
+
+fn fake_with_managed_failure(
+    stale: bool,
+    low_confidence: bool,
+    fail_action: bool,
+    managed_failure: Option<&'static str>,
+) -> Fake {
     let snapshots = AtomicUsize::new(0);
     Fake::start(move |r| match (r.method.as_str(), r.path_only()) {
         ("GET", "/api/v1/auth/me") => Some(ok("me", me("si:chef"))),
@@ -52,6 +61,43 @@ fn fake(stale: bool, low_confidence: bool, fail_action: bool) -> Fake {
             }).collect();
             Some(provider_response(json!({"model":"fixture-jev","answers":answers})))
         }
+        ("POST", "/api/v1/sessions/a3f/ref-selection") => {
+            if let Some(failure) = managed_failure {
+                return Some(match failure {
+                    "http" => err(503, "service_unavailable", "Managed Jev unavailable"),
+                    "old-service" => err(404, "not_found", "Route unavailable"),
+                    "timeout" => {
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        provider_response(json!({}))
+                    }
+                    "invalid-ref" | "invalid-operation" | "low-accepted" | "wrong-provider" | "missing-confidence" => {
+                        let mut decision = json!({"provider":"jev","model":"fixture-managed-jev",
+                            "accepted":true,"operation":"click","target":"@e1","confidence":1.0,
+                            "reason":"fixture","model_ms":12.0,"usage":{}});
+                        match failure {
+                            "invalid-ref" => decision["target"] = json!("@e999"),
+                            "invalid-operation" => decision["operation"] = json!("scroll"),
+                            "low-accepted" => decision["confidence"] = json!(0.3),
+                            "wrong-provider" => decision["provider"] = json!("llm"),
+                            _ => decision["confidence"] = Value::Null,
+                        }
+                        ok("ref_selection", decision)
+                    }
+                    _ => provider_response(json!({"type":"ref_selection","data":{}})),
+                });
+            }
+            let operation = if r.body["data"]["has_text"] == true {
+                "fill"
+            } else {
+                "click"
+            };
+            Some(ok(
+                "ref_selection",
+                json!({"provider":"jev","model":"fixture-managed-jev",
+                "accepted":!low_confidence,"operation":operation,"target":if operation=="fill" {"@e2"}else{"@e1"},
+                "confidence":if low_confidence {0.4}else{1.0},"reason":"fixture","model_ms":12.0,"usage":{}}),
+            ))
+        }
         ("POST", "/llm") => Some(provider_response(
             json!({"model":"fixture-llm","choices":[{"message":{"content":"{\"operation\":\"click\",\"target\":\"@e1\"}"}}]}),
         )),
@@ -83,6 +129,7 @@ fn ref_act_executes_once_with_fresh_generation_and_preserves_literal_text() {
     assert_eq!(calls[2].body["data"]["command"], "fill");
     assert_eq!(calls[2].body["data"]["args"], json!(["@e2~s11", "alice@example.test"]));
     assert!(!f.requests("POST", "/jev")[0].body.to_string().contains("test-access"));
+    assert!(f.requests("POST", "/api/v1/sessions/a3f/ref-selection").is_empty());
 }
 
 #[test]
@@ -145,7 +192,7 @@ fn ref_act_explicit_fallback_is_measured_and_device_failure_is_not_retried() {
 
 #[test]
 fn ref_act_provider_failures_leave_normal_commands_working() {
-    for failure in ["http", "malformed", "timeout", "missing-key"] {
+    for failure in ["http", "malformed", "timeout"] {
         let f = fake(false, false, false);
         let model = Fake::start(move |_| {
             if failure == "timeout" {
@@ -157,12 +204,7 @@ fn ref_act_provider_failures_leave_normal_commands_working() {
                 body: b"not json".to_vec(),
             })
         });
-        let c = cli(&format!("ref-fail-{failure}"), &f)
-            .env("EXTEND_JEV_URL", &format!("{}/jev", model.url))
-            .env(
-                "TYPESAFE_API_KEY",
-                if failure == "missing-key" { "" } else { "model-only-key" },
-            );
+        let c = cli(&format!("ref-fail-{failure}"), &f).env("EXTEND_JEV_URL", &format!("{}/jev", model.url));
         let out = c.run(&["act", "Click Save", "--timeout", "1000", "--json"]);
         assert!(!out.status.success(), "{failure}");
         let doc: Value = serde_json::from_str(&stderr(&out)).unwrap();
@@ -179,6 +221,7 @@ fn ref_act_provider_failures_leave_normal_commands_working() {
             assert!(out.status.success(), "{failure}: {}", stderr(&out));
         }
         assert_eq!(model.requests("POST", "/jev").len(), count);
+        assert!(f.requests("POST", "/api/v1/sessions/a3f/ref-selection").is_empty());
     }
 }
 
@@ -201,4 +244,180 @@ fn ref_act_explicit_llm_fallback_recovers_from_jev_http_failure() {
     assert_eq!(doc["decision"]["provider"], "llm");
     assert_eq!(model.requests("POST", "/jev").len(), 1);
     assert_eq!(f.requests("POST", "/llm").len(), 1);
+}
+
+#[test]
+fn ref_act_managed_default_uses_extend_auth_and_keeps_literal_text_local() {
+    for key in [None, Some(""), Some("   ")] {
+        let f = fake(false, false, false);
+        let mut c = Cli::new("ref-managed", &f.url)
+            .signed_in("si:chef")
+            .connected("a3f", &["snapshot", "click", "fill", "get"])
+            // A personal endpoint override without a key must not redirect the managed request.
+            .env("EXTEND_JEV_URL", "http://127.0.0.1:1/unused");
+        if let Some(key) = key {
+            c = c.env("TYPESAFE_API_KEY", key);
+        }
+        let out = c.run(&[
+            "act",
+            "Fill Email",
+            "--text",
+            "private@example.test",
+            "--threshold",
+            "0.8",
+            "--json",
+        ]);
+        assert!(out.status.success(), "{} {}", stdout(&out), stderr(&out));
+        let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+        assert_eq!(doc["status"], "executed");
+        assert_eq!(doc["decision"]["model"], "fixture-managed-jev");
+        let requests = f.requests("POST", "/api/v1/sessions/a3f/ref-selection");
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(
+            request.headers.get("authorization").map(String::as_str),
+            Some("Bearer test-access")
+        );
+        assert_eq!(request.headers.get("x-org-id").map(String::as_str), Some("acme"));
+        assert_eq!(request.body["type"], "ref_selection");
+        assert_eq!(request.body["data"]["instruction"], "Fill Email");
+        assert_eq!(request.body["data"]["threshold"], 0.8);
+        assert_eq!(request.body["data"]["has_text"], true);
+        assert_eq!(request.body["data"]["snapshot"]["nodes"][0]["ref"], "e1");
+        assert!(!request.body.to_string().contains("private@example.test"));
+        let commands = f.requests("POST", "/api/v1/sessions/a3f/commands");
+        assert_eq!(commands.len(), 3);
+        assert_eq!(
+            commands[2].body["data"]["args"],
+            json!(["@e2~s11", "private@example.test"])
+        );
+        assert!(f.requests("POST", "/jev").is_empty());
+    }
+}
+
+#[test]
+fn ref_act_managed_failures_preserve_normal_refs_and_explicit_llm_fallback() {
+    for failure in ["http", "old-service", "malformed", "timeout"] {
+        let f = fake_with_managed_failure(false, false, false, Some(failure));
+        let c = cli(&format!("ref-managed-{failure}"), &f).env("TYPESAFE_API_KEY", "");
+        let out = c.run(&["act", "Click Save", "--timeout", "1000", "--json"]);
+        assert!(!out.status.success(), "{failure}");
+        let doc: Value = serde_json::from_str(&stderr(&out)).unwrap();
+        assert_eq!(doc["error"]["details"]["action_executed"], false, "{doc}");
+        assert_eq!(
+            doc["error"]["details"]["normal_ref_fallback"]["mode"], "normal_refs",
+            "{doc}"
+        );
+        if failure == "http" {
+            assert_eq!(doc["error"]["code"], "service_unavailable");
+            assert_eq!(doc["error"]["request_id"], "req-0192");
+        }
+        assert!(
+            f.requests("POST", "/api/v1/sessions/a3f/commands")
+                .iter()
+                .all(|r| r.body["data"]["command"] == "snapshot")
+        );
+        assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/ref-selection").len(), 1);
+        for argv in [vec!["snapshot", "-i", "--json"], vec!["click", "@e1", "--json"]] {
+            let out = c.run(&argv);
+            assert!(out.status.success(), "{failure}: {}", stderr(&out));
+        }
+        assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/ref-selection").len(), 1);
+        assert!(f.requests("POST", "/jev").is_empty());
+    }
+    let f = fake_with_managed_failure(false, false, false, Some("http"));
+    let out = cli("ref-managed-llm-fallback", &f).env("TYPESAFE_API_KEY", "").run(&[
+        "act",
+        "Click Save",
+        "--fallback",
+        "llm",
+        "--json",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["status"], "executed");
+    assert_eq!(doc["decision"]["provider"], "llm");
+    assert_eq!(doc["attempts"].as_array().unwrap().len(), 2);
+    assert_eq!(f.requests("POST", "/llm").len(), 1);
+}
+
+#[test]
+fn ref_act_managed_rejects_invalid_threshold_before_capture() {
+    for threshold in ["NaN", "inf", "-0.1", "1.1"] {
+        let f = fake(false, false, false);
+        let out = cli("ref-managed-threshold", &f).env("TYPESAFE_API_KEY", "").run(&[
+            "act",
+            "Click Save",
+            "--threshold",
+            threshold,
+            "--json",
+        ]);
+        assert!(!out.status.success(), "{threshold}");
+        assert!(f.requests("POST", "/api/v1/sessions/a3f/commands").is_empty());
+        assert!(f.requests("POST", "/api/v1/sessions/a3f/ref-selection").is_empty());
+    }
+}
+
+#[test]
+fn ref_act_invalid_managed_decisions_fail_before_dry_run_or_execution_and_allow_fallback() {
+    for failure in [
+        "invalid-ref",
+        "invalid-operation",
+        "low-accepted",
+        "wrong-provider",
+        "missing-confidence",
+    ] {
+        for dry in [false, true] {
+            let f = fake_with_managed_failure(false, false, false, Some(failure));
+            let mut args = vec!["act", "Click Save", "--json"];
+            if dry {
+                args.push("--dry-run");
+            }
+            let out = cli("ref-managed-invalid", &f).env("TYPESAFE_API_KEY", "").run(&args);
+            assert!(!out.status.success(), "{failure} dry={dry}");
+            let doc: Value = serde_json::from_str(&stderr(&out)).unwrap();
+            assert_eq!(doc["error"]["details"]["action_executed"], false, "{doc}");
+            assert_eq!(
+                doc["error"]["details"]["normal_ref_fallback"]["mode"], "normal_refs",
+                "{doc}"
+            );
+            let commands = f.requests("POST", "/api/v1/sessions/a3f/commands");
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0].body["data"]["command"], "snapshot");
+        }
+    }
+    let f = fake_with_managed_failure(false, false, false, Some("invalid-ref"));
+    let out = cli("ref-invalid-managed-llm-fallback", &f)
+        .env("TYPESAFE_API_KEY", "")
+        .run(&["act", "Click Save", "--fallback", "llm", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["status"], "executed");
+    assert_eq!(doc["decision"]["provider"], "llm");
+    assert_eq!(f.requests("POST", "/llm").len(), 1);
+}
+
+#[test]
+fn ref_act_managed_stale_blocked_and_dry_run_never_execute() {
+    for (name, stale, low, dry, expected, count) in [
+        ("managed-stale", true, false, false, "stale", 2),
+        ("managed-low", false, true, false, "blocked", 1),
+        ("managed-dry", false, false, true, "selected", 1),
+    ] {
+        let f = fake(stale, low, false);
+        let mut args = vec!["act", "Click Save", "--json"];
+        if dry {
+            args.push("--dry-run");
+        }
+        let out = cli(name, &f).env("TYPESAFE_API_KEY", "").run(&args);
+        let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+        assert_eq!(doc["status"], expected);
+        assert_eq!(out.status.success(), dry);
+        assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), count);
+        assert!(
+            f.requests("POST", "/api/v1/sessions/a3f/commands")
+                .iter()
+                .all(|r| r.body["data"]["command"] == "snapshot")
+        );
+    }
 }

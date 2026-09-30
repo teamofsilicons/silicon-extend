@@ -996,6 +996,21 @@ impl Authed<'_> {
         .await
     }
 
+    /// Selects a single ref action using Extend's managed Jev provider; does not execute it.
+    pub async fn select_ref(
+        &self,
+        session_id: &str,
+        request: &ref_actions::RefSelectionRequest,
+    ) -> Result<ref_actions::Decision> {
+        self.post(
+            &format!("/api/v1/sessions/{session_id}/ref-selection"),
+            "ref_selection",
+            request,
+            false,
+        )
+        .await
+    }
+
     pub async fn files(&self, q: ListQuery) -> Result<Page<FileInfo>> {
         self.get(&format!(
             "/api/v1/files{}",

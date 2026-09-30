@@ -208,5 +208,7 @@ foreground-service notification and Apple's Automation Running banner remain pla
 ## Experimental semantic ref actions
 
 `extend act 'Click Save'` chooses one existing ref with Jev and executes it through the normal
-session. It is opt-in and requires model credentials. `--dry-run --json` reports the decision and
-timings without execution. See [configuration, scope, and benchmarking](jev-ref-experiment.md).
+session. Starting with CLI 1.3.0, it uses Silicon's managed Jev service by default; no provider key
+is needed. Set `TYPESAFE_API_KEY` to use your own key instead. `--dry-run --json` reports the decision
+and timings without execution. Normal ref commands remain available after selection failures.
+See [configuration, scope, and benchmarking](jev-ref-experiment.md).

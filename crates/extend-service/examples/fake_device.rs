@@ -14,6 +14,8 @@
 //!   connects that pair too, as a 1.1 app keeps one connection per pair.
 //! - `FAKE_FAILED_STEP=<key>`: its setup has that step failed. On `setup_retry` it reports the step
 //!   in progress, then done.
+//! - `FAKE_REF_SNAPSHOT=<json-file>`: return this fixed structured snapshot for ref-action smoke tests.
+//! - `FAKE_TEST_SECRET`: test app secret, as an alternative to the positional argument.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +48,7 @@ struct Fake {
     awake: Option<bool>,
     sleep_state: Option<SleepState>,
     failed_step: Option<String>,
+    ref_snapshot: Option<serde_json::Value>,
     /// One run per process and one sequence across all connections, as a 1.1 app sends `awake`.
     run: Uuid,
     seq: AtomicU64,
@@ -110,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
     let base = args.next().unwrap_or_else(|| "http://127.0.0.1:8480".into());
     let os: DeviceOs = serde_json::from_value(serde_json::json!(args.next().unwrap_or_else(|| "linux".into())))?;
     let mut b = Client::builder(&base);
-    if let Some(s) = args.next() {
+    if let Some(s) = args.next().or_else(|| std::env::var("FAKE_TEST_SECRET").ok()) {
         b = b.testing_secret(s);
     }
     let opt = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
@@ -121,6 +124,9 @@ async fn main() -> anyhow::Result<()> {
         awake: opt("FAKE_AWAKE").map(|v| v != "false" && v != "0"),
         sleep_state: opt("FAKE_SLEEP_STATE").map(|s| SleepState::parse(&s)),
         failed_step: opt("FAKE_FAILED_STEP"),
+        ref_snapshot: opt("FAKE_REF_SNAPSHOT")
+            .map(|path| -> anyhow::Result<serde_json::Value> { Ok(serde_json::from_slice(&std::fs::read(path)?)?) })
+            .transpose()?,
         run: Uuid::new_v4(),
         seq: AtomicU64::new(0),
     });
@@ -215,6 +221,10 @@ async fn serve(fake: &Fake, credential: &str) -> anyhow::Result<()> {
                     files: vec![],
                 };
                 match c.command.as_str() {
+                    "snapshot" if fake.ref_snapshot.is_some() => {
+                        out.output = fake.ref_snapshot.clone().unwrap();
+                        out.text = Some("Managed Jev smoke fixture: @e1 Save button; @e2 Search field".into());
+                    }
                     "screenshot" => {
                         client
                             .upload_artifact(credential, c.upload_ids[0], "screenshot.png", "image/png", PNG.to_vec())

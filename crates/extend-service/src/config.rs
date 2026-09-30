@@ -63,6 +63,7 @@ pub struct Config {
     pub ting: TingMode,
     pub honeycomb_service_token: Option<String>,
     pub postmark_token: Option<String>,
+    pub jev: JevConfig,
     pub report_recipients: Vec<String>,
     pub device_app_min_version: String,
     /// Members local IAM knows: `c:alice@acme,si:chef@acme+labs`.
@@ -74,6 +75,35 @@ pub struct Config {
     pub trusted_proxies: Vec<Cidr>,
     /// Limits and switches added in 1.1 (several Carbons per device, membership checks).
     pub tuning: Tuning,
+}
+
+/// Optional server-managed Jev credentials. Test worlds never use the production credential.
+#[derive(Clone)]
+pub struct JevConfig {
+    pub api_key: Option<String>,
+    pub test_api_key: Option<String>,
+    pub endpoint: String,
+    pub model: String,
+}
+
+impl Default for JevConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            test_api_key: None,
+            endpoint: "https://api.typesafe.ai/v1/systemone".into(),
+            model: "jev-1.13.0".into(),
+        }
+    }
+}
+
+impl std::fmt::Debug for JevConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JevConfig")
+            .field("production_configured", &self.api_key.is_some())
+            .field("test_configured", &self.test_api_key.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// 1.1 settings. The defaults are the ones the Carbon accepted; each has an `EXTEND_*` variable.
@@ -348,6 +378,12 @@ impl Config {
             ting,
             honeycomb_service_token: var("EXTEND_HONEYCOMB_SERVICE_TOKEN"),
             postmark_token: var("EXTEND_POSTMARK_SERVER_TOKEN"),
+            jev: JevConfig {
+                api_key: var("EXTEND_JEV_API_KEY"),
+                test_api_key: var("EXTEND_JEV_TEST_API_KEY"),
+                endpoint: var_or("EXTEND_JEV_URL", "https://api.typesafe.ai/v1/systemone"),
+                model: var_or("EXTEND_JEV_MODEL", "jev-1.13.0"),
+            },
             report_recipients: var_or(
                 "EXTEND_REPORT_RECIPIENTS",
                 "saketdev12@gmail.com,shubhastro2@gmail.com,bugs@teamofsilicons.com",

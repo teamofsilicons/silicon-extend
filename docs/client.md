@@ -48,6 +48,19 @@ ended while the command ran is `Err` with code `session_ended` and `details.may_
 `result.warnings` lists what went wrong around the command without failing it, such as a file
 Briefcase refused to store (an older service leaves it out; it reads as empty).
 
+## Managed ref selection (1.3)
+
+`me.select_ref(&sid, &RefSelectionRequest { snapshot, instruction, has_text, threshold }).await?`
+uses the backend's Jev key and returns a `ref_actions::Decision`. It requires service 1.2.0 and
+an active, authorized session owned by the calling Silicon. Import `RefSelectionRequest` from
+`silicon_extend_client::ref_actions`; `snapshot` is the structured output of a full ref snapshot.
+
+This method only selects. Revalidate against a fresh snapshot before calling `run` with the
+chosen ordinary command. On a refusal or error, continue with the ordinary ref workflow.
+`ref_actions::ModelClient` remains available for direct calls with your own key. The
+[`extend act` command](jev-ref-experiment.md) combines selection, revalidation and execution.
+See the [managed HTTP contract](managed-ref-api.md) for request limits and credential isolation.
+
 ## Files
 
 ```rust

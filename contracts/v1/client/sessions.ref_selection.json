@@ -1,0 +1,60 @@
+{
+  "api_version": 1,
+  "call": "Authed::select_ref",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [
+    "session",
+    "managed_jev"
+  ],
+  "operation": "sessions.ref_selection",
+  "request": {
+    "body": {
+      "data": {
+        "has_text": false,
+        "instruction": "Click Save",
+        "snapshot": {
+          "nodes": [
+            {
+              "label": "Save",
+              "ref": "e1",
+              "type": "Button"
+            }
+          ]
+        },
+        "threshold": 0.7
+      },
+      "type": "ref_selection"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/sessions/{session_id}/ref-selection"
+  },
+  "response": {
+    "non_null": [
+      "/accepted",
+      "/model",
+      "/model_ms",
+      "/operation",
+      "/provider",
+      "/reason"
+    ],
+    "required": [
+      "/accepted",
+      "/model",
+      "/model_ms",
+      "/operation",
+      "/provider",
+      "/reason",
+      "/usage"
+    ],
+    "status": "2xx",
+    "type": "ref_selection"
+  }
+}

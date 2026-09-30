@@ -86,6 +86,22 @@ impl ModelClient {
     }
 
     pub async fn choose(&self, observation: &Observation, instruction: &str) -> Result<Decision> {
+        self.choose_with_threshold(observation, instruction, self.config.threshold)
+            .await
+    }
+
+    /// Reuses the connection pool while applying the caller's confidence threshold to this decision.
+    pub async fn choose_with_threshold(
+        &self,
+        observation: &Observation,
+        instruction: &str,
+        threshold: f64,
+    ) -> Result<Decision> {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(RefError::Invalid(
+                "Confidence threshold must be between 0 and 1.".into(),
+            ));
+        }
         let request = observation.request(instruction)?;
         let body = match self.config.provider {
             Provider::Jev => {
@@ -118,12 +134,12 @@ impl ModelClient {
             .json()
             .await
             .map_err(|_| RefError::Provider("invalid response JSON".into()))?;
-        let mut decision = self.decode(observation, &request, &response)?;
+        let mut decision = self.decode(observation, &request, &response, threshold)?;
         decision.model_ms = start.elapsed().as_secs_f64() * 1000.0;
         Ok(decision)
     }
 
-    fn decode(&self, observation: &Observation, request: &Value, response: &Value) -> Result<Decision> {
+    fn decode(&self, observation: &Observation, request: &Value, response: &Value, threshold: f64) -> Result<Decision> {
         let (operation, target, confidence) = match self.config.provider {
             Provider::Jev => {
                 let answers = &response["answers"];
@@ -162,7 +178,7 @@ impl ModelClient {
                 "Model returned an operation or ref outside the offered choices".into(),
             ));
         }
-        let accepted = !blocked && confidence.is_none_or(|p| p >= self.config.threshold);
+        let accepted = !blocked && confidence.is_none_or(|p| p >= threshold);
         Ok(Decision {
             provider: if self.config.provider == Provider::Jev {
                 "jev"
@@ -230,5 +246,5 @@ pub(super) fn decode_for_test(provider: Provider, observation: &Observation, res
         threshold: 0.7,
         timeout: Duration::from_secs(1),
     })?;
-    client.decode(observation, &observation.request("click Save")?, response)
+    client.decode(observation, &observation.request("click Save")?, response, 0.7)
 }

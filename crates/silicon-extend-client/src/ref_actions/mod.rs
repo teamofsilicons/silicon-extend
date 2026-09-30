@@ -22,6 +22,15 @@ pub enum RefError {
     Provider(String),
 }
 
+/// Inputs for Extend's managed Jev selector. Literal fill text stays with the caller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefSelectionRequest {
+    pub snapshot: Value,
+    pub instruction: String,
+    pub has_text: bool,
+    pub threshold: f64,
+}
+
 /// Normalized observed candidates, supporting nested Android and flat desktop/Apple snapshots.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Observation {

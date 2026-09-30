@@ -10,6 +10,7 @@ contracts/
   v1/client/          silicon-extend-client (and so the extend CLI, which calls Extend only through it), current version
   v1/client-1.0.0/    the released 1.0.0 client's fixtures, frozen: 1.0.0 CLIs and apps built on it are still in use
   v1/client-1.1.0/    the released 1.1.0 client's fixtures, frozen before the 1.2.0 client release
+  v1/client-1.2.0/    the released 1.2.0 client's fixtures, frozen before managed selection in 1.3.0
   v1/device/          the Android app (android.*) and the Mac, Windows and Linux app (agent.*), every supported version
   internal/honeycomb/ Honeycomb's test-environment lifecycle instructions (not API-versioned)
 ```

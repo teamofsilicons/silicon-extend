@@ -1060,6 +1060,26 @@ fn ops() -> Vec<Op> {
             |c| c.silicon().run(SESSION_ID, &command())
         ),
         op!(
+            "sessions.ref_selection",
+            "Authed::select_ref",
+            ["session", "managed_jev"],
+            200,
+            "ref_selection",
+            Some(
+                json!({"provider":"jev","model":"fixture-jev","accepted":true,"operation":"click",
+                "target":"@e1","confidence":1.0,"reason":"Selected an observed ref.","model_ms":1.0,"usage":{}})
+            ),
+            |c| c.silicon().select_ref(
+                SESSION_ID,
+                &silicon_extend_client::ref_actions::RefSelectionRequest {
+                    snapshot: json!({"nodes":[{"ref":"e1","type":"Button","label":"Save"}]}),
+                    instruction: "Click Save".into(),
+                    has_text: false,
+                    threshold: 0.7,
+                }
+            )
+        ),
+        op!(
             "files.list",
             "Authed::files",
             ["file"],
