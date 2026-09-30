@@ -1,0 +1,39 @@
+{
+  "api_version": 1,
+  "call": "Authed::takeover_status",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [
+    "takeover"
+  ],
+  "operation": "sessions.takeover_status",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/sessions/{session_id}/takeover"
+  },
+  "response": {
+    "non_null": [
+      "/expires_at",
+      "/reason",
+      "/session_id",
+      "/started_at",
+      "/takeover_id"
+    ],
+    "required": [
+      "/expires_at",
+      "/reason",
+      "/session_id",
+      "/started_at",
+      "/takeover_id"
+    ],
+    "status": "2xx",
+    "type": "takeover"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "api_version": 1,
+  "call": "Client::upload_artifact",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [
+    "upload"
+  ],
+  "operation": "device.artifact",
+  "request": {
+    "body_base64": "iVBORyBjb250cmFjdCBmaXh0dXJl",
+    "headers": {
+      "authorization": "Extend-Device {device_credential}",
+      "content-type": "image/png",
+      "silicon-extend-api-version": "1",
+      "x-content-sha256": "5497b4250969fad52ded6b71f2c3276883f2ffd727fee82813ea0aa05e27d8bc",
+      "x-file-name": "shot.png"
+    },
+    "method": "PUT",
+    "path": "/api/v1/device/artifacts/{upload_id}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

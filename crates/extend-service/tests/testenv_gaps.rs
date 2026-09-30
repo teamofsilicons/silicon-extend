@@ -68,7 +68,6 @@ async fn start() -> Env {
         ting: TingMode::Local,
         honeycomb_service_token: Some("hck_test".into()),
         postmark_token: None,
-        jev: Default::default(),
         report_recipients: vec!["bugs@example.test".into()],
         device_app_min_version: "1.0.0".into(),
         local_members: vec![

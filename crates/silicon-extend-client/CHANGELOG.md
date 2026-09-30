@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.0
+
+Removes the experimental Jev/model-backed ref selection API: `ref_actions`,
+`Authed::select_ref`, and the `ref_benchmark` example. Use an ordinary `snapshot` command,
+choose a ref in your agent, and send the device action through `Authed::run`.
+
+The remaining HTTP API stays at v1. Existing device, session, snapshot, ref action and Android
+debugging commands are unchanged. The entries below describe previous releases.
+
 ## 1.3.0
 
 Adds `Authed::select_ref` and `ref_actions::RefSelectionRequest` for authenticated managed Jev

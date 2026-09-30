@@ -13,9 +13,6 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-#[path = "cases/ref_actions.rs"]
-mod ref_actions;
-
 #[derive(Debug, Clone)]
 struct Req {
     method: String,
@@ -235,7 +232,6 @@ impl Cli {
             .env("EXTEND_TELEMETRY", "off")
             .env_remove("EXTEND_SESSION")
             .env_remove("EXTEND_TEST_SECRET")
-            .env_remove("TYPESAFE_API_KEY")
             .env_remove("NO_COLOR");
         for (k, v) in &self.env {
             c.env(k, v);
@@ -579,6 +575,53 @@ fn device_ls_says_when_it_stops_early() {
 }
 
 // ───────────────────────────── Help while connected ─────────────────────────────
+
+#[test]
+fn removed_model_commands_leave_ordinary_ref_and_android_commands_usable() {
+    let commands = ["snapshot", "click", "fill", "press", "type", "adb"];
+    let fake = Fake::start(move |r| match (r.method.as_str(), r.path_only()) {
+        ("GET", "/api/v1/sessions/a3f") => Some(ok("session", session("a3f", "active", &commands))),
+        ("POST", "/api/v1/sessions/a3f/commands") => {
+            let mut result = command_result(json!([]), json!([]));
+            result["command"] = r.body["data"]["command"].clone();
+            result["output"] = json!({"nodes":[{"ref":"e2","role":"button","label":"Search"}]});
+            Some(ok("command_result", result))
+        }
+        _ => None,
+    });
+    let cli = Cli::new("ordinary-commands", &fake.url)
+        .signed_in("si:chef")
+        .connected("a3f", &commands);
+    for removed in ["act", "bench-ref"] {
+        let out = cli.run(&[removed, "Click Search", "--json"]);
+        assert!(!out.status.success());
+        let error: Value = serde_json::from_str(stderr(&out).lines().next().unwrap()).unwrap();
+        assert_eq!(error["error"]["code"], "unknown_command");
+        assert!(fake.requests("POST", "/api/v1/sessions/a3f/commands").is_empty());
+    }
+    let help = stdout(&cli.run(&["--help"]));
+    assert!(!help.contains("extend act") && !help.contains("bench-ref"), "{help}");
+
+    let ordinary = [
+        vec!["snapshot", "-i", "--force-full"],
+        vec!["click", "@e2"],
+        vec!["fill", "@e4", "NH1 Bowls"],
+        vec!["press", "450", "615"],
+        vec!["type", "NH1 Bowls"],
+        vec!["adb", "shell", "input", "tap", "450", "615"],
+    ];
+    for argv in &ordinary {
+        let out = cli.run(argv);
+        assert!(out.status.success(), "{}: {}", argv.join(" "), stderr(&out));
+    }
+    let sent = fake.requests("POST", "/api/v1/sessions/a3f/commands");
+    assert_eq!(sent.len(), ordinary.len());
+    for (request, expected) in sent.iter().zip(ordinary) {
+        assert_eq!(request.body["type"], "command");
+        assert_eq!(request.body["data"]["command"], expected[0]);
+        assert_eq!(request.body["data"]["args"], json!(&expected[1..]));
+    }
+}
 
 #[test]
 fn help_follows_the_connected_device() {
@@ -971,7 +1014,7 @@ fn matrix(state: &str) -> Value {
            "versions": [{"api_version": 1, "state": state, "deprecated_at": if state == "current" { Value::Null } else { json!("2026-09-01T00:00:00Z") },
                          "sunset_at": null, "sunset_earliest_at": if state == "deprecated" { json!("2026-10-04T00:00:00Z") } else { Value::Null },
                          "sunset_rule": "Sunset after 7 consecutive days with zero requests",
-                         "compatible": {"client_crate": ">=1.0.0, <2.0.0", "cli": ">=1.0.0, <2.0.0", "device_app_min": "1.0.0"}}]})
+                         "compatible": {"client_crate": ">=1.0.0, <3.0.0", "cli": ">=1.0.0, <3.0.0", "device_app_min": "1.0.0"}}]})
 }
 
 #[test]
@@ -979,7 +1022,7 @@ fn version_reads_the_compatibility_matrix() {
     for (state, says) in [
         (
             "current",
-            "Status: current. API v1 is current, and it works with CLI >=1.0.0, <2.0.0",
+            "Status: current. API v1 is current, and it works with CLI >=1.0.0, <3.0.0",
         ),
         (
             "deprecated",
@@ -998,7 +1041,7 @@ fn version_reads_the_compatibility_matrix() {
         );
         let o = cli.run(&["-V", "--json"]);
         assert_eq!(json_out(&o)["status"], state);
-        assert_eq!(json_out(&o)["cli_range"], ">=1.0.0, <2.0.0");
+        assert_eq!(json_out(&o)["cli_range"], ">=1.0.0, <3.0.0");
     }
 
     let fake = Fake::start_with_version(

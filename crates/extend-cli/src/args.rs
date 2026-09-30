@@ -89,17 +89,6 @@ pub struct Spec {
 /// (a device is only visible to the Carbons who paired it from 1.1).
 pub const SPECS: &[Spec] = &[
     Spec {
-        path: "act",
-        flags: &[
-            ("--provider", true),
-            ("--fallback", true),
-            ("--text", true),
-            ("--scope", true),
-            ("--threshold", true),
-            ("--dry-run", false),
-        ],
-    },
-    Spec {
         path: "login",
         flags: &[],
     },

@@ -18,7 +18,6 @@ pub mod error;
 pub mod files;
 pub mod hub;
 pub mod iam;
-pub mod managed_jev;
 pub mod membership;
 pub mod revocation;
 pub mod routes;
@@ -87,7 +86,6 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
             (t.clone(), Some(t))
         }
     };
-    let managed_jev = managed_jev::ManagedJev::new(&cfg.jev);
     let state = Arc::new(AppState {
         cfg,
         pool,
@@ -99,7 +97,6 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
         hub: hub::Hub::default(),
         auth_cache: iam::AuthCache::default(),
         http: reqwest::Client::new(),
-        managed_jev,
         ready_worlds: RwLock::new(test_worlds.iter().cloned().collect()),
         selections: Default::default(),
         selection_revisions: Default::default(),

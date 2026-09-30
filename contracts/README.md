@@ -11,6 +11,8 @@ contracts/
   v1/client-1.0.0/    the released 1.0.0 client's fixtures, frozen: 1.0.0 CLIs and apps built on it are still in use
   v1/client-1.1.0/    the released 1.1.0 client's fixtures, frozen before the 1.2.0 client release
   v1/client-1.2.0/    the released 1.2.0 client's fixtures, frozen before managed selection in 1.3.0
+  v1/client-1.3.0/    the released 1.3.0 ordinary API fixtures, frozen before 2.0.0
+  retired/client-1.3.0/  withdrawn optional selection contract, retained as history only
   v1/device/          the Android app (android.*) and the Mac, Windows and Linux app (agent.*), every supported version
   internal/honeycomb/ Honeycomb's test-environment lifecycle instructions (not API-versioned)
 ```
@@ -26,6 +28,18 @@ release adds fixtures instead of editing the old ones:
   new file, named for a new operation (`android.device.socket.wake.json`) or with the version in its
   name (`android.device.self.1_1.json`, `agent.enrollments.create.1_1.json`), and says
   `"consumer_version": "1.1.0"`.
+
+## Explicit retirement in 2.0.0
+
+At the product owner's request, 2.0.0 removes Jev, `extend act`, the SDK's `ref_actions` and
+`select_ref`, and `POST /api/v1/sessions/{session_id}/ref-selection`. This optional operation is
+withdrawn for every client, including older 1.3 releases. Its original published fixture is kept
+byte-for-byte under `retired/client-1.3.0/`; it is historical evidence, not a supported contract to
+replay. Every other 1.3.0 fixture remains in the active frozen suite.
+
+This intentional removal does not retire API v1 or change ordinary device/ref commands. Existing
+1.0, 1.1, 1.2 and 1.3 ordinary API contracts remain supported and replayed. Android debugging input
+is independent of selection and remains available.
 
 ## Who writes them
 

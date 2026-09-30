@@ -313,7 +313,7 @@ non-ASCII/control characters and positive `--delay-ms` are rejected to avoid cha
 input. The existing accessibility text path keeps its normal character support.
 Without debugging, `type` returns `text_input_unavailable` with
 `inputSent: false`, rather than claiming that the field lacks focus. Connecting debugging does
-not make hidden nodes appear in accessibility snapshots or create refs for `fill` or Jev.
+not make hidden nodes appear in accessibility snapshots or create refs for `fill`.
 
 Host USB ADB and Extend's on-device debugging connection use separate credentials. A successful
 `adb shell input tap` from a computer does not mean Extend has debugging available. The Carbon

@@ -1,0 +1,35 @@
+{
+  "api_version": 1,
+  "call": "Authed::retry_setup",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [
+    "failed_setup"
+  ],
+  "operation": "devices.setup_retry",
+  "request": {
+    "body": {
+      "data": {},
+      "type": "setup_retry"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/devices/{device_id}/setup/retry"
+  },
+  "response": {
+    "non_null": [
+      "/retrying"
+    ],
+    "required": [
+      "/retrying"
+    ],
+    "status": "2xx",
+    "type": "setup_retry"
+  }
+}

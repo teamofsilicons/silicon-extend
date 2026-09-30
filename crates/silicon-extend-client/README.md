@@ -10,7 +10,7 @@ is built only on this crate.
 
 ```toml
 [dependencies]
-silicon-extend-client = "1"
+silicon-extend-client = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -26,11 +26,3 @@ let devices = me.devices(DeviceQuery::default()).await?;
 The full guide is [docs/client.md](https://github.com/teamofsilicons/silicon-extend/blob/main/docs/client.md),
 and the HTTP contract is [api.yaml](https://github.com/teamofsilicons/silicon-extend/blob/main/understanding/api.yaml).
 MIT licensed.
-
-The experimental `ref_actions` module selects one existing ref with TypeSafe Jev or a configured
-OpenAI-compatible model. It does not execute device actions; callers own revalidation and fallback
-to their normal planner. See [configuration and benchmarks](https://github.com/teamofsilicons/silicon-extend/blob/main/docs/jev-ref-experiment.md).
-
-Version 1.3 adds `Authed::select_ref` for Silicon-managed Jev through the existing Extend login,
-without a personal TypeSafe key. It requires service 1.2.0 and an active authorized session.
-Direct `ref_actions::ModelClient` calls still support your own provider key.

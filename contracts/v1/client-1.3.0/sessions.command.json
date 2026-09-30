@@ -1,0 +1,74 @@
+{
+  "api_version": 1,
+  "call": "Authed::run",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "operation": "sessions.command",
+  "request": {
+    "body": {
+      "data": {
+        "args": [
+          "-i"
+        ],
+        "command": "snapshot",
+        "self_destruct_minutes": 60,
+        "timeout_ms": 30000
+      },
+      "type": "command"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/sessions/{session_id}/commands"
+  },
+  "response": {
+    "non_null": [
+      "/command",
+      "/command_id",
+      "/duration_ms",
+      "/error/code",
+      "/error/message",
+      "/files",
+      "/files/*/content_type",
+      "/files/*/file_id",
+      "/files/*/kind",
+      "/files/*/name",
+      "/files/*/permanent",
+      "/files/*/size_bytes",
+      "/files/*/url",
+      "/ok",
+      "/session_id",
+      "/started_at",
+      "/warnings"
+    ],
+    "required": [
+      "/command",
+      "/command_id",
+      "/duration_ms",
+      "/error/code",
+      "/error/message",
+      "/files/*/content_type",
+      "/files/*/file_id",
+      "/files/*/kind",
+      "/files/*/name",
+      "/files/*/permanent",
+      "/files/*/self_destruct_at",
+      "/files/*/size_bytes",
+      "/files/*/url",
+      "/idle_ends_at",
+      "/ok",
+      "/session_id",
+      "/started_at"
+    ],
+    "status": "2xx",
+    "type": "command_result"
+  }
+}
