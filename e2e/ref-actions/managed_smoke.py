@@ -83,7 +83,9 @@ def run(args):
         def forward(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if self.path.endswith("/ref-selection"):
-                data = json.loads(body)["data"]
+                # This is the service HTTP request envelope, not CLI JSON output.
+                envelope = json.loads(body)
+                data = envelope["data"]
                 observed.append({
                     "has_text": data.get("has_text"),
                     "fields": sorted(data),
