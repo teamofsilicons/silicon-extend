@@ -75,7 +75,9 @@ error with the normal-ref recovery instructions.
    it has no calibrated confidence threshold. Both can abstain.
 5. If explicitly requested, LLM fallback handles abstention or provider failure, before execution.
 6. Capture again and require identical normalized context and refs before executing. If changed,
-   return `stale` without an action. Pin the fresh generation where the driver exposes
+   select again against that fresh observation once, then revalidate again. If it is still changing,
+   return `stale` without an action. This recovers a settling layout without guessing whether a
+   change matters to the instruction. Pin the fresh generation where the driver exposes
    `refsGeneration`; preserve plain refs on other drivers. Existing driver freshness checks remain
    authoritative. This does not create atomic snapshot-plus-execution on legacy drivers.
 7. Send the chosen ordinary device command once. An execution failure never invokes model fallback
@@ -84,10 +86,14 @@ error with the normal-ref recovery instructions.
 No candidate truncation: over 254 eligible refs or 128 KB of request context requires a narrower
 scope. Ref-based execution remains subject to the quality and completeness of the native tree.
 
-`--json` includes the decision, each model attempt, device result, and timings: `snapshot_ms`,
-`selection_ms` (including fallback), `revalidate_ms`, `execution_ms`, and `total_ms` (including
-session lookup). `selected` means dry-run only; `executed` means the device command succeeded,
-not that a larger user task was verified. `blocked`, `stale`, and `execution_failed` exit nonzero.
+`--json` includes the decision, each model attempt, device result, revalidation diagnostics, and
+timings: `snapshot_ms`, `selection_ms` (including fallback and reselection), `revalidate_ms`,
+`execution_ms`, and `total_ms` (including session lookup). `selected` means dry-run only;
+`executed` means the device command succeeded, not that a larger user task was verified.
+`executed_unverified` means the device accepted the action but could not verify its value; inspect
+the screen before deciding what to do next. Both execution statuses exit zero. `blocked`, `stale`,
+and `execution_failed` exit nonzero. Text output includes the underlying device error when present;
+an execution failure may have already affected the device and must not be blindly retried.
 
 Jev is optional. Ordinary snapshot and ref commands have no model dependency and remain usable
 after API failures, timeouts, invalid responses, absent credentials or abstentions. Selection

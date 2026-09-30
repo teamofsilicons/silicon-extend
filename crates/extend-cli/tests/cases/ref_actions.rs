@@ -32,12 +32,13 @@ fn fake_with_managed_failure(
             if result["command"] == "snapshot" {
                 let n = snapshots.fetch_add(1, Ordering::SeqCst);
                 result["output"] = json!({"refsGeneration":10+n,"nodes":[
-                    {"ref":"e1","type":"Button","label":if stale && n>0 {"Delete"}else{"Save"}},
+                    {"ref":"e1","type":"Button","label":if stale && n%2==1 {"Delete"}else{"Save"}},
                     {"ref":"e2","type":"TextField","label":"Email","value":""}
                 ]});
             } else if fail_action {
                 result["ok"] = json!(false);
-                result["error"] = json!({"code":"stale_ref","message":"fixture rejected the ref"});
+                result["error"] = json!({"code":"stale_ref","message":"fixture rejected the ref",
+                    "details":{"expectedLength":12,"actualLength":36,"privateValue":"do-not-echo"}});
             }
             Some(ok("command_result", result))
         }
@@ -116,6 +117,221 @@ fn cli(name: &str, fake: &Fake) -> Cli {
         .env("EXTEND_REF_LLM_MODEL", "fixture-llm")
 }
 
+/// Selects the unique Search candidate, so a changed ref binding must reach the model again.
+fn scripted_screens(screens: Vec<Value>, action_output: Value) -> Fake {
+    let snapshots = AtomicUsize::new(0);
+    Fake::start(move |r| match (r.method.as_str(), r.path_only()) {
+        ("GET", "/api/v1/auth/me") => Some(ok("me", me("si:chef"))),
+        ("GET", "/api/v1/sessions/a3f") => Some(ok(
+            "session",
+            session("a3f", "active", &["snapshot", "click", "fill", "get"]),
+        )),
+        ("POST", "/api/v1/sessions/a3f/commands") => {
+            let mut result = command_result(json!([]), json!([]));
+            result["command"] = r.body["data"]["command"].clone();
+            if result["command"] == "snapshot" {
+                let n = snapshots.fetch_add(1, Ordering::SeqCst);
+                result["output"] = screens[n.min(screens.len() - 1)].clone();
+                result["output"]["refsGeneration"] = json!(10 + n);
+            } else {
+                result["output"] = action_output.clone();
+            }
+            Some(ok("command_result", result))
+        }
+        ("POST", "/jev") | ("POST", "/api/v1/sessions/a3f/ref-selection") => {
+            let managed = r.path_only().ends_with("/ref-selection");
+            let (elements, has_text) = if managed {
+                let elements: serde_json::Map<String, Value> = r.body["data"]["snapshot"]["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|node| (format!("@{}", node["ref"].as_str().unwrap()), node.clone()))
+                    .collect();
+                (elements, r.body["data"]["has_text"] == true)
+            } else {
+                (
+                    r.body["state"]["elements"].as_object().unwrap().clone(),
+                    r.body["state"]["caller_supplied_fill_text"] == true,
+                )
+            };
+            let matches: Vec<_> = elements
+                .iter()
+                .filter(|(_, node)| node["label"] == "Search" && (!has_text || node["type"] == "TextField"))
+                .map(|(reference, _)| reference.as_str())
+                .collect();
+            let operation = if matches.len() != 1 {
+                "BLOCKED"
+            } else if has_text {
+                "fill"
+            } else {
+                "click"
+            };
+            let target = if operation == "BLOCKED" { "BLOCKED" } else { matches[0] };
+            if managed {
+                Some(ok(
+                    "ref_selection",
+                    json!({"provider":"jev","model":"fixture-managed-jev",
+                    "accepted":operation!="BLOCKED","operation":operation,
+                    "target":if operation=="BLOCKED" {Value::Null}else{json!(target)},
+                    "confidence":1.0,"reason":"fixture","model_ms":12.0,"usage":{}}),
+                ))
+            } else {
+                let answers: serde_json::Map<String, Value> = r.body["questions"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(name, q)| {
+                        let selected = if name == "operation" { operation } else { target };
+                        let selected = if q["criteria"].get(selected).is_some() {
+                            selected
+                        } else {
+                            "BLOCKED"
+                        };
+                        let probabilities: serde_json::Map<String, Value> = q["criteria"]
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                            .map(|key| (key.clone(), json!(if key == selected { 1.0 } else { 0.0 })))
+                            .collect();
+                        (
+                            name.clone(),
+                            json!({"choice":selected,"confidence":1.0,"probabilities":probabilities}),
+                        )
+                    })
+                    .collect();
+                Some(provider_response(json!({"model":"fixture-jev","answers":answers})))
+            }
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn ref_act_reselects_after_layout_settles_and_uses_the_new_ref_binding() {
+    let before = json!({"nodes":[{"ref":"e1","type":"Button","label":"Search"}]});
+    let after = json!({"nodes":[
+        {"ref":"e1","type":"Button","label":"Delete"},
+        {"ref":"e2","type":"Button","label":"Search"}
+    ]});
+    for managed in [false, true] {
+        let f = scripted_screens(vec![before.clone(), after.clone(), after.clone()], json!({}));
+        let c = cli("ref-reselect-bound-ref", &f).env("TYPESAFE_API_KEY", if managed { "" } else { "model-only-key" });
+        let out = c.run(&["act", "Click Search", "--json"]);
+        assert!(out.status.success(), "{} {}", stdout(&out), stderr(&out));
+        let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+        assert_eq!(doc["status"], "executed");
+        assert_eq!(doc["selection_rounds"], 2);
+        assert_eq!(doc["attempts"][0]["target"], "@e1");
+        assert_eq!(doc["attempts"][0]["selection_round"], 1);
+        assert_eq!(doc["attempts"][1]["target"], "@e2");
+        assert_eq!(doc["attempts"][1]["selection_round"], 2);
+        assert_eq!(doc["revalidations"][0]["stable"], false);
+        assert_eq!(
+            doc["revalidations"][0]["changes"]["changed_refs"],
+            json!([{"ref":"@e1","fields":["label"]}])
+        );
+        assert_eq!(doc["revalidations"][0]["changes"]["added_refs"], json!(["@e2"]));
+        assert!(!doc["revalidations"].to_string().contains("Delete"));
+        assert_eq!(doc["revalidations"][1]["stable"], true);
+        assert!(doc["timings"]["selection_ms"].as_f64().unwrap() > 0.0);
+        assert!(doc["timings"]["revalidate_ms"].as_f64().unwrap() > 0.0);
+        let commands = f.requests("POST", "/api/v1/sessions/a3f/commands");
+        assert_eq!(commands.len(), 4);
+        assert!(
+            commands[..3]
+                .iter()
+                .all(|request| request.body["data"]["command"] == "snapshot")
+        );
+        assert_eq!(commands[3].body["data"]["args"], json!(["@e2~s12"]));
+        assert_eq!(
+            f.requests(
+                "POST",
+                if managed {
+                    "/api/v1/sessions/a3f/ref-selection"
+                } else {
+                    "/jev"
+                }
+            )
+            .len(),
+            2
+        );
+    }
+}
+
+#[test]
+fn ref_act_changed_target_or_new_ambiguity_is_reconsidered_before_any_action() {
+    let before = json!({"nodes":[{"ref":"e1","type":"Button","label":"Search"}]});
+    for after in [
+        json!({"nodes":[{"ref":"e1","type":"Button","label":"Delete"}]}),
+        json!({"nodes":[{"ref":"e1","type":"Button","label":"Search"},
+            {"ref":"e2","type":"Button","label":"Search"}]}),
+    ] {
+        let f = scripted_screens(vec![before.clone(), after], json!({}));
+        let out = cli("ref-reselect-ambiguity", &f).run(&["act", "Click Search", "--json"]);
+        assert!(!out.status.success());
+        let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+        assert_eq!(doc["status"], "blocked");
+        assert_eq!(doc["selection_rounds"], 2);
+        assert_eq!(doc["decision"]["operation"], "BLOCKED");
+        assert_eq!(f.requests("POST", "/jev").len(), 2);
+        let commands = f.requests("POST", "/api/v1/sessions/a3f/commands");
+        assert_eq!(commands.len(), 2);
+        assert!(
+            commands
+                .iter()
+                .all(|request| request.body["data"]["command"] == "snapshot")
+        );
+    }
+}
+
+#[test]
+fn ref_act_unrelated_changes_can_settle_but_never_skip_model_reselection() {
+    let before = json!({"nodes":[{"ref":"e1","type":"Button","label":"Search"},
+        {"ref":"e2","type":"Button","label":"Carousel one"}]});
+    let mut after = before.clone();
+    after["nodes"][1]["label"] = json!("Carousel two");
+    let f = scripted_screens(vec![before, after.clone(), after], json!({}));
+    let out = cli("ref-reselect-unrelated", &f).run(&["act", "Click Search", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(doc["status"], "executed");
+    assert_eq!(doc["decision"]["target"], "@e1");
+    assert_eq!(f.requests("POST", "/jev").len(), 2);
+    assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), 4);
+}
+
+#[test]
+fn ref_act_accepted_fill_without_readback_is_unverified_and_never_retried() {
+    let screen = json!({"nodes":[{"ref":"e1","type":"TextField","label":"Search","value":""}]});
+    let output = json!({"verified":false,"verification":"unavailable","verificationReason":"accessibility_prompt",
+        "warning":"The app's accessibility tree still reports its search prompt."});
+    for json_mode in [true, false] {
+        let f = scripted_screens(vec![screen.clone()], output.clone());
+        let mut args = vec!["act", "Fill Search", "--text", "itc sunfeast"];
+        if json_mode {
+            args.push("--json");
+        }
+        let out = cli("ref-unverified-fill", &f).run(&args);
+        assert!(out.status.success(), "{} {}", stdout(&out), stderr(&out));
+        if json_mode {
+            let doc: Value = serde_json::from_str(&stdout(&out)).unwrap();
+            assert_eq!(doc["status"], "executed_unverified");
+            assert_eq!(doc["ok"], true);
+            assert_eq!(doc["result"]["output"], output);
+            assert!(doc["normal_ref_fallback"].is_null());
+        } else {
+            assert!(stdout(&out).contains("executed_unverified: fill @e1"));
+            assert!(stdout(&out).contains("could not verify"));
+            assert!(stdout(&out).contains("accessibility tree still reports its search prompt"));
+            assert!(stdout(&out).contains("before retrying"));
+        }
+        assert_eq!(f.requests("POST", "/jev").len(), 1);
+        let commands = f.requests("POST", "/api/v1/sessions/a3f/commands");
+        assert_eq!(commands.len(), 3);
+        assert_eq!(commands[2].body["data"]["command"], "fill");
+    }
+}
+
 #[test]
 fn ref_act_executes_once_with_fresh_generation_and_preserves_literal_text() {
     let f = fake(false, false, false);
@@ -161,7 +377,7 @@ fn ref_act_dry_run_does_not_execute_or_claim_successful_action() {
 #[test]
 fn ref_act_changed_screen_and_low_confidence_never_execute() {
     for (name, stale, low, expected, count) in [
-        ("ref-stale", true, false, "stale", 2),
+        ("ref-stale", true, false, "stale", 3),
         ("ref-low", false, true, "blocked", 1),
     ] {
         let f = fake(stale, low, false);
@@ -171,6 +387,11 @@ fn ref_act_changed_screen_and_low_confidence_never_execute() {
         assert_eq!(doc["status"], expected);
         assert_eq!(doc["normal_ref_fallback"]["mode"], "normal_refs");
         assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), count);
+        if stale {
+            assert_eq!(doc["selection_rounds"], 2);
+            assert_eq!(doc["revalidations"].as_array().unwrap().len(), 2);
+            assert_eq!(f.requests("POST", "/jev").len(), 2, "reselection must stay bounded");
+        }
         let regular = cli(&format!("{name}-regular"), &f).run(&["click", "@e1", "--json"]);
         assert!(regular.status.success(), "{}", stderr(&regular));
     }
@@ -188,6 +409,37 @@ fn ref_act_explicit_fallback_is_measured_and_device_failure_is_not_retried() {
     assert_eq!(doc["decision"]["provider"], "llm");
     assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), 3);
     assert_eq!(f.requests("POST", "/llm").len(), 1);
+}
+
+#[test]
+fn ref_act_text_failure_reports_device_error_and_requires_inspection_before_retry() {
+    let f = fake(false, false, true);
+    let out = cli("ref-device-failure-text", &f).run(&[
+        "act",
+        "Fill Email",
+        "--text",
+        "alice@example.test",
+        "--fallback",
+        "llm",
+    ]);
+    assert!(!out.status.success());
+    let text = stdout(&out);
+    assert!(text.contains("execution_failed: fill @e2"), "{text}");
+    assert!(
+        text.contains("Device error [stale_ref]: fixture rejected the ref"),
+        "{text}"
+    );
+    assert!(text.contains("may already have changed the device"), "{text}");
+    assert!(text.contains("expected length 12, observed length 36"), "{text}");
+    assert!(!text.contains("do-not-echo"), "{text}");
+    assert!(
+        text.contains("before retrying; do not repeat the action automatically"),
+        "{text}"
+    );
+    let calls = f.requests("POST", "/api/v1/sessions/a3f/commands");
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls.iter().filter(|r| r.body["data"]["command"] == "fill").count(), 1);
+    assert!(f.requests("POST", "/llm").is_empty());
 }
 
 #[test]
@@ -400,7 +652,7 @@ fn ref_act_invalid_managed_decisions_fail_before_dry_run_or_execution_and_allow_
 #[test]
 fn ref_act_managed_stale_blocked_and_dry_run_never_execute() {
     for (name, stale, low, dry, expected, count) in [
-        ("managed-stale", true, false, false, "stale", 2),
+        ("managed-stale", true, false, false, "stale", 3),
         ("managed-low", false, true, false, "blocked", 1),
         ("managed-dry", false, false, true, "selected", 1),
     ] {
@@ -414,6 +666,10 @@ fn ref_act_managed_stale_blocked_and_dry_run_never_execute() {
         assert_eq!(doc["status"], expected);
         assert_eq!(out.status.success(), dry);
         assert_eq!(f.requests("POST", "/api/v1/sessions/a3f/commands").len(), count);
+        assert_eq!(
+            f.requests("POST", "/api/v1/sessions/a3f/ref-selection").len(),
+            if stale { 2 } else { 1 }
+        );
         assert!(
             f.requests("POST", "/api/v1/sessions/a3f/commands")
                 .iter()

@@ -76,6 +76,7 @@ class CommandExecutor(
     private class Session {
         var last: Snapshot? = null
         var baseline: Snapshot? = null
+        val fillPrompts = FillReadback.Prompts()
     }
 
     private class Run(val frame: ServiceFrame.Command, val session: Session, val deadline: Long, val pairId: String) {
@@ -865,29 +866,73 @@ class CommandExecutor(
             CommandFailure.NOT_FOUND,
             "${r.desc} isn't a text field and tapping it didn't focus one.",
         )
+        val before = fillReadbackField(info)
         if (!info.isFocused) {
             info.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             if (!info.isFocused) info.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
         typeInto(info, "", text, delayMs)
-        delay(120)
-        info.refresh()
-        val password = info.isPassword
-        val now = if (info.isShowingHintText) "" else info.text?.toString().orEmpty()
-        if (!password && now != text) {
+        val verification = FillReadback.verify(
+            before, text, run.session.fillPrompts, (run.remainingMs() - 100).coerceAtLeast(0),
+            now = SystemClock::elapsedRealtime,
+            capture = {
+                try {
+                    a.capture().allNodes.mapNotNull { node ->
+                        (node.handle as? AccessibilityNodeInfo)?.let {
+                            fillReadbackField(it, node.windowType == "application")
+                        }
+                    }
+                } catch (_: CommandFailure) { null }
+            },
+            refresh = { candidate ->
+                val live = candidate.identity.handle as AccessibilityNodeInfo
+                if (runCatching { live.refresh() }.getOrDefault(false)) fillReadbackField(live, candidate.applicationWindow)
+                else null
+            },
+            pause = { delay(it) },
+        )
+        if (verification.state == FillReadback.State.MISMATCH) {
             throw CommandFailure(
                 CommandFailure.ACTION_FAILED,
-                "After fill the field holds ${now.length} characters, not the ${text.length} typed; the app may format or limit the input. Check it with get text.",
-                buildJsonObject { put("expectedLength", text.length); put("actualLength", now.length) },
+                "After fill the field holds ${verification.actualLength} characters, not the ${text.length} typed; the app may format or limit the input. Inspect the field before retrying.",
+                buildJsonObject {
+                    put("expectedLength", text.length); put("actualLength", verification.actualLength)
+                    put("verification", "mismatch"); put("reason", "text_mismatch"); put("inputAccepted", true)
+                },
             )
         }
+        if (verification.state == FillReadback.State.UNCONFIRMED) {
+            throw CommandFailure(
+                "fill_verification_unconfirmed",
+                "Android accepted the text, but the field could not be read back reliably. Inspect the screen before retrying; text may already have been entered.",
+                buildJsonObject {
+                    put("verification", "unconfirmed"); put("reason", verification.reason); put("inputAccepted", true)
+                },
+            )
+        }
+        val verified = verification.state == FillReadback.State.VERIFIED
+        val warning = if (verification.reason == "password")
+            "Android accepted the text, but accessibility hides this password field. The value was not verified."
+        else "Android accepted the text, but accessibility still exposes the field's earlier prompt instead of its value. Inspect the screen before retrying; the value was not verified."
         val out = buildJsonObject {
             r.ref?.let { put("ref", it) }
             put("chars", text.length)
-            put("verified", !password)
+            put("verified", verified)
+            if (!verified) {
+                put("verification", "unavailable")
+                put("verificationReason", verification.reason)
+                put("warning", warning)
+            }
         }
-        return Outcome(out, "Filled ${r.desc} [redacted ${text.length} chars]")
+        return Outcome(out, if (verified) "Filled ${r.desc} [redacted ${text.length} chars]" else "Fill accepted [redacted ${text.length} chars]. $warning")
     }
+
+    private fun fillReadbackField(info: AccessibilityNodeInfo, applicationWindow: Boolean = true) = FillReadback.Field(
+        identity = FillReadback.Identity(info, info.windowId, info.packageName?.toString(), info.className?.toString(), info.viewIdResourceName),
+        text = info.text?.toString(), hintShowing = info.isShowingHintText, password = info.isPassword,
+        editable = info.isEditable || Roles.normalizeType(info.className?.toString()).let { it.contains("edittext") || it.contains("autocompletetextview") },
+        visible = info.isVisibleToUser, applicationWindow = applicationWindow,
+    )
 
     private suspend fun type(text: String, delayMs: Long?): Outcome {
         val a = a11y()

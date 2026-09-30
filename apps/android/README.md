@@ -1,6 +1,6 @@
 # Silicon Extend for Android (phones, tablets, Android TV, Google TV, Fire OS)
 
-One APK, package `com.teamofsilicons.extend`, version 1.1.0 (versionCode 4; 1.0.2 was versionCode 3,
+One APK, package `com.teamofsilicons.extend`, version 1.1.1 (versionCode 5; 1.1.0 was versionCode 4, 1.0.2 was versionCode 3,
 1.0.0 had minSdk 30), minSdk 26 (Android 8.0), target/compile SDK 36. It
 pairs the device with Extend (with one Carbon or several, like a family TV), keeps it connected,
 shows who is using it with a Stop button, says whether the device is awake and shows a Silicon's
@@ -40,6 +40,20 @@ kotlinx.serialization 1.9.
 Service URL: release builds default to `https://backend.extend.teamofsilicons.com`. Debug builds
 default to the same unless built with `-PextendServiceUrl=http://10.0.2.2:8480`. Cleartext HTTP is
 allowed only for `10.0.2.2`, `localhost` and `127.0.0.1` (`res/xml/network_security_config.xml`).
+
+### Fill verification (1.1.1)
+
+After Android accepts a fill, Extend reads the field again from a fresh accessibility capture,
+polling for up to one second within the remaining command budget. It never types again during
+verification. A matching value returns `verified: true`; a confirmed mismatch remains an error.
+Missing or ambiguous fields return `fill_verification_unconfirmed` with `inputAccepted: true`.
+
+Some apps, including Zomato's search field, keep reporting their original accessibility prompt
+after text appears on screen. When Extend observed that prompt as a hint before filling, it reports
+the accepted input with `verified: false`, `verification: "unavailable"`, and a warning instead of
+misreporting the prompt as the entered value. Prompt evidence is bounded and retained only for
+that session. Password values also remain unverified. Inspect the screen before retrying an
+unverified or failed fill: an error can occur after input has already been applied.
 
 ## Android versions
 
