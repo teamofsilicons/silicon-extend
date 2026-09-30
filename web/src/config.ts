@@ -3,7 +3,7 @@
  * where the Extend apps download from, and how each kind of device is added.
  *
  * The Extend apps link to `/download/<platform>` (extend-agent's config.rs does too), and each
- * page offers the files of the latest GitHub release under stable names. A platform whose `files`
+ * page offers the files of that platform's release. A platform whose `files`
  * is null isn't published yet. Change them here and nowhere else.
  */
 import type { DeviceOs } from "./lib/types";
@@ -11,10 +11,9 @@ import type { DeviceOs } from "./lib/types";
 const PRODUCTION_API = "https://backend.extend.teamofsilicons.com";
 
 /**
- * The Silicon Extend release this website belongs to, and the first app version that can add a
- * pair for another Carbon ("Pair with another Carbon") and report whether a device is awake.
+ * The first app version that can add a pair for another Carbon ("Pair with another Carbon") and
+ * report whether a device is awake.
  */
-export const RELEASE_VERSION = "1.1.0";
 export const MULTI_CARBON_APP_VERSION = "1.1";
 
 /** Extend API base URL without a trailing slash; "" means same origin. */
@@ -45,13 +44,25 @@ export type Platform =
   | "windows"
   | "linux";
 
-/** Assets of the latest GitHub release, by stable name. release.yml builds versioned artifacts
- * (Silicon-Extend-1.1.0-macos-arm64.zip, silicon-extend_1.1.0_amd64.deb, …); the release procedure
- * copies them to these names and writes SHA256SUMS when it creates the GitHub release. The names stay
- * the same from release to release: `releases/latest/download/<name>` only works with a stable name. */
-export const RELEASES_URL = "https://github.com/teamofsilicons/silicon-extend/releases/latest";
-export const releaseAsset = (name: string) => `${RELEASES_URL}/download/${name}`;
-export const CHECKSUMS = releaseAsset("SHA256SUMS");
+export interface DownloadRelease {
+  version: string;
+  url: string;
+  assetsUrl: string;
+}
+
+/** Desktop downloads retain the stable names in the latest full app release. Android patches
+ * have their own tag so publishing an APK does not replace the desktop release or its checksums. */
+const DESKTOP_RELEASE: DownloadRelease = {
+  version: "1.1.0",
+  url: `${LINKS.repository}/releases/latest`,
+  assetsUrl: `${LINKS.repository}/releases/latest/download`,
+};
+const ANDROID_RELEASE: DownloadRelease = {
+  version: "1.1.2",
+  url: `${LINKS.repository}/releases/tag/android-v1.1.2`,
+  assetsUrl: `${LINKS.repository}/releases/download/android-v1.1.2`,
+};
+export const releaseAsset = (release: DownloadRelease, name: string) => `${release.assetsUrl}/${name}`;
 
 export interface DownloadFile {
   label: string;
@@ -63,15 +74,17 @@ export interface Download {
   app: string;
   href: string;
   note: string;
+  release: DownloadRelease;
   /** null: not published yet. */
   files: DownloadFile[] | null;
 }
 
-const ANDROID_APK: DownloadFile[] = [{ label: "Android app (.apk)", name: "Silicon-Extend-android.apk" }];
+const ANDROID_APK: DownloadFile[] = [{ label: "Android app (.apk)", name: "Silicon-Extend-Android-1.1.2.apk" }];
 
 export const DOWNLOADS: Record<Platform, Download> = {
   android: {
     platform: "android",
+    release: ANDROID_RELEASE,
     app: "Silicon Extend for Android",
     href: "/download/android",
     note: "Install the .apk on the phone or tablet. Android asks once to allow installs from your browser.",
@@ -79,6 +92,7 @@ export const DOWNLOADS: Record<Platform, Download> = {
   },
   "android-tv": {
     platform: "android-tv",
+    release: ANDROID_RELEASE,
     app: "Silicon Extend TV",
     href: "/download/android-tv",
     note: "For Android TV, Google TV and Fire TV. The same .apk as for phones: install it on the TV itself.",
@@ -86,6 +100,7 @@ export const DOWNLOADS: Record<Platform, Download> = {
   },
   mac: {
     platform: "mac",
+    release: DESKTOP_RELEASE,
     app: "Silicon Extend for Mac",
     href: "/download/mac",
     note: "A menu bar app for Macs with Apple silicon. Unzip it and move Silicon Extend to Applications.",
@@ -93,6 +108,7 @@ export const DOWNLOADS: Record<Platform, Download> = {
   },
   windows: {
     platform: "windows",
+    release: DESKTOP_RELEASE,
     app: "Silicon Extend for Windows",
     href: "/download/windows",
     note: "A system tray app. Unzip it and run extend-agent.exe. This is a preview: it isn't signed yet, so Windows SmartScreen warns before it runs.",
@@ -103,6 +119,7 @@ export const DOWNLOADS: Record<Platform, Download> = {
   },
   linux: {
     platform: "linux",
+    release: DESKTOP_RELEASE,
     app: "Silicon Extend for Linux",
     href: "/download/linux",
     note: "A .deb for Ubuntu 24.04, Debian 13 and newer, or a tarball for other distributions with glibc 2.39 or later.",

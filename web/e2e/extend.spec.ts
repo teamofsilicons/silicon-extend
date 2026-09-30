@@ -632,14 +632,29 @@ test.describe("settings and docs", () => {
     await expect(page.getByTestId("docs-page")).toContainText("Identifiers and values");
     await page.goto("/docs/devices");
     await expect(page.getByTestId("docs-page")).toContainText("Apple TV");
-    await page.goto("/download/android");
-    await expect(page.getByTestId("download-file")).toHaveAttribute(
-      "href",
-      "https://github.com/teamofsilicons/silicon-extend/releases/latest/download/Silicon-Extend-android.apk",
-    );
+    for (const platform of ["android", "android-tv"]) {
+      await page.goto(`/download/${platform}`);
+      await expect(page.getByTestId("download-version")).toHaveText("Download · version 1.1.2");
+      await expect(page.getByTestId("download-file")).toHaveAttribute(
+        "href",
+        "https://github.com/teamofsilicons/silicon-extend/releases/download/android-v1.1.2/Silicon-Extend-Android-1.1.2.apk",
+      );
+      await expect(page.getByRole("link", { name: "release notes" })).toHaveAttribute(
+        "href", "https://github.com/teamofsilicons/silicon-extend/releases/tag/android-v1.1.2",
+      );
+      await expect(page.getByRole("link", { name: "SHA-256 checksum" })).toHaveAttribute(
+        "href", "https://github.com/teamofsilicons/silicon-extend/releases/download/android-v1.1.2/SHA256SUMS",
+      );
+    }
     await page.goto("/download/linux");
+    await expect(page.getByTestId("download-version")).toHaveText("Download · version 1.1.0");
     await expect(page.getByTestId("download-file")).toHaveCount(4);
-    await expect(page.getByTestId("download-page")).toContainText("SHA-256 checksum");
+    await expect(page.getByTestId("download-file").first()).toHaveAttribute(
+      "href", "https://github.com/teamofsilicons/silicon-extend/releases/latest/download/silicon-extend_amd64.deb",
+    );
+    await expect(page.getByRole("link", { name: "SHA-256 checksum" })).toHaveAttribute(
+      "href", "https://github.com/teamofsilicons/silicon-extend/releases/latest/download/SHA256SUMS",
+    );
   });
 });
 

@@ -204,6 +204,27 @@ class AndroidVersionsTest {
         assertEquals("Core device control is ready. Android debugging below adds app installation, device logs and remote buttons.", SetupReport.build(signals(30, tv = true)).doneSummary)
     }
 
+    @Test fun debuggingIsRecommendedDuringSetupButNeverRequiredForReadiness() {
+        for (sdk in listOf(28, 34)) for (tv in listOf(false, true)) {
+            val report = SetupReport.build(signals(sdk, tv = tv))
+            val optional = report.items.filter { !it.required }
+            assertEquals(listOf("developer_options", DebuggingPath.stepKey(tv, sdk)), optional.map { it.step.key })
+            assertTrue("debugging has not been configured", optional.all { it.step.status == "todo" })
+            assertEquals("skipping debugging must not block sessions", "complete", report.setup.state)
+            assertFalse("a recommendation grants no debugging capability", C.ADB in report.capabilities)
+            val benefits = report.debuggingBenefits
+            assertTrue(benefits, benefits.contains("more apps and controls"))
+            assertTrue(benefits, benefits.contains("app installation") && benefits.contains("device logs"))
+            assertEquals("only phones offer recording", !tv, benefits.contains("recording"))
+            assertTrue(benefits, benefits.contains("skip it and finish setup"))
+
+            val unfinished = SetupReport.build(signals(sdk, tv = tv, a11y = false))
+            assertEquals("the benefit is visible before permissions are complete", benefits, unfinished.debuggingBenefits)
+            assertEquals(optional.map { it.step.key }, unfinished.items.filter { !it.required }.map { it.step.key })
+            assertEquals("needs_carbon", unfinished.setup.state)
+        }
+    }
+
     @Test fun debuggingThatCantReconnectIsAFailedStepWithAPlainError() {
         fun lost(sdk: Int, tv: Boolean = false, retrying: Set<String> = emptySet()) = SetupReport.build(
             signals(sdk, tv = tv, devOptions = true, adbOn = true).copy(adbPaired = true, adbLastError = "java.net.ConnectException: failed to connect to /127.0.0.1 (port 5555)", retrying = retrying),

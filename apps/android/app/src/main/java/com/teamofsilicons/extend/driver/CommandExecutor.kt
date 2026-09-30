@@ -752,6 +752,10 @@ class CommandExecutor(
     private suspend fun click(cmd: Cmd.Click, run: Run): Outcome {
         val r = resolve(cmd.target, run)
         val a = a11y()
+        CoordinateTap.execute(cmd, extend.adb.connected,
+            adbTap = { x, y -> extend.adb.shell(ClickFallback.adbCommand(ClickFallback.Method.ADB_TAP, x, y, android.os.Build.VERSION.SDK_INT), check = false).exitCode },
+            gestureTap = { x, y -> a.tap(x.toFloat(), y.toFloat()) },
+        )?.let { method -> return Outcome(targetJson(r, method.wire), "Tapped ${r.desc}") }
         if (r.node != null && cmd.count == 1 && cmd.holdMs == null) {
             val target = r.node.nearestClickable()
             if (target != null) {
@@ -936,10 +940,10 @@ class CommandExecutor(
 
     private suspend fun type(text: String, delayMs: Long?): Outcome {
         val a = a11y()
-        val info = a.focusedInput() ?: throw CommandFailure(
-            "text_input_not_focused",
-            "No text field has input focus. Focus one first (press @ref or focus @ref), or use fill @ref \"text\".",
-        )
+        val info = a.focusedInput()
+        if (info == null) return AdbTextInput.execute(text, delayMs, a.imeVisible(), extend.adb.connected) { command ->
+            extend.adb.shell(command, check = false).exitCode
+        }
         val existing = if (info.isShowingHintText) "" else info.text?.toString().orEmpty()
         if (info.isPassword && existing.isNotEmpty()) {
             throw CommandFailure(

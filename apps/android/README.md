@@ -291,6 +291,35 @@ UNDERSTANDING.md, The Extend app, Pairing, Access, Waking a device and Always vi
   events); without it those versions kept a scrolled list's old rows in the node cache, so a
   snapshot after a scroll showed the rows from before it.
 
+### Controls hidden from accessibility
+
+`snapshot --raw` removes Extend's filtering; it still contains only the nodes Android exposes to
+the accessibility service. Android can hide sensitive controls and reject accessibility gestures
+on them. A completed gesture callback confirms delivery of a gesture, not that the target accepted
+it or acquired focus. See [Android's sensitive-control protection](https://developer.android.com/blog/posts/enhancing-android-security-stop-malware-from-snooping-on-your-app-data).
+
+For a plain coordinate `press x y` or `click x y`, Extend uses `input tap` when its own Android
+debugging connection is already available, and an accessibility gesture otherwise. It chooses
+one path before sending input. A failed or interrupted debugging tap is not replayed through
+accessibility, since it may already have reached the app. Repeated and held taps retain their
+accessibility gesture path. Inspect the resulting screen before deciding to repeat an action.
+
+When the keyboard is visible but accessibility cannot expose its focused field, `type` can send
+supported text through an already-connected debugging session. The result identifies `adb_text`
+and remains unverified: Android's shell accepted input, but accessibility cannot read back the
+field. Unsupported text or pacing is rejected before input is sent; failed or interrupted input
+is never replayed. This debugging text path accepts printable ASCII and spaces; literal `%s`,
+non-ASCII/control characters and positive `--delay-ms` are rejected to avoid changing the requested
+input. The existing accessibility text path keeps its normal character support.
+Without debugging, `type` returns `text_input_unavailable` with
+`inputSent: false`, rather than claiming that the field lacks focus. Connecting debugging does
+not make hidden nodes appear in accessibility snapshots or create refs for `fill` or Jev.
+
+Host USB ADB and Extend's on-device debugging connection use separate credentials. A successful
+`adb shell input tap` from a computer does not mean Extend has debugging available. The Carbon
+connects it in the Android debugging setup card. Extend does not enable debugging remotely or
+declare itself a disability-support accessibility tool to change the controls Android exposes.
+
 ## Tests
 
 - **JVM unit tests** (`app/src/test`, 226 tests; 236 with `vendor/libadb`): every frame example in `docs/device-protocol.md`
@@ -595,6 +624,10 @@ Extend discovers this device's connection port; it also accepts the port shown o
 Debugging screen. TVs with TCP debugging can connect to their local port (commonly 5555) and approve
 Android's RSA prompt. Connections are restricted to loopback, and credentials are encrypted with the
 Android Keystore. The app never opens a debugging connection in response to a remote command.
+
+Android debugging is included in setup by default as an optional recommendation. Its benefit
+text explains that it helps agents with more apps and controls, plus device-appropriate features
+such as app installation, logs and recording. Skipping it does not block core setup or readiness.
 
 Trusting the peer. Any installed app can listen on a loopback port or advertise
 `_adb-tls-connect._tcp`, so Extend checks every new connection before using it:
