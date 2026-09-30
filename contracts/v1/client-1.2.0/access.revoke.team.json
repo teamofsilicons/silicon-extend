@@ -1,0 +1,27 @@
+{
+  "api_version": 1,
+  "call": "Authed::revoke_in_team",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.2.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "access.revoke.team",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "DELETE",
+    "path": "/api/v1/devices/{device_id}/access/{silicon_id}?team={team}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

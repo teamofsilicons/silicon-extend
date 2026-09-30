@@ -1,0 +1,58 @@
+{
+  "api_version": 1,
+  "call": "Client::refresh",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.2.0",
+  "contract": 1,
+  "given": [
+    "refresh_token"
+  ],
+  "operation": "auth.refresh",
+  "request": {
+    "body": {
+      "data": {
+        "refresh_token": "{refresh_token}"
+      },
+      "type": "refresh"
+    },
+    "headers": {
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1"
+    },
+    "method": "POST",
+    "path": "/api/v1/auth/refresh"
+  },
+  "response": {
+    "non_null": [
+      "/access_token",
+      "/expires_in",
+      "/member",
+      "/member/id",
+      "/member/type",
+      "/refresh_token",
+      "/teams",
+      "/testing_environment/device_limit",
+      "/testing_environment/environment_id",
+      "/testing_environment/name",
+      "/testing_environment/paired_devices",
+      "/testing_environment/state",
+      "/token_type"
+    ],
+    "required": [
+      "/access_token",
+      "/expires_in",
+      "/member",
+      "/member/id",
+      "/member/type",
+      "/refresh_token",
+      "/teams",
+      "/testing_environment/environment_id",
+      "/testing_environment/name",
+      "/testing_environment/state",
+      "/token_type"
+    ],
+    "status": "2xx",
+    "type": "refresh"
+  }
+}

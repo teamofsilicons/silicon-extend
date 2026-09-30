@@ -109,6 +109,17 @@ CLI/client 1.2.0 uses this same `cli-v` archive lane. Its client crate has an in
 version, and the workspace dependency points to it. Publish `silicon-extend-client` before
 `silicon-extend-cli`; service, protocol and device-app versions remain 1.1.0.
 
+CLI/client 1.3.0 follows the same lane and requires service 1.2.0 for managed Jev selection.
+The service has an explicit version; workspace, protocol and device apps remain 1.1.0. Deploy
+service 1.2.0 before publishing CLI 1.3.0. Store `EXTEND_JEV_API_KEY` and
+`EXTEND_JEV_TEST_API_KEY` only in the backend runtime secret; neither is included in the CLI.
+Test worlds require the test key and never use the production key. These settings are optional:
+without them, managed selection fails while ordinary device commands remain available.
+`EXTEND_JEV_URL` and `EXTEND_JEV_MODEL` optionally override the server endpoint and model.
+Refresh the existing host's environment renderer before deployment (see the
+[AWS runbook](../deploy/aws/README.md)); an image update alone does not refresh its allowlist.
+No database migration or device-app update is required for this release.
+
 ## Device apps
 
 Android: `apps/android` builds the APK, package `com.teamofsilicons.extend` (1.1.0: `versionName`

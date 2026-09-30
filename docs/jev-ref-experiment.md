@@ -1,8 +1,9 @@
 # Jev reference-action experiment
 
 This opt-in experiment adds `extend act` on the caller's machine. It selects **one** existing
-reference action with TypeSafe Jev, or an explicitly configured OpenAI-compatible LLM. It does
-not change existing `click @ref` commands, install a planner in the service, or release an update.
+reference action with TypeSafe Jev, or an explicitly configured OpenAI-compatible LLM. CLI/client
+1.3.0 uses Silicon-managed Jev by default through service 1.2.0. Existing `click @ref` commands
+remain independent of models.
 The calling Silicon retains multi-step planning. The device service still owns authentication,
 authorization, takeover, revocation, and command execution.
 
@@ -24,16 +25,23 @@ parsers do not consistently support escaping flag-like text.
 
 ## Configuration and use
 
-Configure credentials in your local environment (never commit keys):
+With CLI 1.3.0 and Silicon's backend, no Jev key is required. Sign in to Extend, connect a
+ref-capable session, then run `extend act 'Click Save'`. The backend uses Silicon's key without
+distributing it to clients. The calling Silicon must own an active, authorized session.
 
-- `TYPESAFE_API_KEY`: Jev key.
-- `EXTEND_JEV_MODEL`: optional; pinned default `jev-1.13.0`.
-- `EXTEND_JEV_URL`: optional; default `https://api.typesafe.ai/v1/systemone`.
+To use your own provider credentials, configure your local environment (never commit keys):
+
+- `TYPESAFE_API_KEY`: optional Jev key. A nonblank value takes priority and calls Jev directly;
+  absent or blank uses the managed backend. A failing personal key never silently uses Silicon's key.
+- `EXTEND_JEV_MODEL`: optional for direct calls; pinned default `jev-1.13.0`.
+- `EXTEND_JEV_URL`: optional for direct calls; default `https://api.typesafe.ai/v1/systemone`.
 - `EXTEND_REF_LLM_URL`: full OpenAI-compatible chat-completions endpoint for baseline/fallback.
 - `EXTEND_REF_LLM_KEY`, `EXTEND_REF_LLM_MODEL`: baseline/fallback credentials and model.
 
 The configured providers receive the instruction and structured screen text, including ordinary
-field values. They do not receive Extend credentials. Model endpoints require HTTPS except
+field values. Managed selection sends the snapshot to Extend, which filters eligible refs before
+calling Jev; direct selection filters locally. Jev does not receive Extend credentials or the
+literal `--text` argument. Model endpoints require HTTPS except
 loopback test servers; redirects are disabled. API errors do not echo provider response bodies.
 
 ```sh
@@ -45,10 +53,14 @@ target/debug/extend act 'Click Save' --provider jev --fallback llm --json
 target/debug/extend act 'Click Save' --provider llm --json
 ```
 
-Normal global options, including `--session`, `--team`, and `--test`, keep their meaning. `--scope`
+Normal global options, including `--session`, `--team`, and `--test`, keep their meaning. Managed
+test-world requests use a separate server test key and never fall through to the production key.
+`--scope`
 passes the same scope to both snapshots. `--timeout` bounds each provider/device request, not
-the combined wall time. No provider is silently substituted. Provider config is checked before
-screen capture, including the fallback config if requested.
+the combined wall time; the managed backend additionally caps each inference at 30 seconds.
+No provider is silently substituted. Direct provider config is checked before screen capture,
+including the fallback config if requested. An older or unconfigured backend returns a selection
+error with the normal-ref recovery instructions.
 
 ## Decision and execution contract
 

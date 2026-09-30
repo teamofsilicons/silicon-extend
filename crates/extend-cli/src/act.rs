@@ -3,7 +3,9 @@
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use silicon_extend_client::ref_actions::{ModelClient, ModelConfig, Observation, Provider, RefError, validate_text};
+use silicon_extend_client::ref_actions::{
+    Decision, ModelClient, ModelConfig, Observation, Provider, RefError, RefSelectionRequest, validate_text,
+};
 
 use crate::{Args, CliError, CommandRequest, CommandResult, Ctx, ErrorCode, R};
 
@@ -18,9 +20,41 @@ fn model_error(e: RefError) -> CliError {
         RefError::Invalid(_) => ErrorCode::InvalidInput,
         RefError::Provider(_) => ErrorCode::CommandFailed,
     };
-    CliError::new(code, e.to_string())
-        .hint("No selected action was executed. Continue with `extend snapshot -i --force-full` and normal ref commands; Jev is optional.")
-        .details(json!({"action_executed":false,"normal_ref_fallback":normal_ref_fallback()}))
+    selection_error(CliError::new(code, e.to_string()))
+}
+
+fn selection_error(mut error: CliError) -> CliError {
+    let fallback_hint = "No selected action was executed. Continue with `extend snapshot -i --force-full` and normal ref commands; Jev is optional.";
+    error.hint = Some(match error.hint {
+        Some(hint) => format!("{hint} {fallback_hint}"),
+        None => fallback_hint.into(),
+    });
+    let mut details = match *error.details {
+        Value::Object(details) => details,
+        _ => serde_json::Map::new(),
+    };
+    details.insert("action_executed".into(), json!(false));
+    details.insert("normal_ref_fallback".into(), normal_ref_fallback());
+    error.details = Box::new(Value::Object(details));
+    error
+}
+
+fn validate_managed_decision(decision: Decision, observation: &Observation, threshold: f64) -> R<Decision> {
+    let valid_confidence = decision
+        .confidence
+        .is_some_and(|p| p.is_finite() && (0.0..=1.0).contains(&p));
+    let valid_selection = !decision.accepted
+        || (decision.confidence.is_some_and(|p| p >= threshold)
+            && observation
+                .targets
+                .get(&decision.operation)
+                .is_some_and(|refs| decision.target.as_ref().is_some_and(|target| refs.contains(target))));
+    if decision.provider != "jev" || !valid_confidence || !valid_selection {
+        return Err(model_error(RefError::Provider(
+            "managed Jev returned an invalid decision for this observation or confidence threshold.".into(),
+        )));
+    }
+    Ok(decision)
 }
 
 async fn command(ctx: &mut Ctx, sid: &str, name: &str, args: Vec<String>) -> R<CommandResult> {
@@ -84,10 +118,28 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
         .unwrap_or_else(|| "0.7".into())
         .parse::<f64>()
         .map_err(|_| CliError::usage("Invalid confidence threshold", "Use --threshold 0.7 (between 0 and 1)."))?;
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(model_error(RefError::Invalid(
+            "Confidence threshold must be between 0 and 1.".into(),
+        )));
+    }
     let timeout = Duration::from_millis(ctx.g.timeout.unwrap_or(30_000));
     // Validate both provider configurations before reading or sending screen content.
-    let model = ModelClient::new(ModelConfig::from_env(provider, threshold, timeout).map_err(model_error)?)
-        .map_err(model_error)?;
+    // A configured personal key always stays on the direct path, including when that key fails.
+    let managed = provider == Provider::Jev
+        && match std::env::var("TYPESAFE_API_KEY") {
+            Ok(key) => key.trim().is_empty(),
+            Err(std::env::VarError::NotPresent) => true,
+            Err(std::env::VarError::NotUnicode(_)) => false,
+        };
+    let model = if managed {
+        None
+    } else {
+        Some(
+            ModelClient::new(ModelConfig::from_env(provider, threshold, timeout).map_err(model_error)?)
+                .map_err(model_error)?,
+        )
+    };
     let fallback_model = if fallback {
         Some(
             ModelClient::new(ModelConfig::from_env(Provider::Llm, threshold, timeout).map_err(model_error)?)
@@ -126,7 +178,27 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
     let observation = Observation::from_snapshot(&snapshot, &commands, text.is_some()).map_err(model_error)?;
     let snapshot_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();
-    let first = model.choose(&observation, &instruction).await;
+    let first = if let Some(model) = &model {
+        model.choose(&observation, &instruction).await.map_err(model_error)
+    } else {
+        let request = RefSelectionRequest {
+            snapshot,
+            instruction: instruction.clone(),
+            has_text: text.is_some(),
+            threshold,
+        };
+        let selection = ctx.call("managed ref selection", |c, token, team| {
+            let sid = sid.clone();
+            let request = request.clone();
+            async move { c.authed(&token, team.as_deref()).select_ref(&sid, &request).await }
+        });
+        match tokio::time::timeout(timeout, selection).await {
+            Ok(result) => result
+                .map_err(selection_error)
+                .and_then(|decision| validate_managed_decision(decision, &observation, threshold)),
+            Err(_) => Err(model_error(RefError::Provider("managed Jev request timed out.".into()))),
+        }
+    };
     let mut attempts = vec![];
     let decision = match first {
         Ok(decision) if decision.accepted || fallback_model.is_none() => {
@@ -136,8 +208,8 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
         result => {
             match result {
                 Ok(decision) => attempts.push(json!(decision)),
-                Err(e) if fallback_model.is_none() => return Err(model_error(e)),
-                Err(e) => attempts.push(json!({"provider":"jev","error":e.to_string()})),
+                Err(e) if fallback_model.is_none() => return Err(e),
+                Err(e) => attempts.push(json!({"provider":"jev","error":e.message})),
             }
             let decision = fallback_model
                 .as_ref()

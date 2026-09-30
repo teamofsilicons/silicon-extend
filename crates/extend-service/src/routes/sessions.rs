@@ -1020,15 +1020,15 @@ fn refuse_unless_active(s: &SessionRow, d: &domain::DeviceRow) -> AppResult<()> 
     }
 }
 
-pub async fn command(
-    State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
-    Path(session_id): Path<String>,
-    headers: HeaderMap,
-    Body(req): Body<CommandRequest>,
-) -> AppResult<Response> {
+/// The same current grant, membership and session ownership checks protect commands and paid
+/// ref selection. Choosing a ref does not reserve or execute a device command.
+async fn authorized_session(
+    state: &Shared,
+    auth: &Auth,
+    session_id: &str,
+) -> AppResult<(SessionRow, domain::DeviceRow)> {
     auth.require_silicon()?;
-    let (s, d) = visible_session(&state, &auth, &session_id).await?;
+    let (s, d) = visible_session(state, auth, session_id).await?;
     if s.silicon_id != auth.p.id() {
         return Err(AppError::new(
             ErrorCode::NotSessionOwner,
@@ -1038,11 +1038,11 @@ pub async fn command(
     refuse_unless_active(&s, &d)?;
     // Access is re-checked on every command, not only at session start: the grant on the
     // session's pair in the session's Team, and that the Carbon who gave it is still in that Team.
-    if domain::access_of(&state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
+    if domain::access_of(state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
         domain::end_session(
-            &state,
+            state,
             &auth.world,
-            &session_id,
+            session_id,
             EndReason::AccessRemoved,
             &domain::system_member(),
         )
@@ -1054,7 +1054,7 @@ pub async fn command(
     }
     // When the Carbon who gave access left the Team, the refusal comes after the session ended.
     crate::membership::owner_active(
-        &state,
+        state,
         &auth.world,
         &s.team,
         &d.owner_id,
@@ -1063,6 +1063,71 @@ pub async fn command(
         auth.sel.as_ref(),
     )
     .await?;
+    Ok((s, d))
+}
+
+pub async fn ref_selection(
+    State(state): State<Shared>,
+    SessionAuth(auth): SessionAuth,
+    Path(session_id): Path<String>,
+    Body(req): Body<silicon_extend_client::ref_actions::RefSelectionRequest>,
+) -> AppResult<Response> {
+    let (s, d) = authorized_session(&state, &auth, &session_id).await?;
+    if !domain::is_online(&state, &auth.world, &d).await {
+        return Err(
+            AppError::new(ErrorCode::DeviceOffline, format!("{} is offline right now.", d.name))
+                .hint(offline_hint(&d, &s.team)),
+        );
+    }
+    if !req.threshold.is_finite() || !(0.0..=1.0).contains(&req.threshold) {
+        return Err(AppError::invalid("Confidence threshold must be between 0 and 1."));
+    }
+    // The caller supplies the observation but cannot add capabilities the device does not have.
+    let caps = d.capabilities();
+    let commands: Vec<String> = extend_protocol::COMMANDS
+        .iter()
+        .filter(|spec| d.command_requirements(spec).iter().any(|c| caps.contains(c)))
+        .map(|spec| spec.name.to_owned())
+        .collect();
+    if !commands.iter().any(|command| command == "snapshot") {
+        return Err(AppError::new(
+            ErrorCode::UnsupportedOnDevice,
+            "Managed ref selection requires snapshot support on this device.",
+        ));
+    }
+    let observation =
+        silicon_extend_client::ref_actions::Observation::from_snapshot(&req.snapshot, &commands, req.has_text)
+            .map_err(crate::managed_jev::ref_error)?;
+    // Validate before spending either a rate-limit slot or a provider call.
+    observation
+        .request(&req.instruction)
+        .map_err(crate::managed_jev::ref_error)?;
+    state
+        .rate_limit(
+            format!("managed-jev:{}:{}", auth.world.schema, auth.p.id()),
+            120,
+            Duration::from_secs(60),
+            "Managed Jev requests",
+        )
+        .await?;
+    let decision = state
+        .managed_jev
+        .choose(&auth.world, &observation, &req.instruction, req.threshold)
+        .await?;
+    // Access may have changed while the provider was answering. No inference result is returned
+    // after a known revocation, session end or takeover; the caller still revalidates its screen.
+    authorized_session(&state, &auth, &session_id).await?;
+    Ok(ok("ref_selection", decision))
+}
+
+pub async fn command(
+    State(state): State<Shared>,
+    SessionAuth(auth): SessionAuth,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Body(req): Body<CommandRequest>,
+) -> AppResult<Response> {
+    let (s, d) = authorized_session(&state, &auth, &session_id).await?;
     let spec = check_args(&req)?;
     let online = domain::is_online(&state, &auth.world, &d).await;
     if !online {

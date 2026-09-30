@@ -7,6 +7,8 @@
 
 #![allow(dead_code)]
 
+pub mod jev;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,6 +80,7 @@ pub fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf, tuning:
         ting: TingMode::Local,
         honeycomb_service_token: Some("hck_test".into()),
         postmark_token: None,
+        jev: Default::default(),
         report_recipients: vec!["bugs@example.test".into()],
         device_app_min_version: "1.0.0".into(),
         local_members: MEMBERS
@@ -95,11 +98,17 @@ pub async fn start() -> Env {
 }
 
 pub async fn start_with(tuning: Tuning) -> Env {
+    start_configured(tuning, |_| {}).await
+}
+
+pub async fn start_configured(tuning: Tuning, configure: impl FnOnce(&mut Config)) -> Env {
     let (url, data) = database("v11").await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");
-    let state = extend_service::build(config(url, addr, data, tuning)).await.unwrap();
+    let mut cfg = config(url, addr, data, tuning);
+    configure(&mut cfg);
+    let state = extend_service::build(cfg).await.unwrap();
     let pool = state.pool.clone();
     tokio::spawn(extend_service::serve_on(listener, state.clone()));
     let client = Client::connect(&base).await.unwrap();

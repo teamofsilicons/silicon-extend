@@ -1,0 +1,45 @@
+{
+  "api_version": 1,
+  "call": "Authed::report",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.2.0",
+  "contract": 1,
+  "given": [],
+  "operation": "reports.create",
+  "request": {
+    "body": {
+      "data": {
+        "client_version": "1.0.0",
+        "context": {
+          "command": "snapshot"
+        },
+        "message": "snapshot misses a button",
+        "pr": "https://github.com/teamofsilicons/silicon-extend/pull/1"
+      },
+      "type": "report"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/reports"
+  },
+  "response": {
+    "non_null": [
+      "/notification",
+      "/report_id",
+      "/repository_url"
+    ],
+    "required": [
+      "/notification",
+      "/report_id",
+      "/repository_url"
+    ],
+    "status": "2xx",
+    "type": "report"
+  }
+}

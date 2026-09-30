@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0
+
+Adds `Authed::select_ref` and `ref_actions::RefSelectionRequest` for authenticated managed Jev
+selection through service 1.2.0. The server keeps separate production/test provider keys and
+returns a decision without executing an action. The caller still owns fresh-snapshot validation
+and execution. Direct provider calls continue to support personal keys.
+
+`ModelClient::choose_with_threshold` applies a per-request confidence threshold while reusing
+the existing connection pool. API remains v1; protocol and device applications stay at 1.1.0.
+
 ## 1.2.0
 
 Adds the experimental `ref_actions` module for selecting an existing device ref with TypeSafe
