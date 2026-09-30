@@ -1,5 +1,6 @@
 //! Opt-in semantic single actions; all device I/O still uses the normal authorized session API.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -55,6 +56,151 @@ fn validate_managed_decision(decision: Decision, observation: &Observation, thre
         )));
     }
     Ok(decision)
+}
+
+struct Selector {
+    model: Option<ModelClient>,
+    fallback_model: Option<ModelClient>,
+    instruction: String,
+    has_text: bool,
+    threshold: f64,
+    timeout: Duration,
+}
+
+impl Selector {
+    async fn choose(
+        &self,
+        ctx: &mut Ctx,
+        sid: &str,
+        snapshot: &Value,
+        observation: &Observation,
+    ) -> R<(Decision, Vec<Value>)> {
+        let first = if let Some(model) = &self.model {
+            model.choose(observation, &self.instruction).await.map_err(model_error)
+        } else {
+            let request = RefSelectionRequest {
+                snapshot: snapshot.clone(),
+                instruction: self.instruction.clone(),
+                has_text: self.has_text,
+                threshold: self.threshold,
+            };
+            let selection = ctx.call("managed ref selection", |c, token, team| {
+                let sid = sid.to_owned();
+                let request = request.clone();
+                async move { c.authed(&token, team.as_deref()).select_ref(&sid, &request).await }
+            });
+            match tokio::time::timeout(self.timeout, selection).await {
+                Ok(result) => result
+                    .map_err(selection_error)
+                    .and_then(|decision| validate_managed_decision(decision, observation, self.threshold)),
+                Err(_) => Err(model_error(RefError::Provider("managed Jev request timed out.".into()))),
+            }
+        };
+        let mut attempts = vec![];
+        let decision = match first {
+            Ok(decision) if decision.accepted || self.fallback_model.is_none() => {
+                attempts.push(json!(decision));
+                decision
+            }
+            result => {
+                match result {
+                    Ok(decision) => attempts.push(json!(decision)),
+                    Err(e) if self.fallback_model.is_none() => return Err(e),
+                    Err(e) => attempts.push(json!({"provider":"jev","error":e.message})),
+                }
+                let decision = self
+                    .fallback_model
+                    .as_ref()
+                    .expect("fallback configured")
+                    .choose(observation, &self.instruction)
+                    .await
+                    .map_err(model_error)?;
+                attempts.push(json!(decision));
+                decision
+            }
+        };
+        Ok((decision, attempts))
+    }
+}
+
+fn changed_fields(before: &Value, after: &Value) -> Vec<String> {
+    let keys: BTreeSet<_> = before
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.keys())
+        .chain(after.as_object().into_iter().flat_map(|object| object.keys()))
+        .collect();
+    keys.into_iter()
+        .filter(|key| before.get(*key) != after.get(*key))
+        .cloned()
+        .collect()
+}
+
+/// Report the shape of a change without copying screen text or field values into diagnostics.
+fn observation_changes(before: &Observation, after: &Observation) -> Value {
+    let added: Vec<_> = after
+        .elements
+        .keys()
+        .filter(|key| !before.elements.contains_key(*key))
+        .collect();
+    let removed: Vec<_> = before
+        .elements
+        .keys()
+        .filter(|key| !after.elements.contains_key(*key))
+        .collect();
+    let changed: Vec<_> = before
+        .elements
+        .iter()
+        .filter_map(|(reference, value)| {
+            let fields = changed_fields(value, after.elements.get(reference)?);
+            (!fields.is_empty()).then(|| json!({"ref":reference,"fields":fields}))
+        })
+        .collect();
+    let operations: BTreeSet<_> = before.targets.keys().chain(after.targets.keys()).collect();
+    let changed_operations: Vec<_> = operations
+        .into_iter()
+        .filter(|key| before.targets.get(*key) != after.targets.get(*key))
+        .collect();
+    json!({"reason":"observation_changed","context_fields":changed_fields(&before.context,&after.context),
+        "added_refs":added,"removed_refs":removed,"changed_refs":changed,
+        "changed_operation_targets":changed_operations})
+}
+
+fn stale_detail(revalidations: &[Value]) -> String {
+    let changes = revalidations.last().map(|round| &round["changes"]);
+    let refs: BTreeSet<_> = changes
+        .into_iter()
+        .flat_map(|changes| {
+            changes["changed_refs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry["ref"].as_str())
+                .chain(
+                    changes["added_refs"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+                .chain(
+                    changes["removed_refs"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+        })
+        .collect();
+    let examples = refs.iter().take(6).copied().collect::<Vec<_>>().join(", ");
+    let changed = if refs.is_empty() {
+        "Screen context changed.".to_owned()
+    } else {
+        format!("Changed refs: {examples}{}.", if refs.len() > 6 { ", …" } else { "" })
+    };
+    format!(
+        " Screen kept changing across two selection rounds. {changed} Use --scope to narrow the screen, or continue with a fresh snapshot and normal ref commands. --json includes changed field names."
+    )
 }
 
 async fn command(ctx: &mut Ctx, sid: &str, name: &str, args: Vec<String>) -> R<CommandResult> {
@@ -174,87 +320,92 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
         snapshot_args.extend(["-s".into(), scope]);
     }
     let t = Instant::now();
-    let snapshot = snapshot_result(command(ctx, &sid, "snapshot", snapshot_args.clone()).await?)?;
-    let observation = Observation::from_snapshot(&snapshot, &commands, text.is_some()).map_err(model_error)?;
+    let mut snapshot = snapshot_result(command(ctx, &sid, "snapshot", snapshot_args.clone()).await?)?;
+    let mut observation = Observation::from_snapshot(&snapshot, &commands, text.is_some()).map_err(model_error)?;
     let snapshot_ms = t.elapsed().as_secs_f64() * 1000.0;
-    let t = Instant::now();
-    let first = if let Some(model) = &model {
-        model.choose(&observation, &instruction).await.map_err(model_error)
-    } else {
-        let request = RefSelectionRequest {
-            snapshot,
-            instruction: instruction.clone(),
-            has_text: text.is_some(),
-            threshold,
-        };
-        let selection = ctx.call("managed ref selection", |c, token, team| {
-            let sid = sid.clone();
-            let request = request.clone();
-            async move { c.authed(&token, team.as_deref()).select_ref(&sid, &request).await }
-        });
-        match tokio::time::timeout(timeout, selection).await {
-            Ok(result) => result
-                .map_err(selection_error)
-                .and_then(|decision| validate_managed_decision(decision, &observation, threshold)),
-            Err(_) => Err(model_error(RefError::Provider("managed Jev request timed out.".into()))),
-        }
+    let selector = Selector {
+        model,
+        fallback_model,
+        instruction,
+        has_text: text.is_some(),
+        threshold,
+        timeout,
     };
     let mut attempts = vec![];
-    let decision = match first {
-        Ok(decision) if decision.accepted || fallback_model.is_none() => {
-            attempts.push(json!(decision));
-            decision
-        }
-        result => {
-            match result {
-                Ok(decision) => attempts.push(json!(decision)),
-                Err(e) if fallback_model.is_none() => return Err(e),
-                Err(e) => attempts.push(json!({"provider":"jev","error":e.message})),
-            }
-            let decision = fallback_model
-                .as_ref()
-                .expect("fallback configured")
-                .choose(&observation, &instruction)
-                .await
-                .map_err(model_error)?;
-            attempts.push(json!(decision));
-            decision
-        }
-    };
-    let selection_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let mut revalidations = vec![];
+    let mut selection_ms = 0.0;
     let mut revalidate_ms = 0.0;
     let mut execution_ms = 0.0;
     let mut result = None;
-    let mut status = if decision.accepted { "selected" } else { "blocked" };
-    if decision.accepted && !args.flag("--dry-run") {
+    let mut selection_round = 0;
+    let (decision, status) = loop {
+        selection_round += 1;
         let t = Instant::now();
-        let fresh = snapshot_result(command(ctx, &sid, "snapshot", snapshot_args).await?)?;
+        let selected = selector.choose(ctx, &sid, &snapshot, &observation).await;
+        selection_ms += t.elapsed().as_secs_f64() * 1000.0;
+        let (decision, round_attempts) = selected.map_err(|mut error| {
+            error.details["selection_rounds"] = json!(selection_round);
+            error.details["failed_selection_round"] = json!(selection_round);
+            error.details["attempts"] = json!(attempts);
+            error.details["revalidations"] = json!(revalidations);
+            error.details["timings"] = json!({"snapshot_ms":snapshot_ms,"selection_ms":selection_ms,
+                "revalidate_ms":revalidate_ms,"execution_ms":0.0,"total_ms":started.elapsed().as_secs_f64()*1000.0});
+            error
+        })?;
+        attempts.extend(round_attempts.into_iter().map(|mut attempt| {
+            attempt["selection_round"] = json!(selection_round);
+            attempt
+        }));
+        if !decision.accepted {
+            break (decision, "blocked");
+        }
+        if args.flag("--dry-run") {
+            break (decision, "selected");
+        }
+        let t = Instant::now();
+        let fresh = snapshot_result(command(ctx, &sid, "snapshot", snapshot_args.clone()).await?)?;
         let current = Observation::from_snapshot(&fresh, &commands, text.is_some()).map_err(model_error)?;
-        revalidate_ms = t.elapsed().as_secs_f64() * 1000.0;
-        if current != observation {
-            status = "stale";
-        } else {
-            let (name, mut argv) = current.command(&decision, text.as_deref()).map_err(model_error)?;
-            // Engine snapshots expose a generation; pin it so another snapshot cannot rebind the ref.
-            if let Some(generation) = fresh.get("refsGeneration").and_then(Value::as_u64) {
-                for arg in &mut argv {
-                    if Some(arg.as_str()) == decision.target.as_deref() {
-                        *arg = format!("{arg}~s{generation}");
-                        break;
-                    }
+        revalidate_ms += t.elapsed().as_secs_f64() * 1000.0;
+        let stable = current == observation;
+        revalidations.push(json!({"selection_round":selection_round,"stable":stable,
+            "changes":if stable {Value::Null} else {observation_changes(&observation,&current)}}));
+        if !stable {
+            if selection_round < 2 {
+                // A changed layout may have rebound every ref. Select again against the new
+                // observation, then require another full match before sending any action.
+                snapshot = fresh;
+                observation = current;
+                continue;
+            }
+            break (decision, "stale");
+        }
+        let (name, mut argv) = current.command(&decision, text.as_deref()).map_err(model_error)?;
+        // Engine snapshots expose a generation; pin it so another snapshot cannot rebind the ref.
+        if let Some(generation) = fresh.get("refsGeneration").and_then(Value::as_u64) {
+            for arg in &mut argv {
+                if Some(arg.as_str()) == decision.target.as_deref() {
+                    *arg = format!("{arg}~s{generation}");
+                    break;
                 }
             }
-            let t = Instant::now();
-            let executed = command(ctx, &sid, &name, argv).await?;
-            execution_ms = t.elapsed().as_secs_f64() * 1000.0;
-            status = if executed.ok { "executed" } else { "execution_failed" };
-            result = Some(executed);
         }
-    }
-    let ok = matches!(status, "selected" | "executed");
+        let t = Instant::now();
+        let executed = command(ctx, &sid, &name, argv).await?;
+        execution_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let status = if !executed.ok {
+            "execution_failed"
+        } else if executed.output.get("verified").and_then(Value::as_bool) == Some(false) {
+            "executed_unverified"
+        } else {
+            "executed"
+        };
+        result = Some(executed);
+        break (decision, status);
+    };
+    let ok = matches!(status, "selected" | "executed" | "executed_unverified");
     ctx.emit(
         json!({"experimental":true,"ok":ok,"status":status,"decision":decision,"attempts":attempts,
-        "result":result,"normal_ref_fallback":if matches!(status,"blocked"|"stale") {normal_ref_fallback()} else {Value::Null},
+        "result":result,"selection_rounds":selection_round,"revalidations":revalidations,"normal_ref_fallback":if matches!(status,"blocked"|"stale") {normal_ref_fallback()} else {Value::Null},
         "timings":{"snapshot_ms":snapshot_ms,"selection_ms":selection_ms,
         "revalidate_ms":revalidate_ms,"execution_ms":execution_ms,"total_ms":started.elapsed().as_secs_f64()*1000.0}}),
         || {
@@ -264,10 +415,30 @@ pub(super) async fn run(ctx: &mut Ctx, raw: &[String]) -> R<i32> {
                 decision.target.as_deref().unwrap_or(""),
                 selection_ms,
                 started.elapsed().as_secs_f64() * 1000.0,
-                if matches!(status,"blocked"|"stale") {
-                    " Continue with a fresh snapshot and normal ref commands; Jev is optional."
+                if status == "stale" {
+                    stale_detail(&revalidations)
+                } else if status == "blocked" {
+                    " Continue with a fresh snapshot and normal ref commands; Jev is optional.".to_owned()
+                } else if status == "executed_unverified" {
+                    let warning = result.as_ref().and_then(|result| result.output.get("warning"))
+                        .and_then(Value::as_str).map(|warning|format!(" {warning}")).unwrap_or_default();
+                    format!("\nThe device accepted the action, but could not verify the resulting value.{warning} Inspect a fresh snapshot or screenshot before retrying; do not repeat the action automatically.")
+                } else if status == "execution_failed" {
+                    let error = result.as_ref().and_then(|result| result.error.as_ref());
+                    let detail = error.map_or_else(
+                        || "The device reported failure without error details.".to_owned(),
+                        |error| {
+                            let lengths = match (error.details.get("expectedLength").and_then(Value::as_u64),
+                                error.details.get("actualLength").and_then(Value::as_u64)) {
+                                (Some(expected),Some(actual)) => format!(" (expected length {expected}, observed length {actual})"),
+                                _ => String::new(),
+                            };
+                            format!("Device error [{}]: {}{lengths}", error.code, error.message)
+                        },
+                    );
+                    format!("\n{detail}\nThe action may already have changed the device. Inspect a fresh snapshot or read the field before retrying; do not repeat the action automatically.")
                 } else {
-                    ""
+                    String::new()
                 }
             )
         },
