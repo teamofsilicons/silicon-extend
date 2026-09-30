@@ -345,8 +345,7 @@ Resources:
                         'EXTEND_REPOSITORY_URL', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG',
                         'EXTEND_MAX_PAIRS_PER_DEVICE', 'EXTEND_MEMBERSHIP_SWEEP_HOURS',
                         'EXTEND_OWNER_CHECK_CACHE_S', 'EXTEND_OWNER_CHECK_AT_USE',
-                        'EXTEND_TEST_LINK_WINDOW_S', 'EXTEND_JEV_API_KEY',
-                        'EXTEND_JEV_TEST_API_KEY', 'EXTEND_JEV_URL', 'EXTEND_JEV_MODEL')
+                        'EXTEND_TEST_LINK_WINDOW_S')
             def clean(key, value):
                 if not isinstance(value, str) or not value or any(ord(c) in (0, 10, 13) for c in value):
                     raise SystemExit('runtime secret value missing or malformed: ' + key)

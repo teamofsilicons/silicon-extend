@@ -62,7 +62,6 @@ pub struct AppState {
     pub hub: Hub,
     pub auth_cache: AuthCache,
     pub http: reqwest::Client,
-    pub managed_jev: crate::managed_jev::ManagedJev,
     /// Test worlds whose schema is known to exist.
     pub ready_worlds: RwLock<std::collections::HashSet<String>>,
     /// Secret digest → IAM's answer for an open environment, reused for [`SELECTION_TTL`].

@@ -1,0 +1,36 @@
+{
+  "api_version": 1,
+  "call": "Authed::team_silicons_all",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [],
+  "operation": "team.silicons.all",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/team/silicons?team=any"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/id",
+      "/teams",
+      "/teams/*/ok",
+      "/teams/*/team"
+    ],
+    "required": [
+      "/items",
+      "/items/*/id",
+      "/teams/*/ok",
+      "/teams/*/team"
+    ],
+    "status": "2xx",
+    "type": "team_silicons"
+  }
+}

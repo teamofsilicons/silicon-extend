@@ -1,0 +1,38 @@
+{
+  "api_version": 1,
+  "call": "Authed::ting_turn_on",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [],
+  "operation": "ting.registration.turn_on",
+  "request": {
+    "body": {
+      "data": {},
+      "type": "ting_registration"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "PUT",
+    "path": "/api/v1/ting-registration?team={team}"
+  },
+  "response": {
+    "non_null": [
+      "/member",
+      "/missing_types",
+      "/status",
+      "/team"
+    ],
+    "required": [
+      "/member",
+      "/status",
+      "/team"
+    ],
+    "status": "2xx",
+    "type": "ting_registration"
+  }
+}

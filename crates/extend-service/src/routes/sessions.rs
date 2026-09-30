@@ -1020,8 +1020,7 @@ fn refuse_unless_active(s: &SessionRow, d: &domain::DeviceRow) -> AppResult<()> 
     }
 }
 
-/// The same current grant, membership and session ownership checks protect commands and paid
-/// ref selection. Choosing a ref does not reserve or execute a device command.
+/// Checks current grant, membership and session ownership before a device command.
 async fn authorized_session(
     state: &Shared,
     auth: &Auth,
@@ -1064,60 +1063,6 @@ async fn authorized_session(
     )
     .await?;
     Ok((s, d))
-}
-
-pub async fn ref_selection(
-    State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
-    Path(session_id): Path<String>,
-    Body(req): Body<silicon_extend_client::ref_actions::RefSelectionRequest>,
-) -> AppResult<Response> {
-    let (s, d) = authorized_session(&state, &auth, &session_id).await?;
-    if !domain::is_online(&state, &auth.world, &d).await {
-        return Err(
-            AppError::new(ErrorCode::DeviceOffline, format!("{} is offline right now.", d.name))
-                .hint(offline_hint(&d, &s.team)),
-        );
-    }
-    if !req.threshold.is_finite() || !(0.0..=1.0).contains(&req.threshold) {
-        return Err(AppError::invalid("Confidence threshold must be between 0 and 1."));
-    }
-    // The caller supplies the observation but cannot add capabilities the device does not have.
-    let caps = d.capabilities();
-    let commands: Vec<String> = extend_protocol::COMMANDS
-        .iter()
-        .filter(|spec| d.command_requirements(spec).iter().any(|c| caps.contains(c)))
-        .map(|spec| spec.name.to_owned())
-        .collect();
-    if !commands.iter().any(|command| command == "snapshot") {
-        return Err(AppError::new(
-            ErrorCode::UnsupportedOnDevice,
-            "Managed ref selection requires snapshot support on this device.",
-        ));
-    }
-    let observation =
-        silicon_extend_client::ref_actions::Observation::from_snapshot(&req.snapshot, &commands, req.has_text)
-            .map_err(crate::managed_jev::ref_error)?;
-    // Validate before spending either a rate-limit slot or a provider call.
-    observation
-        .request(&req.instruction)
-        .map_err(crate::managed_jev::ref_error)?;
-    state
-        .rate_limit(
-            format!("managed-jev:{}:{}", auth.world.schema, auth.p.id()),
-            120,
-            Duration::from_secs(60),
-            "Managed Jev requests",
-        )
-        .await?;
-    let decision = state
-        .managed_jev
-        .choose(&auth.world, &observation, &req.instruction, req.threshold)
-        .await?;
-    // Access may have changed while the provider was answering. No inference result is returned
-    // after a known revocation, session end or takeover; the caller still revalidates its screen.
-    authorized_session(&state, &auth, &session_id).await?;
-    Ok(ok("ref_selection", decision))
 }
 
 pub async fn command(

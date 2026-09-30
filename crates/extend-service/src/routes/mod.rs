@@ -71,8 +71,6 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v1/sessions/{session_id}/end", post(sessions::end))
         .route("/api/v1/sessions/{session_id}/takeover", post(sessions::takeover_start).get(sessions::takeover_get).delete(sessions::takeover_release))
         .route("/api/v1/sessions/{session_id}/commands", post(sessions::command))
-        .route("/api/v1/sessions/{session_id}/ref-selection", post(sessions::ref_selection)
-            .layer(axum::extract::DefaultBodyLimit::max(256 * 1024)))
         .route("/api/v1/files", get(files::list))
         .route("/api/v1/files/{file_id}", get(files::get))
         .route("/api/v1/files/{file_id}/keep", post(files::keep))

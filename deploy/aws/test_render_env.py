@@ -61,24 +61,11 @@ class RuntimeRendererTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(SystemExit, key):
                 self.render({key: "1\nEXTEND_ENVIRONMENT=development"})
 
-    def test_managed_jev_configuration_reaches_service_without_logging_secrets(self):
-        settings = {
-            "EXTEND_JEV_API_KEY": "fixture-production-key",
-            "EXTEND_JEV_TEST_API_KEY": "fixture-test-key",
-            "EXTEND_JEV_URL": "https://api.typesafe.ai/v1/systemone",
-            "EXTEND_JEV_MODEL": "jev-1.13.0",
-        }
-        values, log = self.render(settings)
-        self.assertEqual({key: values.get(key) for key in settings}, settings)
-        self.assertNotIn("fixture-production-key", log)
-        self.assertNotIn("fixture-test-key", log)
-        defaults, _ = self.render({})
-        self.assertTrue(settings.keys().isdisjoint(defaults))
-
-    def test_managed_jev_settings_cannot_inject_environment_assignments(self):
-        for key in ("EXTEND_JEV_API_KEY", "EXTEND_JEV_TEST_API_KEY", "EXTEND_JEV_URL", "EXTEND_JEV_MODEL"):
-            with self.subTest(key=key), self.assertRaisesRegex(SystemExit, key):
-                self.render({key: "fixture\nEXTEND_ENVIRONMENT=development"})
+    def test_unknown_settings_are_not_forwarded_or_logged_as_values(self):
+        values, log = self.render({"EXTEND_RETIRED_PROVIDER_KEY": "fixture-private-value"})
+        self.assertNotIn("EXTEND_RETIRED_PROVIDER_KEY", values)
+        self.assertIn("EXTEND_RETIRED_PROVIDER_KEY", log)
+        self.assertNotIn("fixture-private-value", log)
 
 
 if __name__ == "__main__":

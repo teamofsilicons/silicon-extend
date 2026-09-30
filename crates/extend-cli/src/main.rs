@@ -4,7 +4,6 @@
 //! password. Every failure says what went wrong, why, and what to run next, and exits with a code
 //! from `understanding/cli.yaml`.
 
-mod act;
 mod args;
 mod compat;
 mod error;
@@ -733,7 +732,6 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
     let args = rest[1..].to_vec();
     let sub = args.first().cloned().unwrap_or_default();
     match cmd.as_str() {
-        "act" => act::run(ctx, &args).await,
         "help" => {
             out!("{}", help_for(ctx, &args));
             Ok(0)

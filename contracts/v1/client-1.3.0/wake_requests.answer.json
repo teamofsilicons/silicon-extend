@@ -1,0 +1,74 @@
+{
+  "api_version": 1,
+  "call": "Authed::answer_wake",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "1.3.0",
+  "contract": 1,
+  "given": [
+    "wake_request"
+  ],
+  "operation": "wake_requests.answer",
+  "request": {
+    "body": {
+      "data": {
+        "answer": "declined",
+        "wake_ids": [
+          "{wake_id}"
+        ]
+      },
+      "type": "wake_answer"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/devices/{device_id}/wake-requests/answer"
+  },
+  "response": {
+    "non_null": [
+      "/answer",
+      "/ended",
+      "/ended/*/asks",
+      "/ended/*/created_at",
+      "/ended/*/device_id",
+      "/ended/*/device_notice",
+      "/ended/*/expires_at",
+      "/ended/*/from",
+      "/ended/*/host/device_id",
+      "/ended/*/host/name",
+      "/ended/*/host/online",
+      "/ended/*/last_asked_at",
+      "/ended/*/reason",
+      "/ended/*/state",
+      "/ended/*/team",
+      "/ended/*/to",
+      "/ended/*/wake_detectable",
+      "/ended/*/wake_id"
+    ],
+    "required": [
+      "/answer",
+      "/ended/*/asks",
+      "/ended/*/created_at",
+      "/ended/*/device_id",
+      "/ended/*/device_notice",
+      "/ended/*/expires_at",
+      "/ended/*/from",
+      "/ended/*/host/device_id",
+      "/ended/*/host/name",
+      "/ended/*/host/online",
+      "/ended/*/last_asked_at",
+      "/ended/*/reason",
+      "/ended/*/state",
+      "/ended/*/team",
+      "/ended/*/to",
+      "/ended/*/wake_detectable",
+      "/ended/*/wake_id"
+    ],
+    "status": "2xx",
+    "type": "wake_answer"
+  }
+}

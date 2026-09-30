@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Authed::ting_registration",
   "consumer": "silicon-extend-client",
-  "consumer_version": "1.3.0",
+  "consumer_version": "2.0.0",
   "contract": 1,
   "given": [],
   "operation": "ting.registration.get",

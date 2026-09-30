@@ -107,7 +107,12 @@ pub struct Compat {
 
 impl Compat {
     fn default_for(major: u32) -> Self {
-        let range = format!(">={major}.0.0, <{}.0.0", major + 1);
+        // Client/CLI 2 removed model selection, while ordinary requests still use API v1.
+        let range = if major == 1 {
+            ">=1.0.0, <3.0.0".to_owned()
+        } else {
+            format!(">={major}.0.0, <{}.0.0", major + 1)
+        };
         Self {
             client_crate: range.clone(),
             cli: range,
@@ -692,7 +697,9 @@ mod tests {
     fn policy_defaults_and_overrides() {
         let p = Policy::parse(&[1], env(&[])).unwrap();
         assert!(p.deprecated.is_empty());
-        assert_eq!(p.compat[&1].client_crate, ">=1.0.0, <2.0.0");
+        assert_eq!(p.served, vec![1]);
+        assert_eq!(p.compat[&1].client_crate, ">=1.0.0, <3.0.0");
+        assert_eq!(p.compat[&1].cli, ">=1.0.0, <3.0.0");
         let p = Policy::parse(
             &[1, 2],
             env(&[

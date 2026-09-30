@@ -212,11 +212,3 @@ The setting belongs to the physical device, so it applies to every Carbon's pair
 Stop remains available in the Extend app and on the website. With the setting on, the banner
 shows for 10 seconds per session. Requests waiting for a Carbon remain visible. Android's quiet
 foreground-service notification and Apple's Automation Running banner remain platform requirements.
-
-## Experimental semantic ref actions
-
-`extend act 'Click Save'` chooses one existing ref with Jev and executes it through the normal
-session. Starting with CLI 1.3.0, it uses Silicon's managed Jev service by default; no provider key
-is needed. Set `TYPESAFE_API_KEY` to use your own key instead. `--dry-run --json` reports the decision
-and timings without execution. Normal ref commands remain available after selection failures.
-See [configuration, scope, and benchmarking](jev-ref-experiment.md).

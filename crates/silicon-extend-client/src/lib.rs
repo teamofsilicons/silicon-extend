@@ -19,8 +19,6 @@
 use std::time::Duration;
 
 pub mod attachments;
-/// Opt-in reference selection experiment; does not alter device commands or authorization.
-pub mod ref_actions;
 pub use extend_protocol as protocol;
 use extend_protocol::envelope::Page;
 use extend_protocol::model::*;
@@ -991,21 +989,6 @@ impl Authed<'_> {
             &format!("/api/v1/sessions/{session_id}/commands"),
             "command",
             cmd,
-            false,
-        )
-        .await
-    }
-
-    /// Selects a single ref action using Extend's managed Jev provider; does not execute it.
-    pub async fn select_ref(
-        &self,
-        session_id: &str,
-        request: &ref_actions::RefSelectionRequest,
-    ) -> Result<ref_actions::Decision> {
-        self.post(
-            &format!("/api/v1/sessions/{session_id}/ref-selection"),
-            "ref_selection",
-            request,
             false,
         )
         .await

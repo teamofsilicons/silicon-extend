@@ -6,7 +6,7 @@ lacks. It is **stateless**: it holds a base URL, a connection pool, the negotiat
 
 ```toml
 [dependencies]
-silicon-extend-client = "1"
+silicon-extend-client = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -48,19 +48,6 @@ ended while the command ran is `Err` with code `session_ended` and `details.may_
 `result.warnings` lists what went wrong around the command without failing it, such as a file
 Briefcase refused to store (an older service leaves it out; it reads as empty).
 
-## Managed ref selection (1.3)
-
-`me.select_ref(&sid, &RefSelectionRequest { snapshot, instruction, has_text, threshold }).await?`
-uses the backend's Jev key and returns a `ref_actions::Decision`. It requires service 1.2.0 and
-an active, authorized session owned by the calling Silicon. Import `RefSelectionRequest` from
-`silicon_extend_client::ref_actions`; `snapshot` is the structured output of a full ref snapshot.
-
-This method only selects. Revalidate against a fresh snapshot before calling `run` with the
-chosen ordinary command. On a refusal or error, continue with the ordinary ref workflow.
-`ref_actions::ModelClient` remains available for direct calls with your own key. The
-[`extend act` command](jev-ref-experiment.md) combines selection, revalidation and execution.
-See the [managed HTTP contract](managed-ref-api.md) for request limits and credential isolation.
-
 ## Files
 
 ```rust
@@ -87,7 +74,7 @@ argument that names a local file and replace it with `attachment:<name>`. It enf
 `team_silicons`, `setup`, `setup_code`. `devices_including_removed` also lists the Carbon's removed
 devices (with `removed_at` and `removed_reason`), whose `device()` and `activity()` stay readable.
 
-1.1 (the crate is semver-compatible: `silicon-extend-client = "1"` picks it up):
+Device-management methods introduced in 1.1 remain available in 2.0:
 
 - A Carbon's own devices, sessions, files and history answer in every Team, so
   `client.authed(&token, None)` works for them; the Team you pass is still the Team `grant` gives

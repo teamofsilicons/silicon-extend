@@ -105,20 +105,17 @@ workspace/client/protocol versions unchanged. Publish only `silicon-extend-cli` 
 Create its GitHub release with `--latest=false` so the website's latest desktop/Android downloads
 continue pointing at the full app release.
 
-CLI/client 1.2.0 uses this same `cli-v` archive lane. Its client crate has an independent 1.2.0
-version, and the workspace dependency points to it. Publish `silicon-extend-client` before
-`silicon-extend-cli`; service, protocol and device-app versions remain 1.1.0.
+CLI/client/service 2.0.0 use independent crate versions; the CLI follows the same `cli-v` archive
+lane. Publish `silicon-extend-client` before `silicon-extend-cli` and deploy service 2.0.0 as part
+of the release. The ordinary HTTP API remains v1. Android stays at 1.1.2 and desktop applications
+and the device protocol stay at 1.1.0. The [2.0.0 release notes](releases/cli-2.0.0.md) describe
+the intentionally removed API and the ordinary snapshot/ref workflow for upgrading callers.
 
-CLI/client 1.3.0 follows the same lane and requires service 1.2.0 for managed Jev selection.
-The service has an explicit version; workspace, protocol and device apps remain 1.1.0. Deploy
-service 1.2.0 before publishing CLI 1.3.0. Store `EXTEND_JEV_API_KEY` and
-`EXTEND_JEV_TEST_API_KEY` only in the backend runtime secret; neither is included in the CLI.
-Test worlds require the test key and never use the production key. These settings are optional:
-without them, managed selection fails while ordinary device commands remain available.
-`EXTEND_JEV_URL` and `EXTEND_JEV_MODEL` optionally override the server endpoint and model.
-Refresh the existing host's environment renderer before deployment (see the
-[AWS runbook](../deploy/aws/README.md)); an image update alone does not refresh its allowlist.
-No database migration or device-app update is required for this release.
+Refresh the existing host's environment renderer from this release and remove retired provider
+settings from its runtime secret (see the [AWS runbook](../deploy/aws/README.md)). An image update
+alone does not refresh the renderer's allowlist. Preserve all unrelated secret settings and
+verify only setting names or presence, never their values. No database migration or device-app
+update is required for this release.
 
 ## Device apps
 
