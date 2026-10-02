@@ -107,9 +107,10 @@ pub struct Compat {
 
 impl Compat {
     fn default_for(major: u32) -> Self {
-        // Client/CLI 2 removed model selection, while ordinary requests still use API v1.
+        // Client/CLI 2 removed model selection and 3 separates delegated permissions.
+        // Both retain API v1 for ordinary device and session requests.
         let range = if major == 1 {
-            ">=1.0.0, <3.0.0".to_owned()
+            ">=1.0.0, <4.0.0".to_owned()
         } else {
             format!(">={major}.0.0, <{}.0.0", major + 1)
         };
@@ -698,8 +699,8 @@ mod tests {
         let p = Policy::parse(&[1], env(&[])).unwrap();
         assert!(p.deprecated.is_empty());
         assert_eq!(p.served, vec![1]);
-        assert_eq!(p.compat[&1].client_crate, ">=1.0.0, <3.0.0");
-        assert_eq!(p.compat[&1].cli, ">=1.0.0, <3.0.0");
+        assert_eq!(p.compat[&1].client_crate, ">=1.0.0, <4.0.0");
+        assert_eq!(p.compat[&1].cli, ">=1.0.0, <4.0.0");
         let p = Policy::parse(
             &[1, 2],
             env(&[

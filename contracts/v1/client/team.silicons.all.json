@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Authed::team_silicons_all",
   "consumer": "silicon-extend-client",
-  "consumer_version": "2.0.0",
+  "consumer_version": "3.0.0",
   "contract": 1,
   "given": [],
   "operation": "team.silicons.all",

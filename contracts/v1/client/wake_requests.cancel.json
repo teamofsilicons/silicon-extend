@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Authed::cancel_wake",
   "consumer": "silicon-extend-client",
-  "consumer_version": "2.0.0",
+  "consumer_version": "3.0.0",
   "contract": 1,
   "given": [
     "wake_request"

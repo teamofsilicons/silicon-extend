@@ -1014,7 +1014,7 @@ fn matrix(state: &str) -> Value {
            "versions": [{"api_version": 1, "state": state, "deprecated_at": if state == "current" { Value::Null } else { json!("2026-09-01T00:00:00Z") },
                          "sunset_at": null, "sunset_earliest_at": if state == "deprecated" { json!("2026-10-04T00:00:00Z") } else { Value::Null },
                          "sunset_rule": "Sunset after 7 consecutive days with zero requests",
-                         "compatible": {"client_crate": ">=1.0.0, <3.0.0", "cli": ">=1.0.0, <3.0.0", "device_app_min": "1.0.0"}}]})
+                         "compatible": {"client_crate": ">=1.0.0, <4.0.0", "cli": ">=1.0.0, <4.0.0", "device_app_min": "1.0.0"}}]})
 }
 
 #[test]
@@ -1022,7 +1022,7 @@ fn version_reads_the_compatibility_matrix() {
     for (state, says) in [
         (
             "current",
-            "Status: current. API v1 is current, and it works with CLI >=1.0.0, <3.0.0",
+            "Status: current. API v1 is current, and it works with CLI >=1.0.0, <4.0.0",
         ),
         (
             "deprecated",
@@ -1041,7 +1041,7 @@ fn version_reads_the_compatibility_matrix() {
         );
         let o = cli.run(&["-V", "--json"]);
         assert_eq!(json_out(&o)["status"], state);
-        assert_eq!(json_out(&o)["cli_range"], ">=1.0.0, <3.0.0");
+        assert_eq!(json_out(&o)["cli_range"], ">=1.0.0, <4.0.0");
     }
 
     let fake = Fake::start_with_version(
