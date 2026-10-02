@@ -1,9 +1,9 @@
-# Extend delegated-access cutover (local, unreleased)
+# Extend 3 delegated-access release candidate
 
-The service now uses the official IAM 4.1.0 and Briefcase 2.1.0 workspace clients.
-Their vendored source provenance is recorded in `vendor/*/SOURCE.md`. Pin reviewed
-upstream revisions before publishing a package; these snapshots do not establish
-that either dependency is deployed.
+The service uses the official IAM 5.0.0 and Briefcase 3.0.0 clients. Their exact
+reviewed release commits and archive hashes are recorded in
+`vendor/*/VENDORED.md`. Source and build verification do not establish that either
+dependency is deployed.
 
 Account login authorizes Extend itself. It never creates an OBO grant. The
 [feature permission flow](FEATURE_PERMISSIONS.md) requests separate consent and
