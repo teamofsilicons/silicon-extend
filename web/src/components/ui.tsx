@@ -3,6 +3,7 @@ import { Check, CircleAlert, Laptop, LoaderCircle, Monitor, Smartphone, Tablet, 
 import type { ApiError } from "../lib/api";
 import type { Device } from "../lib/types";
 import { statusLabel } from "../lib/format";
+import { Link } from "../lib/router";
 import Shader from "./Shader";
 
 /** Shows exactly what Extend said: the message, the hint, and the ids to report it with. */
@@ -16,6 +17,9 @@ export function ErrorNote(props: { error: ApiError | null | undefined; compact?:
             <p class="error-message">{error().message}</p>
             <Show when={error().hint}>
               <p class="error-hint">{error().hint}</p>
+            </Show>
+            <Show when={error().details.permission_required === true}>
+              <p><Link href="/settings#feature-permissions">Review feature access in Settings</Link></p>
             </Show>
             <p class="error-meta">
               <code>{error().code}</code>

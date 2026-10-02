@@ -1,6 +1,6 @@
 //! Extend's notifications through Ting: requests for a device in use, and wake requests.
 //!
-//! Every Ting is sent on a member's behalf with a single-use IAM OBO proof for `tings.send` (the
+//! Every Ting is sent on a member's behalf with a reusable IAM OBO access token for `tings.send` (the
 //! way Silicon Hook and DM reach Ting). Its `org_id` is one Team that both the sender (the actor)
 //! and the recipient belong to. The actor is always a member who took part, or the recipient
 //! itself (a notification to themselves, under their own consent); never a member who didn't take
@@ -233,7 +233,7 @@ impl TingNotifier {
         }
     }
 
-    /// Sends one proof-bound call to Ting as `member`. A proof is single-use; no retries here.
+    /// Sends a call with separately approved reusable authority; receiver authorization remains live.
     async fn call(
         &self,
         member: &Principal,
@@ -247,10 +247,17 @@ impl TingNotifier {
             .iam
             .obo_proof(member, "ting", endpoint_id, json!({}), "POST", &bytes, sel)
             .await?;
+        if proof.org_id.as_deref() != body.get("org_id").and_then(Value::as_str)
+            || (endpoint_id == "subscriptions.register" && proof.actor.as_deref() != Some(member.id()))
+        {
+            return Err(AppError::new(ErrorCode::ConfirmationRequired,"Ting approval must use the device organization; subscription approval must also use the recipient's account.")
+                .hint("Open Extend Settings → Permissions and choose this account and device organization in IAM. Notification recipients are never silently moved to another organization."));
+        }
         let mut req = self
             .http
             .post(format!("{}{path}", self.base_url))
             .bearer_auth(&proof.access_proof)
+            .header("X-App-ID", self.iam.app_id())
             .header("Content-Type", "application/json")
             .body(bytes);
         if let (Some(secret), Some(key)) = (&proof.testing_app_secret, &proof.testing_iam_key) {
@@ -297,7 +304,7 @@ impl TingNotifier {
 
 /// Only an explicit provider self-send restriction establishes that capability. Authentication,
 /// authorization and recipient validation failures say nothing about other self-sends, and must
-/// remain retryable with a fresh proof or after the affected member's permissions change.
+/// remain retryable with a current endpoint authority or after the affected member's permissions change.
 fn refuses_self_send(status: u16, code: &str) -> bool {
     matches!(status, 400 | 403 | 422) && matches!(code, "self_send_not_allowed" | "self_send_unsupported")
 }

@@ -27,9 +27,37 @@ use extend_protocol::{
     TESTING_SECRET_HEADER,
 };
 use reqwest::{Method, StatusCode};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// One separately approved feature endpoint.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PermissionEndpoint {
+    pub audience: String,
+    pub endpoint_id: String,
+}
+/// Provider context approved for a feature; credentials remain in Extend.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturePermission {
+    pub audience: String,
+    pub endpoint_id: String,
+    pub grant_id: Uuid,
+    pub org_id: String,
+    pub actor: serde_json::Value,
+    pub expires_at: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturePermissions {
+    pub items: Vec<FeaturePermission>,
+}
+/// Open this review URL, then redeem the single-use approval code with its id.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturePermissionRequest {
+    pub id: Uuid,
+    pub consent_url: String,
+    pub expires_at: String,
+}
 
 /// Versions of the API this crate speaks.
 pub const SUPPORTED_API_VERSIONS: &[u32] = &[API_VERSION];
@@ -900,6 +928,49 @@ impl Authed<'_> {
                         &format!("/api/v1/ting-registration{}", qs(&[("team", Some(team.to_owned()))])),
                     )
                     .json(&env("ting_registration", serde_json::json!({}))),
+                )
+                .await?,
+        )
+        .await
+    }
+
+    /// Lists feature permissions for the current account, organization and environment.
+    pub async fn permissions(&self) -> Result<FeaturePermissions> {
+        self.get("/api/v1/permissions").await
+    }
+
+    /// Starts a separate approval without running the feature. Reuse the key on retry.
+    pub async fn request_permissions(
+        &self,
+        endpoints: &[PermissionEndpoint],
+        idempotency_key: &str,
+    ) -> Result<FeaturePermissionRequest> {
+        Uuid::parse_str(idempotency_key).map_err(|_| Error::Invalid("idempotency key must be a UUID".into()))?;
+        decode(
+            self.c
+                .send(
+                    self.req(Method::POST, "/api/v1/permissions")
+                        .header("Idempotency-Key", idempotency_key)
+                        .json(&env("permission", serde_json::json!({"endpoints":endpoints}))),
+                )
+                .await?,
+        )
+        .await
+    }
+    /// Saves explicitly approved credentials on the server. The same key safely retries this code.
+    pub async fn complete_permissions(
+        &self,
+        id: Uuid,
+        code: &str,
+        idempotency_key: &str,
+    ) -> Result<FeaturePermissions> {
+        Uuid::parse_str(idempotency_key).map_err(|_| Error::Invalid("idempotency key must be a UUID".into()))?;
+        decode(
+            self.c
+                .send(
+                    self.req(Method::POST, &format!("/api/v1/permissions/{id}/complete"))
+                        .header("Idempotency-Key", idempotency_key)
+                        .json(&env("permission", serde_json::json!({"code":code}))),
                 )
                 .await?,
         )

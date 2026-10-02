@@ -87,6 +87,24 @@ export interface TokenPair {
   testing_environment?: TestingEnvironment | null;
 }
 
+export interface PermissionEndpoint {
+  audience: string;
+  endpoint_id: string;
+}
+
+export interface FeaturePermission extends PermissionEndpoint {
+  grant_id: string;
+  org_id: string;
+  actor: { public_id?: string; id?: string; kind?: string };
+  expires_at: string;
+}
+
+export interface FeaturePermissionRequest {
+  id: string;
+  consent_url: string;
+  expires_at: string;
+}
+
 /** Where one world's token pair lives. `save` must replace the whole pair in one write. */
 export interface TokenStore {
   load(): TokenPair | null;
@@ -133,6 +151,8 @@ interface RequestOptions {
   team?: TeamMode;
   /** Send an Idempotency-Key, reused on the one retry after a network failure. */
   idempotent?: boolean;
+  /** Retain a mutation's key when the user explicitly retries the same request. */
+  idempotencyKey?: string;
   ifMatch?: string;
   /** Expected envelope `type` of a successful body, or the types a route may answer with. */
   expect?: string | string[];
@@ -287,7 +307,7 @@ export class ExtendClient {
   async request<T>(options: RequestOptions): Promise<ApiResponse<T>> {
     const auth = options.auth ?? true;
     const headers = this.baseHeaders(options);
-    if (options.idempotent) headers["Idempotency-Key"] = (this.ctx.newKey ?? defaultKey)();
+    if (options.idempotent) headers["Idempotency-Key"] = options.idempotencyKey ?? (this.ctx.newKey ?? defaultKey)();
     const init = (token?: string): RequestInit => ({
       method: options.method,
       headers: token ? { ...headers, Authorization: `Bearer ${token}` } : headers,
@@ -708,6 +728,24 @@ export class ExtendClient {
    * Whether Extend's Tings reach the member in a Team, and which of Extend's Ting types the Team is
    * missing. "any" (Carbons) lists every Team of the login plus the Teams of the Carbon's grants.
    */
+  async permissions(): Promise<FeaturePermission[]> {
+    return (await this.request<{ items: FeaturePermission[] }>({ method: "GET", path: "/api/v1/permissions", expect: "permissions" })).data.items;
+  }
+
+  async requestPermissions(endpoints: PermissionEndpoint[], idempotencyKey: string): Promise<FeaturePermissionRequest> {
+    return (await this.request<FeaturePermissionRequest>({
+      method: "POST", path: "/api/v1/permissions", body: { type: "permission", data: { endpoints } },
+      idempotent: true, idempotencyKey, expect: "permission",
+    })).data;
+  }
+
+  async completePermissions(id: string, code: string, idempotencyKey: string): Promise<FeaturePermission[]> {
+    return (await this.request<{ items: FeaturePermission[] }>({
+      method: "POST", path: `/api/v1/permissions/${encodeURIComponent(id)}/complete`, body: { type: "permission", data: { code } },
+      idempotent: true, idempotencyKey, expect: "permissions",
+    })).data.items;
+  }
+
   async getTingRegistrations(team: string | "any" = "any"): Promise<TingRegistration[]> {
     const res = await this.request<TingRegistration | Page<TingRegistration> | TingRegistration[]>({
       method: "GET",

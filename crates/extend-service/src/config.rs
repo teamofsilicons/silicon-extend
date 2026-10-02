@@ -55,6 +55,7 @@ pub struct Config {
     pub repository_url: String,
     pub data_dir: PathBuf,
     pub iam: IamMode,
+    pub delegation_key: Option<crate::obo::GrantKey>,
     pub iam_public_url: String,
     pub iam_login_url: String,
     pub webhook_secret: Option<(i64, String)>,
@@ -316,6 +317,12 @@ impl Config {
         if production && !public_url.starts_with("https://") {
             bail!("EXTEND_PUBLIC_URL must be https in production");
         }
+        let delegation_key = var("EXTEND_DELEGATION_ENCRYPTION_KEY")
+            .map(|v| crate::obo::GrantKey::parse(&v))
+            .transpose()?;
+        if matches!(iam, IamMode::Sdk { .. }) && delegation_key.is_none() {
+            bail!("EXTEND_DELEGATION_ENCRYPTION_KEY is required with SDK IAM");
+        }
         Ok(Self {
             environment,
             bind,
@@ -338,6 +345,7 @@ impl Config {
                     format!("{}/dev/iam/login", var_or("EXTEND_PUBLIC_URL", "http://127.0.0.1:8480"))
                 }),
             },
+            delegation_key,
             iam,
             webhook_secret,
             webhook_previous_secret: secret(
@@ -412,6 +420,10 @@ mod tests {
         let mut vars = vec![
             DB,
             ("EXTEND_ENVIRONMENT", "production"),
+            (
+                "EXTEND_DELEGATION_ENCRYPTION_KEY",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
             ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
             ("EXTEND_IAM_APP_ID", "extend"),
             ("EXTEND_IAM_APP_SECRET", "ask_x"),
@@ -442,6 +454,10 @@ mod tests {
         let err = cfg(&[
             DB,
             ("EXTEND_ENVIRONMENT", "production"),
+            (
+                "EXTEND_DELEGATION_ENCRYPTION_KEY",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
             ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
             ("EXTEND_IAM_APP_ID", "extend"),
             ("EXTEND_IAM_APP_SECRET", "ask_x"),

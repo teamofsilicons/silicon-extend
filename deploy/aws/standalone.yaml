@@ -335,6 +335,7 @@ Resources:
             stack = dict(l.split('=', 1) for l in pathlib.Path('/etc/extend/stack.env').read_text().splitlines() if '=' in l)
             source = json.loads(pathlib.Path('/etc/extend/runtime.json').read_text())
             required = ('EXTEND_DATABASE_URL', 'EXTEND_IAM_APP_ID', 'EXTEND_IAM_APP_SECRET',
+                        'EXTEND_DELEGATION_ENCRYPTION_KEY',
                         'EXTEND_IAM_WEBHOOK_SECRET', 'EXTEND_HONEYCOMB_SERVICE_TOKEN',
                         'EXTEND_POSTMARK_SERVER_TOKEN', 'EXTEND_REPORT_RECIPIENTS')
             optional = ('EXTEND_IAM_WEBHOOK_SECRET_VERSION', 'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET',

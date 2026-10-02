@@ -747,6 +747,7 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
         "takeover" => takeover(ctx, &args).await,
         "request" => request(ctx, &args).await,
         "ting" => ting(ctx, &args).await,
+        "permission" => permission(ctx, &args).await,
         "file" => file(ctx, &args).await,
         "report" => report(ctx, &args).await,
         "env" => env_cmd(ctx, &args).await,
@@ -3878,6 +3879,102 @@ async fn takeover(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 "Usage: extend takeover --reason \"...\" | extend takeover status | extend takeover release",
             ));
         }
+    }
+    Ok(0)
+}
+
+async fn permission(ctx: &mut Ctx, args: &[String]) -> R<i32> {
+    let (sub, rest) = sub_and_rest(args, "ls");
+    let path = format!("permission {sub}");
+    if !args::SPECS.iter().any(|s| s.path == path) {
+        return Err(unknown_sub("permission", &sub));
+    }
+    let a = Args::parse(rest, &path)?;
+    if sub == "ls" {
+        a.at_most(0)?;
+        let result = ctx
+            .call("GET /api/v1/permissions", |c, t, team| async move {
+                c.authed(&t, team.as_deref()).permissions().await
+            })
+            .await?;
+        ctx.emit(to_json(&result), || {
+            result
+                .items
+                .iter()
+                .map(|p| format!("{} · {} · {}", p.audience, p.endpoint_id, p.org_id))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        return Ok(0);
+    }
+    let key = a
+        .value("--idempotency")
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    uuid::Uuid::parse_str(&key)
+        .map_err(|_| CliError::usage("Invalid idempotency key", "Use a UUID with --idempotency."))?;
+    eprintln!("Approval retry key: {key}");
+    if sub == "request" {
+        a.at_most(2)?;
+        let audience = a.req(0, "application id")?;
+        let endpoints = a
+            .req(1, "comma-separated endpoint IDs")?
+            .split(',')
+            .map(|id| silicon_extend_client::PermissionEndpoint {
+                audience: audience.clone(),
+                endpoint_id: id.trim().to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let result = ctx
+            .call("POST /api/v1/permissions", |c, t, team| {
+                let endpoints = endpoints.clone();
+                let key = key.clone();
+                async move {
+                    c.authed(&t, team.as_deref())
+                        .request_permissions(&endpoints, &key)
+                        .await
+                }
+            })
+            .await?;
+        ctx.emit(to_json(&result),||format!("Review access: {}\nApproval ID: {}\nAfter approving, save the code to a private file and run: extend permission complete {} --code-file PATH\nKeep the same --team and --test options.",result.consent_url,result.id,result.id));
+    } else {
+        a.at_most(1)?;
+        let id = uuid::Uuid::parse_str(&a.req(0, "approval id")?)
+            .map_err(|_| CliError::usage("Invalid approval ID", "Use the ID returned by permission request."))?;
+        let path = a.value("--code-file").ok_or_else(|| missing_value("--code-file"))?;
+        let file = std::fs::File::open(path).map_err(|_| {
+            CliError::usage(
+                "Could not open the approval code file",
+                "Use --code-file with a readable private file.",
+            )
+        })?;
+        let mut code = String::new();
+        file.take(16385).read_to_string(&mut code).map_err(|_| {
+            CliError::usage(
+                "Could not read the approval code",
+                "Use a UTF-8 file containing one single-use IAM code.",
+            )
+        })?;
+        let code = code.trim().to_owned();
+        if code.len() > 16384 || !code.starts_with("obc_") {
+            return Err(CliError::usage(
+                "Invalid approval code",
+                "Save the single-use code shown after approval in IAM.",
+            ));
+        }
+        let result = ctx
+            .call("POST /api/v1/permissions/complete", |c, t, team| {
+                let code = code.clone();
+                let key = key.clone();
+                async move {
+                    c.authed(&t, team.as_deref())
+                        .complete_permissions(id, &code, &key)
+                        .await
+                }
+            })
+            .await?;
+        ctx.emit(to_json(&result), || {
+            "Permission saved. Retry your original action when ready.".into()
+        });
     }
     Ok(0)
 }

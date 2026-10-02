@@ -2,6 +2,10 @@ name: Honeycomb release archive
 on:
   workflow_dispatch:
     inputs:
+      cli_only:
+        description: Build only the six CLI candidates; leave desktop releases unchanged
+        type: boolean
+        default: false
       windows_only:
         description: Only rebuild and verify Windows desktop packages
         type: boolean
@@ -88,7 +92,7 @@ jobs:
           if-no-files-found: error
   # Build and verify Linux/Windows desktop apps: no secrets, nothing published from here.
   desktop-linux:
-    if: ${{ inputs.windows_only != true && !startsWith(github.ref, 'refs/tags/cli-v') }}
+    if: ${{ inputs.cli_only != true && inputs.windows_only != true && !startsWith(github.ref, 'refs/tags/cli-v') }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,7 +126,7 @@ jobs:
             target/desktop/linux/*.deb
           if-no-files-found: error
   desktop-windows:
-    if: ${{ !startsWith(github.ref, 'refs/tags/cli-v') }}
+    if: ${{ inputs.cli_only != true && !startsWith(github.ref, 'refs/tags/cli-v') }}
     env:
       EXTEND_WINDOWS_VERIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_verification || 'full' }}
     strategy:

@@ -15,6 +15,9 @@
 //! Needs a PostgreSQL the tests can create databases on:
 //! `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+#[path = "common/permissions.rs"]
+mod permission_fixture;
+
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -70,6 +73,7 @@ fn config(database_url: String, addr: SocketAddr, device_app_min: &str) -> Confi
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir: std::env::temp_dir().join(format!("extend_contracts_{}", Uuid::new_v4().simple())),
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
@@ -104,7 +108,9 @@ impl Svc {
         let url = database().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
+        let mut state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
+        let iam = permission_fixture::decorate(state.iam.clone(), state.pool.clone()).await;
+        Arc::get_mut(&mut state).unwrap().iam = iam;
         let pool = state.pool.clone();
         let versions = Registry::start_with_clock(pool.clone(), policy, clock).await.unwrap();
         tokio::spawn(extend_service::serve_versioned(listener, state, versions.clone()));
@@ -595,6 +601,8 @@ fn load(dir: &Path) -> Vec<(String, Value)> {
 /// Provider states a fixture can name in `given`, and the placeholders they fill.
 const STATES: &[(&str, &[&str])] = &[
     ("refresh_token", &["refresh_token"]),
+    ("permission_request", &["permission_id", "permission_code"]),
+    ("permission_grant", &[]),
     ("enrollment", &["enrollment_id", "enrollment_secret", "pairing_code"]),
     ("device", &["device_id", "device_credential", "device_version"]),
     ("session", &["session_id"]),
@@ -628,6 +636,7 @@ const STATES: &[(&str, &[&str])] = &[
 /// States a state sets up first.
 fn implies(state: &str) -> &'static [&'static str] {
     match state {
+        "permission_grant" => &["permission_request"],
         "session" | "upload" | "shared_device" | "wake_request" => &["device"],
         "takeover" | "file" => &["session"],
         "attached" | "shared_computer" => &["host"],
@@ -1095,6 +1104,33 @@ impl<'a> Provider<'a> {
             }
             let base = self.svc.base.clone();
             match state {
+                "permission_request" => {
+                    let response = self
+                        .carbon()
+                        .request_permissions(
+                            &[silicon_extend_client::PermissionEndpoint {
+                                audience: "briefcase".into(),
+                                endpoint_id: "briefcase.uploads.reserve".into(),
+                            }],
+                            &Uuid::new_v4().to_string(),
+                        )
+                        .await
+                        .unwrap();
+                    self.vars.insert("permission_id".into(), response.id.to_string());
+                    self.vars
+                        .insert("permission_code".into(), "obc_sentinel-permission-code".into());
+                }
+                "permission_grant" => {
+                    self.given("permission_request").await;
+                    self.carbon()
+                        .complete_permissions(
+                            self.var("permission_id").parse().unwrap(),
+                            &self.var("permission_code"),
+                            &Uuid::new_v4().to_string(),
+                        )
+                        .await
+                        .unwrap();
+                }
                 "refresh_token" => {
                     let s = self.client.login("c:alice").await.unwrap();
                     self.vars.insert("refresh_token".into(), s.refresh_token);

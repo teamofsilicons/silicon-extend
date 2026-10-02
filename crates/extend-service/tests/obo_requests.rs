@@ -28,7 +28,6 @@ struct ProofAsked {
     audience: String,
     endpoint_id: String,
     member: String,
-    metadata: serde_json::Value,
     body_sha256: String,
     proof: String,
 }
@@ -37,6 +36,9 @@ struct ProofAsked {
 #[derive(Default)]
 struct RecordingIam {
     asked: Mutex<Vec<ProofAsked>>,
+    refused: bool,
+    selected_actor: Option<String>,
+    selected_org: Option<String>,
 }
 
 #[async_trait]
@@ -85,23 +87,27 @@ impl Iam for RecordingIam {
         principal: &Principal,
         audience: &str,
         endpoint_id: &str,
-        metadata: serde_json::Value,
+        _metadata: serde_json::Value,
         method: &str,
         body: &[u8],
         _sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof> {
         assert_eq!(method, "POST");
+        if self.refused {
+            return Err(extend_service::obo::missing(audience, endpoint_id));
+        }
         let mut asked = self.asked.lock().unwrap();
-        let proof = format!("obo_test_{}", asked.len());
+        let proof = format!("oba_test_{audience}_{endpoint_id}");
         asked.push(ProofAsked {
             audience: audience.into(),
             endpoint_id: endpoint_id.into(),
             member: principal.id().into(),
-            metadata,
             body_sha256: hex::encode(Sha256::digest(body)),
             proof: proof.clone(),
         });
         Ok(OboProof {
+            actor: Some(self.selected_actor.clone().unwrap_or_else(|| principal.id().to_owned())),
+            org_id: self.selected_org.clone().or_else(|| principal.team.clone()),
             access_proof: proof,
             testing_app_secret: None,
             testing_iam_key: None,
@@ -139,7 +145,7 @@ async fn stand_in(script: Script) -> (String, Arc<Mutex<Vec<Received>>>) {
         let log = log.clone();
         let script = script.clone();
         async move {
-            assert_eq!(method, Method::POST, "{uri}");
+            assert!(matches!(method, Method::POST | Method::PUT), "{uri}");
             let r = Received {
                 path: uri.path().to_owned(),
                 headers,
@@ -189,29 +195,55 @@ fn member(id: &str, token: &str) -> Principal {
 
 /// A Briefcase that creates a new entry for every upload, like the real one does for a new name.
 fn briefcase_script() -> Script {
-    Arc::new(|r: &Received| match r.path.as_str() {
-        "/api/v1/obo/files" => json(
-            StatusCode::CREATED,
-            serde_json::json!({"id": Uuid::new_v4(), "permanent_url": "https://briefcase.example/org/acme/apps/extend/private/si:chef/x"}),
-        ),
-        "/api/v1/obo/invitations" => json(
-            StatusCode::OK,
-            serde_json::json!({"id": Uuid::new_v4(), "access": ["read", "update"]}),
-        ),
-        "/api/v1/obo/entries/trash" => (StatusCode::NO_CONTENT, vec![], vec![]),
-        "/api/v1/obo/files/read" => (
-            StatusCode::OK,
-            vec![("content-type", "image/png".into())],
-            b"\x89PNG bytes".to_vec(),
-        ),
-        other => panic!("unexpected Briefcase path {other}"),
+    let uploads = Arc::new(Mutex::new(std::collections::HashMap::<Uuid, Uuid>::new()));
+    Arc::new(move |r: &Received| {
+        let status = |operation: Uuid, upload: Uuid, state: &str, entry: Option<Uuid>| serde_json::json!({"operation_id":operation,"upload_id":upload,"state":state,"expires_at":"2099-01-01T00:00:00Z","published_entry_id":entry});
+        match r.path.as_str() {
+            "/api/v1/obo/uploads/reserve" => {
+                let op: Uuid = serde_json::from_value(r.json()["operation_id"].clone()).unwrap();
+                let upload = Uuid::new_v4();
+                uploads.lock().unwrap().insert(upload, op);
+                let mut value = status(op, upload, "reserved", None);
+                value["capability"] = serde_json::json!("upload_fixture_capability");
+                json(StatusCode::CREATED, value)
+            }
+            p if p.ends_with("/content") => {
+                let upload: Uuid = p.split('/').nth(5).unwrap().parse().unwrap();
+                let op = uploads.lock().unwrap()[&upload];
+                json(StatusCode::OK, status(op, upload, "staged", None))
+            }
+            "/api/v1/obo/uploads/commit" => {
+                let v = r.json();
+                json(
+                    StatusCode::OK,
+                    status(
+                        serde_json::from_value(v["operation_id"].clone()).unwrap(),
+                        serde_json::from_value(v["upload_id"].clone()).unwrap(),
+                        "committed",
+                        Some(Uuid::new_v4()),
+                    ),
+                )
+            }
+            "/api/v1/obo/invitations" => {
+                let mut v = r.json()["invitation"].clone();
+                v["id"] = serde_json::json!(Uuid::new_v4());
+                json(StatusCode::OK, v)
+            }
+            "/api/v1/obo/entries/trash" => (StatusCode::NO_CONTENT, vec![], vec![]),
+            "/api/v1/obo/files/read" => (
+                StatusCode::OK,
+                vec![("content-type", "image/png".into())],
+                b"\x89PNG bytes".to_vec(),
+            ),
+            other => panic!("unexpected Briefcase path {other}"),
+        }
     })
 }
 
 /// The OBO headers Briefcase requires, and nothing it refuses.
 fn assert_obo_headers(r: &Received, proof: &str) {
     assert_eq!(r.header("x-app-id"), Some("extend"));
-    assert_eq!(r.header("x-iam-obo-access-proof"), Some(proof));
+    assert_eq!(r.header("x-iam-obo-access-token"), Some(proof));
     assert_eq!(r.header("x-org-id"), Some("acme"));
     assert!(
         r.header("authorization").is_none(),
@@ -230,6 +262,7 @@ async fn stored_files_get_their_own_names_and_are_shared_read_update() {
         .store(
             &chef,
             NewFile {
+                operation_id: uuid::Uuid::new_v4(),
                 name: "screenshot.png",
                 content_type: "image/png",
                 bytes: png.clone(),
@@ -243,6 +276,7 @@ async fn stored_files_get_their_own_names_and_are_shared_read_update() {
         .store(
             &chef,
             NewFile {
+                operation_id: uuid::Uuid::new_v4(),
                 name: "screenshot.png",
                 content_type: "image/png",
                 bytes: b"two".to_vec(),
@@ -257,9 +291,8 @@ async fn stored_files_get_their_own_names_and_are_shared_read_update() {
 
     let asked = iam.asked.lock().unwrap().clone();
     let seen = seen.lock().unwrap().clone();
-    assert_eq!(asked.len(), 4);
-    assert_eq!(seen.len(), 4);
-    // Upload: metadata bound in the proof, raw bytes in the body, digest over exactly those bytes.
+    assert_eq!(asked.len(), 8);
+    assert_eq!(seen.len(), 8);
     let (upload, created) = (&asked[0], &seen[0]);
     assert_eq!(
         (
@@ -267,46 +300,31 @@ async fn stored_files_get_their_own_names_and_are_shared_read_update() {
             upload.endpoint_id.as_str(),
             upload.member.as_str()
         ),
-        ("briefcase", "briefcase.files.create", "si:chef")
+        ("briefcase", "briefcase.uploads.reserve", "si:chef")
     );
-    assert_eq!(created.path, "/api/v1/obo/files");
-    assert_eq!(created.body, png);
-    assert_eq!(upload.body_sha256, hex::encode(Sha256::digest(&png)));
-    assert_eq!(created.header("content-type"), Some("application/octet-stream"));
     assert_obo_headers(created, &upload.proof);
-    let name = upload.metadata["name"].as_str().unwrap();
-    assert!(name.starts_with("screenshot-") && name.ends_with(".png"), "{name}");
-    assert_eq!(upload.metadata["path"], "");
-    assert_eq!(upload.metadata["content_type"], "image/png");
+    let body = created.json();
+    assert_eq!(body["sha256"], hex::encode(Sha256::digest(&png)));
+    assert_eq!(body["content_type"], "image/png");
+    assert_eq!(body["size"], png.len());
+    assert_ne!(seen[0].json()["name"], seen[4].json()["name"]);
+    assert_eq!(seen[1].body, png);
     assert_eq!(
-        upload.metadata.as_object().unwrap().len(),
-        3,
-        "Briefcase's schema has exactly path, name, content_type"
+        seen[1].header("x-briefcase-upload-capability"),
+        Some("upload_fixture_capability")
     );
-    // Briefcase would publish the second upload as a new version of the first if the names matched.
-    assert_ne!(asked[2].metadata["name"], upload.metadata["name"]);
-
-    // Sharing: the critical invitation endpoint, empty metadata, the whole operation in the body.
-    let (invite, sent) = (&asked[1], &seen[1]);
+    assert!(seen[1].header("x-iam-obo-access-token").is_none());
+    assert!(seen[1].header("authorization").is_none());
+    assert_obo_headers(&seen[2], &asked[1].proof);
+    assert_eq!(seen[2].json()["operation_id"], body["operation_id"]);
+    let (invite, sent) = (&asked[3], &seen[3]);
     assert_eq!(invite.endpoint_id, "briefcase.invitations.create");
-    assert_eq!(invite.metadata, serde_json::json!({}));
-    assert_eq!(sent.path, "/api/v1/obo/invitations");
     assert_obo_headers(sent, &invite.proof);
-    assert_eq!(invite.body_sha256, hex::encode(Sha256::digest(&sent.body)));
-    let body = sent.json();
-    assert!(
-        body["operation_id"]
-            .as_str()
-            .and_then(|s| s.parse::<Uuid>().ok())
-            .is_some_and(|u| !u.is_nil())
-    );
-    assert_eq!(body["entry_id"], serde_json::json!(first.file_id));
+    assert_eq!(sent.json()["entry_id"], serde_json::json!(first.file_id));
     assert_eq!(
-        body["invitation"],
-        serde_json::json!({"principal": {"type": "carbon", "id": "c:alice"}, "access": ["read", "update"], "inherit": true}),
-        "Briefcase refuses write on a file (invalid_access) and delete is never shared"
+        sent.json()["invitation"],
+        serde_json::json!({"principal":{"type":"carbon","id":"c:alice"},"access":["read","update"],"inherit":true})
     );
-    assert_eq!(body.as_object().unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -352,9 +370,9 @@ async fn trash_repeats_one_logical_operation_and_treats_gone_as_done() {
     );
     let asked = iam.asked.lock().unwrap().clone();
     assert_eq!(asked[0].endpoint_id, "briefcase.entries.trash");
-    assert_ne!(
+    assert_eq!(
         asked[0].proof, asked[1].proof,
-        "every try needs a fresh single-use proof"
+        "a still-approved token is reusable; the operation UUID retains write idempotency"
     );
     assert_obo_headers(&seen[1], &asked[1].proof);
 }
@@ -372,7 +390,10 @@ async fn reads_bytes_through_the_delegated_read() {
         (&b"\x89PNG bytes"[..], "image/png")
     );
     let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen[0].json(), serde_json::json!({"entry_id": id}));
+    assert_eq!(
+        seen[0].json(),
+        serde_json::json!({"entry_id": id,"range":null,"download":false})
+    );
     let asked = iam.asked.lock().unwrap().clone();
     assert_eq!(
         (asked[0].endpoint_id.as_str(), asked[0].member.as_str()),
@@ -381,7 +402,7 @@ async fn reads_bytes_through_the_delegated_read() {
 }
 
 #[tokio::test]
-async fn refusals_are_explained_and_nothing_is_sent_without_a_login() {
+async fn refusals_are_explained_and_nothing_is_sent_without_feature_approval() {
     let (url, seen) = stand_in(Arc::new(|_: &Received| {
         json(StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"error": {"code": "invalid_name", "message": "The request contains invalid data.", "request_id": "r-1"}}))
     }))
@@ -392,6 +413,7 @@ async fn refusals_are_explained_and_nothing_is_sent_without_a_login() {
         .store(
             &member("si:chef", "oat_chef"),
             NewFile {
+                operation_id: uuid::Uuid::new_v4(),
                 name: "a.png",
                 content_type: "image/png",
                 bytes: vec![1],
@@ -402,20 +424,25 @@ async fn refusals_are_explained_and_nothing_is_sent_without_a_login() {
         .await
         .unwrap_err();
     assert!(
-        err.0.message.contains("invalid_name") && err.0.message.contains("r-1") && err.0.message.contains("si:chef"),
+        err.0.message.contains("invalid_name") && err.0.message.contains("r-1"),
         "{}",
         err.0.message
     );
     assert!(err.0.hint.is_some());
 
-    // The scheduler's stand-in principal for a Silicon with no live session has no token.
+    // Without separately approved authority, no request reaches the provider.
+    let iam = Arc::new(RecordingIam {
+        refused: true,
+        ..Default::default()
+    });
+    let files = BriefcaseFiles::new("http://127.0.0.1:9".into(), "http://localhost".into(), iam.clone());
     let err = files
         .destroy(&member("si:chef", ""), Uuid::now_v7(), None)
         .await
         .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::NotSignedIn);
+    assert_eq!(err.code(), ErrorCode::ConfirmationRequired);
     assert_eq!(seen.lock().unwrap().len(), 1, "no request without a login");
-    assert_eq!(iam.asked.lock().unwrap().len(), 1, "no proof without a login");
+    assert_eq!(iam.asked.lock().unwrap().len(), 0, "no token without feature approval");
 }
 
 #[tokio::test]
@@ -625,7 +652,7 @@ async fn a_refused_self_send_is_remembered() {
 }
 
 #[tokio::test]
-async fn an_unrelated_self_send_failure_retries_the_same_body_with_a_new_proof() {
+async fn an_unrelated_self_send_failure_retries_the_same_body_with_reusable_authority() {
     for (status, code) in [
         (StatusCode::UNAUTHORIZED, "unauthorized"),
         (StatusCode::FORBIDDEN, "forbidden"),
@@ -662,7 +689,7 @@ async fn an_unrelated_self_send_failure_retries_the_same_body_with_a_new_proof()
         assert_eq!(seen.len(), 2);
         assert_eq!(asked.len(), 2);
         assert_eq!(seen[0].body, seen[1].body);
-        assert_ne!(asked[0].proof, asked[1].proof);
+        assert_eq!(asked[0].proof, asked[1].proof);
         assert_eq!(
             seen[0].header("authorization"),
             Some(format!("Bearer {}", asked[0].proof).as_str())
@@ -673,4 +700,51 @@ async fn an_unrelated_self_send_failure_retries_the_same_body_with_a_new_proof()
         );
         assert!(!ting.self_send_refused());
     }
+}
+
+#[tokio::test]
+async fn selected_briefcase_context_is_forwarded_without_the_origin_login() {
+    let (url, seen) = stand_in(briefcase_script()).await;
+    let iam = Arc::new(RecordingIam {
+        selected_actor: Some("c:storage".into()),
+        selected_org: Some("archive".into()),
+        ..Default::default()
+    });
+    let files = BriefcaseFiles::new(url.clone(), url, iam);
+    files
+        .read(&member("si:chef", "oat_origin"), Uuid::new_v4(), None)
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].header("x-org-id"), Some("archive"));
+    assert!(seen[0].header("authorization").is_none());
+    assert!(seen[0].header("x-iam-obo-access-proof").is_none());
+}
+#[tokio::test]
+async fn notification_context_cannot_silently_change_recipient_or_device_team() {
+    let (url, seen) = stand_in(Arc::new(|_| {
+        panic!("Mismatched context must be refused before delivery")
+    }))
+    .await;
+    let iam = Arc::new(RecordingIam {
+        selected_org: Some("other-org".into()),
+        ..Default::default()
+    });
+    let ting = TingNotifier::new(url.clone(), iam);
+    let err = ting
+        .register_recipient(&member("si:chef", "oat_original"), true, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfirmationRequired);
+    let iam = Arc::new(RecordingIam {
+        selected_actor: Some("c:other".into()),
+        ..Default::default()
+    });
+    let ting = TingNotifier::new(url, iam);
+    let err = ting
+        .register_recipient(&member("si:chef", "oat_original"), true, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfirmationRequired);
+    assert!(seen.lock().unwrap().is_empty());
 }

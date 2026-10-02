@@ -1,3 +1,5 @@
+> **Historical fixture:** this harness pins the retired Ting 0.1.9 single-use OBO contract and seeds login-time OBO consent and raw Briefcase uploads. It does not validate the new separate feature-consent integration. Do not use its earlier successful runs as evidence for this cutover. Current endpoint/configuration requirements and local regression evidence are in [the OBO cutover guide](../../docs/OBO_CUTOVER.md). A current real-provider rehearsal remains a release gate.
+
 # Extend against a real Silicon IAM
 
 `realiam.py` runs the Extend service in `EXTEND_IAM_MODE=sdk` against a real, disposable Silicon

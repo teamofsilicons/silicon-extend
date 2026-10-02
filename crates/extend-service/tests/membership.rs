@@ -365,6 +365,7 @@ async fn stored_file(env: &Env, member: &str, team: &str, device: &str, name: &s
         .store(
             &p,
             extend_service::files::NewFile {
+                operation_id: uuid::Uuid::new_v4(),
                 name,
                 content_type: "text/plain",
                 bytes: name.as_bytes().to_vec(),

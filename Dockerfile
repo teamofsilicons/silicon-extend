@@ -3,6 +3,8 @@ FROM rust:1.98.0-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+COPY vendor/silicon-iam-client ./vendor/silicon-iam-client
+COPY vendor/briefcase-client ./vendor/briefcase-client
 RUN cargo build --locked --release -p extend-service --bin extend-service
 
 FROM debian:bookworm-slim AS runtime

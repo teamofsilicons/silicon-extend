@@ -7,6 +7,7 @@ import { toApiError, type ApiError } from "../lib/api";
 import type { TingRegistration } from "../lib/types";
 import { Button, ErrorNote, MemberTag, Spinner, toast } from "../components/ui";
 import { TestingSecretForm } from "../components/TestingSecretForm";
+import { PermissionSettings } from "../components/PermissionSettings";
 import { SignOutButton, signOutEffect } from "../components/SignOut";
 import { MissingTingTypes } from "../components/Ting";
 import { applyTheme, currentTheme, type Theme } from "../lib/theme";
@@ -23,7 +24,7 @@ export default function Settings() {
         <div>
           <p class="eyebrow">This browser · your account</p>
           <h1 class="page-title">Settings.</h1>
-          <p class="lead">Who you are signed in as, Ting notifications, test environments, telemetry and how the site looks.</p>
+          <p class="lead">Your account, feature access, Ting notifications, test environments and appearance.</p>
         </div>
       </header>
 
@@ -54,6 +55,7 @@ export default function Settings() {
       </div>
 
       <Show when={s.member()}>
+        <PermissionSettings />
         <TingSettings />
       </Show>
 

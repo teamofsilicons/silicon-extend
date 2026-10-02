@@ -29,6 +29,7 @@ class RuntimeRendererTests(unittest.TestCase):
             "EXTEND_IAM_WEBHOOK_SECRET": "fixture-only",
             "EXTEND_HONEYCOMB_SERVICE_TOKEN": "fixture-only",
             "EXTEND_POSTMARK_SERVER_TOKEN": "fixture-only",
+            "EXTEND_DELEGATION_ENCRYPTION_KEY": "fixture-only-never-production",
             "EXTEND_REPORT_RECIPIENTS": "fixture@example.invalid",
             **overrides,
         }

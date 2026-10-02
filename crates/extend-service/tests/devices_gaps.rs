@@ -59,6 +59,7 @@ async fn start() -> Env {
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir: data,
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,

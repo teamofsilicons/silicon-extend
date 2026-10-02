@@ -62,6 +62,53 @@ pub const NODES: &[Node] = &[
         examples: &["extend iam --json"],
     },
     Node {
+        path: "permission",
+        usage: "extend permission ls | request <app> <endpoint_ids> | complete <id> --code-file <path>",
+        who: "Carbon or Silicon",
+        purpose: "Review and approve feature access separately from login.",
+        used_with: "Keep the same --team and --test selection. Only approve in IAM as the account requesting this permission. Approval does not execute the original action.",
+        flags: &[],
+        examples: &[
+            "extend permission request briefcase briefcase.uploads.reserve,briefcase.uploads.commit,briefcase.uploads.status",
+        ],
+    },
+    Node {
+        path: "permission ls",
+        usage: "extend permission ls",
+        who: "Carbon or Silicon",
+        purpose: "List approved endpoints and their provider account and organization.",
+        used_with: "Revoke permissions in IAM. Ordinary logout does not remove this separate consent.",
+        flags: &[],
+        examples: &["extend permission ls --json"],
+    },
+    Node {
+        path: "permission request",
+        usage: "extend permission request <app> <endpoint_ids> [--idempotency <uuid>]",
+        who: "Carbon or Silicon",
+        purpose: "Create an IAM feature approval request for one or more comma-separated endpoint IDs.",
+        used_with: "Open consent_url, review the actions and provider account+organization, then save the single-use code to a private file and run permission complete.",
+        flags: &[(
+            "--idempotency",
+            "Reuse the printed UUID when retrying this same approval request.",
+        )],
+        examples: &["extend permission request ting tings.send,subscriptions.register"],
+    },
+    Node {
+        path: "permission complete",
+        usage: "extend permission complete <id> --code-file <path> [--idempotency <uuid>]",
+        who: "Carbon or Silicon",
+        purpose: "Store approved credentials on the server without printing them.",
+        used_with: "After completion, explicitly retry the original action with its original operation key.",
+        flags: &[
+            (
+                "--code-file",
+                "Private file containing the single-use IAM approval code.",
+            ),
+            ("--idempotency", "Reuse this UUID for identical completion retries."),
+        ],
+        examples: &[],
+    },
+    Node {
         path: "team",
         usage: "extend team ls | extend team silicons [--all-teams] | extend team use <handle>",
         who: "Carbon or Silicon",

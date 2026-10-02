@@ -105,6 +105,18 @@ pub const SPECS: &[Spec] = &[
         flags: &[],
     },
     Spec {
+        path: "permission ls",
+        flags: &[],
+    },
+    Spec {
+        path: "permission request",
+        flags: &[("--idempotency", true)],
+    },
+    Spec {
+        path: "permission complete",
+        flags: &[("--code-file", true), ("--idempotency", true)],
+    },
+    Spec {
         path: "team ls",
         flags: &[],
     },

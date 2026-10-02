@@ -93,7 +93,7 @@ async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
             &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")
         )
         .await,
-        5
+        extend_service::db::WORLD_VERSION
     );
     assert!(
         one::<bool>(
@@ -486,7 +486,7 @@ async fn repeated_rollback_and_forward_preserve_schema5_indicators_and_world_iso
                 db::ensure_world_to(&pool, world, 3).await.unwrap();
                 db::ensure_world(&pool, world).await.unwrap();
                 db::ensure_world(&pool, world).await.unwrap();
-                assert_eq!(one::<i32>(&pool, &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")).await, 5);
+                assert_eq!(one::<i32>(&pool, &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")).await, extend_service::db::WORLD_VERSION);
                 let current: Value = one(&pool, &format!("SELECT jsonb_agg(jsonb_build_array(d.device_id, d.instance_id, d.first_pair, i.side_salt) ORDER BY d.device_id) FROM {s}.devices d JOIN {s}.device_instances i USING (instance_id) WHERE d.device_id LIKE 'cccc%'")).await;
                 assert_eq!(current, identities[index].0);
                 assert_eq!(one::<String>(&pool, &format!("SELECT value FROM {s}.world_settings WHERE name = 'hardware_salt'")).await, identities[index].1);
@@ -567,7 +567,7 @@ async fn copied_production_schema_rolls_backward_and_forward() {
             INSERT INTO extend.device_locks (device_id, session_id) VALUES ('cafe0001', 'f01');
         "#).await;
         db::migrate_global(&pool).await.unwrap();
-        assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, 5);
+        assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, extend_service::db::WORLD_VERSION);
         assert_eq!(one::<i64>(&pool, "SELECT count(DISTINCT instance_id) FROM extend.devices").await, 2);
         assert!(one::<bool>(&pool, "SELECT bool_and(visibility = 'personal' AND first_pair) FROM extend.devices").await);
         assert!(one::<bool>(&pool, "SELECT bool_and(in_use_indicator = 'shown' AND length(side_salt) = 64) FROM extend.device_instances").await);
@@ -628,7 +628,7 @@ async fn copied_production_schema_rolls_backward_and_forward() {
             assert!(one::<bool>(&pool, "SELECT wake_muted AND granted_at = '2026-09-01T00:00:00Z' AND last_used_at = '2026-09-02T00:00:00Z' FROM extend.device_access WHERE device_id = 'cafe0002' AND silicon_id = 'si:scout'").await);
             assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.activity WHERE details->>'restored_after_rollback' = 'true'").await, cycle + 1);
             assert!(one::<Option<String>>(&pool, "SELECT to_regclass('extend.rollback_1_1_grants')::text").await.is_none());
-            assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, 5);
+            assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, extend_service::db::WORLD_VERSION);
             eprintln!("Copied production schema: cycle {} passed (down twice, forward twice, exact grants/credentials/instances/salts/indicator retained)", cycle + 1);
         }
     }).catch_unwind().await;

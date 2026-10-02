@@ -204,6 +204,8 @@ interface Environment {
 }
 
 interface World {
+  featureRequests: Map<string, { member: string; team: string; endpoints: { audience: string; endpoint_id: string }[]; expires: number; approved: boolean }>;
+  featureGrants: Map<string, unknown[]>;
   key: string;
   environment: Environment | null;
   members: Map<string, Member>;
@@ -268,6 +270,8 @@ const b64 = (n: number) => randomBytes(n).toString("base64url");
 
 function newWorld(key: string, environment: Environment | null): World {
   return {
+    featureRequests: new Map(),
+    featureGrants: new Map(),
     key,
     environment,
     members: new Map(),
@@ -2067,6 +2071,49 @@ function tingView(world: World, member: Member, team: string) {
     missing_types: world.tingMissing.get(team) ?? [],
   };
 }
+
+route("GET", "/api/v1/permissions", (ctx) => {
+  const member = caller(ctx), team = teamOf(ctx, member)!;
+  return ok(200, "permissions", { items: ctx.world.featureGrants.get(gkey(team, member.id)) ?? [] });
+});
+
+route("POST", "/api/v1/permissions", (ctx) => {
+  requireKey(ctx);
+  const member = caller(ctx), team = teamOf(ctx, member)!;
+  const data = envelope(ctx, "permission");
+  const endpoints = data.endpoints as { audience: string; endpoint_id: string }[];
+  if (!Array.isArray(endpoints) || !endpoints.length || endpoints.length > 16 || endpoints.some((e) => !e.audience || !e.endpoint_id))
+    fail(422, "invalid_input", "Choose between one and sixteen endpoints.");
+  const id = randomUUID(), expires = now() + 10 * MIN;
+  ctx.world.featureRequests.set(id, { member: member.id, team, endpoints, expires, approved: false });
+  return ok(200, "permission", { id, consent_url: `${ctx.origin}/__mock/iam/feature?request=${id}`, expires_at: iso(expires) });
+});
+
+route("POST", "/api/v1/permissions/:id/complete", (ctx) => {
+  requireKey(ctx);
+  const member = caller(ctx), team = teamOf(ctx, member)!;
+  const request = ctx.world.featureRequests.get(ctx.params.id);
+  if (!request || request.member !== member.id || request.team !== team) fail(404, "not_found", "Approval request not found for this account and organization.");
+  const data = envelope(ctx, "permission");
+  if (!request!.approved || request!.expires < now() || data.code !== `obc_mock_${ctx.params.id}`)
+    fail(422, "confirmation_required", "Approve this request and copy its demo code.", "Your login remains active.");
+  const key = gkey(team, member.id);
+  const items = request!.endpoints.map((endpoint) => ({ ...endpoint, grant_id: ctx.params.id, actor: { public_id: member.id, type: member.type }, org_id: team, expires_at: iso(now() + 30 * MIN) }));
+  const previous = ctx.world.featureGrants.get(key) as { audience: string; endpoint_id: string }[] | undefined;
+  ctx.world.featureGrants.set(key, [...(previous ?? []).filter((old) => !items.some((item) => item.audience === old.audience && item.endpoint_id === old.endpoint_id)), ...items]);
+  return ok(200, "permissions", { items: ctx.world.featureGrants.get(key) });
+});
+
+route("GET", "/__mock/iam/feature", (ctx) => {
+  const id = ctx.url.searchParams.get("request") ?? "";
+  const request = [...worlds.values()].map((world) => world.featureRequests.get(id)).find(Boolean);
+  if (!request || request.expires < now()) fail(404, "not_found", "This demo approval expired.");
+  if (ctx.url.searchParams.get("approve") === "yes") {
+    request!.approved = true;
+    return { status: 200, html: `<h1>Demo feature approval</h1><p>This is local test data. Copy this single-use demo code into Extend:</p><code>obc_mock_${escapeHtml(id)}</code>` };
+  }
+  return { status: 200, html: `<h1>Demo feature approval</h1><p>Local test data only. Extend requests access for ${escapeHtml(request!.member)} in ${escapeHtml(request!.team)}.</p><ul>${request!.endpoints.map((e) => `<li>${escapeHtml(e.audience)} · ${escapeHtml(e.endpoint_id)}</li>`).join("")}</ul><form><input type="hidden" name="request" value="${escapeHtml(id)}"><button name="approve" value="yes">Approve demo request</button></form>` };
+});
 
 route("GET", "/api/v1/ting-registration", (ctx) => {
   const member = caller(ctx);

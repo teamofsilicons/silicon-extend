@@ -19,6 +19,7 @@ pub mod files;
 pub mod hub;
 pub mod iam;
 pub mod membership;
+pub mod obo;
 pub mod revocation;
 pub mod routes;
 pub mod scheduler;
@@ -59,7 +60,13 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
                     cfg.webhook_secret.clone(),
                     cfg.webhook_previous_secret.clone(),
                 )
-                .await?,
+                .await?
+                .with_delegations(
+                    pool.clone(),
+                    cfg.delegation_key
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("EXTEND_DELEGATION_ENCRYPTION_KEY is required with SDK IAM"))?,
+                ),
             ),
             None,
         ),

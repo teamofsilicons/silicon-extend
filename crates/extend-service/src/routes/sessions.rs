@@ -1377,6 +1377,7 @@ pub async fn command(
             .store(
                 &auth.p,
                 NewFile {
+                    operation_id: f.upload_id,
                     name: &f.name,
                     content_type: &f.content_type,
                     bytes,

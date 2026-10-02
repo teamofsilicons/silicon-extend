@@ -35,7 +35,7 @@ pub struct Principal {
     pub team: Option<String>,
     pub teams: Vec<String>,
     pub role: Option<String>,
-    /// The access token, kept to mint OBO proofs for Briefcase and Ting on the member's behalf.
+    /// The app login token. Separate feature approvals are required for OBO operations.
     pub token: String,
 }
 
@@ -81,12 +81,23 @@ impl Membership {
 }
 
 /// A proof for one delegated request to another application.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OboProof {
+    pub actor: Option<String>,
+    pub org_id: Option<String>,
     pub access_proof: String,
     /// In a test environment, the other application's test secret and IAM test key.
     pub testing_app_secret: Option<String>,
     pub testing_iam_key: Option<String>,
+}
+
+impl std::fmt::Debug for OboProof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OboProof")
+            .field("actor", &self.actor)
+            .field("org_id", &self.org_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A verified IAM webhook, reduced to what Extend acts on.
@@ -178,6 +189,29 @@ pub trait Iam: Send + Sync {
         body: &[u8],
         sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof>;
+    async fn permission_start(
+        &self,
+        _p: &Principal,
+        _input: crate::obo::PermissionInput,
+        _key: Uuid,
+        _sel: Option<&TestingSelection>,
+    ) -> AppResult<serde_json::Value> {
+        Err(AppError::invalid(
+            "Feature permissions require SDK IAM; local development does not simulate consent.",
+        ))
+    }
+    async fn permission_complete(
+        &self,
+        _p: &Principal,
+        _id: Uuid,
+        _code: &str,
+        _sel: Option<&TestingSelection>,
+    ) -> AppResult<serde_json::Value> {
+        Err(AppError::invalid("Feature permissions require SDK IAM."))
+    }
+    async fn permissions(&self, _p: &Principal, _sel: Option<&TestingSelection>) -> AppResult<serde_json::Value> {
+        Ok(serde_json::json!({"items":[]}))
+    }
     async fn verify_webhook(&self, headers: &http::HeaderMap, body: &[u8]) -> AppResult<IamEvent>;
     /// Whose login `token` (an access or a refresh token) is, asked live before the token is
     /// revoked. `Ok(None)` when IAM no longer accepts the token (it expired or was already revoked);
@@ -287,6 +321,7 @@ fn member_from_public_id(id: &str) -> AppResult<Member> {
 // ───────────────────────────── Official client ─────────────────────────────
 
 pub struct SdkIam {
+    delegations: Option<crate::obo::GrantStore>,
     sdk: SdkClient,
     app_id: String,
     app_secret: String,
@@ -323,6 +358,7 @@ impl SdkIam {
             None => None,
         };
         Ok(Self {
+            delegations: None,
             sdk,
             app_id: app_id.to_owned(),
             app_secret: app_secret.to_owned(),
@@ -331,6 +367,18 @@ impl SdkIam {
         })
     }
 
+    pub fn with_delegations(mut self, pool: sqlx::PgPool, key: crate::obo::GrantKey) -> Self {
+        self.delegations = Some(crate::obo::GrantStore::new(pool, key));
+        self
+    }
+    fn delegations(&self) -> AppResult<&crate::obo::GrantStore> {
+        self.delegations.as_ref().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::ServiceUnavailable,
+                "Feature approval storage is not configured.",
+            )
+        })
+    }
     fn client(&self, sel: Option<&TestingSelection>) -> AppResult<SdkClient> {
         match sel {
             None => Ok(self.sdk.clone()),
@@ -411,30 +459,6 @@ fn sdk_error(err: silicon_iam_client::Error) -> AppError {
             "Silicon IAM is rate limiting Extend; retry shortly.",
         ),
         _ => AppError::unavailable("Silicon IAM", &err),
-    }
-}
-
-/// Maps a refused OBO catalog read or proof exchange. IAM answers 404 when the endpoint is not in
-/// the audience's catalog or Extend holds no approved, consented authority for it, 403 when the
-/// member's selected team or membership does not allow it, and 400 `invalid_subject_token` when
-/// the member's login is no longer accepted.
-fn obo_error(err: silicon_iam_client::Error, member: &str, audience: &str, endpoint_id: &str) -> AppError {
-    let what = |api: &silicon_iam_client::ApiError| {
-        format!(
-            "Silicon IAM would not let Extend act for {member} on {audience} ({endpoint_id}): {} ({}).",
-            api.message, api.code
-        )
-    };
-    match &err {
-        silicon_iam_client::Error::Api(api) if api.code == "invalid_subject_token" || api.status == 401 && api.code.contains("subject") => {
-            AppError::new(ErrorCode::TokenExpired, format!("{} {member}'s Extend login is no longer accepted.", what(api)))
-                .hint("Get a new short-lived token with the IAM CLI and run `extend login <slt>`.")
-        }
-        silicon_iam_client::Error::Api(api) if api.status == 404 || api.status == 403 => AppError::new(ErrorCode::NoAccess, what(api)).hint(format!(
-            "Extend needs {audience}'s {endpoint_id} approved for it (a Team admin does this in Honeycomb) and {member}'s consent: \
-             get a new short-lived token with the IAM CLI and run `extend login <slt>` to approve Extend's current access."
-        )),
-        _ => sdk_error(err),
     }
 }
 
@@ -742,43 +766,40 @@ impl Iam for SdkIam {
         Ok((ctx.environment_id, name))
     }
 
+    async fn permission_start(
+        &self,
+        p: &Principal,
+        input: crate::obo::PermissionInput,
+        key: Uuid,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<serde_json::Value> {
+        self.delegations()?.start(&self.client(sel)?, p, input, key, sel).await
+    }
+    async fn permission_complete(
+        &self,
+        p: &Principal,
+        id: Uuid,
+        code: &str,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<serde_json::Value> {
+        self.delegations()?.complete(&self.client(sel)?, p, id, code, sel).await
+    }
+    async fn permissions(&self, p: &Principal, sel: Option<&TestingSelection>) -> AppResult<serde_json::Value> {
+        self.delegations()?.list(p, sel).await
+    }
     async fn obo_proof(
         &self,
         principal: &Principal,
         audience: &str,
         endpoint_id: &str,
-        metadata: serde_json::Value,
-        method: &str,
-        body: &[u8],
+        _metadata: serde_json::Value,
+        _method: &str,
+        _body: &[u8],
         sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof> {
-        let client = self.client(sel)?;
-        let catalog = client
-            .obo()
-            .endpoints(audience)
+        self.delegations()?
+            .access(&self.client(sel)?, principal, audience, endpoint_id, sel)
             .await
-            .map_err(|e| obo_error(e, principal.id(), audience, endpoint_id))?;
-        let request = models::OboExchangeRequest {
-            org_id: principal.team.clone(),
-            subject_token: principal.token.clone(),
-            audience: audience.to_owned(),
-            endpoint_id: endpoint_id.to_owned(),
-            metadata,
-            request: models::OboExchangeRequestBinding {
-                method: method.to_owned(),
-                body_sha256: silicon_iam_client::api::obo::body_sha256(body),
-            },
-        };
-        let proof = client
-            .obo()
-            .exchange_signed(&request, &catalog, &Mutation::new())
-            .await
-            .map_err(|e| obo_error(e, principal.id(), audience, endpoint_id))?;
-        Ok(OboProof {
-            access_proof: proof.access_proof,
-            testing_app_secret: proof.testing_context.as_ref().map(|t| t.app_secret.clone()),
-            testing_iam_key: proof.testing_context.map(|t| t.iam_test_key),
-        })
     }
 
     async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
@@ -1373,6 +1394,8 @@ impl Iam for LocalIam {
         _sel: Option<&TestingSelection>,
     ) -> AppResult<OboProof> {
         Ok(OboProof {
+            actor: Some(principal.id().to_owned()),
+            org_id: principal.team.clone(),
             access_proof: format!("obo_local:{audience}:{endpoint_id}:{}", principal.id()),
             testing_app_secret: None,
             testing_iam_key: None,
@@ -1506,38 +1529,6 @@ mod tests {
         assert!(removed_memberships(&e).is_empty());
     }
 
-    #[test]
-    fn obo_refusals_say_what_why_and_what_to_do() {
-        let api = |status: u16, code: &str| {
-            silicon_iam_client::Error::Api(Box::new(silicon_iam_client::ApiError {
-                status,
-                code: code.into(),
-                message: "refused".into(),
-                details: None,
-                request_id: None,
-            }))
-        };
-        let e = obo_error(
-            api(404, "not_found"),
-            "si:chef",
-            "briefcase",
-            "briefcase.invitations.create",
-        );
-        assert_eq!(e.code(), ErrorCode::NoAccess);
-        assert!(
-            e.0.message.contains("si:chef") && e.0.message.contains("briefcase.invitations.create"),
-            "{}",
-            e.0.message
-        );
-        assert!(e.0.hint.as_deref().unwrap_or_default().contains("extend login"));
-        let e = obo_error(api(400, "invalid_subject_token"), "si:chef", "ting", "tings.send");
-        assert_eq!(e.code(), ErrorCode::TokenExpired);
-        assert_eq!(
-            obo_error(api(503, "unavailable"), "si:chef", "ting", "tings.send").code(),
-            ErrorCode::ServiceUnavailable
-        );
-    }
-
     fn test_selection() -> TestingSelection {
         TestingSelection {
             environment_id: Uuid::new_v4(),
@@ -1599,6 +1590,7 @@ mod tests {
             .build()
             .unwrap();
         let iam = SdkIam {
+            delegations: None,
             sdk,
             app_id: "extend".into(),
             app_secret: "ask_unused".into(),

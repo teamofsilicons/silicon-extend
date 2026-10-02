@@ -1,0 +1,42 @@
+{
+  "api_version": 1,
+  "call": "Authed::permissions",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "2.0.0",
+  "contract": 1,
+  "given": [
+    "permission_grant"
+  ],
+  "operation": "permissions.list",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/permissions"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/audience",
+      "/items/*/endpoint_id",
+      "/items/*/expires_at",
+      "/items/*/grant_id",
+      "/items/*/org_id"
+    ],
+    "required": [
+      "/items",
+      "/items/*/actor",
+      "/items/*/audience",
+      "/items/*/endpoint_id",
+      "/items/*/expires_at",
+      "/items/*/grant_id",
+      "/items/*/org_id"
+    ],
+    "status": "2xx",
+    "type": "permissions"
+  }
+}

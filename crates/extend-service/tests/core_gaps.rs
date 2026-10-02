@@ -81,6 +81,7 @@ fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf) -> Config {
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir,
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
