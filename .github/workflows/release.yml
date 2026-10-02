@@ -48,7 +48,7 @@ jobs:
       - name: Check CLI release
         if: matrix.package == 'linux-x86_64'
         run: |
-          cargo fmt --all --check
+          cargo fmt --check
           cargo clippy --locked -p silicon-extend-cli -p silicon-extend-client --all-targets -- -D warnings
           cargo test --locked -p silicon-extend-cli -p silicon-extend-client --all-targets
       - run: cargo build --locked --release -p silicon-extend-cli --target ${{ matrix.target }}
