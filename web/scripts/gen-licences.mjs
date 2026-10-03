@@ -31,4 +31,5 @@ for (const name of Object.keys(pkg.dependencies ?? {}).sort()) {
   if (!file) throw new Error(`${name} has no licence file; add it to the notices by hand`);
   parts.push("", rule, `${name} ${meta.version} (${meta.license})`, rule, "", readFileSync(join(dir, file), "utf8").trim());
 }
+parts.push("", rule, "UIArc free components (MIT)", rule, "", readFileSync(join(web, "public", "licenses", "UIArc.txt"), "utf8").trim());
 writeFileSync(join(web, "public", "licences.txt"), parts.join("\n") + "\n");

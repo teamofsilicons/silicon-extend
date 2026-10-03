@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
-import { Plus, RefreshCw, Search } from "lucide-solid";
+import { Download, LockKeyhole, Plus, RefreshCw, Search } from "lucide-solid";
 import { session } from "../lib/session";
 import { toApiError, type ApiError } from "../lib/api";
 import type { Device } from "../lib/types";
@@ -9,7 +9,7 @@ import { devicesTick } from "../lib/refresh";
 import { OS_LABEL, POLL_MS } from "../config";
 import { awakeLabel, duration, plural, relativeTime, removedWhy } from "../lib/format";
 import { Button, DeviceIcon, Empty, ErrorNote, MemberTag, OnlineDot, Spinner } from "../components/ui";
-import Shader from "../components/Shader";
+import { SegmentedTabs } from "../components/SegmentedTabs";
 import ImportDevices from "../components/ImportDevices";
 import DevicePage from "./DevicePage";
 
@@ -131,10 +131,10 @@ export default function Devices(props: { selected?: string | null }) {
           <header class="list-title">
             <div>
               <p class="eyebrow">{EYEBROW[scope()]}</p>
-              <h1>Devices.</h1>
+              <h1>Devices</h1>
             </div>
             <Show when={!isSilicon()}>
-              <button class="icon-button outlined" aria-label="Import configured devices" title="Import configured devices" onClick={()=>setImporting(true)}>↓</button>
+              <Button small class="import-action" aria-label="Import configured devices" onClick={() => setImporting(true)}><Download size={15} aria-hidden="true" /> Import</Button>
               <Link href="/devices/new" class="icon-button outlined" aria-label="Add a device" title="Add a device" data-testid="add-device">
                 <Plus size={17} aria-hidden="true" />
               </Link>
@@ -154,22 +154,16 @@ export default function Devices(props: { selected?: string | null }) {
           </label>
 
           <Show when={!!s.member()}>
-            <div class="filter-chips" role="tablist" aria-label="Whose devices">
-              <button role="tab" aria-selected={scope() === "mine" || scope() === "accessible"} class={scope() === "mine" || scope() === "accessible" ? "selected" : ""} onClick={() => setScope(isSilicon() ? "accessible" : "mine")} data-testid="tab-mine">
-                {isSilicon() ? "Available to me" : "My devices"}
-              </button>
-              <button role="tab" aria-selected={scope()==="team"} class={scope()==="team"?"selected":""} onClick={()=>setScope("team")} data-testid="tab-team">Organization</button>
-              <Show when={!isSilicon()}><button
-                role="tab"
-                aria-selected={scope() === "removed"}
-                class={scope() === "removed" ? "selected" : ""}
-                onClick={() => setScope("removed")}
-                title="Devices you removed, or whose pair ended. Their activity logs stay readable."
-                data-testid="tab-removed"
-              >
-                Removed
-              </button></Show>
-            </div>
+            <SegmentedTabs<Scope>
+              label="Whose devices"
+              value={scope()}
+              change={setScope}
+              items={[
+                { value: isSilicon() ? "accessible" : "mine", label: isSilicon() ? "Available to me" : "My devices", testid: "tab-mine" },
+                { value: "team", label: "Organization", testid: "tab-team" },
+                ...(!isSilicon() ? [{ value: "removed" as const, label: "Removed", testid: "tab-removed", title: "Devices removed from this organization. Their activity logs stay readable." }] : []),
+              ]}
+            />
           </Show>
 
           <div class="list-label">
@@ -369,23 +363,16 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
         >
           <section class="overview" aria-label="At a glance">
             <p class="eyebrow">Extend · {where()}</p>
-            <h2 class="overview-title">Pick a device.</h2>
+            <h2 class="overview-title">{props.scope === "team" ? "Shared with your organization." : "Your devices, in one place."}</h2>
             <p class="overview-lead">
               {props.isSilicon
                 ? "Choose one on the left to see what you can do on it. You use it through the extend CLI."
                 : "Choose one on the left to see who is using it, change which Silicons can, or stop a session."}
             </p>
-            <figure class="tally" aria-label="Your devices at a glance">
-              <div class="tally-print">
-                <Shader variant="ticket" seed={2.4} />
-                <span class="print-caption top">
-                  {props.scope === "accessible" ? "Yours to use" : "Paired"} · {where()}
-                </span>
-                <span class="print-caption top right">Silicon Extend</span>
-              </div>
+            <figure class="tally" aria-label="Devices at a glance">
               <dl class="tally-numbers">
                 <div>
-                  <dt>{props.scope === "accessible" ? "Yours to use" : "Paired"}</dt>
+                  <dt>{props.scope === "accessible" ? "Yours to use" : props.scope === "team" ? "Shared" : "Paired"}</dt>
                   <dd>{two(list().length)}</dd>
                 </div>
                 <div>
@@ -404,9 +391,12 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
                 <Link href="/devices/new" class="button primary">
                   <Plus size={16} aria-hidden="true" /> Add a device
                 </Link>
-                <Link href="/docs" class="button secondary">
-                  How it works
-                </Link>
+                <Button onClick={props.onImport}><Download size={16} aria-hidden="true" /> Import existing devices</Button>
+                <Link href="/docs" class="link-button">How it works</Link>
+              </div>
+              <div class="privacy-note">
+                <LockKeyhole size={18} aria-hidden="true" />
+                <div><strong>Private until you share</strong><p>New and imported devices are visible only to you. Share a device with {where()} when you are ready.</p></div>
               </div>
             </Show>
           </section>

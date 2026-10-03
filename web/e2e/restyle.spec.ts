@@ -277,9 +277,9 @@ test.describe("restyle tour", () => {
     await capture(page, "17-dark-pairing-code");
     await page.goto("/devices");
     await expect(page.locator(".tally")).toBeVisible();
-    const tally = await page.evaluate(() => [getComputedStyle(document.querySelector(".tally-print")!).backgroundColor, getComputedStyle(document.querySelector(".tally")!).backgroundColor]);
-    expect(tally[0]).toBe(tally[1]);
-    expect(tally[0]).not.toBe("rgba(0, 0, 0, 0)");
+    // The Arc stat card uses the existing dark surface, without the decorative print.
+    const tally = await page.locator(".tally").evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(tally).toBe("rgb(26, 29, 28)");
   });
 
   test("reduced motion: no animation runs", async ({ page, mock }) => {
