@@ -208,7 +208,7 @@ fn tomorrow_midnight(t: OffsetDateTime) -> OffsetDateTime {
 // ───────────── Versioning 6: the compatibility matrix ─────────────
 
 #[tokio::test]
-async fn the_default_matrix_keeps_api_one_for_client_and_cli_two() {
+async fn the_default_matrix_keeps_api_one_for_client_and_cli_three() {
     let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
     let client = Client::connect(&svc.base).await.unwrap();
     assert_eq!(client.api_version(), 1);
