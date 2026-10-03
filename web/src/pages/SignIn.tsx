@@ -1,4 +1,4 @@
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { ArrowRight, FlaskConical, KeyRound } from "lucide-solid";
 import { session } from "../lib/session";
 import { ApiError, toApiError } from "../lib/api";
@@ -14,7 +14,7 @@ import { write } from "../lib/storage";
 export default function SignIn(props: { reason?: ApiError | null; next?: string; onSignedIn?: () => void }) {
   const s = session();
   const [slt, setSlt] = createSignal("");
-  const [busy, setBusy] = createSignal<"carbon" | "silicon" | "signup" | "slt" | null>(null);
+  const [busy, setBusy] = createSignal<"carbon" | "silicon" | "signup" | "slt" | "redirect" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [showTesting, setShowTesting] = createSignal(false);
   const testing = () => s.world().kind === "testing";
@@ -36,34 +36,47 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
     return !info || iamSignupUrl(info) !== null;
   };
 
-  /** Sign in, or (for a Carbon new to Silicon IAM) sign up first: both go through IAM and come back here. */
-  async function withIam(signup = false) {
-    setBusy(signup ? "signup" : "carbon");
+  let operation = 0;
+  let popupController: AbortController | undefined;
+  onCleanup(() => popupController?.abort());
+
+  /** Full-page IAM remains available when a popup is blocked or cannot finish. */
+  async function withIam(kind: IdentityKind, signup = false) {
+    const current = ++operation;
+    popupController?.abort();
+    s.invalidateLogin();
+    setBusy(signup ? "signup" : "redirect");
     setError(null);
+    const client = s.client(), revision = s.contextRevision(), world = worldKey(), context = s.loginContext();
     try {
-      const info = await s.client().iam();
+      const info = await client.iam();
+      if (current !== operation || revision !== s.contextRevision() || context !== s.loginContext()) throw new Error("The selected account or environment changed. Start sign-in again.");
       setIamInfo(info);
       write("session", "extend.next", props.next ?? "/devices");
-      const url = (signup ? beginIamSignup(info, location.origin, worldKey()) : null) ?? beginIamLogin(info, location.origin, worldKey());
+      const url = (signup ? beginIamSignup(info, location.origin, world, Date.now(), context) : null)
+        ?? beginIamLogin(info, location.origin, world, Date.now(), kind, "redirect", context);
       location.assign(url);
     } catch (e) {
-      setError(toApiError(e));
-      setBusy(null);
+      if (current === operation) { setError(toApiError(e)); setBusy(null); }
     }
   }
 
   async function withKind(kind: IdentityKind) {
+    const current = ++operation;
+    popupController?.abort();
+    s.invalidateLogin();
+    popupController = new AbortController();
     setBusy(kind); setError(null);
     try {
       const client = s.client(), revision = s.contextRevision();
-      const token = await signInPopup(() => client.iam(), kind, worldKey);
-      if (revision !== s.contextRevision()) throw new Error("The selected account or environment changed. Start sign-in again.");
+      const token = await signInPopup(() => client.iam(), kind, worldKey, popupController.signal);
+      if (current !== operation || revision !== s.contextRevision()) throw new Error("The selected account or environment changed. Start sign-in again.");
       await client.login(token, kind);
       s.clearSignedOutReason(); props.onSignedIn?.();
       const next = props.next ?? "/devices";
       if (next.startsWith("/") && !next.startsWith("//")) navigate(next, { replace: true });
-    } catch (error) { setError(toApiError(error)); }
-    finally { setBusy(null); }
+    } catch (error) { if (current === operation) setError(toApiError(error)); }
+    finally { if (current === operation) setBusy(null); }
   }
 
   async function withSlt(event: Event) {
@@ -79,6 +92,9 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
       );
       return;
     }
+    ++operation;
+    popupController?.abort();
+    s.invalidateLogin();
     setBusy("slt");
     setError(null);
     try {
@@ -126,12 +142,19 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
         <div class="input-row"><Button variant="primary" onClick={() => withKind("carbon")} busy={busy() === "carbon"} disabled={busy() !== null} data-testid="sign-in-carbon">Continue as Carbon <ArrowRight size={16} aria-hidden="true" /></Button><Button onClick={() => withKind("silicon")} busy={busy() === "silicon"} disabled={busy() !== null} data-testid="sign-in-silicon">Continue as Silicon <ArrowRight size={16} aria-hidden="true" /></Button></div>
         <p class="fine">Choose your account and organization in the IAM popup. Feature access is approved separately when you need it. Extend never sees your password.</p>
 
+        <p class="fine" data-testid="full-page-sign-in">
+          Prefer this window?{" "}
+          <button class="link-button" onClick={() => withIam("carbon")} disabled={busy() === "redirect" || busy() === "signup" || busy() === "slt"} data-testid="sign-in-carbon-page">Carbon full-page sign-in</button>
+          {" · "}
+          <button class="link-button" onClick={() => withIam("silicon")} disabled={busy() === "redirect" || busy() === "signup" || busy() === "slt"} data-testid="sign-in-silicon-page">Silicon full-page sign-in</button>
+        </p>
+
         {/* Signing up is IAM's too. Test identities come from the test environment, not from sign-up. */}
         <Show when={!testing()}>
           <div class="signup" data-testid="signup">
             <p class="signup-line">
               New to Silicon IAM?{" "}
-              <button class="link-button" onClick={() => withIam(true)} disabled={busy() === "signup"} data-testid="sign-up-iam">
+              <button class="link-button" onClick={() => withIam("carbon", true)} disabled={busy() !== null} data-testid="sign-up-iam">
                 Create an account
               </button>
             </p>

@@ -106,7 +106,9 @@ test.describe("signing in", () => {
     // The mock's consent screen lives at /__mock/iam/login, which is not IAM's layout.
     await expect(page.getByTestId("signup-note")).toContainText("gives Extend no sign-up page, so this opens its sign-in page");
     await page.getByTestId("sign-up-iam").click();
-    await expect(page).toHaveURL(/\/__mock\/iam\/login\?app_id=extend&redirect_uri=/);
+    await expect(page).toHaveURL(/\/__mock\/iam\/login\?/);
+    expect(new URL(page.url()).searchParams.get("identity_kind")).toBe("carbon");
+    expect(new URL(page.url()).searchParams.has("display")).toBe(false);
     await page.getByRole("button", { name: /Continue as Saket/ }).click();
     await expect(page.getByTestId("devices-page")).toBeVisible();
   });

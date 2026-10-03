@@ -3,7 +3,7 @@
  * (silicon-iam/docs/client/login.html):
  *
  * 1. Send the browser to `<iam_login_url>?app_id=<app_id>&redirect_uri=<callback>`.
- *    IAM shows Extend's permissions and asks the Carbon to pick teams. The website never sends
+ *    IAM shows Extend's permissions and asks the account to pick one organization. The website never sends
  *    a team (`org_id`): IAM refuses it.
  * 2. IAM returns to `<callback>?slt=…` (it keeps the callback's own query, so our `state` survives).
  *    The SLT lives two minutes and works once.
@@ -14,8 +14,8 @@
  * random `state` kept in sessionStorage.
  *
  * Signing up goes through IAM too. IAM's auth site serves `/login` and `/signup` side by side, and
- * its sign-up page carries `app_id` and `redirect_uri` through: it verifies the new Carbon's email and
- * phone, creates the account, signs them in, then shows the same consent screen and returns here.
+ * its sign-up page carries `app_id` and `redirect_uri` through: it verifies the new Carbon's email,
+ * creates the account, signs them in, then shows the same consent screen and returns here.
  */
 import { IAM_LOGIN_URL_OVERRIDE } from "../config";
 import { ApiError } from "./api";
@@ -24,12 +24,14 @@ import { readJson, remove, writeJson } from "./storage";
 import { KEYS } from "./session";
 
 const ATTEMPT_TTL_MS = 10 * 60_000;
-/** Creating an account verifies an email and a phone first, so a sign-up attempt gets longer. */
+/** Creating an account verifies an email first, so a sign-up attempt gets longer. */
 const SIGNUP_TTL_MS = 30 * 60_000;
 
 export type IdentityKind = "carbon" | "silicon";
 interface LoginAttempt {
   kind?: IdentityKind;
+  display?: "popup" | "redirect";
+  context?: string;
   state: string;
   /** "production" or the test environment id the attempt started in. */
   world: string;
@@ -80,8 +82,8 @@ export function randomState(): string {
 }
 
 /** Builds the consent URL and remembers the attempt. Returns the URL to navigate to. */
-export function beginIamLogin(info: IamInfo, origin: string, world: string, now = Date.now(), kind?: IdentityKind): string {
-  return begin(iamLoginUrl(info), info.app_id, origin, { state: randomState(), world, created: now, kind });
+export function beginIamLogin(info: IamInfo, origin: string, world: string, now = Date.now(), kind?: IdentityKind, display: "popup" | "redirect" = "redirect", context?: string): string {
+  return begin(iamLoginUrl(info), info.app_id, origin, { state: randomState(), world, created: now, kind, display, context });
 }
 
 /**
@@ -89,9 +91,9 @@ export function beginIamLogin(info: IamInfo, origin: string, world: string, now 
  * same app_id and callback, so after creating the account IAM asks them to approve Extend and sends
  * them back signed in. Returns null when there is no sign-up page to send them to (see `iamSignupUrl`).
  */
-export function beginIamSignup(info: IamInfo, origin: string, world: string, now = Date.now()): string | null {
+export function beginIamSignup(info: IamInfo, origin: string, world: string, now = Date.now(), context?: string): string | null {
   const signup = iamSignupUrl(info);
-  return signup ? begin(signup, info.app_id, origin, { state: randomState(), world, created: now, signup: true }) : null;
+  return signup ? begin(signup, info.app_id, origin, { state: randomState(), world, created: now, signup: true, kind: "carbon", display: "redirect", context }) : null;
 }
 
 function begin(page: string, appId: string, origin: string, attempt: LoginAttempt): string {
@@ -99,7 +101,12 @@ function begin(page: string, appId: string, origin: string, attempt: LoginAttemp
   const callback = new URL("/auth/callback", origin);
   callback.searchParams.set("state", attempt.state);
   const url = new URL(page);
-  if (attempt.kind) { url.searchParams.set("identity_kind", attempt.kind); url.searchParams.set("display", "popup"); }
+  if (attempt.kind) url.searchParams.set("identity_kind", attempt.kind);
+  url.searchParams.delete("display");
+  if (attempt.display === "popup") {
+    url.searchParams.set("display", "popup");
+    callback.searchParams.set("display", "popup");
+  }
   url.searchParams.set("app_id", appId);
   url.searchParams.set("redirect_uri", callback.toString());
   return url.toString();
@@ -142,24 +149,39 @@ export function finishIamLogin(params: URLSearchParams, world: string, now = Dat
   return slt;
 }
 
+/** Full-page return consumes only its own typed, context-bound redirect attempt. */
+export function finishIamRedirect(params: URLSearchParams, world: string, context: string, now = Date.now()): { slt: string; kind: IdentityKind } {
+  const attempt = readJson<LoginAttempt>("session", KEYS.loginState);
+  if (!attempt || attempt.display !== "redirect" || (attempt.kind !== "carbon" && attempt.kind !== "silicon") || attempt.context !== context) {
+    remove("session", KEYS.loginState);
+    throw new ApiError(409, { code: "invalid_login_state", message: "The selected account or environment changed, or this return does not belong to a full-page sign-in. Start sign-in again." });
+  }
+  return { slt: finishIamLogin(params, world, now, attempt.kind), kind: attempt.kind };
+}
+
 const POPUP_MESSAGE = "silicon-extend:sign-in";
 export function completeIamPopup(params: URLSearchParams): boolean {
-  if (!window.opener || !params.get("state")) return false;
+  if (!window.opener || params.get("display") !== "popup" || !params.get("state")) return false;
   window.opener.postMessage({ type: POPUP_MESSAGE, state: params.get("state"), slt: params.get("slt"), error: params.get("error"), error_description: params.get("error_description") }, location.origin);
   window.close();
   return true;
 }
-export async function signInPopup(info: () => Promise<IamInfo>, kind: IdentityKind, world: () => string): Promise<string> {
+export async function signInPopup(info: () => Promise<IamInfo>, kind: IdentityKind, world: () => string, signal?: AbortSignal): Promise<string> {
   const popup = window.open("about:blank", `extend-login-${randomState()}`, "popup,width=520,height=720");
-  if (!popup) throw new Error("Allow pop-ups for Extend, then try signing in again.");
+  if (!popup) throw new Error("The popup was blocked. Use one of the full-page sign-in options below.");
   const startedWorld = world();
   let url: URL;
-  try { url = new URL(beginIamLogin(await info(), location.origin, startedWorld, Date.now(), kind)); }
+  try {
+    const metadata = await info();
+    if (signal?.aborted) throw new Error("Sign-in replaced by another attempt.");
+    url = new URL(beginIamLogin(metadata, location.origin, startedWorld, Date.now(), kind, "popup"));
+  }
   catch (error) { popup.close(); throw error; }
   const state = new URL(url.searchParams.get("redirect_uri")!).searchParams.get("state")!;
   return new Promise((resolve, reject) => {
-    const cleanup = () => { window.removeEventListener("message", receive); clearTimeout(timeout); clearInterval(closed); popup.close(); };
-    const fail = (error: unknown) => { cleanup(); remove("session", KEYS.loginState); reject(error); };
+    const cleanup = () => { signal?.removeEventListener("abort", aborted); window.removeEventListener("message", receive); clearTimeout(timeout); clearInterval(closed); popup.close(); };
+    const fail = (error: unknown) => { cleanup(); if (readJson<LoginAttempt>("session", KEYS.loginState)?.state === state) remove("session", KEYS.loginState); reject(error); };
+    const aborted = () => fail(new Error("Sign-in replaced by another attempt."));
     const receive = (event: MessageEvent) => {
       if (event.origin !== location.origin || event.source !== popup || event.data?.type !== POPUP_MESSAGE || event.data.state !== state) return;
       const params = new URLSearchParams({ state });
@@ -169,6 +191,7 @@ export async function signInPopup(info: () => Promise<IamInfo>, kind: IdentityKi
     };
     const timeout = setTimeout(() => fail(new Error("Sign-in timed out. Please try again.")), ATTEMPT_TTL_MS);
     const closed = setInterval(() => { if (popup.closed) fail(new Error("Sign-in cancelled.")); }, 500);
+    signal?.addEventListener("abort", aborted, { once: true });
     window.addEventListener("message", receive);
     popup.location.href = url.href; popup.focus();
   });

@@ -75,7 +75,11 @@ export function createSession() {
   const [world, setWorld] = createSignal<World>(loadWorld());
   const [authTick, setAuthTick] = createSignal(0);
   const [contextRevision, setContextRevision] = createSignal(0);
-  const changedContext = () => setContextRevision(n => n + 1);
+  const changedContext = (persist = true) => {
+    // Survives a full-page IAM round trip, including account A → B → A in another tab.
+    if (persist) write("local", "extend.login.context-epoch", crypto.randomUUID());
+    setContextRevision(n => n + 1);
+  };
   const [telemetryOff, setTelemetryOff] = createSignal(read("local", KEYS.telemetry) === "off");
   const [signedOutReason, setSignedOutReason] = createSignal<ApiError | null>(null);
   const bump = () => setAuthTick((n) => n + 1);
@@ -104,7 +108,7 @@ export function createSession() {
   });
   if (typeof window !== "undefined")
     window.addEventListener("storage", (event) => {
-      if (!event.key || event.key.startsWith(KEYS.productionAuth)) { changedContext(); bump(); }
+      if (!event.key || event.key.startsWith(KEYS.productionAuth)) { changedContext(false); bump(); }
     });
   const selected = createMemo(() => {
     authTick();
@@ -179,6 +183,8 @@ export function createSession() {
     contexts,
     contextKey: contextKeyValue,
     contextRevision,
+    invalidateLogin: () => changedContext(),
+    loginContext: () => `${contextKeyValue()}:${read("local", "extend.login.context-epoch") ?? "initial"}`,
     selectContext(id: string) {
       if (!contexts().some((p) => contextId(p) === id)) return;
       changedContext();
@@ -223,6 +229,7 @@ export function createSession() {
     enterTesting(secret: string, environment: TestingEnvironment) {
       writeJson("session", KEYS.testing, { secret, environment });
       setSignedOutReason(null);
+      changedContext();
       setWorld({ kind: "testing", secret, environment });
     },
 
@@ -234,6 +241,7 @@ export function createSession() {
       // including the read that called this, and loop.
       if (JSON.stringify(w.environment) === JSON.stringify(environment)) return;
       writeJson("session", KEYS.testing, { secret: w.secret, environment });
+      changedContext();
       setWorld({ ...w, environment });
     },
 
@@ -257,6 +265,7 @@ export function createSession() {
       remove("session", KEYS.testing);
       remove("session", KEYS.team(w));
       setSignedOutReason(null);
+      changedContext();
       setWorld({ kind: "production" });
     },
 
