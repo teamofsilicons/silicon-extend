@@ -652,7 +652,12 @@ async fn test_device_limit_holds_under_concurrent_adds() {
         let e = r.api().expect("an API error");
         assert_eq!(e.code, ErrorCode::TestDeviceLimit, "{e:?}");
         assert_eq!(e.message, TEST_DEVICE_LIMIT_MESSAGE);
-        assert!(e.hint.as_deref().unwrap_or_default().contains("Revoke an unused physical pairing"));
+        assert!(
+            e.hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Revoke an unused physical pairing")
+        );
     }
     assert_eq!(a.devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
     drop(host);
