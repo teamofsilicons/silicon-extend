@@ -346,3 +346,12 @@ describe("removed devices", () => {
     expect(calls.every((call) => new URL(call.url).searchParams.get("include_removed") === "true")).toBe(true);
   });
 });
+
+describe("typed popup session verification", () => {
+  it("never saves a mismatched account kind", async () => {
+    const store = memoryStore();
+    const { client: c } = client((call) => call.url.endsWith("/auth/login") ? json(200, { type: "login", data: session("oat_fresh", "ort_fresh") }) : json(200, { type: "me", data: { authenticated: true, member: { type: "carbon", id: "c:saket" } } }), { tokens: store });
+    await expect(c.login("oac_fresh", "silicon")).rejects.toMatchObject({ code: "identity_kind_mismatch" });
+    expect(store.saves).toBe(0);
+  });
+});

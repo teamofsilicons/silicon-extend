@@ -102,3 +102,12 @@ describe("IAM sign-up", () => {
     expect(() => finishIamLogin(new URLSearchParams({ state: login, slt: "oac_abc" }), "production", 25 * 60_000)).toThrow(/older than 10 minutes/);
   });
 });
+
+it("locks each popup account kind into the saved attempt and IAM URL", () => {
+  for (const kind of ["carbon", "silicon"] as const) {
+    const url = new URL(beginIamLogin(info, "https://extend.test", "production", 100, kind));
+    expect(url.searchParams.get("identity_kind")).toBe(kind); expect(url.searchParams.get("display")).toBe("popup");
+    const params = new URL(url.searchParams.get("redirect_uri")!).searchParams; params.set("slt", "oac_fresh");
+    expect(() => finishIamLogin(params, "production", 101, kind === "carbon" ? "silicon" : "carbon")).toThrow();
+  }
+});

@@ -2,7 +2,7 @@ import { createSignal, onMount, Show } from "solid-js";
 import { ArrowRight, FlaskConical, KeyRound } from "lucide-solid";
 import { session } from "../lib/session";
 import { ApiError, toApiError } from "../lib/api";
-import { beginIamLogin, beginIamSignup, iamSignupUrl } from "../lib/auth";
+import { beginIamLogin, beginIamSignup, iamSignupUrl, signInPopup, type IdentityKind } from "../lib/auth";
 import type { IamInfo } from "../lib/types";
 import { Button, ErrorNote } from "../components/ui";
 import { ExtendMark } from "../components/ExtendMark";
@@ -14,7 +14,7 @@ import { write } from "../lib/storage";
 export default function SignIn(props: { reason?: ApiError | null; next?: string; onSignedIn?: () => void }) {
   const s = session();
   const [slt, setSlt] = createSignal("");
-  const [busy, setBusy] = createSignal<"iam" | "signup" | "slt" | null>(null);
+  const [busy, setBusy] = createSignal<"carbon" | "silicon" | "signup" | "slt" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [showTesting, setShowTesting] = createSignal(false);
   const testing = () => s.world().kind === "testing";
@@ -38,7 +38,7 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
 
   /** Sign in, or (for a Carbon new to Silicon IAM) sign up first: both go through IAM and come back here. */
   async function withIam(signup = false) {
-    setBusy(signup ? "signup" : "iam");
+    setBusy(signup ? "signup" : "carbon");
     setError(null);
     try {
       const info = await s.client().iam();
@@ -50,6 +50,20 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
       setError(toApiError(e));
       setBusy(null);
     }
+  }
+
+  async function withKind(kind: IdentityKind) {
+    setBusy(kind); setError(null);
+    try {
+      const client = s.client();
+      const token = await signInPopup(() => client.iam(), kind, worldKey);
+      if (client !== s.client()) throw new Error("The environment changed. Start sign-in again.");
+      await client.login(token, kind);
+      s.clearSignedOutReason(); props.onSignedIn?.();
+      const next = props.next ?? "/devices";
+      if (next.startsWith("/") && !next.startsWith("//")) navigate(next, { replace: true });
+    } catch (error) { setError(toApiError(error)); }
+    finally { setBusy(null); }
   }
 
   async function withSlt(event: Event) {
@@ -109,10 +123,8 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
           </p>
         </Show>
 
-        <Button variant="primary" class="wide" onClick={() => withIam()} busy={busy() === "iam"} data-testid="sign-in-iam">
-          Continue with Silicon IAM <ArrowRight size={16} aria-hidden="true" />
-        </Button>
-        <p class="fine">Choose your account and organization in IAM, then return here. Feature access is approved separately when you need it. Extend never sees your password.</p>
+        <div class="input-row"><Button variant="primary" onClick={() => withKind("carbon")} busy={busy() === "carbon"} disabled={busy() !== null} data-testid="sign-in-carbon">Continue as Carbon <ArrowRight size={16} aria-hidden="true" /></Button><Button onClick={() => withKind("silicon")} busy={busy() === "silicon"} disabled={busy() !== null} data-testid="sign-in-silicon">Continue as Silicon <ArrowRight size={16} aria-hidden="true" /></Button></div>
+        <p class="fine">Choose your account and organization in the IAM popup. Feature access is approved separately when you need it. Extend never sees your password.</p>
 
         {/* Signing up is IAM's too. Test identities come from the test environment, not from sign-up. */}
         <Show when={!testing()}>
@@ -125,7 +137,7 @@ export default function SignIn(props: { reason?: ApiError | null; next?: string;
             </p>
             <p class="fine" data-testid="signup-note">
               {signupPageKnown()
-                ? "Silicon IAM checks your email and phone, creates your Carbon account and signs you in with a code, then asks you to approve Extend and sends you back here."
+                ? "Silicon IAM verifies your email, creates your Carbon account and signs you in with a code, then asks you to approve Extend and sends you back here."
                 : "This Silicon IAM gives Extend no sign-up page, so this opens its sign-in page. Create your account there if it offers to; if it doesn't, ask someone in your Team to invite you."}
             </p>
           </div>

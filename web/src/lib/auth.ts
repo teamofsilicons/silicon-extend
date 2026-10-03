@@ -27,7 +27,9 @@ const ATTEMPT_TTL_MS = 10 * 60_000;
 /** Creating an account verifies an email and a phone first, so a sign-up attempt gets longer. */
 const SIGNUP_TTL_MS = 30 * 60_000;
 
+export type IdentityKind = "carbon" | "silicon";
 interface LoginAttempt {
+  kind?: IdentityKind;
   state: string;
   /** "production" or the test environment id the attempt started in. */
   world: string;
@@ -78,8 +80,8 @@ export function randomState(): string {
 }
 
 /** Builds the consent URL and remembers the attempt. Returns the URL to navigate to. */
-export function beginIamLogin(info: IamInfo, origin: string, world: string, now = Date.now()): string {
-  return begin(iamLoginUrl(info), info.app_id, origin, { state: randomState(), world, created: now });
+export function beginIamLogin(info: IamInfo, origin: string, world: string, now = Date.now(), kind?: IdentityKind): string {
+  return begin(iamLoginUrl(info), info.app_id, origin, { state: randomState(), world, created: now, kind });
 }
 
 /**
@@ -97,13 +99,14 @@ function begin(page: string, appId: string, origin: string, attempt: LoginAttemp
   const callback = new URL("/auth/callback", origin);
   callback.searchParams.set("state", attempt.state);
   const url = new URL(page);
+  if (attempt.kind) { url.searchParams.set("identity_kind", attempt.kind); url.searchParams.set("display", "popup"); }
   url.searchParams.set("app_id", appId);
   url.searchParams.set("redirect_uri", callback.toString());
   return url.toString();
 }
 
 /** Checks the callback belongs to this tab's attempt, and returns the SLT to exchange. */
-export function finishIamLogin(params: URLSearchParams, world: string, now = Date.now()): string {
+export function finishIamLogin(params: URLSearchParams, world: string, now = Date.now(), kind?: IdentityKind): string {
   const attempt = readJson<LoginAttempt>("session", KEYS.loginState);
   remove("session", KEYS.loginState);
   const error = params.get("error");
@@ -122,7 +125,7 @@ export function finishIamLogin(params: URLSearchParams, world: string, now = Dat
       hint: "Start sign-in again from this page.",
     });
   const ttl = attempt?.signup ? SIGNUP_TTL_MS : ATTEMPT_TTL_MS;
-  if (!attempt || !state || attempt.state !== state || now - attempt.created > ttl)
+  if (!attempt || !state || attempt.state !== state || attempt.kind !== kind || now - attempt.created > ttl)
     throw new ApiError(0, {
       code: "invalid_login_state",
       message: `This sign-in result doesn't belong to a sign-in started in this tab, or it is older than ${ttl / 60_000} minutes.`,
@@ -137,4 +140,36 @@ export function finishIamLogin(params: URLSearchParams, world: string, now = Dat
       hint: "Start sign-in again from this tab.",
     });
   return slt;
+}
+
+const POPUP_MESSAGE = "silicon-extend:sign-in";
+export function completeIamPopup(params: URLSearchParams): boolean {
+  if (!window.opener || !params.get("state")) return false;
+  window.opener.postMessage({ type: POPUP_MESSAGE, state: params.get("state"), slt: params.get("slt"), error: params.get("error"), error_description: params.get("error_description") }, location.origin);
+  window.close();
+  return true;
+}
+export async function signInPopup(info: () => Promise<IamInfo>, kind: IdentityKind, world: () => string): Promise<string> {
+  const popup = window.open("about:blank", `extend-login-${randomState()}`, "popup,width=520,height=720");
+  if (!popup) throw new Error("Allow pop-ups for Extend, then try signing in again.");
+  const startedWorld = world();
+  let url: URL;
+  try { url = new URL(beginIamLogin(await info(), location.origin, startedWorld, Date.now(), kind)); }
+  catch (error) { popup.close(); throw error; }
+  const state = new URL(url.searchParams.get("redirect_uri")!).searchParams.get("state")!;
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { window.removeEventListener("message", receive); clearTimeout(timeout); clearInterval(closed); popup.close(); };
+    const fail = (error: unknown) => { cleanup(); remove("session", KEYS.loginState); reject(error); };
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== location.origin || event.source !== popup || event.data?.type !== POPUP_MESSAGE || event.data.state !== state) return;
+      const params = new URLSearchParams({ state });
+      for (const key of ["slt", "error", "error_description"]) if (typeof event.data[key] === "string") params.set(key, event.data[key]);
+      try { const token = finishIamLogin(params, world(), Date.now(), kind); cleanup(); resolve(token); }
+      catch (error) { fail(error); }
+    };
+    const timeout = setTimeout(() => fail(new Error("Sign-in timed out. Please try again.")), ATTEMPT_TTL_MS);
+    const closed = setInterval(() => { if (popup.closed) fail(new Error("Sign-in cancelled.")); }, 500);
+    window.addEventListener("message", receive);
+    popup.location.href = url.href; popup.focus();
+  });
 }

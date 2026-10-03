@@ -1,7 +1,7 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { session } from "../lib/session";
 import { toApiError, type ApiError } from "../lib/api";
-import { finishIamLogin } from "../lib/auth";
+import { finishIamLogin, completeIamPopup } from "../lib/auth";
 import { navigate } from "../lib/router";
 import { read, remove } from "../lib/storage";
 import { ErrorNote, Spinner } from "../components/ui";
@@ -16,6 +16,7 @@ export default function Callback() {
     const params = new URLSearchParams(location.search);
     // The SLT must not linger in the address bar or history.
     history.replaceState(null, "", "/auth/callback");
+    if (completeIamPopup(params)) return;
     const w = s.world();
     try {
       const slt = finishIamLogin(params, w.kind === "production" ? "production" : w.environment.environment_id);

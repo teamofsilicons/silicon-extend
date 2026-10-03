@@ -423,7 +423,7 @@ export class ExtendClient {
   // ───────────── Auth ─────────────
 
   /** Exchanges an SLT (or, in a test environment, a test member id) and stores the pair. */
-  async login(slt: string): Promise<TokenPair> {
+  async login(slt: string, kind?: "carbon" | "silicon"): Promise<TokenPair> {
     const { data } = await this.request<AuthSession>({
       method: "POST",
       path: "/api/v1/auth/login",
@@ -434,6 +434,10 @@ export class ExtendClient {
       body: { type: "login", data: { slt } },
     });
     const pair = pairFromSession(data, this.now());
+    if (kind) {
+      const { data: verified } = await this.request<Me>({ method: "GET", path: "/api/v1/auth/me", auth: false, team: "none", expect: "me", headers: { Authorization: `Bearer ${pair.access_token}` } });
+      if (!verified.authenticated || verified.member.type !== kind || pair.member.type !== kind || verified.member.id !== pair.member.id) throw new ApiError(401, { code: "identity_kind_mismatch", message: `This sign-in did not return a ${kind} account. Start again with the matching account button.` });
+    }
     this.ctx.tokens.save(pair);
     return pair;
   }
