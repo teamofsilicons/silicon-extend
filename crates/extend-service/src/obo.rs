@@ -91,11 +91,21 @@ fn crypto_error() -> AppError {
 #[serde(deny_unknown_fields)]
 pub struct PermissionInput {
     pub endpoints: Vec<models::OboAuthorizationEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback: Option<PermissionCallback>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionCallback {
+    pub redirect_uri: String,
+    pub state: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompleteInput {
     pub code: String,
+    #[serde(default)]
+    pub state: Option<String>,
 }
 
 pub fn missing(audience: &str, endpoint: &str) -> AppError {
@@ -209,8 +219,8 @@ impl GrantStore {
         );
         let id = Uuid::new_v4();
         let request = models::OboAuthorizationRequest {
-            redirect_uri: None,
-            state: None,
+            redirect_uri: input.callback.as_ref().map(|c| c.redirect_uri.clone()),
+            state: input.callback.as_ref().map(|c| c.state.clone()),
             subject_token: p.token.clone(),
             org_id: org.to_owned(),
             endpoints: input.endpoints,
@@ -263,7 +273,10 @@ impl GrantStore {
         let url = answer
             .authorization_url
             .ok_or_else(|| AppError::new(ErrorCode::ServiceUnavailable, "IAM did not return a consent page."))?;
-        let consent = json!({"id":id,"consent_url":url,"expires_at":answer.expires_at.format(&time::format_description::well_known::Rfc3339).ok()});
+        let mut consent = json!({"id":id,"consent_url":url,"expires_at":answer.expires_at.format(&time::format_description::well_known::Rfc3339).ok()});
+        if let Some(state) = &request.state {
+            consent["state"] = json!(state);
+        }
         sqlx::query(sql!(
             "UPDATE {} SET authorization_id=$2,consent=$3 WHERE id=$1",
             w.t("obo_requests")
@@ -281,9 +294,10 @@ impl GrantStore {
         client: &Client,
         p: &Principal,
         id: Uuid,
-        code: &str,
+        input: &CompleteInput,
         sel: Option<&TestingSelection>,
     ) -> AppResult<Value> {
+        let code = input.code.trim();
         if code.is_empty() || code.len() > 2048 {
             return Err(AppError::invalid("Paste the authorization code shown by IAM."));
         }
@@ -305,6 +319,13 @@ impl GrantStore {
                 "This approval request is not available for the selected account and organization.",
             )
         })?;
+        let consent: Option<Value> = row.get("consent");
+        let expected_state = consent.as_ref().and_then(|v| v["state"].as_str());
+        if expected_state != input.state.as_deref() {
+            return Err(AppError::invalid(
+                "This approval callback does not match its original request.",
+            ));
+        }
         let hash = format!("{:x}", Sha256::digest(code.as_bytes()));
         if row.get::<Option<String>, _>("code_hash").is_some_and(|h| h != hash) {
             return Err(AppError::invalid(

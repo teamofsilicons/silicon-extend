@@ -1,3 +1,5 @@
+import { approvalPopup, awaitApproval } from "../lib/approval-popup";
+import { randomState } from "../lib/auth";
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { toApiError, type ApiError, type FeaturePermission, type FeaturePermissionRequest } from "../lib/api";
 import { session } from "../lib/session";
@@ -33,6 +35,8 @@ export function PermissionSettings() {
   const [message, setMessage] = createSignal("");
   let generation = 0;
   let startKey: string | null = null;
+  let popupState: string | null = null;
+  let popupAbort: AbortController | null = null;
   let completion: { code: string; key: string } | null = null;
 
   async function load(current: number) {
@@ -46,23 +50,35 @@ export function PermissionSettings() {
   createEffect(on([() => s.member()?.type, () => s.member()?.id, s.team, s.world], () => {
     const current = ++generation;
     setPending(null); setCode(""); setRows(null); setError(null); setMessage(""); setBusy(false);
-    startKey = null; completion = null;
+    startKey = null; popupState = null; popupAbort?.abort(); popupAbort = null; completion = null;
     if (s.member() && s.team()) void load(current);
   }));
-  onCleanup(() => { generation++; completion = null; });
+  onCleanup(() => { generation++; popupAbort?.abort(); completion = null; });
 
   async function start() {
     const current = generation;
     const feature = FEATURES.find((f) => f.id === selected())!;
-    startKey ??= crypto.randomUUID();
+    let popup: Window | undefined;
+    startKey ??= crypto.randomUUID(); popupState ??= randomState();
     setBusy(true); setError(null); setMessage("");
     try {
-      const request = await s.client().requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey);
-      if (current === generation) { setPending(request); setCode(""); completion = null; }
+      popup = approvalPopup(); popupAbort = new AbortController();
+      const client = s.client();
+      const request = await client.requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey, { redirect_uri: new URL("/auth/obo/callback", location.origin).href, state: popupState });
+      if (current !== generation) { popup.close(); return; }
+      if (request.state !== popupState) throw new Error("This approval did not match its original request. Start again.");
+      setPending(request); setCode(""); completion = null;
+      await awaitApproval(popup, request.consent_url, request.state, async value => {
+        if (current !== generation || client !== s.client()) throw new Error("Account or organization changed. Start a new approval.");
+        const result = await client.completePermissions(request.id, value, crypto.randomUUID(), request.state);
+        if (current !== generation) return;
+        setRows(result); setPending(null); setCode(""); startKey = null; popupState = null; completion = null;
+        setMessage("Access approved. Return to the feature and retry your action. You can revoke access in IAM at any time.");
+      }, popupAbort.signal);
     } catch (e) {
-      if (current === generation) setError(toApiError(e));
+      popup?.close(); if (current === generation) setError(toApiError(e));
     } finally {
-      if (current === generation) setBusy(false);
+      if (current === generation) { setBusy(false); popupAbort = null; }
     }
   }
 
@@ -75,7 +91,7 @@ export function PermissionSettings() {
     if (completion?.code !== value) completion = { code: value, key: crypto.randomUUID() };
     setBusy(true); setError(null);
     try {
-      const result = await s.client().completePermissions(request.id, value, completion.key);
+      const result = await s.client().completePermissions(request.id, value, completion.key, request.state);
       if (current !== generation) return;
       setRows(result); setPending(null); setCode(""); startKey = null; completion = null;
       setMessage("Access approved. Return to the feature and retry your action. You can revoke this access in IAM at any time.");

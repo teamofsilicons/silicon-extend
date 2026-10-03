@@ -136,10 +136,10 @@ impl Iam for PermissionIam {
         &self,
         p: &Principal,
         id: Uuid,
-        code: &str,
+        input: &extend_service::obo::CompleteInput,
         sel: Option<&TestingSelection>,
     ) -> AppResult<Value> {
-        self.store.complete(&self.client, p, id, code, sel).await
+        self.store.complete(&self.client, p, id, input, sel).await
     }
     async fn permissions(&self, p: &Principal, sel: Option<&TestingSelection>) -> AppResult<Value> {
         self.store.list(p, sel).await

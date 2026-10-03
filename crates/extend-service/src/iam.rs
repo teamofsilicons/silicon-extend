@@ -204,7 +204,7 @@ pub trait Iam: Send + Sync {
         &self,
         _p: &Principal,
         _id: Uuid,
-        _code: &str,
+        _input: &crate::obo::CompleteInput,
         _sel: Option<&TestingSelection>,
     ) -> AppResult<serde_json::Value> {
         Err(AppError::invalid("Feature permissions require SDK IAM."))
@@ -779,10 +779,12 @@ impl Iam for SdkIam {
         &self,
         p: &Principal,
         id: Uuid,
-        code: &str,
+        input: &crate::obo::CompleteInput,
         sel: Option<&TestingSelection>,
     ) -> AppResult<serde_json::Value> {
-        self.delegations()?.complete(&self.client(sel)?, p, id, code, sel).await
+        self.delegations()?
+            .complete(&self.client(sel)?, p, id, input, sel)
+            .await
     }
     async fn permissions(&self, p: &Principal, sel: Option<&TestingSelection>) -> AppResult<serde_json::Value> {
         self.delegations()?.list(p, sel).await

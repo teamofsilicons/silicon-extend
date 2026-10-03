@@ -100,6 +100,7 @@ export interface FeaturePermission extends PermissionEndpoint {
 }
 
 export interface FeaturePermissionRequest {
+  state?: string;
   id: string;
   consent_url: string;
   expires_at: string;
@@ -736,16 +737,16 @@ export class ExtendClient {
     return (await this.request<{ items: FeaturePermission[] }>({ method: "GET", path: "/api/v1/permissions", expect: "permissions" })).data.items;
   }
 
-  async requestPermissions(endpoints: PermissionEndpoint[], idempotencyKey: string): Promise<FeaturePermissionRequest> {
+  async requestPermissions(endpoints: PermissionEndpoint[], idempotencyKey: string, callback?: { redirect_uri: string; state: string }): Promise<FeaturePermissionRequest> {
     return (await this.request<FeaturePermissionRequest>({
-      method: "POST", path: "/api/v1/permissions", body: { type: "permission", data: { endpoints } },
+      method: "POST", path: "/api/v1/permissions", body: { type: "permission", data: { endpoints, ...(callback ? { callback } : {}) } },
       idempotent: true, idempotencyKey, expect: "permission",
     })).data;
   }
 
-  async completePermissions(id: string, code: string, idempotencyKey: string): Promise<FeaturePermission[]> {
+  async completePermissions(id: string, code: string, idempotencyKey: string, state?: string): Promise<FeaturePermission[]> {
     return (await this.request<{ items: FeaturePermission[] }>({
-      method: "POST", path: `/api/v1/permissions/${encodeURIComponent(id)}/complete`, body: { type: "permission", data: { code } },
+      method: "POST", path: `/api/v1/permissions/${encodeURIComponent(id)}/complete`, body: { type: "permission", data: { code, ...(state ? { state } : {}) } },
       idempotent: true, idempotencyKey, expect: "permissions",
     })).data.items;
   }

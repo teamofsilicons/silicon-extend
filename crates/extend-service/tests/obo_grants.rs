@@ -15,7 +15,7 @@ use extend_protocol::{
 use extend_service::{
     db::{self, World},
     iam::{Principal, TestingSelection},
-    obo::{GrantKey, GrantStore, PermissionInput},
+    obo::{CompleteInput, GrantKey, GrantStore, PermissionCallback, PermissionInput},
 };
 use futures::FutureExt as _;
 use serde_json::{Value, json};
@@ -48,6 +48,10 @@ async fn authorize(State(s): State<Arc<Mutex<Fixture>>>, Json(body): Json<Value>
     let mut s = s.lock().unwrap();
     s.starts += 1;
     assert_eq!(body["subject_token"], "oat_initial");
+    if body["redirect_uri"].is_string() {
+        assert_eq!(body["redirect_uri"], "https://extend.example/auth/obo/callback");
+        assert_eq!(body["state"], "a".repeat(43));
+    }
     Json(
         json!({"id":"7b77df91-df6b-4e8f-8028-4c0d6af170bd","app_id":"extend","app_name":"Extend","actor":{"type":"silicon","public_id":"si:chef"},"org_id":"acme","status":"pending","version":1,"expires_at":"2099-01-01T00:00:00Z","endpoints":[],"authorization_url":"https://auth.iam.example/obo/consent"}),
     )
@@ -101,6 +105,7 @@ fn principal(id: &str) -> Principal {
 }
 fn input() -> PermissionInput {
     PermissionInput {
+        callback: None,
         endpoints: vec![models::OboAuthorizationEndpoint {
             audience: "briefcase".into(),
             endpoint_id: "briefcase.files.read".into(),
@@ -151,19 +156,52 @@ async fn durable_grants_keep_secrets_server_side_and_retry_rotation_without_cros
             ErrorCode::ConfirmationRequired
         );
         let retry = Uuid::new_v4();
-        let pending = store.start(&client, &p, input(), retry, None).await.unwrap();
+        let callback_state = "a".repeat(43);
+        let mut popup = input();
+        popup.callback = Some(PermissionCallback {
+            redirect_uri: "https://extend.example/auth/obo/callback".into(),
+            state: callback_state.clone(),
+        });
+        let pending = store.start(&client, &p, popup.clone(), retry, None).await.unwrap();
+        assert_eq!(pending["state"], callback_state);
+        assert!(store.start(&client, &p, input(), retry, None).await.is_err());
         let id: Uuid = serde_json::from_value(pending["id"].clone()).unwrap();
         let mut refreshed = p.clone();
         refreshed.token = "oat_changed".into();
         assert_eq!(
-            store.start(&client, &refreshed, input(), retry, None).await.unwrap(),
+            store.start(&client, &refreshed, popup, retry, None).await.unwrap(),
             pending
         );
         assert_eq!(fixture.lock().unwrap().starts, 1);
+        assert!(
+            store
+                .complete(
+                    &client,
+                    &p,
+                    id,
+                    &CompleteInput {
+                        code: "approved-fixture-code".into(),
+                        state: Some("wrong-state".into())
+                    },
+                    None
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(fixture.lock().unwrap().redeems, 0);
         let other = principal("si:other");
         assert_eq!(
             store
-                .complete(&client, &other, id, "approved-fixture-code", None)
+                .complete(
+                    &client,
+                    &other,
+                    id,
+                    &CompleteInput {
+                        code: "approved-fixture-code".into(),
+                        state: Some(callback_state.clone())
+                    },
+                    None
+                )
                 .await
                 .unwrap_err()
                 .code(),
@@ -171,14 +209,32 @@ async fn durable_grants_keep_secrets_server_side_and_retry_rotation_without_cros
         );
         assert_eq!(
             store
-                .complete(&client, &p, id, "wrong-code", None)
+                .complete(
+                    &client,
+                    &p,
+                    id,
+                    &CompleteInput {
+                        code: "wrong-code".into(),
+                        state: Some(callback_state.clone())
+                    },
+                    None
+                )
                 .await
                 .unwrap_err()
                 .code(),
             ErrorCode::ConfirmationRequired
         );
         let complete = store
-            .complete(&client, &p, id, "approved-fixture-code", None)
+            .complete(
+                &client,
+                &p,
+                id,
+                &CompleteInput {
+                    code: "approved-fixture-code".into(),
+                    state: Some(callback_state.clone()),
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(complete["items"][0]["actor"], actor());
@@ -186,7 +242,16 @@ async fn durable_grants_keep_secrets_server_side_and_retry_rotation_without_cros
         assert!(!complete.to_string().contains("obr_"));
         assert!(!complete.to_string().contains("oba_"));
         store
-            .complete(&client, &p, id, "approved-fixture-code", None)
+            .complete(
+                &client,
+                &p,
+                id,
+                &CompleteInput {
+                    code: "approved-fixture-code".into(),
+                    state: Some(callback_state.clone()),
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(fixture.lock().unwrap().redeems, 1);
@@ -243,7 +308,16 @@ async fn durable_grants_keep_secrets_server_side_and_retry_rotation_without_cros
             .unwrap();
         let id: Uuid = serde_json::from_value(pending["id"].clone()).unwrap();
         resumed
-            .complete(&client, &p, id, "approved-fixture-code", Some(&selection))
+            .complete(
+                &client,
+                &p,
+                id,
+                &CompleteInput {
+                    code: "approved-fixture-code".into(),
+                    state: None,
+                },
+                Some(&selection),
+            )
             .await
             .unwrap();
         fixture.lock().unwrap().revoked = true;
