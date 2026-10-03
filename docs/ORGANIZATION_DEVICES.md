@@ -120,8 +120,16 @@ rows, including private backfill, preserved physical credentials, idempotent
 reapplication, backup restoration and private creation by the native-pair trigger.
 The older ignored suite fixture is not the evidence for that operator rehearsal.
 
-Authenticated live own-device import, known-ID privacy denials for another
-member/admin/Silicon, and old-grant denial still await designated disposable
-identities and devices. Credential-gated live provider tests and physical control
-were not exercised. Anonymous production UI checks and unchanged pairing
-fingerprints must not be described as those authenticated or physical tests.
+Authenticated rollout acceptance completed on 2026-10-03 UTC against the deployed
+API and published CLI 3.1.0: all 64 checks passed using real IAM identities in the
+designated disposable testing world. The matrix covered two organizations, owner
+import and idempotent retry, organization-specific My devices, organization-wide
+discovery without control, Hidden defaults, and known-ID and old-grant denial for
+another member, an administrator and a Silicon. Import preserved the physical
+device identity and native credential. CLI checks also covered retained contexts,
+organization switching, unbinding and private reimport.
+
+Cleanup revoked the disposable pair and verified that its native credential was
+rejected. No production device was changed. These checks establish organization
+bindings and device authorization using synthetic devices; physical device
+control and reboot behavior were not exercised.
