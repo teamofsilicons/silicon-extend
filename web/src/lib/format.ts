@@ -154,9 +154,9 @@ function settingsSummary(d: Details): string[] {
   const shown = indicator && typeof indicator === "object" ? str(indicator.to) : str(indicator);
   if (shown === "hidden") parts.push("turned off the banner while a Silicon uses it");
   if (shown === "shown") parts.push("turned on the banner while a Silicon uses it");
-  // Only 1.0 wrote these: since 1.1 a device is visible only to the Carbons who paired it.
+  // Organization discovery visibility is separate from explicit Silicon access.
   if (d.visibility === "team") parts.push("visible to the Team");
-  if (d.visibility === "personal") parts.push("visible only to its owner");
+  if (d.visibility === "personal") parts.push("hidden from other Carbons and ungranted Silicons");
   return parts;
 }
 

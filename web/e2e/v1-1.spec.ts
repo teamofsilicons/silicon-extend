@@ -292,7 +292,7 @@ test.describe("setup retry (contract A)", () => {
 });
 
 test.describe("adding a device (1.1)", () => {
-  test("new devices are private by default; the code step explains Pair with another Carbon", async ({ page, mock }) => {
+  test("new devices are organization-visible by default; the code step explains Pair with another Carbon", async ({ page, mock }) => {
     void mock;
     await signInWithSlt(page);
     await page.goto("/devices/new?kind=android");
@@ -301,10 +301,10 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("pairing-code-input").fill("4F9C2A");
     await page.getByTestId("wizard-next").click();
     await expect(page.getByTestId("name-step")).not.toContainText("Who can see it exists");
-    await expect(page.getByRole("checkbox", {name:/Visible to members of/})).not.toBeChecked();
+    await expect(page.getByRole("checkbox", {name:/Visible to members of/})).toBeChecked();
   });
 
-  test("pairing a computer another Carbon paired: warning, then access in the selected organization", async ({ page, mock }) => {
+  test("pairing a hidden computer retains Silicon access and resets the next device to visible", async ({ page, mock }) => {
     // Alice's Windows PC shows "Pair with another Carbon".
     const code = await mock.enroll("windows", { instance_of: "b3f81c20" });
     await signInWithSlt(page);
@@ -315,7 +315,7 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("pairing-code-input").fill(code);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Shared PC");
-    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).uncheck();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -325,13 +325,27 @@ test.describe("adding a device (1.1)", () => {
     );
     // A pair of a device already set up is ready at once.
     await expect(page.getByTestId("setup-complete")).toBeVisible();
-    expect(claims).toEqual([{ type: "pairing", data: { pairing_code: code, name: "Shared PC", visibility: "team", pair_ttl_days: 14 } }]);
+    expect(claims).toEqual([{ type: "pairing", data: { pairing_code: code, name: "Shared PC", visibility: "personal", pair_ttl_days: 14 } }]);
     await shoot(page, "37-wizard-shared-computer");
     await page.getByTestId("setup-next").click();
     await page.getByTestId("grant-input").fill("si:atlas");
     await page.getByTestId("grant-submit").click();
     await expect(page.getByTestId("wizard-done")).toContainText("si:atlas can use it now");
     await expect(page.getByTestId("wizard-done")).toContainText("extend --team acme device show");
+    const openDevice = await page.getByTestId("open-device").getAttribute("href");
+    await page.getByRole("button", { name: "Add another device" }).click();
+    await page.getByTestId("kind-android").click();
+    await page.getByTestId("wizard-next").click();
+    await page.getByTestId("pairing-code-input").fill("4F9C2A");
+    await page.getByTestId("wizard-next").click();
+    await expect(page.getByRole("checkbox", { name: /Visible to members of/ })).toBeChecked();
+    // Existing hidden choice and grant survive reopening the device; the owner can add more grants.
+    await page.goto(openDevice!);
+    await expect(page.getByTestId("settings-card").getByRole("checkbox", { name: /Visible to members of/ })).not.toBeChecked();
+    await expect(page.getByTestId("grant-team")).toContainText("si:atlas");
+    await page.getByText("Give another Silicon access", { exact: true }).click();
+    await expect(page.getByTestId("grant-input")).toBeVisible();
+    await shoot(page, "hidden-device-granted-access");
   });
 
   test("a device I already paired: the claim's 409 names my own pair", async ({ page, mock }) => {
@@ -342,8 +356,9 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("pairing-code-input").fill(code);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Studio again");
-    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).uncheck();
     await page.getByTestId("pair-submit").click();
+    await expect(page.getByRole("checkbox", { name: /Visible to members of/ })).not.toBeChecked();
     await expect(page.getByTestId("pairing-error")).toHaveAttribute("data-code", "conflict");
     await expect(page.getByTestId("pairing-error")).toContainText(`You already paired this device: it's Studio Mac (${DEVICE_STUDIO_MAC}) in your devices.`);
   });

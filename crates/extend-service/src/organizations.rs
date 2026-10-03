@@ -31,6 +31,11 @@ CREATE OR REPLACE TRIGGER device_initial_organization AFTER INSERT ON {s}.device
     FOR EACH ROW EXECUTE FUNCTION {s}.device_initial_organization();
 "#;
 
+/// Only future bindings use the new default. Existing owner choices and physical pairs stay intact.
+pub const VISIBLE_DEFAULT_MIGRATION: &str = r#"
+ALTER TABLE {s}.device_organizations ALTER COLUMN visibility SET DEFAULT 'team';
+"#;
+
 pub async fn visibility(
     state: &AppState,
     world: &World,
@@ -211,7 +216,7 @@ pub async fn import(
         || async {
             let mut tx = state.pool.begin().await?;
             // An attachment's physical transport stays with its configured host. Import the owner's
-            // host privately too so the attachment cannot reveal a host outside the current context.
+            // host too, using the same explicit/default visibility for a new binding.
             let mut ids = vec![d.device_id.clone()];
             let mut instances = vec![d.instance_id];
             if let Some(host) = &d.host_device_id {
@@ -243,11 +248,7 @@ pub async fn import(
                 ))
                 .bind(id)
                 .bind(&org)
-                .bind(if id == &device_id {
-                    input.visibility.unwrap_or(Visibility::Personal).as_str()
-                } else {
-                    "personal"
-                })
+                .bind(input.visibility.unwrap_or_default().as_str())
                 .execute(&mut *tx)
                 .await?;
             }
@@ -349,7 +350,7 @@ pub async fn require_grant<'c>(
     org: &str,
     silicon: &str,
 ) -> AppResult<()> {
-    let allowed: bool = sqlx::query_scalar(sql!("SELECT EXISTS(SELECT 1 FROM {} a JOIN {} o ON o.device_id = a.device_id AND o.org_id = a.team WHERE a.device_id = $1 AND a.team = $2 AND a.silicon_id = $3 AND o.visibility = 'team' AND o.removed_at IS NULL)", world.t("device_access"), world.t("device_organizations")))
+    let allowed: bool = sqlx::query_scalar(sql!("SELECT EXISTS(SELECT 1 FROM {} a JOIN {} o ON o.device_id = a.device_id AND o.org_id = a.team WHERE a.device_id = $1 AND a.team = $2 AND a.silicon_id = $3 AND o.removed_at IS NULL)", world.t("device_access"), world.t("device_organizations")))
         .bind(device).bind(org).bind(silicon).fetch_one(db).await?;
     if allowed {
         Ok(())
@@ -393,23 +394,23 @@ pub async fn project_removal(
     Ok(())
 }
 
-/// Apply private bindings to persisted work before serving after an upgrade/restart, and heal
-/// an interrupted visibility change. Captured IDs cannot include newly authorized work.
+/// End persisted work whose organization binding or explicit Silicon grant was removed.
+/// Hidden visibility never invalidates an otherwise authorized session or notification.
 pub async fn reconcile(state: &AppState, world: &World) -> AppResult<()> {
     let sessions = sqlx::query_scalar(sql!(
         "SELECT s.session_id FROM {} s WHERE s.state <> 'ended' AND NOT EXISTS
-         (SELECT 1 FROM {} o WHERE o.device_id=s.device_id AND o.org_id=s.team AND o.visibility='team' AND o.removed_at IS NULL)",
-        world.t("sessions"), world.t("device_organizations")))
+         (SELECT 1 FROM {} o JOIN {} a ON a.device_id=o.device_id AND a.team=o.org_id WHERE o.device_id=s.device_id AND o.org_id=s.team AND o.removed_at IS NULL AND a.silicon_id=s.silicon_id)",
+        world.t("sessions"), world.t("device_organizations"), world.t("device_access")))
         .fetch_all(&state.pool).await?;
     let wakes = sqlx::query_scalar(sql!(
         "SELECT w.wake_id FROM {} w WHERE w.state='open' AND NOT EXISTS
-         (SELECT 1 FROM {} o WHERE o.device_id=w.device_id AND o.org_id=w.team AND o.visibility='team' AND o.removed_at IS NULL)",
-        world.t("wake_requests"), world.t("device_organizations")))
+         (SELECT 1 FROM {} o JOIN {} a ON a.device_id=o.device_id AND a.team=o.org_id WHERE o.device_id=w.device_id AND o.org_id=w.team AND o.removed_at IS NULL AND a.silicon_id=w.from_id)",
+        world.t("wake_requests"), world.t("device_organizations"), world.t("device_access")))
         .fetch_all(&state.pool).await?;
     sqlx::query(sql!(
         "UPDATE {} r SET delivery='failed', ting_next_at=NULL, last_error='Device access was removed in this organization.'
-         WHERE r.delivery='pending' AND NOT EXISTS (SELECT 1 FROM {} o WHERE o.device_id=r.device_id AND o.org_id=r.team AND o.visibility='team' AND o.removed_at IS NULL)",
-        world.t("requests"), world.t("device_organizations")))
+         WHERE r.delivery='pending' AND NOT EXISTS (SELECT 1 FROM {} o JOIN {} a ON a.device_id=o.device_id AND a.team=o.org_id WHERE o.device_id=r.device_id AND o.org_id=r.team AND o.removed_at IS NULL AND a.silicon_id=r.from_id)",
+        world.t("requests"), world.t("device_organizations"), world.t("device_access")))
         .execute(&state.pool).await?;
     finish_disable(state, world, DisabledUse { sessions, wakes }, &domain::system_member()).await
 }

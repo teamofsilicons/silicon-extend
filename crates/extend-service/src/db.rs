@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
     WORLD_1_1_BANNER,
     crate::obo::MIGRATION,
     crate::organizations::MIGRATION,
+    crate::organizations::VISIBLE_DEFAULT_MIGRATION,
 ];
 
 /// Schema version 4 (1.1.0): devices belong to the Carbons who paired them; several Carbons can
@@ -493,7 +494,7 @@ ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text 
 "#;
 
 /// The schema version a 1.1.0 service brings every world to.
-pub const WORLD_VERSION: i32 = 7;
+pub const WORLD_VERSION: i32 = 8;
 
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
     // Serialise migrations across service instances.

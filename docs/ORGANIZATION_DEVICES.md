@@ -8,11 +8,14 @@ simultaneous control across organizations.
 
 ## Visibility and import
 
-New pairings and imports default to `personal` (Hidden). Only the Carbon who
-configured that device can see a hidden binding. Other Carbons, Silicons and
-organization administrators cannot discover it or access it by a known ID.
-Existing grants never override hidden visibility. Hiding a previously shared
-binding removes its Silicon grants and ends its sessions in that organization.
+New pairings, attachments and imports default to `team` (Organization). Owners can
+explicitly choose `personal` (Hidden) for the binding in that organization.
+Hidden devices remain visible and usable to their configuring Carbon and Silicons
+with an explicit owner grant in the same organization. Other Carbons (including
+organization administrators) and ungranted Silicons cannot discover or access a
+hidden device, even by a known ID. Hiding preserves existing grants and active
+sessions; revoking a Silicon's grant remains the separate way to end its access.
+Existing bindings retain their stored visibility.
 
 `team` (Organization) allows members of the selected organization to discover the
 device. The owner still manages settings and grants. Silicon control additionally
@@ -29,7 +32,8 @@ worlds never share this inventory.
 `{"type":"device_import","data":{"visibility":"personal"}}` and an
 `Idempotency-Key`. The authenticated organization is the destination; the caller
 cannot supply another owner or destination organization. Importing an attachment
-also binds its configured host privately. Existing active host visibility is
+also binds a missing or removed configured host with the same chosen visibility. Omitting
+visibility uses `team`; the example explicitly chooses Hidden. Existing active host visibility is
 preserved. The response is a normal `device` envelope with `team` set to the
 current organization. Reusing an operation key with a different body is refused.
 
@@ -37,7 +41,8 @@ current organization. Reusing an operation key with a different body is refused.
 `scope=team` shows other owners' organization-visible devices; a Silicon uses
 `scope=accessible` for devices it may control. Device details and all resource
 operations use the same selected organization. Hidden devices answer as absent to
-other members, including when their ID is already known.
+other Carbons and ungranted Silicons, including when their ID is already known.
+An owner can grant same-organization Silicon access before or after hiding the device.
 
 Deleting a device from the website or CLI removes that organization's binding and
 its grants, sessions and carried-device bindings. It preserves the physical
@@ -49,18 +54,21 @@ compatible with the existing protocol.
 
 ## Migration and deployment
 
-World schema version 7 adds `device_organizations`, keyed by `(device_id, org_id)`.
-It seeds **private** bindings for each device's original pairing organization and
-each organization with an existing Silicon grant. This deliberately avoids
-publishing any previously personal device to colleagues. Existing grants are
-ineffective until the owner explicitly chooses Organization visibility. Native
-credentials, instance IDs and existing data remain in place. An insert trigger
-creates the initial private binding in the same transaction as a new pair.
-Existing activity gets its session's organization, or its configuring organization
-for physical lifecycle events. Before serving after startup, persisted sessions,
-open wake requests and pending notifications on private or removed bindings are
-ended or cancelled. Dormant grants and native credentials remain intact. The
-scheduler also repairs an interrupted visibility change.
+World schema version 7 added `device_organizations`, keyed by `(device_id, org_id)`.
+It seeded **private** bindings for each device's original pairing organization and
+each organization with an existing Silicon grant. Schema version 8 changes only
+the default for newly created bindings to `team`; it does not rewrite existing
+visibility. Physical credentials, instance IDs and existing data remain in place.
+The insert trigger uses the new default for a new pair, while an explicit Hidden
+choice is stored in the same transaction. Existing activity retains its session's
+organization, or its configuring organization for physical lifecycle events.
+
+The initial schema-7 rollout also denied granted Silicons access to hidden devices
+and cancelled their sessions. The current policy supersedes that behavior: hidden
+bindings honor explicit same-organization grants, and visibility changes do not
+remove grants or end sessions. Removed bindings and revoked grants continue to
+prevent access. Previously ended sessions are not resurrected.
+
 Testing cleanup removes bindings with the other test data.
 
 An old service does not enforce organization bindings or hidden visibility.
@@ -80,8 +88,10 @@ readiness, version, anonymous-access and canonical static-asset checks.
 
 CLI 3.1.0 binaries were built at `b74e712`. The `cli-v3.1.0` release at `5bb6e40`
 adds only packaging metadata, a regression test and deployment documentation:
-protocol crate 1.1.1 is required by SDK/CLI 3.1.0 so registry installs retain the
-private default. The runtime implementation is identical. All three Rust crates
+protocol crate 1.1.1 was required by SDK/CLI 3.1.0 so those registry installs retained
+the then-current private default. This is historical release evidence, not validation
+of the current visible-by-default policy. That packaging-only revision retained the
+same runtime implementation. All three Rust crates
 and the six-platform GitHub archive were published and their public checksums
 verified. Physical desktop and Android application versions remain unchanged.
 
@@ -99,12 +109,13 @@ Website stop cannot end another owner's session through a physical alias.
 Released cross-owner stop fixture requests are replayed unchanged and asserted
 to fail without revealing or ending the holder. The current SDK's `device_stopped`
 contract exercises an owner stopping their own carried device through its host.
-A pairing with Silicon grants must explicitly choose `team` visibility.
+Pairing and granting control are independent of discovery visibility. Explicitly
+granted same-organization Silicons can use either visibility.
 
 ## Local validation
 
 `org_devices` exercises the real HTTP service, PostgreSQL and a scripted native
-WebSocket: own-device import, private defaults, wrong owner and testing-world
+WebSocket: own-device import, visibility defaults and explicit choices, wrong owner and testing-world
 refusal, separate organization credentials, discovery versus control, hiding an
 active session, physical credential preservation, cross-organization session
 redaction, removal, logout, and additive schema/cleanup behavior. IAM and provider
@@ -120,7 +131,7 @@ rows, including private backfill, preserved physical credentials, idempotent
 reapplication, backup restoration and private creation by the native-pair trigger.
 The older ignored suite fixture is not the evidence for that operator rehearsal.
 
-Authenticated rollout acceptance completed on 2026-10-03 UTC against the deployed
+Historical acceptance of the initial private-default policy completed on 2026-10-03 UTC against the deployed
 API and published CLI 3.1.0: all 64 checks passed using real IAM identities in the
 designated disposable testing world. The matrix covered two organizations, owner
 import and idempotent retry, organization-specific My devices, organization-wide
@@ -133,3 +144,7 @@ Cleanup revoked the disposable pair and verified that its native credential was
 rejected. No production device was changed. These checks establish organization
 bindings and device authorization using synthetic devices; physical device
 control and reboot behavior were not exercised.
+
+The historical results above do not establish the updated default or hidden Silicon
+access policy. The current change requires focused service and web regression
+validation before release; existing organization bindings must remain unchanged.

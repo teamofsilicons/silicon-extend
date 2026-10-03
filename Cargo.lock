@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "extend-service"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4276,7 +4276,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-cli"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4291,7 +4291,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-client"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "reqwest",
  "serde",
@@ -4307,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-protocol"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "rand 0.9.5",

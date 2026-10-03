@@ -111,7 +111,7 @@ export default function DevicePage(props: { id: string }) {
             </Show>
             <InUse device={d()} now={now()} onStopped={load} />
             <TingBanner registrations={ting()} />
-            <Show when={d().visibility === "team"} fallback={<p class="notice">Private to you. Turn on organization visibility below before giving Silicons access.</p>}><Access device={d()} onChanged={load} onTeams={setGrantTeams} /></Show>
+            <Access device={d()} onChanged={load} onTeams={setGrantTeams} />
             <Settings device={d()} patch={patch} onChanged={load} />
             <Capabilities device={d()} />
             <Activity device={d()} />
@@ -158,7 +158,7 @@ function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => 
       <DeviceIcon device={d()} size={26} />
       <div class="device-header-main">
         <p class="eyebrow" data-testid="device-eyebrow">
-          {KIND_WORD[d().kind] ?? "Device"} · {d().removed_at ? "Removed" : d().visibility === "team" ? `Shared in ${d().team ?? s.team()}` : "Private to you"}
+          {KIND_WORD[d().kind] ?? "Device"} · {d().removed_at ? "Removed" : d().visibility === "team" ? `Shared in ${d().team ?? s.team()}` : "Hidden from organization members without access"}
         </p>
         <Show
           when={editing()}
@@ -692,7 +692,7 @@ function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Prom
     <div class="card" data-testid="settings-card">
       <h2 class="card-title">Settings.</h2>
       <label class="checkbox-row"><input type="checkbox" checked={props.device.visibility==="team"} disabled={!!busy()} onChange={async e=>{const input=e.currentTarget;const shared=input.checked;setBusy("visibility");const err=await props.patch({visibility:shared?"team":"personal"});setError(err);if(err)input.checked=!shared;setBusy(null);}}/>Visible to members of {s.team()}</label>
-      <p class="fine">Private devices are hidden from every other organization member, including Silicons with a previous access grant.</p>
+      <p class="fine">Off hides this device from other Carbons and Silicons without access. Silicons with an explicit grant in this organization keep their access and running sessions.</p>
       <TtlSlider
         id="device-ttl"
         value={ttl()}

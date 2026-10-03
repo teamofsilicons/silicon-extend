@@ -71,9 +71,12 @@ pub struct ListQuery {
 /// in every Team (`$1`, the Team, is still mentioned so PostgreSQL can type it).
 fn who(auth: &Auth) -> String {
     let member = if auth.p.is_silicon() {
-        "f.created_by = $2 AND o.visibility = 'team'"
+        format!(
+            "f.created_by = $2 AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id=d.device_id AND a.team=$1 AND a.silicon_id=$2)",
+            auth.world.t("device_access")
+        )
     } else {
-        "d.owner_id = $2"
+        "d.owner_id = $2".to_owned()
     };
     format!(
         "f.team = $1 AND EXISTS (SELECT 1 FROM {} d JOIN {} o ON o.device_id = d.device_id WHERE d.device_id = f.device_id AND o.org_id = $1 AND o.removed_at IS NULL AND {member})",
