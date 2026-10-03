@@ -61,11 +61,13 @@ declares:
 - the IAM scopes `self.identity.read`, `self.profile.read`, `self.organizations.read`,
   `self.membership.read`, `directory.silicons.read`, `directory.carbons.read`,
   `directory.memberships.read` and `directory.profiles.read`;
-- the external OBO endpoints Extend calls: Briefcase `briefcase.files.create`,
-  `briefcase.invitations.create` (critical: it needs Briefcase's approval),
-  `briefcase.entries.trash` and `briefcase.files.read` (the file download route,
-  `GET /api/v1/files/{file_id}/content`), and Ting `tings.send` and `subscriptions.register` (called
-  when a Silicon starts a session; a real Ting refuses requests to unregistered recipients).
+- the external OBO endpoints Extend calls: Briefcase `briefcase.uploads.reserve`,
+  `briefcase.uploads.commit`, `briefcase.uploads.status`, `briefcase.invitations.create`,
+  `briefcase.entries.trash` and `briefcase.files.read`, plus Ting `tings.send` and
+  `subscriptions.register`. Each feature needs its own approved OBO grant after login.
+  `briefcase.uploads.cancel` is supported for explicit cleanup; the normal store flow does
+  not call it. The retired raw `briefcase.files.create` endpoint is not used. See the
+  [OBO cutover guide](OBO_CUTOVER.md#exact-provider-endpoints) for the full contract.
 
 Ting 0.1.9 resolves types by context and application, across delivery Teams. A manager of the
 app's owning Team (`tos` for production Extend) registers all four once in production and in each

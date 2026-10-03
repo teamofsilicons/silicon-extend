@@ -1661,9 +1661,10 @@ async fn briefcase_display_reads_are_delegated_and_bounded_even_without_content_
         axum::routing::post(
             |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| async move {
                 assert_eq!(
-                    headers["X-IAM-OBO-Access-Proof"],
+                    headers["X-IAM-OBO-Access-Token"],
                     "obo_local:briefcase:briefcase.files.read:si:chef"
                 );
+                assert!(!headers.contains_key("X-IAM-OBO-Access-Proof"));
                 assert_eq!(headers["X-Org-ID"], "acme");
                 assert!(body["entry_id"].as_str().unwrap().parse::<Uuid>().is_ok());
                 let chunks = futures::stream::iter([Ok::<_, std::io::Error>("123"), Ok("456")]);
