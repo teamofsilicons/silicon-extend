@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Client::revoke_pair",
   "consumer": "silicon-extend-client",
-  "consumer_version": "3.0.0",
+  "consumer_version": "3.1.0",
   "contract": 1,
   "given": [
     "device"
