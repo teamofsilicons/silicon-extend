@@ -24,6 +24,7 @@ const ACTION_NAMES: Record<string, string> = {
 /** Approval stays with the selected account, team and environment; actions are retried separately. */
 export function PermissionSettings() {
   const s = session();
+  const client = s.client();
   const [rows, setRows] = createSignal<FeaturePermission[] | null>(null);
   const [selected, setSelected] = createSignal("store");
   const [pending, setPending] = createSignal<FeaturePermissionRequest | null>(null);
@@ -37,7 +38,7 @@ export function PermissionSettings() {
 
   async function load(current: number) {
     try {
-      const result = await s.client().permissions();
+      const result = await client.permissions();
       if (current === generation) setRows(result);
     } catch (e) {
       if (current === generation) setError(toApiError(e));
@@ -57,7 +58,7 @@ export function PermissionSettings() {
     startKey ??= crypto.randomUUID();
     setBusy(true); setError(null); setMessage("");
     try {
-      const request = await s.client().requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey);
+      const request = await client.requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey);
       if (current === generation) { setPending(request); setCode(""); completion = null; }
     } catch (e) {
       if (current === generation) setError(toApiError(e));
@@ -75,7 +76,7 @@ export function PermissionSettings() {
     if (completion?.code !== value) completion = { code: value, key: crypto.randomUUID() };
     setBusy(true); setError(null);
     try {
-      const result = await s.client().completePermissions(request.id, value, completion.key);
+      const result = await client.completePermissions(request.id, value, completion.key);
       if (current !== generation) return;
       setRows(result); setPending(null); setCode(""); startKey = null; completion = null;
       setMessage("Access approved. Return to the feature and retry your action. You can revoke this access in IAM at any time.");

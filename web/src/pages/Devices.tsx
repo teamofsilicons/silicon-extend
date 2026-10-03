@@ -10,22 +10,21 @@ import { OS_LABEL, POLL_MS } from "../config";
 import { awakeLabel, duration, plural, relativeTime, removedWhy } from "../lib/format";
 import { Button, DeviceIcon, Empty, ErrorNote, MemberTag, OnlineDot, Spinner } from "../components/ui";
 import Shader from "../components/Shader";
+import ImportDevices from "../components/ImportDevices";
 import DevicePage from "./DevicePage";
 
-/**
- * The list's tabs. "removed" is the Carbon's own devices that were removed (scope=mine&include_removed=true).
- * Since 1.1 a device belongs to the Carbons who paired it, not to a Team: "mine" is every device the
- * Carbon paired, whichever Team is selected, and nobody else sees it (the "Team devices" tab is gone).
- */
-type Scope = "mine" | "removed" | "accessible";
+/** Every tab is scoped to the selected organization; team discovery never grants control. */
+type Scope = "mine" | "removed" | "accessible" | "team";
 
 const EYEBROW: Record<Scope, string> = {
+  team: "Shared in your organization",
   mine: "Your paired devices",
   removed: "Your removed devices",
   accessible: "Devices you can use",
 };
 
 const EMPTY: Record<Scope, string> = {
+  team: "No shared devices in this organization.",
   mine: "Nothing paired yet.",
   removed: "Nothing removed.",
   accessible: "No Carbon has given you a device in this Team yet.",
@@ -46,7 +45,9 @@ function rowInUse(d: Device): "own" | "other" | "carried" | null {
  */
 export default function Devices(props: { selected?: string | null }) {
   const s = session();
+  const client = s.client();
   const isSilicon = () => s.member()?.type === "silicon";
+  const [importing, setImporting] = createSignal(new URLSearchParams(location.search).get("import") === "1");
   const [scope, setScope] = createSignal<Scope>(isSilicon() ? "accessible" : "mine");
   const [items, setItems] = createSignal<Device[] | null>(null);
   const [next, setNext] = createSignal<string | null>(null);
@@ -66,8 +67,8 @@ export default function Devices(props: { selected?: string | null }) {
     try {
       const page =
         current === "removed"
-          ? { items: await s.client().listRemovedDevices(), next_cursor: null }
-          : await s.client().listDevices({ scope: current, limit: Math.min(100, Math.max(50, shown)) });
+          ? { items: await client.listRemovedDevices(), next_cursor: null }
+          : await client.listDevices({ scope: current, limit: Math.min(100, Math.max(50, shown)) });
       if (current !== scope()) return;
       setItems(page.items);
       setNext(page.next_cursor);
@@ -85,7 +86,8 @@ export default function Devices(props: { selected?: string | null }) {
     if (!cursor || current === "removed") return;
     setLoadingMore(true);
     try {
-      const page = await s.client().listDevices({ scope: current, cursor });
+      const page = await client.listDevices({ scope: current, cursor });
+      if (current !== scope()) return;
       setItems([...(items() ?? []), ...page.items]);
       setNext(page.next_cursor);
     } catch (e) {
@@ -95,9 +97,9 @@ export default function Devices(props: { selected?: string | null }) {
     }
   }
 
-  // A Carbon's list doesn't change with the Team menu (1.1); a Silicon's is its selected Team's.
+  // Changing organization remounts this page with that context's immutable client.
   createEffect(
-    on([scope, () => (isSilicon() ? s.team() : null), s.world], () => {
+    on([scope, s.contextKey], () => {
       setItems(null);
       setError(null);
       load(true);
@@ -123,6 +125,7 @@ export default function Devices(props: { selected?: string | null }) {
 
   return (
     <div class={`devices-view ${showMain() ? "show-main" : "show-list"}`} data-testid={props.selected ? "devices-view" : "devices-page"}>
+      <Show when={importing()}><ImportDevices close={()=>setImporting(false)}/></Show>
       <aside class="list-column" aria-label="Devices">
         <div class="list-inner">
           <header class="list-title">
@@ -131,6 +134,7 @@ export default function Devices(props: { selected?: string | null }) {
               <h1>Devices.</h1>
             </div>
             <Show when={!isSilicon()}>
+              <button class="icon-button outlined" aria-label="Import configured devices" title="Import configured devices" onClick={()=>setImporting(true)}>↓</button>
               <Link href="/devices/new" class="icon-button outlined" aria-label="Add a device" title="Add a device" data-testid="add-device">
                 <Plus size={17} aria-hidden="true" />
               </Link>
@@ -149,12 +153,13 @@ export default function Devices(props: { selected?: string | null }) {
             <input type="search" placeholder="Find a device" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} data-testid="device-filter" />
           </label>
 
-          <Show when={!isSilicon()}>
+          <Show when={!!s.member()}>
             <div class="filter-chips" role="tablist" aria-label="Whose devices">
-              <button role="tab" aria-selected={scope() === "mine"} class={scope() === "mine" ? "selected" : ""} onClick={() => setScope("mine")} data-testid="tab-mine">
-                My devices
+              <button role="tab" aria-selected={scope() === "mine" || scope() === "accessible"} class={scope() === "mine" || scope() === "accessible" ? "selected" : ""} onClick={() => setScope(isSilicon() ? "accessible" : "mine")} data-testid="tab-mine">
+                {isSilicon() ? "Available to me" : "My devices"}
               </button>
-              <button
+              <button role="tab" aria-selected={scope()==="team"} class={scope()==="team"?"selected":""} onClick={()=>setScope("team")} data-testid="tab-team">Organization</button>
+              <Show when={!isSilicon()}><button
                 role="tab"
                 aria-selected={scope() === "removed"}
                 class={scope() === "removed" ? "selected" : ""}
@@ -163,13 +168,13 @@ export default function Devices(props: { selected?: string | null }) {
                 data-testid="tab-removed"
               >
                 Removed
-              </button>
+              </button></Show>
             </div>
           </Show>
 
           <div class="list-label">
             <span data-testid="list-label">
-              {scope() === "accessible" ? `Yours to use in ${s.team() ?? "this Team"}` : scope() === "removed" ? "Removed" : "Every Team"}
+              {scope() === "accessible" ? `Yours to use in ${s.team() ?? "this Team"}` : scope() === "removed" ? "Removed" : s.team() ?? "This organization"}
               <Show when={items()}> · {items()!.length}</Show>
             </span>
             <span class="list-label-tail">
@@ -323,7 +328,7 @@ export default function Devices(props: { selected?: string | null }) {
       </aside>
 
       <div class="main-pane">
-        <Show when={props.selected} keyed fallback={<Overview items={items()} scope={scope()} isSilicon={isSilicon()} />}>
+        <Show when={props.selected} keyed fallback={<Overview items={items()} scope={scope()} isSilicon={isSilicon()} onImport={() => setImporting(true)} />}>
           {(id) => <DevicePage id={id} />}
         </Show>
       </div>
@@ -332,11 +337,11 @@ export default function Devices(props: { selected?: string | null }) {
 }
 
 /** The right pane with no device open: what is here at a glance, or where to start. */
-function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: boolean }) {
+function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: boolean; onImport: () => void }) {
   const s = session();
   const count = (f: (d: Device) => boolean) => (props.items ?? []).filter(f).length;
   const two = (n: number) => String(n).padStart(2, "0");
-  const where = () => (props.isSilicon ? (s.team() ?? "") : "every Team");
+  const where = () => s.team() ?? "your organization";
   return (
     <Show when={props.scope !== "removed"} fallback={<RemovedOverview items={props.items} />}>
     <Show when={props.items}>
@@ -348,15 +353,16 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
               when={props.scope === "mine"}
               fallback={
                 <Empty eyebrow={s.team() ?? undefined} title="No devices yet.">
-                  <p>No Carbon has given you access to a device in this Team yet. Ask the Carbon who owns it.</p>
+                  <p>{props.scope === "team" ? "No devices are shared with this organization yet." : "No Carbon has given you access to a device in this organization yet."}</p>
                 </Empty>
               }
             >
-              <Empty eyebrow="Extend · your devices" title="No devices paired yet.">
-                <p>Pair a phone, computer or TV, then choose which Silicons can use it. It takes a few minutes.</p>
+              <Empty eyebrow="Extend · your devices" title="No devices in this organization.">
+                <p>Add a new device or import one you have already configured in another organization. Devices are private until you share them.</p>
                 <Link href="/devices/new" class="button primary">
                   <Plus size={16} aria-hidden="true" /> Add your first device
                 </Link>
+                <Button onClick={props.onImport}>Import configured devices</Button>
               </Empty>
             </Show>
           }
@@ -426,10 +432,10 @@ function RemovedOverview(props: { items: Device[] | null }) {
           }
         >
           <section class="overview" aria-label="Removed devices" data-testid="removed-overview">
-            <p class="eyebrow">Extend · every Team</p>
+            <p class="eyebrow">Extend · {s.team()}</p>
             <h2 class="overview-title">Removed devices.</h2>
             <p class="overview-lead">
-              Choose one on the left to read its activity log. A removed device can't be changed or used, and no Silicon can reach it. To use one again, pair it again.
+              Choose one on the left to read its activity log. A removed device can't be changed or used, and no Silicon can reach it. Import it again to use it in this organization.
             </p>
             <div class="overview-actions">
               <Link href="/devices/new" class="button primary">

@@ -176,7 +176,7 @@ describe("headers", () => {
 });
 
 describe("token refresh", () => {
-  it("refreshes after a 401 and retries with the new token, storing the pair in one save", async () => {
+  it("refreshes after a 401 and retries with the new token, persisting the retry identity before atomically replacing the pair", async () => {
     const { client: c, calls, tokens } = client((call) => {
       if (call.url.endsWith("/auth/refresh")) return json(200, { type: "refresh", data: session("oat_new", "ort_new") });
       return call.headers.Authorization === "Bearer oat_new" ? json(200, DEVICES) : json(401, { type: "error", data: { code: "token_expired", message: "expired" } });
@@ -185,8 +185,8 @@ describe("token refresh", () => {
     expect(calls.map((x) => x.url.split("/api/v1")[1])).toEqual(["/devices?scope=mine", "/auth/refresh", "/devices?scope=mine"]);
     expect(calls[1].body).toEqual({ type: "refresh", data: { refresh_token: "ort_old" } });
     expect(calls[1].headers["Idempotency-Key"]).toBeTruthy();
-    expect(tokens.value).toMatchObject({ access_token: "oat_new", refresh_token: "ort_new", expires_at: NOW + 1800_000, teams: ["acme", "labs"] });
-    expect(tokens.saves).toBe(1);
+    expect(tokens.value).toMatchObject({ access_token: "oat_new", refresh_token: "ort_new", expires_at: NOW + 1800_000, teams: ["acme"] });
+    expect(tokens.saves).toBe(2);
   });
 
   it("refreshes before sending when the access token is about to expire", async () => {

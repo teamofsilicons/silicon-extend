@@ -32,6 +32,7 @@ export function CommandMenu() {
   const [devices, setDevices] = createSignal<Device[] | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [active, setActive] = createSignal(0);
+  let generation = 0;
   const isCarbon = () => s.member()?.type === "carbon";
 
   onMount(() => {
@@ -45,20 +46,29 @@ export function CommandMenu() {
     onCleanup(() => document.removeEventListener("keydown", key));
   });
 
+  createEffect(on(s.contextKey, () => {
+    generation++;
+    setOpen(false); setDevices(null); setQuery(""); setError(null);
+  }));
+
   createEffect(
     on(open, async (isOpen) => {
+      const current = ++generation;
       if (isOpen && !dialog.open) {
         dialog.showModal();
         setQuery("");
         setActive(0);
+        setDevices(null);
+        setError(null);
         setTimeout(() => input?.focus());
         if (!s.pair()) return setDevices(null);
         try {
           const page = await s.client().listDevices({ scope: s.member()?.type === "silicon" ? "accessible" : "mine", limit: 100 });
+          if (current !== generation) return;
           setDevices(page.items);
           setError(null);
         } catch (e) {
-          setError(toApiError(e));
+          if (current === generation) setError(toApiError(e));
         }
       } else if (!isOpen && dialog.open) dialog.close();
     }),

@@ -294,10 +294,6 @@ impl Ctx {
     fn other_silicon(&self) -> silicon_extend_client::Authed<'_> {
         self.client.authed(OTHER_SILICON_TOKEN, Some(TEAM))
     }
-    /// c:bob, who paired the same device as c:alice (`shared_device`).
-    fn other_carbon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(OTHER_CARBON_TOKEN, Some(TEAM))
-    }
 }
 
 struct Op {
@@ -702,6 +698,28 @@ fn ops() -> Vec<Op> {
             })
         ),
         op!(
+            "devices.importable",
+            "Authed::importable_devices",
+            ["importable_device"],
+            200,
+            "devices",
+            Some(page(
+                json!({"device_id":DEVICE_ID,"name":"Pixel","os":"android","model":null,"host_device_id":null})
+            )),
+            |c| c.carbon().importable_devices(Some(10), None)
+        ),
+        op!(
+            "devices.import",
+            "Authed::import_device",
+            ["importable_device"],
+            200,
+            "device",
+            Some(device()),
+            |c| c
+                .carbon()
+                .import_device(DEVICE_ID, Visibility::Personal, PERMISSION_KEY)
+        ),
+        op!(
             "devices.get",
             "Authed::device",
             ["device"],
@@ -790,11 +808,11 @@ fn ops() -> Vec<Op> {
         op!(
             "devices.stop.device_stopped",
             "Authed::stop",
-            ["shared_device", "session"],
+            ["carried_session"],
             200,
             "device_stopped",
-            Some(json!({"device_id": SHARED_DEVICE_ID, "stopped_at": TS, "in_use_by_other": true})),
-            |c| c.other_carbon().stop(SHARED_DEVICE_ID)
+            Some(json!({"device_id": HOST_ID, "stopped_at": TS, "in_use_by_other": true})),
+            |c| c.carbon().stop(HOST_ID)
         ),
         op!(
             "team.silicons",

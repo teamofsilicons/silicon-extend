@@ -88,6 +88,6 @@ export function session(access: string, refresh: string, expiresIn = 1800) {
     token_type: "Bearer",
     expires_in: expiresIn,
     member: { type: "carbon", id: "c:saket" },
-    teams: ["acme", "labs"],
+    teams: ["acme"],
   };
 }

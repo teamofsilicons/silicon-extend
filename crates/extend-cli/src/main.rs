@@ -180,7 +180,7 @@ impl Ctx {
     /// Commands in session `sid` run in the Team it was started in, unless `--team` says otherwise.
     fn use_session_team(&mut self, sid: &str) {
         if self.g.team.is_none()
-            && let Some(c) = store::load_session_cache(&self.plane, sid)
+            && let Some(c) = store::load_session_cache(&self.plane, self.auth.as_ref(), sid)
         {
             self.session_team = c.team;
         }
@@ -214,7 +214,7 @@ impl Ctx {
     }
 
     fn require_auth(&self) -> R<Auth> {
-        self.auth.clone().ok_or_else(|| {
+        let auth = self.auth.clone().ok_or_else(|| {
             let mut e = CliError::new(ErrorCode::NotSignedIn, "You are not signed in to Silicon Extend");
             e.message.push_str(if self.plane.is_test() {
                 " in this test environment."
@@ -222,7 +222,17 @@ impl Ctx {
                 "."
             });
             e.hint("Get a short-lived token from Silicon IAM and run `extend login <slt>`.")
-        })
+        })?;
+        if auth.api_url != self.api_url()
+            || auth.teams.len() != 1
+            || self.team().as_deref() != auth.teams.first().map(String::as_str)
+        {
+            return Err(CliError::usage(
+                "This request does not match the saved account and organization.",
+                "Sign in for this organization, then choose its saved context with `extend login use <account> <organization>`.",
+            ));
+        }
+        Ok(auth)
     }
 
     /// Runs an authenticated call, refreshing the access token once if it expired. `label` names
@@ -251,8 +261,9 @@ impl Ctx {
     async fn refresh(&mut self, client: &Client) -> R<Auth> {
         let _lock = store::Lock::acquire("refresh");
         // Another process may have refreshed while we waited.
-        if let Some(disk) = store::load_auth(&self.plane)
-            && self.auth.as_ref().is_some_and(|a| a.access_token != disk.access_token)
+        let original = self.require_auth()?;
+        if let Some(disk) = store::load_context(&self.plane, &original)
+            && original.access_token != disk.access_token
         {
             self.auth = Some(disk.clone());
             return Ok(disk);
@@ -274,6 +285,19 @@ impl Ctx {
                 c.hint = Some("Your login ended. Get a new short-lived token and run `extend login <slt>`.".into());
                 c
             })?;
+        if s.member.id != auth.member_id
+            || (if s.member.kind == MemberKind::Carbon {
+                "carbon"
+            } else {
+                "silicon"
+            }) != auth.member_kind
+            || s.teams != auth.teams
+        {
+            return Err(CliError::new(
+                ErrorCode::Unauthorized,
+                "IAM returned a different account or organization during refresh.",
+            ));
+        }
         let fresh = Auth {
             access_token: s.access_token,
             refresh_token: s.refresh_token,
@@ -285,7 +309,12 @@ impl Ctx {
             },
             ..auth
         };
-        store::save_auth(&self.plane, Some(&fresh))?;
+        if !store::save_refreshed_context(&self.plane, &original, &fresh)? {
+            return Err(CliError::new(
+                ErrorCode::Unauthorized,
+                "This saved login changed while refreshing. Retry in the original account and organization.",
+            ));
+        }
         self.auth = Some(fresh.clone());
         Ok(fresh)
     }
@@ -295,7 +324,7 @@ impl Ctx {
             .session
             .clone()
             .or_else(|| std::env::var("EXTEND_SESSION").ok().filter(|s| !s.is_empty()))
-            .or_else(|| store::current_session(&self.plane))
+            .or_else(|| store::current_session(&self.plane, self.auth.as_ref()))
             .ok_or_else(|| {
                 CliError::new(ErrorCode::NoSession, "No session selected.").hint(format!(
                     "Run `{}`, or pass --session <session_id>.",
@@ -460,7 +489,17 @@ async fn run(argv: Vec<String>) -> i32 {
         test_trailer(&ctx.out, &id, ctx.test_name.as_deref(), None, true);
         return code;
     }
-    ctx.auth = store::load_auth(&ctx.plane);
+    ctx.auth = store::load_auth(&ctx.plane).filter(|auth| auth.api_url == ctx.api_url());
+    if let (Some(selected), Some(org)) = (ctx.auth.clone(), ctx.g.team.as_ref())
+        && selected.team.as_ref() != Some(org)
+    {
+        ctx.auth = store::contexts(&ctx.plane).into_iter().find(|a| {
+            a.api_url == selected.api_url
+                && a.member_id == selected.member_id
+                && a.member_kind == selected.member_kind
+                && a.team.as_ref() == Some(org)
+        });
+    }
     let started = Instant::now();
     let result = dispatch(&mut ctx, rest.clone()).await;
     let code = match &result {
@@ -663,7 +702,7 @@ fn telemetry_step(rest: &[String]) -> (String, String) {
 /// The session `--help` describes: the one commands would run in, if its device is cached.
 fn connected_cache(ctx: &Ctx) -> Option<store::SessionCache> {
     let sid = ctx.session_id().ok()?;
-    store::load_session_cache(&ctx.plane, &sid)
+    store::load_session_cache(&ctx.plane, ctx.auth.as_ref(), &sid)
 }
 
 fn with_connected<T>(ctx: &Ctx, f: impl FnOnce(Option<&help::Connected>) -> T) -> T {
@@ -737,6 +776,7 @@ async fn dispatch(ctx: &mut Ctx, rest: Vec<String>) -> R<i32> {
             Ok(0)
         }
         "login" if sub == "status" => login_status(ctx, &args[1..]).await,
+        "login" if sub == "contexts" || sub == "use" => login_context(ctx, &sub, &args[1..]).await,
         "login" => login(ctx, &args).await,
         "logout" => logout(ctx, &args).await,
         "iam" => iam(ctx, &args).await,
@@ -848,6 +888,12 @@ async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     let client = ctx.client().await?;
     let t = Instant::now();
     let s = ctx.timed("POST /api/v1/auth/login", t, client.login(&slt).await)?;
+    if s.teams.len() != 1 {
+        return Err(CliError::new(
+            ErrorCode::Unauthorized,
+            "IAM login must select exactly one organization. Sign in again and choose an organization.",
+        ));
+    }
     let team = ctx
         .cfg
         .get("team")
@@ -892,6 +938,53 @@ async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             )
         },
     );
+    Ok(0)
+}
+
+async fn login_context(ctx: &mut Ctx, action: &str, rest: &[String]) -> R<i32> {
+    let a = Args::parse(rest, &format!("login {action}"))?;
+    let saved = store::contexts(&ctx.plane);
+    if action == "contexts" {
+        a.at_most(0)?;
+        let items: Vec<Value> = saved.iter().map(|s| json!({"account":s.member_id,"kind":s.member_kind,"organization":s.team,"selected":ctx.auth.as_ref().is_some_and(|a|a.same_context(s))})).collect();
+        ctx.emit(json!({"items":items}), || {
+            saved
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{} @ {}",
+                        s.member_id,
+                        s.team.as_deref().unwrap_or("reauthentication required")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+    } else {
+        a.at_most(2)?;
+        let account = a.req(0, "account id")?;
+        let org = a.req(1, "organization")?;
+        let selected = saved
+            .into_iter()
+            .find(|s| {
+                s.api_url == ctx.api_url()
+                    && s.member_id == account
+                    && s.team.as_deref() == Some(&org)
+                    && s.teams == [org.clone()]
+            })
+            .ok_or_else(|| {
+                CliError::new(
+                    ErrorCode::NotSignedIn,
+                    "No saved session for that account and organization.",
+                )
+                .hint("Run `extend login <slt>` for that account and organization first.")
+            })?;
+        store::save_auth(&ctx.plane, Some(&selected))?;
+        ctx.auth = Some(selected);
+        ctx.emit(json!({"account":account,"organization":org}), || {
+            format!("Selected {account} @ {org}.")
+        });
+    }
     Ok(0)
 }
 
@@ -952,7 +1045,7 @@ async fn logout(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     ctx.require_auth()?;
     let silicon = ctx.is_silicon();
     // Signing out ends the Silicon's own sessions, or, for a Carbon, the sessions of the Silicons
-    // they gave access to (through their own pairs, in every Team; never another Carbon's). They
+    // they gave access to through their own pairs in the selected organization. They
     // are read first so the answer can name them; without that read it says so in general.
     let running = running_sessions(ctx).await;
     let names = if !silicon && running.as_ref().is_some_and(|r| !r.is_empty()) {
@@ -966,8 +1059,8 @@ async fn logout(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     let t = Instant::now();
     let r = client.logout(&auth.refresh_token, Some(&auth.access_token)).await;
     let _ = ctx.timed("POST /api/v1/auth/logout", t, r);
-    store::save_auth(&ctx.plane, None)?;
-    store::set_current_session(&ctx.plane, None)?;
+    store::remove_context(&ctx.plane, &auth)?;
+    store::set_current_session(&ctx.plane, ctx.auth.as_ref(), None)?;
     ctx.auth = None;
     let ended: Option<Vec<String>> = running
         .as_ref()
@@ -1216,17 +1309,21 @@ async fn team(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         _ => {
             a.at_most(1)?;
             let t = a.req(0, "team handle")?;
-            if !auth.teams.contains(&t) {
-                return Err(CliError::new(
-                    ErrorCode::NotATeamMember,
-                    format!("This login doesn't reach team {t:?}."),
-                )
-                .hint(format!(
-                    "Teams this login reaches: {}. Sign in as a member of {t} to use it.",
-                    auth.teams.join(", ")
-                )));
-            }
-            auth.team = Some(t.clone());
+            auth = store::contexts(&ctx.plane)
+                .into_iter()
+                .find(|a| {
+                    a.api_url == auth.api_url
+                        && a.member_id == auth.member_id
+                        && a.member_kind == auth.member_kind
+                        && a.teams == [t.clone()]
+                })
+                .ok_or_else(|| {
+                    CliError::new(
+                        ErrorCode::NotSignedIn,
+                        format!("No saved session for this account in {t}."),
+                    )
+                    .hint("Sign in for that organization with `extend login <slt>`.")
+                })?;
             store::save_auth(&ctx.plane, Some(&auth))?;
             ctx.auth = Some(auth);
             ctx.emit(json!({"default": t}), || format!("Default team is now {t}."));
@@ -1940,6 +2037,17 @@ fn missing_types_text(team: &str, missing: &[String]) -> String {
     )
 }
 
+fn parse_visibility(value: &str) -> R<Visibility> {
+    match value {
+        "personal" => Ok(Visibility::Personal),
+        "team" => Ok(Visibility::Team),
+        _ => Err(CliError::usage(
+            "Visibility must be personal or team.",
+            "personal hides the device from all other organization members; team makes it discoverable, while control still requires an explicit grant.",
+        )),
+    }
+}
+
 async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     let (sub, rest) = sub_and_rest(args, "ls");
     let path = format!("device {sub}");
@@ -1950,21 +2058,10 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
     match sub.as_str() {
         "ls" => {
             a.at_most(0)?;
-            if a.flag("--team-visible") {
-                // From 1.1 nobody sees another Carbon's devices, and the service answers
-                // `scope=team` with an empty page, so nothing is asked.
-                let note = "Devices are only ever visible to the Carbons who paired them, so --team-visible lists nothing. `extend device ls` lists every device you paired, in every Team.";
-                if ctx.out.json {
-                    ctx.emit(json!({"items": [], "next_cursor": null, "note": note}), String::new);
-                } else {
-                    ctx.out.note(note);
-                }
-                return Ok(0);
-            }
             let removed = a.flag("--removed");
             let online = a.flag("--online");
             let q = DeviceQuery {
-                scope: None,
+                scope: a.flag("--team-visible").then(|| "team".into()),
                 online: online.then_some(true),
                 os: a.value("--os"),
                 limit: Some(100),
@@ -2045,11 +2142,6 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                     "Name the device: extend device pair <pairing_code> --name \"Saket's Pixel\"",
                 )
             })?;
-            if a.value("--visibility").is_some() {
-                ctx.out.note(
-                    "--visibility is ignored: from Silicon Extend 1.1 a device is only visible to the Carbons who paired it.",
-                );
-            }
             let ttl = a
                 .value("--ttl-days")
                 .map(|v| {
@@ -2064,7 +2156,9 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let claim = PairingClaim {
                 pairing_code: code,
                 name,
-                visibility: None,
+                visibility: Some(parse_visibility(
+                    a.value("--visibility").as_deref().unwrap_or("personal"),
+                )?),
                 pair_ttl_days: ttl,
                 silicon_ids: a.values("--access"),
             };
@@ -2113,7 +2207,9 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let input = AttachmentCreate {
                 os,
                 name,
-                visibility: None,
+                visibility: Some(parse_visibility(
+                    a.value("--visibility").as_deref().unwrap_or("personal"),
+                )?),
                 pair_ttl_days: None,
                 address: a.value("--address"),
             };
@@ -2172,10 +2268,104 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             ctx.emit(to_json(&s), || format!("Code sent.\n{}", setup_text(&s, colors, &id)));
         }
         "visibility" => {
-            return Err(CliError::usage(
-                "Visibility is gone in Extend 1.1: a device is only visible to the Carbons who paired it.",
-                "Nothing changed. Choose which Silicons can use it with `extend device access grant <device_id> <silicon_id>`.",
-            ));
+            a.at_most(2)?;
+            let id = a.req(0, "device id")?;
+            parse_device_id(&id)?;
+            let visibility = parse_visibility(&a.req(1, "personal or team")?)?;
+            let d = ctx
+                .call(&format!("PATCH /api/v1/devices/{id}"), |c, t, team| {
+                    let id = id.clone();
+                    async move {
+                        c.authed(&t, team.as_deref())
+                            .update_device(
+                                &id,
+                                None,
+                                &DevicePatch {
+                                    visibility: Some(visibility),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                    }
+                })
+                .await?;
+            ctx.emit(to_json(&d), || {
+                format!(
+                    "Visibility saved in this organization: {}.",
+                    if visibility == Visibility::Personal {
+                        "private to you"
+                    } else {
+                        "organization visible"
+                    }
+                )
+            });
+        }
+        "importable" => {
+            a.at_most(0)?;
+            let mut items = Vec::new();
+            let mut cursor = None;
+            loop {
+                let page = ctx
+                    .call("GET /api/v1/devices/importable", |c, t, team| {
+                        let cursor = cursor.clone();
+                        async move {
+                            c.authed(&t, team.as_deref())
+                                .importable_devices(Some(100), cursor)
+                                .await
+                        }
+                    })
+                    .await?;
+                items.extend(page.items);
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            ctx.emit(json!({"items":items,"next_cursor":null}), || {
+                items
+                    .iter()
+                    .map(|d| format!("{}  {}  {}", d.device_id, d.name, d.os.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+        }
+        "import" => {
+            a.at_most(1)?;
+            let id = a.req(0, "device id")?;
+            parse_device_id(&id)?;
+            let visibility = parse_visibility(a.value("--visibility").as_deref().unwrap_or("personal"))?;
+            let key = a.value("--key").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            if !uuid::Uuid::parse_str(&key).is_ok_and(|id| !id.is_nil()) {
+                return Err(CliError::usage(
+                    "--key must be a non-nil UUID",
+                    "Omit --key to generate one, or reuse the original UUID when retrying.",
+                ));
+            }
+            let original_team = ctx.team().unwrap_or_default();
+            let d = ctx
+                .call(&format!("POST /api/v1/devices/{id}/import"), |c, t, team| {
+                    let (id, key) = (id.clone(), key.clone());
+                    async move { c.authed(&t, team.as_deref()).import_device(&id, visibility, &key).await }
+                })
+                .await.map_err(|mut error| {
+                    if error.code == ErrorCode::ServiceUnavailable {
+                        let visibility = if visibility == Visibility::Team { "team" } else { "personal" };
+                        error.hint = Some(format!("Retry this import in its original organization: extend --team {original_team} device import {id} --visibility {visibility} --key {key}"));
+                    }
+                    error
+                })?;
+            ctx.emit(to_json(&d), || {
+                format!(
+                    "Imported {} into {} ({}).",
+                    d.name,
+                    d.team.as_deref().unwrap_or("this organization"),
+                    if visibility == Visibility::Personal {
+                        "private"
+                    } else {
+                        "organization visible"
+                    }
+                )
+            });
         }
         "banner" => {
             a.at_most(2)?;
@@ -2490,61 +2680,32 @@ async fn device_access(ctx: &mut Ctx, a: &Args) -> R<()> {
         );
         return Ok(());
     }
-    // revoke: with --team, that Team's grant only; without it, every Team's.
-    if let Some(team) = ctx.g.team.clone() {
-        for s in &silicons {
-            ctx.call(
-                &format!("DELETE /api/v1/devices/{id}/access/{s}?team={team}"),
-                |c, t, h| {
-                    let (id, s, team) = (id.clone(), s.clone(), team.clone());
-                    async move { c.authed(&t, h.as_deref()).revoke_in_team(&id, &s, &team).await }
-                },
-            )
-            .await?;
-        }
-        ctx.emit(json!({"device_id": id, "revoke": silicons, "team": team}), || {
-            format!(
-                "Revoked access for {} on {id} in {team}; any running session of theirs there has ended.",
-                silicons.join(", ")
-            )
-        });
-        return Ok(());
-    }
-    // Listed first so the answer can say which Teams' grants went; a failed read only leaves that out.
-    let before = read_access(ctx, &id).await.ok();
-    for s in &silicons {
-        ctx.call(&format!("DELETE /api/v1/devices/{id}/access/{s}"), |c, t, team| {
-            let (id, s) = (id.clone(), s.clone());
-            async move { c.authed(&t, team.as_deref()).revoke(&id, &s).await }
-        })
+    // Both explicit and default selections revoke only the current organization's grant.
+    let team = ctx
+        .team()
+        .ok_or_else(|| CliError::new(ErrorCode::NotSignedIn, "Select an organization first."))?;
+    for silicon in &silicons {
+        ctx.call(
+            &format!("DELETE /api/v1/devices/{id}/access/{silicon}?team={team}"),
+            |client, token, selected| {
+                let (id, silicon, team) = (id.clone(), silicon.clone(), team.clone());
+                async move {
+                    client
+                        .authed(&token, selected.as_deref())
+                        .revoke_in_team(&id, &silicon, &team)
+                        .await
+                }
+            },
+        )
         .await?;
     }
-    let teams: BTreeMap<String, Vec<String>> = silicons
-        .iter()
-        .map(|s| {
-            let ts = before
-                .iter()
-                .flatten()
-                .filter(|g| &g.silicon_id == s)
-                .filter_map(|g| g.team.clone())
-                .collect();
-            (s.clone(), ts)
-        })
-        .collect();
-    ctx.emit(json!({"device_id": id, "revoke": silicons, "teams": teams}), || {
-        let who: Vec<String> = silicons
-            .iter()
-            .map(|s| match teams.get(s).filter(|t| !t.is_empty()) {
-                Some(t) => format!("{s} (in {})", and_list(t)),
-                None if before.is_some() => format!("{s} (it had no access)"),
-                None => s.clone(),
-            })
-            .collect();
+    ctx.emit(json!({"device_id":id,"revoke":silicons,"team":team}), || {
         format!(
-            "Revoked access on {id} for {}, in every Team; any running session of theirs there has ended.",
-            who.join(", ")
+            "Revoked access for {} on {id} in {team}; any running session of theirs there has ended.",
+            silicons.join(", ")
         )
     });
+
     Ok(())
 }
 
@@ -3554,8 +3715,8 @@ fn remember_session(ctx: &Ctx, s: &Session, connect: bool) -> R<()> {
         forget_session(ctx, &sid);
         return Ok(());
     }
-    let current = store::current_session(&ctx.plane);
-    let cached = store::load_session_cache(&ctx.plane, &sid).is_some();
+    let current = store::current_session(&ctx.plane, ctx.auth.as_ref());
+    let cached = store::load_session_cache(&ctx.plane, ctx.auth.as_ref(), &sid).is_some();
     if !(connect || cached || current.as_deref() == Some(sid.as_str())) {
         return Ok(());
     }
@@ -3589,18 +3750,18 @@ fn remember_session(ctx: &Ctx, s: &Session, connect: bool) -> R<()> {
         refreshed_at: now_s(),
         team: s.team.clone().or_else(|| ctx.team()),
     };
-    store::save_session_cache(&ctx.plane, &cache)?;
+    store::save_session_cache(&ctx.plane, ctx.auth.as_ref(), &cache)?;
     if connect {
-        store::set_current_session(&ctx.plane, Some(&sid))?;
+        store::set_current_session(&ctx.plane, ctx.auth.as_ref(), Some(&sid))?;
     }
     Ok(())
 }
 
 /// The session ended or is gone: stop listing its device's commands, and disconnect from it.
 fn forget_session(ctx: &Ctx, sid: &str) {
-    store::remove_session_cache(&ctx.plane, sid);
-    if store::current_session(&ctx.plane).as_deref() == Some(sid) {
-        let _ = store::set_current_session(&ctx.plane, None);
+    store::remove_session_cache(&ctx.plane, ctx.auth.as_ref(), sid);
+    if store::current_session(&ctx.plane, ctx.auth.as_ref()).as_deref() == Some(sid) {
+        let _ = store::set_current_session(&ctx.plane, ctx.auth.as_ref(), None);
     }
 }
 
@@ -3717,7 +3878,7 @@ async fn session(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         }
         "disconnect" => {
             a.at_most(0)?;
-            store::set_current_session(&ctx.plane, None)?;
+            store::set_current_session(&ctx.plane, ctx.auth.as_ref(), None)?;
             ctx.emit(json!({"connected": null}), || {
                 "Disconnected. The session keeps running until it's ended or idle for 5 minutes.".into()
             });
@@ -4321,7 +4482,7 @@ async fn report(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "cli": env!("CARGO_PKG_VERSION"),
-        "session": store::current_session(&ctx.plane),
+        "session": store::current_session(&ctx.plane, ctx.auth.as_ref()),
         "test": ctx.plane.is_test(),
     });
     let input = ReportInput {
@@ -4704,8 +4865,8 @@ async fn device_command(ctx: &mut Ctx, name: &str, raw: Vec<String>) -> R<i32> {
     };
     // While the command runs, re-read the session, so `extend --help` lists what its device can
     // do now (a permission granted since connecting, a device that came online).
-    let watch = store::current_session(&ctx.plane).as_deref() == Some(sid.as_str())
-        || store::load_session_cache(&ctx.plane, &sid).is_some();
+    let watch = store::current_session(&ctx.plane, ctx.auth.as_ref()).as_deref() == Some(sid.as_str())
+        || store::load_session_cache(&ctx.plane, ctx.auth.as_ref(), &sid).is_some();
     let peek = {
         let client = ctx.client().await?;
         let token = ctx.require_auth()?.access_token;

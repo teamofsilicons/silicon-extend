@@ -36,6 +36,8 @@ function KindIcon(props: { kind: DeviceKind; size?: number }) {
 
 export default function AddDevice() {
   const s = session();
+  const client = s.client();
+  const [shared, setShared] = createSignal(false);
   const preset = deviceKind(query().get("kind") ?? undefined)?.id ?? null;
   const [state, setState] = createSignal(initialState(preset));
   const dispatch = (event: WizardEvent) => setState((current) => reduce(current, event));
@@ -65,26 +67,28 @@ export default function AddDevice() {
       let device: Device;
       if (k.via === "app") {
         device = (
-          await s.client().claimPairing({
+          await client.claimPairing({
             pairing_code: normalizePairingCode(st.code).code,
             name: st.name.trim(),
             pair_ttl_days: st.ttlDays,
+            visibility: shared() ? "team" : "personal",
           })
         ).device;
       } else {
-        device = await s.client().attachDevice(st.hostId!, {
+        device = await client.attachDevice(st.hostId!, {
           os: k.os as AttachOs,
           name: st.name.trim(),
           pair_ttl_days: st.ttlDays,
+          visibility: shared() ? "team" : "personal",
         });
       }
       dispatch({ type: "created", device });
-      void s.client().telemetry({ event: "pairing", step: k.via === "app" ? "web.pairing.claim" : "web.pairing.attach", success: true, duration_ms: performance.now() - started, device_os: k.os });
+      void client.telemetry({ event: "pairing", step: k.via === "app" ? "web.pairing.claim" : "web.pairing.attach", success: true, duration_ms: performance.now() - started, device_os: k.os });
     } catch (e) {
       const error = toApiError(e);
       setLastError(error);
       dispatch({ type: "failed", error: { code: error.code, message: error.message, hint: error.hint } });
-      void s.client().telemetry({ event: "pairing", step: k.via === "app" ? "web.pairing.claim" : "web.pairing.attach", success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: k.os });
+      void client.telemetry({ event: "pairing", step: k.via === "app" ? "web.pairing.claim" : "web.pairing.attach", success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: k.os });
     }
   }
   /**
@@ -100,7 +104,7 @@ export default function AddDevice() {
     if (!state().savingBanner) return;
     const change = { in_use_indicator: state().banner ? "shown" : "hidden" } as const;
     const started = performance.now();
-    const send = async (ifMatch: string) => (await s.client().updateDevice(device.device_id, change, ifMatch)).device;
+    const send = async (ifMatch: string) => (await client.updateDevice(device.device_id, change, ifMatch)).device;
     try {
       let updated;
       try {
@@ -108,16 +112,16 @@ export default function AddDevice() {
       } catch (e) {
         const error = toApiError(e);
         if (error.status !== 412 && error.code !== "version_unknown") throw e;
-        const fresh = await s.client().getDevice(device.device_id);
+        const fresh = await client.getDevice(device.device_id);
         updated = await send(ifMatchValue(fresh.etag, fresh.device.version));
       }
       dispatch({ type: "banner_saved", device: updated });
-      void s.client().telemetry({ event: "device_update", step: "web.pairing.in_use_indicator", success: true, duration_ms: performance.now() - started, device_os: device.os });
+      void client.telemetry({ event: "device_update", step: "web.pairing.in_use_indicator", success: true, duration_ms: performance.now() - started, device_os: device.os });
     } catch (e) {
       const error = toApiError(e);
       setLastError(error);
       dispatch({ type: "failed", error: { code: error.code, message: error.message, hint: error.hint } });
-      void s.client().telemetry({ event: "device_update", step: "web.pairing.in_use_indicator", success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: device.os });
+      void client.telemetry({ event: "device_update", step: "web.pairing.in_use_indicator", success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: device.os });
     }
   }
 
@@ -292,7 +296,8 @@ export default function AddDevice() {
                 <Show when={state().name && nameProblem(state().name)}>
                   <p class="field-problem">{nameProblem(state().name)}</p>
                 </Show>
-                <p class="fine">Only you see it on Extend. Other Carbons who pair the same device get their own, separate pair.</p>
+                <label class="checkbox-row"><input type="checkbox" checked={shared()} onChange={e=>setShared(e.currentTarget.checked)}/>Visible to members of {s.team()}</label>
+                <p class="fine">Off keeps this device private to you, hidden from every other organization member. Shared devices need an explicit access grant before a Silicon can control them.</p>
                 <TtlSlider value={state().ttlDays} onInput={(days) => dispatch({ type: "set_ttl", days })} />
                 <ErrorNote error={shownError()} testid="pairing-error" />
                 <Nav
@@ -392,9 +397,9 @@ export default function AddDevice() {
                 <p class="eyebrow">Access</p>
                 <h2 class="card-title">Which Silicons can use {device().name}?</h2>
                 <p class="fine">
-                  Pick Silicons from any of your Teams; each uses the device as a member of its own Team. You can change this any time on the device's page. Only one Silicon uses the device at a
-                  time; the others can ask for a turn.
+                  Choose Silicons in {s.team()}. Only one Silicon uses the device at a time. A private device stays hidden from every other member, even when an access grant exists.
                 </p>
+                <Show when={device().visibility === "team"} fallback={<p class="notice">This device is private. Turn on organization visibility in its settings when you want to give a Silicon access.</p>}>
                 <AccessPicker
                   deviceId={device().device_id}
                   onGranted={(ids, team) => {
@@ -402,6 +407,7 @@ export default function AddDevice() {
                     dispatch({ type: "access_done", granted: [...state().granted, ...ids] });
                   }}
                 />
+                </Show>
                 <div class="wizard-nav">
                   <span />
                   <Button variant="ghost" onClick={() => dispatch({ type: "skip_access" })} data-testid="skip-access">
@@ -622,11 +628,12 @@ function HostStep(props: {
   canNext: boolean;
 }) {
   const s = session();
+  const client = s.client();
   // Every computer the Carbon paired, whichever Team is selected (1.1: devices belong to the Carbon).
   const [hosts] = createResource(
     () => s.world(),
     async () => {
-      const page = await s.client().listDevices({ scope: "mine", limit: 100 });
+      const page = await client.listDevices({ scope: "mine", limit: 100 });
       return page.items.filter(
         (d) => !d.host_device_id && (props.kind.host === "mac" ? d.os === "macos" : d.os === "macos" || d.os === "windows" || d.os === "linux"),
       );

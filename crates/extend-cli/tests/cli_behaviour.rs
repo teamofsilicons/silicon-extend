@@ -202,12 +202,49 @@ impl Cli {
         self
     }
 
+    fn with_saved_org(self, org: &str) -> Self {
+        let mut auth: Value = serde_json::from_slice(&std::fs::read(self.state().join("auth.json")).unwrap()).unwrap();
+        auth["team"] = json!(org);
+        auth["teams"] = json!([org]);
+        auth["access_token"] = json!(format!("access-{org}"));
+        auth["refresh_token"] = json!(format!("refresh-{org}"));
+        let binding = serde_json::to_string(&(
+            &auth["api_url"],
+            &auth["member_kind"],
+            &auth["member_id"],
+            &auth["team"],
+        ))
+        .unwrap();
+        let dir = self.state().join("contexts/production");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{}.json", extend_protocol::ids::secret_digest(&binding))),
+            auth.to_string(),
+        )
+        .unwrap();
+        self
+    }
+
+    fn session_dir(&self) -> PathBuf {
+        let auth: Value = serde_json::from_slice(&std::fs::read(self.state().join("auth.json")).unwrap()).unwrap();
+        let binding = serde_json::to_string(&(
+            &auth["api_url"],
+            &auth["member_kind"],
+            &auth["member_id"],
+            &auth["team"],
+        ))
+        .unwrap();
+        self.state()
+            .join("sessions")
+            .join(extend_protocol::ids::secret_digest(&binding))
+    }
+
     fn connected(self, sid: &str, commands: &[&str]) -> Self {
         let cache = json!({
             "session_id": sid, "device_id": "7c1e09ab", "device_name": "CLI box", "os": "linux",
             "capabilities": [], "commands": commands, "test_id": null,
         });
-        let dir = self.state().join("sessions");
+        let dir = self.session_dir();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{sid}.json")), cache.to_string()).unwrap();
         std::fs::write(dir.join("current"), sid).unwrap();
@@ -671,7 +708,7 @@ fn help_follows_the_connected_device() {
     assert_eq!(o.status.code(), Some(1));
     let help = stdout(&cli.run(&["--help"]));
     assert!(!help.contains("connected to session"), "{help}");
-    assert!(!cli.state().join("sessions/current").exists());
+    assert!(!cli.session_dir().join("current").exists());
 }
 
 #[test]
@@ -1160,24 +1197,27 @@ fn device_ls_shows_awake_and_in_use_as_each_viewer_may_see_them() {
     }
     assert!(!out.contains("LAST USED") && !out.contains("another Carbon"), "{out}");
 
-    // --team-visible is gone: a note, nothing listed, nothing asked.
-    let before = fake.requests("GET", "/api/v1/devices").len();
-    let o = carbon.run(&["device", "ls", "--team-visible"]);
-    assert!(o.status.success());
-    assert_eq!(stdout(&o), "");
-    assert!(
-        stderr(&o).contains("only ever visible to the Carbons who paired them"),
-        "{}",
-        stderr(&o)
-    );
+    // Organization discovery requests only the selected organization.
     let o = carbon.run(&["device", "ls", "--team-visible", "--json"]);
-    assert_eq!(json_out(&o)["items"], json!([]));
-    assert_eq!(fake.requests("GET", "/api/v1/devices").len(), before);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(json_out(&o)["items"].as_array().unwrap().len(), 3);
+    let calls = fake.requests("GET", "/api/v1/devices");
+    let request = calls.last().unwrap();
+    assert_eq!(request.query("scope").as_deref(), Some("team"));
+    assert_eq!(request.headers.get("x-org-id").map(String::as_str), Some("acme"));
 }
 
 #[test]
-fn visibility_is_gone_and_pair_ignores_it() {
+fn visibility_and_pair_are_explicit_and_org_scoped() {
     let fake = Fake::start(|r| match (r.method.as_str(), r.path_only()) {
+        ("PATCH", "/api/v1/devices/7c1e09ab") => Some(ok(
+            "device",
+            device_with(
+                "7c1e09ab",
+                "CLI box",
+                json!({"visibility":r.body["data"]["visibility"]}),
+            ),
+        )),
         ("POST", "/api/v1/pairings") => Some(answer(
             201,
             "device",
@@ -1191,12 +1231,10 @@ fn visibility_is_gone_and_pair_ignores_it() {
     });
     let cli = Cli::new("visibility", &fake.url).signed_in("c:alice");
     let o = cli.run(&["device", "visibility", "7c1e09ab", "personal"]);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(
-        stderr(&o).contains("Visibility is gone in Extend 1.1: a device is only visible to the Carbons who paired it."),
-        "{}",
-        stderr(&o)
-    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let changes = fake.requests("PATCH", "/api/v1/devices/7c1e09ab");
+    assert_eq!(changes[0].body["data"]["visibility"], "personal");
+    assert_eq!(changes[0].headers.get("x-org-id").map(String::as_str), Some("acme"));
     let o = cli.run(&[
         "device",
         "pair",
@@ -1207,10 +1245,9 @@ fn visibility_is_gone_and_pair_ignores_it() {
         "team",
     ]);
     assert!(o.status.success(), "{}", stderr(&o));
-    assert!(stderr(&o).contains("--visibility is ignored"), "{}", stderr(&o));
     assert_eq!(
-        fake.requests("POST", "/api/v1/pairings")[0].body["data"].get("visibility"),
-        None
+        fake.requests("POST", "/api/v1/pairings")[0].body["data"]["visibility"],
+        "team"
     );
     let out = stdout(&o);
     assert!(
@@ -1517,7 +1554,9 @@ fn access_is_per_team() {
         ("DELETE", _) => Some(no_content()),
         _ => None,
     });
-    let cli = Cli::new("access", &fake.url).signed_in("c:alice");
+    let cli = Cli::new("access", &fake.url)
+        .signed_in("c:alice")
+        .with_saved_org("labs");
     let o = cli.run(&["--team", "labs", "device", "access", "grant", "7c1e09ab", "si:chef"]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(stdout(&o).trim(), "Granted si:chef access to 7c1e09ab in labs.");
@@ -1536,8 +1575,12 @@ fn access_is_per_team() {
         Some("labs")
     );
     let o = cli.run(&["--team", "globex", "device", "access", "grant", "7c1e09ab", "si:scout"]);
-    assert_eq!(o.status.code(), Some(4));
-    assert!(stderr(&o).contains("doesn't reach globex"), "{}", stderr(&o));
+    assert_eq!(o.status.code(), Some(3));
+    assert!(stderr(&o).contains("not signed in"), "{}", stderr(&o));
+    assert!(
+        fake.requests("PUT", "/api/v1/devices/7c1e09ab/access/si:scout")
+            .is_empty()
+    );
 
     let out = stdout(&cli.run(&["device", "access", "ls", "7c1e09ab"]));
     assert!(
@@ -1548,14 +1591,10 @@ fn access_is_per_team() {
     let o = cli.run(&["--team", "labs", "device", "access", "revoke", "7c1e09ab", "si:chef"]);
     assert!(stdout(&o).contains("in labs"), "{}", stdout(&o));
     let o = cli.run(&["device", "access", "revoke", "7c1e09ab", "si:chef"]);
-    assert!(
-        stdout(&o).contains("si:chef (in acme and labs), in every Team"),
-        "{}",
-        stdout(&o)
-    );
+    assert!(stdout(&o).contains("si:chef on 7c1e09ab in acme"), "{}", stdout(&o));
     let deletes = fake.requests("DELETE", "/api/v1/devices/7c1e09ab/access/si:chef");
     assert_eq!(deletes[0].query("team").as_deref(), Some("labs"));
-    assert_eq!(deletes[1].query("team"), None);
+    assert_eq!(deletes[1].query("team").as_deref(), Some("acme"));
 }
 
 #[test]
@@ -1578,7 +1617,7 @@ fn ting_status_and_on() {
         )),
         _ => None,
     });
-    let cli = Cli::new("ting", &fake.url).signed_in("c:alice");
+    let cli = Cli::new("ting", &fake.url).signed_in("c:alice").with_saved_org("labs");
     let out = stdout(&cli.run(&["ting", "status"]));
     assert!(
         out.contains("acme  off     —")
@@ -1817,4 +1856,154 @@ fn banner_setting_uses_only_the_new_field_and_checks_arguments() {
         assert_eq!(c.run(&args).status.code(), Some(2));
     }
     assert_eq!(f.requests("PATCH", "/api/v1/devices/7c1e09ab").len(), 2);
+}
+
+#[test]
+fn saved_logins_select_their_own_org_tokens_and_session_cache() {
+    let fake = Fake::start(|r| match (r.method.as_str(), r.path_only()) {
+        ("POST", "/api/v1/auth/login") => {
+            let org = r.body["data"]["slt"].as_str().unwrap();
+            Some(ok(
+                "login",
+                json!({"access_token":format!("access-{org}"),"refresh_token":format!("refresh-{org}"),"expires_in":900,"token_type":"Bearer","member":{"type":"silicon","id":"si:chef"},"teams":[org]}),
+            ))
+        }
+        ("GET", "/api/v1/devices") => Some(ok("devices", json!({"items":[],"next_cursor":null}))),
+        _ => None,
+    });
+    let cli = Cli::new("contexts", &fake.url)
+        .signed_in("si:chef")
+        .connected("a3f", &["device-info"]);
+    let original_sessions = cli.session_dir();
+    assert!(cli.run(&["login", "labs"]).status.success());
+    assert_ne!(cli.session_dir(), original_sessions);
+    assert!(!cli.session_dir().join("current").exists());
+    assert!(original_sessions.join("current").exists());
+    let contexts = cli.run(&["login", "contexts", "--json"]);
+    assert!(contexts.status.success(), "{}", stderr(&contexts));
+    let rows = json_out(&contexts)["items"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 2);
+    assert!(!stdout(&contexts).contains("refresh"));
+    let use_org = cli.run(&["login", "use", "si:chef", "acme"]);
+    assert!(use_org.status.success(), "{}", stderr(&use_org));
+    assert_eq!(cli.session_dir(), original_sessions);
+    assert!(cli.session_dir().join("current").exists());
+    assert!(cli.run(&["--team", "labs", "device", "ls"]).status.success());
+    let calls = fake.requests("GET", "/api/v1/devices");
+    assert_eq!(calls[0].headers["x-org-id"], "labs");
+    assert_eq!(calls[0].headers["authorization"], "Bearer access-labs");
+    let saved: Value = serde_json::from_slice(&std::fs::read(cli.state().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(
+        saved["team"], "acme",
+        "one-command context selection must not change the default"
+    );
+    let denied = cli.run(&["--team", "unknown", "device", "ls"]);
+    assert!(!denied.status.success());
+    assert_eq!(
+        fake.requests("GET", "/api/v1/devices").len(),
+        1,
+        "unsaved org sends no authenticated request"
+    );
+}
+
+#[test]
+fn import_uses_private_default_and_explicit_retry_key() {
+    let fake = Fake::start(|r| match (r.method.as_str(), r.path_only()) {
+        ("GET", "/api/v1/devices/importable") => Some(ok(
+            "devices",
+            json!({"items":[{"device_id":"7c1e09ab","name":"Configured Mac","os":"macos","model":null,"host_device_id":null}],"next_cursor":null}),
+        )),
+        ("POST", "/api/v1/devices/7c1e09ab/import") => Some(ok(
+            "device",
+            device_with(
+                "7c1e09ab",
+                "Configured Mac",
+                json!({"visibility":"personal","team":"acme"}),
+            ),
+        )),
+        _ => None,
+    });
+    let cli = Cli::new("device-import", &fake.url).signed_in("c:alice");
+    let inventory = cli.run(&["device", "importable", "--json"]);
+    assert!(inventory.status.success(), "{}", stderr(&inventory));
+    assert_eq!(json_out(&inventory)["items"][0]["name"], "Configured Mac");
+    let key = "0192f3a4-0000-7000-8000-000000000001";
+    for _ in 0..2 {
+        let result = cli.run(&["device", "import", "7c1e09ab", "--key", key]);
+        assert!(result.status.success(), "{}", stderr(&result));
+    }
+    for request in fake.requests("POST", "/api/v1/devices/7c1e09ab/import") {
+        assert_eq!(
+            request.body,
+            json!({"type":"device_import","data":{"visibility":"personal"}})
+        );
+        assert_eq!(request.headers["x-org-id"], "acme");
+        assert_eq!(request.headers["idempotency-key"], key);
+    }
+}
+
+#[test]
+fn refresh_rejects_changed_identity_without_replacing_saved_credentials() {
+    let fake = Fake::start(|r| match (r.method.as_str(), r.path_only()) {
+        ("GET", "/api/v1/devices") => Some(err(401, "token_expired", "Expired.")),
+        ("POST", "/api/v1/auth/refresh") => Some(ok(
+            "refresh",
+            json!({"access_token":"wrong-access","refresh_token":"wrong-refresh","expires_in":900,"token_type":"Bearer","member":{"type":"carbon","id":"c:alice"},"teams":["labs"]}),
+        )),
+        _ => None,
+    });
+    let cli = Cli::new("refresh-context", &fake.url).signed_in("c:alice");
+    let before = std::fs::read(cli.state().join("auth.json")).unwrap();
+    let result = cli.run(&["device", "ls"]);
+    assert!(!result.status.success());
+    assert!(stderr(&result).contains("different account or organization"));
+    assert_eq!(std::fs::read(cli.state().join("auth.json")).unwrap(), before);
+    assert_eq!(fake.requests("GET", "/api/v1/devices").len(), 1);
+}
+
+#[test]
+fn changing_api_origin_never_sends_the_previous_origins_bearer() {
+    let fake = Fake::start(|r| {
+        (r.path_only() == "/api/v1/devices").then(|| ok("devices", json!({"items":[],"next_cursor":null})))
+    });
+    let mut cli = Cli::new("origin-isolation", "https://old.example").signed_in("c:alice");
+    cli.url = fake.url.clone();
+    let result = cli.run(&["device", "ls"]);
+    assert!(!result.status.success());
+    assert!(
+        fake.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.headers.contains_key("authorization"))
+    );
+}
+
+#[test]
+fn delayed_refresh_cannot_replace_a_newer_saved_login() {
+    let state = Arc::new(Mutex::new(PathBuf::new()));
+    let pending_state = state.clone();
+    let fake = Fake::start(move |r| match (r.method.as_str(), r.path_only()) {
+        ("GET", "/api/v1/devices") => Some(err(401, "token_expired", "Expired.")),
+        ("POST", "/api/v1/auth/refresh") => {
+            let file = pending_state.lock().unwrap().join("auth.json");
+            let mut newer: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+            newer["access_token"] = json!("new-login-access");
+            newer["refresh_token"] = json!("new-login-refresh");
+            std::fs::write(file, newer.to_string()).unwrap();
+            Some(ok(
+                "refresh",
+                json!({"access_token":"old-family-access","refresh_token":"old-family-refresh","expires_in":900,"token_type":"Bearer","member":{"type":"carbon","id":"c:alice"},"teams":["acme"]}),
+            ))
+        }
+        _ => None,
+    });
+    let cli = Cli::new("refresh-new-login", &fake.url).signed_in("c:alice");
+    *state.lock().unwrap() = cli.state();
+    let result = cli.run(&["device", "ls"]);
+    assert!(!result.status.success());
+    assert!(stderr(&result).contains("saved login changed"), "{}", stderr(&result));
+    let saved: Value = serde_json::from_slice(&std::fs::read(cli.state().join("auth.json")).unwrap()).unwrap();
+    assert_eq!(saved["access_token"], "new-login-access");
+    assert_eq!(fake.requests("GET", "/api/v1/devices").len(), 1);
 }

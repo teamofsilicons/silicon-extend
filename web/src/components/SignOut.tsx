@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import { LogOut } from "lucide-solid";
 import { session } from "../lib/session";
 import { navigate } from "../lib/router";
@@ -12,7 +12,7 @@ import { Button, Modal } from "./ui";
 export function signOutEffect(type: "carbon" | "silicon" | undefined): string {
   return type === "silicon"
     ? "Signing out ends your running sessions."
-    : "Signing out ends the running sessions of the Silicons you gave access to, on every device you paired. Silicons other Carbons gave access to carry on. Your Silicons keep their access.";
+    : "Signing out ends the running sessions of the Silicons you gave access to, in this organization. Silicons other Carbons gave access to carry on. Your Silicons keep their access.";
 }
 
 /** Sign out, after saying what it ends. `icon` is the top bar's button; otherwise a plain button. */
@@ -20,6 +20,7 @@ export function SignOutButton(props: { icon?: boolean }) {
   const s = session();
   const [open, setOpen] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
+  createEffect(on(s.contextKey, () => setOpen(false)));
   async function signOut() {
     setBusy(true);
     // Go to "/" first so the sign-in form appears once, not twice.

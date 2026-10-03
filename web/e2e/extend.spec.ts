@@ -11,7 +11,7 @@ test.describe("signing in", () => {
     await page.getByTestId("slt-input").fill("oac_saket");
     await page.getByTestId("slt-submit").click();
     const rows = page.getByTestId("device-list").getByTestId("device-row");
-    await expect(rows).toHaveCount(7);
+    await expect(rows).toHaveCount(6);
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
     const pixel = page.locator(`[data-device-id="${DEVICE_PIXEL}"]`);
     await expect(pixel).toContainText("Saket's Pixel");
@@ -23,16 +23,16 @@ test.describe("signing in", () => {
     await expect(page.locator('[data-device-id="51ab93c0"]')).toContainText("through MacBook Pro");
     await shoot(page, "02-devices");
 
-    // 1.1: devices belong to the Carbon, not to a Team. No "Team devices" tab, and no other Carbon's device.
-    await expect(page.getByTestId("tab-team")).toHaveCount(0);
+    await expect(page.getByTestId("tab-team")).toBeVisible();
     await expect(page.getByTestId("device-list")).not.toContainText("Alice's");
-    await expect(page.getByTestId("list-label")).toContainText("Every Team · 7");
-    // The Team menu doesn't change the list: the labs device shows in acme, and acme's in labs.
+    await expect(page.getByTestId("list-label")).toContainText("acme · 6");
+    await expect(page.getByTestId("device-list")).not.toContainText("Lab Linux box");
+    await page.getByRole("link", { name: "Add account or organization" }).click();
+    await page.getByTestId("slt-input").fill("oac_saket@labs");
+    await page.getByTestId("slt-submit").click();
+    await expect(rows).toHaveCount(1);
     await expect(page.getByTestId("device-list")).toContainText("Lab Linux box");
-    await page.getByTestId("team-picker").selectOption("labs");
-    await expect(rows).toHaveCount(7);
-    await expect(page.getByTestId("device-list")).toContainText("Saket's Pixel");
-    await expect(page.getByTestId("device-list")).toContainText("Lab Linux box");
+    await expect(page.getByTestId("device-list")).not.toContainText("Saket's Pixel");
   });
 
   test("shows the service's message and hint for a bad token", async ({ page, mock }) => {
@@ -150,6 +150,7 @@ test.describe("adding a device", () => {
     await expect(page.getByTestId("name-step")).toBeVisible();
     await page.getByTestId("device-name-input").fill("Test Pixel");
     await shoot(page, "07-wizard-name");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -186,6 +187,7 @@ test.describe("adding a device", () => {
     await page.getByTestId("pairing-code-input").fill("ABCDEF");
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Nope");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("code-step")).toBeVisible();
     await expect(page.getByTestId("code-error")).toContainText("That pairing code is wrong, expired or already used.");
@@ -200,6 +202,7 @@ test.describe("adding a device", () => {
     await page.getByTestId("pairing-code-input").fill(code);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Desk PC");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -227,6 +230,7 @@ test.describe("adding a device", () => {
     await page.getByTestId("host-option").filter({ hasText: "MacBook Pro" }).click();
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Bedroom Apple TV");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -273,7 +277,7 @@ test.describe("a device's page", () => {
     // No visibility: since 1.1 a device is only ever visible to the Carbons who paired it.
     await expect(page.getByTestId("visibility-personal")).toHaveCount(0);
     await expect(page.getByTestId("visibility-team")).toHaveCount(0);
-    await expect(page.getByTestId("device-eyebrow")).toHaveText("Phone · Only you see it");
+    await expect(page.getByTestId("device-eyebrow")).toHaveText("Phone · Shared in acme");
 
     // The activity log reads those changes back in plain words.
     const summaries = page.getByTestId("activity-summary");
@@ -358,7 +362,7 @@ test.describe("a device's page", () => {
     await page.goto(`/devices/${DEVICE_MAC}`);
     await expect(page.getByTestId("device-name")).toHaveText("MacBook Pro");
     // Someone else changes the device in another tab.
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
     const res = await request.patch(`/api/v1/devices/${DEVICE_MAC}`, {
       headers: { Authorization: `Bearer ${token}`, "X-Org-ID": "acme", "If-Match": '"2"', "Content-Type": "application/json" },
       data: { type: "device", data: { name: "MacBook (renamed elsewhere)" } },
@@ -380,7 +384,7 @@ test.describe("a device's page", () => {
     await expect(dialog).toBeVisible();
     // What removal does to this offline TV with one Silicon, in words that agree with the count.
     await expect(page.getByTestId("remove-access")).toHaveText("1 Silicon loses access.");
-    await expect(page.getByTestId("remove-unpair")).toHaveText("It's offline, so the Extend app on it unpairs the next time it connects, then shows a new pairing code.");
+    await expect(page.getByTestId("remove-unpair")).toHaveText("Its configured connection stays available for importing. Other organizations keep their bindings.");
     await expect(page.getByTestId("remove-consequences")).toContainText("Its activity log stays readable: find it under Removed in your device list.");
     await expect(page.getByTestId("remove-confirm")).toBeDisabled();
     await page.getByTestId("remove-confirm-input").fill("Living room");
@@ -389,7 +393,7 @@ test.describe("a device's page", () => {
     await shoot(page, "13-remove-dialog");
     await page.getByTestId("remove-confirm").click();
     await expect(page).toHaveURL(/\/devices$/);
-    await expect(page.getByTestId("device-row")).toHaveCount(6);
+    await expect(page.getByTestId("device-row")).toHaveCount(5);
     await expect(page.getByTestId("device-list")).not.toContainText("Living room TV");
     await expect(page.getByTestId("toast").last()).toContainText("Its activity log is under Removed");
 
@@ -427,7 +431,7 @@ test.describe("a device's page", () => {
     await expect(page.getByTestId("activity-summary").first()).toHaveText("Removed the device");
     // Nothing that changes a device is offered on a removed one.
     for (const id of ["rename", "stop-session", "access-card", "settings-card", "danger-zone", "capabilities"]) await expect(page.getByTestId(id)).toHaveCount(0);
-    await expect(page.getByTestId("pair-again")).toHaveAttribute("href", "/devices/new?kind=android");
+    await expect(page.getByTestId("pair-again")).toHaveAttribute("href", "/devices?import=1");
     await shoot(page, "24-removed-device");
 
     // Extend's own entry (the pair ran out) is not shown as a Carbon's.
@@ -436,7 +440,7 @@ test.describe("a device's page", () => {
     await expect(page.getByTestId("actor-extend")).toHaveText("Silicon Extend");
 
     // The mock refuses changes the way the service does: its Carbon hears when and why.
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
     const res = await request.patch("/api/v1/devices/e1d0a7c3", {
       headers: { Authorization: `Bearer ${token}`, "X-Org-ID": "acme", "If-Match": '"4"', "Content-Type": "application/json" },
       data: { type: "device", data: { name: "Back again" } },
@@ -456,11 +460,11 @@ test.describe("a device's page", () => {
     await signInWithSlt(page);
     await page.goto(`/devices/${DEVICE_MAC}`);
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-children")).toHaveText("Also removed, because they pair through it: Saket's iPhone.");
-    await expect(page.getByTestId("remove-unpair")).toHaveText("The Extend app on it unpairs now and shows a new pairing code.");
+    await expect(page.getByTestId("remove-children")).toHaveText("Also removed from this organization, because they connect through it: Saket's iPhone.");
+    await expect(page.getByTestId("remove-unpair")).toHaveText("Its configured connection stays available for importing. Other organizations keep their bindings.");
     await page.getByTestId("remove-confirm-input").fill("MacBook Pro");
     await page.getByTestId("remove-confirm").click();
-    await expect(page.getByTestId("device-row")).toHaveCount(5);
+    await expect(page.getByTestId("device-row")).toHaveCount(4);
     // The iPhone went with its Mac, for the same reason.
     await page.goto(`/devices/${DEVICE_IPHONE}`);
     await expect(page.getByTestId("removed-why")).toContainText("You removed it, or the computer it paired through.");
@@ -471,12 +475,12 @@ test.describe("a device's page", () => {
     await signInWithSlt(page);
     await page.goto(`/devices/${DEVICE_IPHONE}`);
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-unpair")).toHaveText("Extend stops reaching it through MacBook Pro.");
+    await expect(page.getByTestId("remove-unpair")).toHaveText("Its configured connection stays available for importing. Other organizations keep their bindings.");
     await expect(page.getByTestId("remove-access")).toHaveCount(0);
     await page.getByRole("button", { name: "Cancel" }).click();
     await page.goto(`/devices/${DEVICE_PIXEL}`);
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-access")).toHaveText("4 Silicons lose access.");
+    await expect(page.getByTestId("remove-access")).toHaveText("2 Silicons lose access.");
     await expect(page.getByTestId("remove-consequences")).toContainText("si:chef is using it now; its session ends immediately.");
     await shoot(page, "13b-remove-dialog-pixel");
   });
@@ -511,7 +515,7 @@ test.describe("test environments", () => {
     await page.getByTestId("slt-input").fill("c:alice");
     await page.getByTestId("slt-submit").click();
     await expect(banner).toContainText("signed in as c:alice");
-    await expect(page.getByTestId("devices-page")).toContainText("No devices paired yet");
+    await expect(page.getByTestId("devices-page")).toContainText("No devices in this organization");
 
     // Every API call now carries the test secret.
     const headers: (string | undefined)[] = [];
@@ -522,7 +526,7 @@ test.describe("test environments", () => {
     for (let i = 0; i < 6; i++) codes.push(await mock.enroll("android"));
     await page.evaluate(
       async ({ codes, secret }) => {
-        const envKey = Object.keys(sessionStorage).find((k) => k.startsWith("extend.auth.testing."))!;
+        const envKey = Object.keys(sessionStorage).find((k) => k.startsWith("extend.auth.testing.") && k.includes(".context."))!;
         const token = JSON.parse(sessionStorage.getItem(envKey)!).access_token;
         for (const [i, code] of codes.entries()) {
           const res = await fetch("/api/v1/pairings", {
@@ -544,6 +548,7 @@ test.describe("test environments", () => {
     await page.getByTestId("pairing-code-input").fill(codes[5]);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("One too many");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("pairing-error")).toHaveAttribute("data-code", "test_device_limit");
     await expect(page.getByTestId("pairing-error")).toContainText("In test environment you are limited to 5 paired devices per environment.");
@@ -556,7 +561,7 @@ test.describe("test environments", () => {
     await expect(page.getByTestId("testing-banner")).toHaveCount(0);
     await expect(page.getByTestId("devices-page")).toBeVisible();
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
-    await expect(page.getByTestId("device-row")).toHaveCount(7);
+    await expect(page.getByTestId("device-row")).toHaveCount(6);
   });
 
   test("exiting with no production login asks to sign in", async ({ page, mock }) => {
@@ -596,7 +601,7 @@ test.describe("settings and docs", () => {
     const seen: (string | undefined)[] = [];
     page.on("request", (r) => r.url().includes("/api/v1/") && seen.push(r.headers()["x-extend-telemetry"]));
     await page.goto("/devices");
-    await expect(page.getByTestId("device-row")).toHaveCount(7);
+    await expect(page.getByTestId("device-row")).toHaveCount(6);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((h) => h === "off")).toBe(true);
     await page.goto("/settings");

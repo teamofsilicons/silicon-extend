@@ -479,15 +479,23 @@ impl Client {
 /// Filters for listing devices.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceQuery {
-    /// `mine` (Carbons: every device they paired, whatever the Team) or `accessible` (Silicons:
-    /// the devices they were given access to in their Team). Default depends on the member. `team`
-    /// is deprecated: from 1.1 a device is only visible to the Carbons who paired it, so it always
-    /// lists nothing.
+    /// `mine` (owned devices in this organization), `team` (organization-visible devices), or
+    /// `accessible` (devices a Silicon has explicit access to). Private devices are owner-only.
     pub scope: Option<String>,
     pub online: Option<bool>,
     pub os: Option<String>,
     pub limit: Option<u32>,
     pub cursor: Option<String>,
+}
+
+/// An owned physical device available to import; other organizations are not disclosed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportableDevice {
+    pub device_id: String,
+    pub name: String,
+    pub os: extend_protocol::DeviceOs,
+    pub model: Option<String>,
+    pub host_device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -544,9 +552,8 @@ pub enum StopOutcome {
 
 /// Calls made as a signed-in member.
 ///
-/// The Team (`X-Org-ID`) is the Silicon's Team for everything a Silicon does. A Carbon's calls on
-/// their own devices work in every Team, so the Team may be left out; it is still the Team a
-/// [`Authed::grant`] gives access in.
+/// The organization (`X-Org-ID`) must match this account's IAM application session. Requests,
+/// devices and delegated permissions remain bound to that context.
 #[derive(Debug, Clone, Copy)]
 pub struct Authed<'a> {
     c: &'a Client,
@@ -612,6 +619,28 @@ impl Authed<'_> {
 
     pub async fn device(&self, id: &str) -> Result<Device> {
         self.get(&format!("/api/v1/devices/{id}")).await
+    }
+
+    /// Owned configured devices that can be imported into the current organization.
+    pub async fn importable_devices(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> Result<Page<ImportableDevice>> {
+        self.get(&format!(
+            "/api/v1/devices/importable{}",
+            qs(&[("limit", limit.map(|v| v.to_string())), ("cursor", cursor)])
+        ))
+        .await
+    }
+
+    /// Add an owned device to this organization. Reuse `idempotency_key` after an uncertain result.
+    pub async fn import_device(&self, id: &str, visibility: Visibility, idempotency_key: &str) -> Result<Device> {
+        let request = self
+            .req(Method::POST, &format!("/api/v1/devices/{id}/import"))
+            .header("Idempotency-Key", idempotency_key)
+            .json(&env("device_import", serde_json::json!({"visibility": visibility})));
+        decode(self.c.send(request).await?).await
     }
 
     pub async fn pair(&self, claim: &PairingClaim) -> Result<Device> {

@@ -31,7 +31,7 @@ pnpm dev             # the website on http://localhost:5190 against the Rust ser
 `pnpm dev` proxies `/api` to `EXTEND_API_PROXY` (default `http://127.0.0.1:8480`), so the site is
 same-origin in development. With the mock:
 
-- Sign in with the SLT `oac_saket` (Carbon `c:saket`, Teams `acme` and `labs`), or through the mock
+- Sign in with the SLT `oac_saket` (Carbon `c:saket` in `acme`), then add `oac_saket@labs` as a separate saved organization login, or through the mock
   consent screen ("Continue with Silicon IAM"). `oac_si_chef` signs in as the Silicon `si:chef`.
 - 1.1 scenarios in the seed: a family TV and a Mac that `c:saket` and `c:alice` both paired (Alice
   installed Extend on the Mac, so Saket's Silicons get no terminal there), a request Alice's Silicon
@@ -54,9 +54,7 @@ pnpm test:e2e:real   # against a running Rust service (EXTEND_REAL_URL, default 
 pnpm test:e2e:compat # the released 1.0.0 website (built from git tag v1.0.0) against the 1.1 mock
 ```
 
-`pnpm typecheck` is `pnpm check`. `e2e/v1-1.spec.ts` covers 1.1: the device list whatever Team is
-selected, several Carbons and their separate sides, access per Team with the "Sign in to Extend for
-<team>" marker, waking, Ting types per Team, setup Retry (contract A) and a device in the 1.0 shape.
+`pnpm typecheck` is `pnpm check`. `e2e/organization-context.spec.ts` covers saved context switching, private imports and shared device discovery. `e2e/v1-1.spec.ts` retains coverage of multi-Carbon physical setup, waking, Ting, and setup Retry while enforcing the selected organization.
 The compat suite builds the 1.0.0 bundle same-origin and aborts any request that isn't to localhost,
 so it never reaches the production service.
 
@@ -205,3 +203,17 @@ tests/unit/                 vitest
 - **Errors** always show the service's `message` and `hint`, the `code`, the request id and the docs
   link. Failures without an envelope (a proxy's 502, a network or CORS failure) get their own message
   naming what failed.
+
+## IAM 5 contexts and devices
+
+Every saved login binds one account and organization. The selector restores that context's credentials;
+adding an account or organization goes through sign-in again. Production contexts use localStorage;
+testing contexts use sessionStorage under the environment id. Refreshes and in-flight requests keep
+their original token store and organization, and pages remount when the context changes so drafts
+and device state cannot move into another account. Multi-org legacy sessions require a new sign-in.
+
+The device list separates your configured devices from shared organization devices. Add/import starts
+private; the owner can make it organization-visible from Settings. Private devices are hidden from
+every other member, including previously granted Silicons. Shared discovery remains read-only for
+other members; a Silicon still needs an explicit owner grant to control the device. Removing a binding
+affects the selected organization and retains the physical setup for importing later.

@@ -1,7 +1,7 @@
 import { createEffect, createResource, createSignal, For, on, Show } from "solid-js";
 import { Plus } from "lucide-solid";
 import { session } from "../lib/session";
-import { ApiError, toApiError } from "../lib/api";
+import { ApiError, toApiError, type ExtendClient } from "../lib/api";
 import { parseSiliconIds } from "../lib/pairing";
 import type { TeamSilicon } from "../lib/types";
 import { Button, ErrorNote } from "./ui";
@@ -15,11 +15,9 @@ interface TeamRoster {
 }
 
 /**
- * Who can be given access, per Team. One read of GET /team/silicons?team=any lists every Team the
- * Carbon's login reaches (1.1), each tagged, with the Teams that couldn't be read and why. A service
- * without team=any answers only the selected Team; then each Team is read on its own (X-Org-ID set to
- * it, which the login reaches). If that fails too, Silicons already using the Carbon's other devices
- * are suggested. Typing an id always works; Extend checks it when access is given.
+ * Reads the saved organization's roster, with a compatibility fallback to the same context.
+ * If its directory is unavailable, known Silicons on the owner's devices are suggested.
+ * Typed ids are checked by Extend when access is granted.
  */
 async function loadRosters(teams: string[]): Promise<Map<string, TeamRoster>> {
   const client = session().client();
@@ -51,14 +49,13 @@ async function loadRosters(teams: string[]): Promise<Map<string, TeamRoster>> {
     }),
   );
   if ([...rosters.values()].some((r) => r.source === "known")) {
-    const known = await knownSilicons().catch(() => []);
+    const known = await knownSilicons(client).catch(() => []);
     for (const r of rosters.values()) if (r.source === "known") r.items = known;
   }
   return rosters;
 }
 
-async function knownSilicons(): Promise<TeamSilicon[]> {
-  const client = session().client();
+async function knownSilicons(client: ExtendClient): Promise<TeamSilicon[]> {
   const page = await client.listDevices({ scope: "mine", limit: 50 });
   const ids = new Set<string>();
   for (const d of page.items) if (d.in_use) ids.add(d.in_use.silicon_id);
@@ -77,6 +74,7 @@ export function AccessPicker(props: {
   submitLabel?: string;
 }) {
   const s = session();
+  const client = s.client();
   const [input, setInput] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [errors, setErrors] = createSignal<ApiError[]>([]);
@@ -118,7 +116,7 @@ export function AccessPicker(props: {
     }
     const inTeam = team();
     setBusy(true);
-    const results = await Promise.allSettled(ids.map((id) => s.client().grantAccess(props.deviceId, id, inTeam || null)));
+    const results = await Promise.allSettled(ids.map((id) => client.grantAccess(props.deviceId, id, inTeam || null)));
     setBusy(false);
     const done: string[] = [];
     const failed: ApiError[] = [];

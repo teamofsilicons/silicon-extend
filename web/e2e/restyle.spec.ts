@@ -58,7 +58,7 @@ test.describe("restyle tour", () => {
     await expect(page.locator(".welcome-art canvas")).toHaveAttribute("data-ready", "true");
 
     await signInWithSlt(page);
-    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(7);
+    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(6);
     await expect(page.locator(`[data-device-id="${DEVICE_PIXEL}"] .pixel-dot.in-use`)).toHaveCount(1);
     await expect(page.locator('[data-device-id="0d44e1f2"] .pixel-dot.offline')).toHaveCount(1);
     // The tally is a quiet stat, not a second poster beside the pairing code.
@@ -112,6 +112,7 @@ test.describe("restyle tour", () => {
     await capture(page, "06-wizard-pairing-code");
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Kitchen tablet");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -174,7 +175,7 @@ test.describe("restyle tour", () => {
 
     // The Remove dialog, with its count in agreement.
     await page.getByTestId("remove-device").click();
-    await expect(page.getByTestId("remove-access")).toHaveText("4 Silicons lose access.");
+    await expect(page.getByTestId("remove-access")).toHaveText("2 Silicons lose access.");
     await capture(page, "09b-remove-dialog");
     await page.keyboard.press("Escape");
 
@@ -209,7 +210,7 @@ test.describe("restyle tour", () => {
     await capture(page, "13-testing-sign-in");
     await page.getByTestId("slt-input").fill("c:alice");
     await page.getByTestId("slt-submit").click();
-    await expect(page.getByTestId("devices-page")).toContainText("No devices paired yet");
+    await expect(page.getByTestId("devices-page")).toContainText("No devices in this organization");
     // The empty-state orb is printed at the sign-in print's finer 3 px cell.
     await expect(page.locator(".empty-orb")).toHaveAttribute("data-cell", "3");
     await capture(page, "14-testing-banner-empty");
@@ -256,7 +257,7 @@ test.describe("restyle tour", () => {
     await page.emulateMedia({ colorScheme: "dark" });
     await signInWithSlt(page);
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(20, 22, 21)");
-    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(7);
+    await expect(page.getByTestId("device-list").getByTestId("device-row")).toHaveCount(6);
     // Focus and selection use dark tokens, not light values that vanish on the dark surface.
     await page.getByTestId("device-filter").focus();
     expect(await page.locator(".list-search").evaluate((el) => getComputedStyle(el).outlineColor)).toBe("rgb(143, 163, 255)");

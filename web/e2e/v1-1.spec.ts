@@ -16,7 +16,7 @@ test.describe("several Carbons on one device", () => {
     await expect(row.getByTestId("in-use")).toContainText("si:scout");
     await expect(row.getByTestId("in-use")).toContainText("acme");
     await row.click();
-    await expect(page.getByTestId("device-eyebrow")).toHaveText("TV · Also paired by another Carbon");
+    await expect(page.getByTestId("device-eyebrow")).toHaveText("TV · Shared in acme");
     await expect(page.getByTestId("shared-note")).toContainText("Your pair is separate");
     await expect(page.getByTestId("shared-device-warning")).toHaveText("Silicons any Carbon gives access to can use this whole device, including what others leave on it.");
     await expect(page.getByTestId("in-use-silicon")).toHaveText("si:scout");
@@ -31,7 +31,7 @@ test.describe("several Carbons on one device", () => {
     await shoot(page, "30-shared-tv");
   });
 
-  test("a computer another Carbon installed Extend on: no terminal for my Silicons, Stop for the other side, my request hidden", async ({ page, mock }) => {
+  test("a computer another Carbon installed Extend on: no terminal for my Silicons, other context stop unavailable, my request hidden", async ({ page, mock }) => {
     void mock;
     await signInWithSlt(page);
     await page.goto(`/devices/${DEVICE_STUDIO_MAC}`);
@@ -50,9 +50,8 @@ test.describe("several Carbons on one device", () => {
     await expect(sent.getByTestId("request-to-hidden")).toHaveText("the Carbon who gave access to the Silicon using it");
     await expect(sent).toContainText("Not delivered yet; it is retried.");
     await shoot(page, "31-shared-computer");
-    await page.getByTestId("stop-session").click();
-    await expect(page.getByTestId("toast").last()).toContainText("Stopped the Silicon using Studio Mac (another Carbon gave it access)");
-    await expect(page.getByTestId("in-use-card")).toHaveAttribute("data-side", "free");
+    await expect(page.getByTestId("stop-session")).toHaveCount(0);
+    await expect(page.getByTestId("in-use-card")).toContainText("owning context");
   });
 
   test("a device the computer carries for another Carbon is in use: no Stop here, and the service's 409 says where", async ({ page, mock, request }) => {
@@ -62,7 +61,7 @@ test.describe("several Carbons on one device", () => {
     await expect(page.getByTestId("in-use-card").getByTestId("in-use-carried")).toContainText("A device this computer carries is in use.");
     await expect(page.getByTestId("stop-session")).toHaveCount(0);
     await expect(page.locator(`[data-device-id="${DEVICE_STUDIO_MAC}"]`).getByTestId("in-use-carried")).toBeVisible();
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
     const res = await request.post(`/api/v1/devices/${DEVICE_STUDIO_MAC}/stop`, { headers: { Authorization: `Bearer ${token}` } });
     expect(res.status()).toBe(409);
     expect((await res.json()).data.message).toBe("A device carried by Studio Mac is in use. It can be stopped by the Carbon who paired it, or from Studio Mac's Extend app.");
@@ -71,50 +70,33 @@ test.describe("several Carbons on one device", () => {
 });
 
 test.describe("access per Team", () => {
-  test("grants grouped by Team, a Team the login doesn't reach marked, giving access in another Team and taking it away in one", async ({ page, mock }) => {
+  test("grants and roster are confined to the selected organization", async ({ page, mock }) => {
     void mock;
     await signInWithSlt(page);
-    const deletes: string[] = [];
-    const puts: string[] = [];
-    page.on("request", (r) => {
-      if (r.url().includes("/access/")) (r.method() === "DELETE" ? deletes : r.method() === "PUT" ? puts : []).push(new URL(r.url()).search);
-    });
+    const puts: string[] = [], deletes: string[] = [];
+    page.on("request", r => { if(r.url().includes("/access/")) (r.method()==="PUT"?puts:deletes).push(new URL(r.url()).search); });
     await page.goto(`/devices/${DEVICE_PIXEL}`);
-    const teams = page.getByTestId("grant-team");
-    await expect(teams).toHaveCount(3);
-    await expect(teams.nth(0)).toHaveAttribute("data-team", "acme");
-    await expect(teams.nth(1)).toHaveAttribute("data-team", "labs");
-    await expect(teams.nth(2)).toHaveAttribute("data-team", "studio");
-    await expect(teams.nth(2).getByTestId("sign-in-marker")).toHaveText(
-      "Sign in to Extend for studio to see names, add Silicons from it, open their files and get Tings there. You can still take access away.",
-    );
-    await expect(teams.nth(0).getByTestId("sign-in-marker")).toHaveCount(0);
-
-    // Give si:atlas access in labs, from the Team select (the menu's Team, acme, is only the default).
+    await expect(page.getByTestId("grant-team")).toHaveCount(1);
+    await expect(page.getByTestId("grant-team")).toHaveAttribute("data-team","acme");
+    await expect(page.getByTestId("access-card")).not.toContainText("studio");
+    await expect(page.getByTestId("access-card")).not.toContainText("labs");
     await page.getByText("Give another Silicon access").click();
-    await expect(page.getByTestId("grant-team-select")).toHaveValue("acme");
-    await page.getByTestId("grant-team-select").selectOption("labs");
-    const roster = page.locator('[data-roster="team"]');
-    await expect(roster).toContainText("Silicons in labs");
-    // si:juniper already has access in labs, so only si:atlas is offered there.
-    await expect(roster.getByTestId("grant-suggestion")).toHaveCount(1);
-    await roster.getByTestId("grant-suggestion").click();
+    const roster=page.locator('[data-roster="team"]');
+    await roster.getByTestId("grant-suggestion").filter({hasText:"si:atlas"}).click();
     await page.getByTestId("grant-submit").click();
-    await expect(page.getByTestId("toast").last()).toContainText("si:atlas can now use Saket's Pixel (in labs)");
-    await expect(page.locator('[data-testid="grant"][data-team="labs"][data-silicon="si:atlas"]')).toBeVisible();
-    expect(puts).toContain("?team=labs");
-
-    // A grant in a Team the login doesn't reach can still be taken away, in that Team only.
-    await page.locator('[data-testid="grant"][data-team="studio"]').getByTestId("revoke").click();
-    await expect(page.locator('[data-testid="grant"][data-team="studio"]')).toHaveCount(0);
-    expect(deletes).toContain("?team=studio");
-    await shoot(page, "33-access-by-team");
+    const grant=page.locator('[data-testid="grant"][data-team="acme"][data-silicon="si:atlas"]');
+    await expect(grant).toBeVisible();
+    expect(puts).toContain("?team=acme");
+    await grant.getByTestId("revoke").click();
+    await expect(grant).toHaveCount(0);
+    expect(deletes).toContain("?team=acme");
+    await shoot(page,"33-access-by-organization");
   });
 
   test("a grant in a Team the login doesn't reach is refused with the service's words", async ({ page, mock, request }) => {
     void mock;
     await signInWithSlt(page);
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
     const res = await request.put(`/api/v1/devices/${DEVICE_PIXEL}/access/si:orbit?team=studio`, { headers: { Authorization: `Bearer ${token}`, "X-Org-ID": "acme" } });
     expect(res.status()).toBe(403);
     const body = (await res.json()).data;
@@ -188,7 +170,7 @@ test.describe("waking", () => {
   test("a device a computer carries: wake the computer too, and say It's awake where Extend can't tell", async ({ page, mock, request }) => {
     void mock;
     await signInWithSlt(page);
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
     await request.put(`/api/v1/devices/${DEVICE_IPHONE}/access/si:atlas?team=acme`, { headers: { Authorization: `Bearer ${token}` } });
     const login = await request.post("/api/v1/auth/login", { headers: { "Idempotency-Key": "atlas-login-2" }, data: { type: "login", data: { slt: "oac_si_atlas" } } });
     const atlas = (await login.json()).data.access_token;
@@ -214,33 +196,30 @@ test.describe("waking", () => {
 });
 
 test.describe("Ting app types and recipient Teams", () => {
-  test("the device page names the Team missing Extend's types, with the exact command", async ({ page, mock }) => {
-    void mock;
-    await signInWithSlt(page);
+  test("the device page reports missing app types only for the selected organization", async ({page,mock,request}) => {
+    void mock; await signInWithSlt(page,"oac_saket@labs");
+    const token=await page.evaluate(()=>JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
+    const headers={Authorization:`Bearer ${token}`,"X-Org-ID":"labs","Idempotency-Key":crypto.randomUUID()};
+    expect((await request.post(`/api/v1/devices/${DEVICE_PIXEL}/import`,{headers,data:{type:"device_import",data:{visibility:"team"}}})).status()).toBe(200);
+    await request.put(`/api/v1/devices/${DEVICE_PIXEL}/access/si:atlas?team=labs`,{headers});
     await page.goto(`/devices/${DEVICE_PIXEL}`);
-    const banner = page.getByTestId("ting-banner");
+    const banner=page.getByTestId("ting-banner");
     await expect(banner.getByTestId("ting-missing")).toHaveCount(1);
-    await expect(banner.getByTestId("ting-missing")).toHaveAttribute("data-team", "labs");
-    await expect(banner).toContainText("ting --org '<owning-team>' types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'");
-    await expect(banner).toContainText("ting --org '<owning-team>' types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'");
-    // A device with grants only in acme, where nothing is missing, shows no banner.
-    await page.goto(`/devices/${DEVICE_MAC}`);
-    await expect(page.getByTestId("device-name")).toHaveText("MacBook Pro");
-    await expect(page.getByTestId("ting-banner")).toHaveCount(0);
+    await expect(banner.getByTestId("ting-missing")).toHaveAttribute("data-team","labs");
+    await expect(banner).toContainText("extend.device.wake_requested");
+    await expect(banner).toContainText("extend.device.woken");
+    await page.getByTestId("team-picker").selectOption({label:"Saket · labs"});
   });
 
   test("Settings: Turn on registers the recipient while missing app types keep their owner guidance", async ({ page, mock }) => {
-    await signInWithSlt(page);
+    await signInWithSlt(page,"oac_saket@labs");
     await page.goto("/settings");
     const rows = page.getByTestId("ting-row");
-    await expect(rows).toHaveCount(3);
-    await expect(page.locator('[data-testid="ting-row"][data-team="acme"]').getByTestId("ting-status")).toHaveText("On");
+    await expect(rows).toHaveCount(1);
     const labs = page.locator('[data-testid="ting-row"][data-team="labs"]');
     await expect(labs.getByTestId("ting-status")).toHaveText("Not set up yet");
     await expect(labs.getByTestId("ting-missing")).toContainText("extend.device.wake_requested");
-    const studio = page.locator('[data-testid="ting-row"][data-team="studio"]');
-    await expect(studio).toContainText("Sign in to Extend for studio to get Tings there.");
-    await expect(studio.getByTestId("ting-turn-on")).toHaveCount(0);
+    await expect(page.locator('[data-testid="ting-row"][data-team="studio"]')).toHaveCount(0);
     await shoot(page, "35-settings-ting");
 
     await labs.getByTestId("ting-turn-on").click();
@@ -300,6 +279,7 @@ test.describe("setup retry (contract A)", () => {
     await page.getByTestId("pairing-code-input").fill(code);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Old phone");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -312,7 +292,7 @@ test.describe("setup retry (contract A)", () => {
 });
 
 test.describe("adding a device (1.1)", () => {
-  test("no visibility step; the code step explains Pair with another Carbon", async ({ page, mock }) => {
+  test("new devices are private by default; the code step explains Pair with another Carbon", async ({ page, mock }) => {
     void mock;
     await signInWithSlt(page);
     await page.goto("/devices/new?kind=android");
@@ -321,10 +301,10 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("pairing-code-input").fill("4F9C2A");
     await page.getByTestId("wizard-next").click();
     await expect(page.getByTestId("name-step")).not.toContainText("Who can see it exists");
-    await expect(page.locator('input[name="visibility"]')).toHaveCount(0);
+    await expect(page.getByRole("checkbox", {name:/Visible to members of/})).not.toBeChecked();
   });
 
-  test("pairing a computer another Carbon paired: the warning, then access in any of my Teams", async ({ page, mock }) => {
+  test("pairing a computer another Carbon paired: warning, then access in the selected organization", async ({ page, mock }) => {
     // Alice's Windows PC shows "Pair with another Carbon".
     const code = await mock.enroll("windows", { instance_of: "b3f81c20" });
     await signInWithSlt(page);
@@ -335,6 +315,7 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("pairing-code-input").fill(code);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Shared PC");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -344,14 +325,13 @@ test.describe("adding a device (1.1)", () => {
     );
     // A pair of a device already set up is ready at once.
     await expect(page.getByTestId("setup-complete")).toBeVisible();
-    expect(claims).toEqual([{ type: "pairing", data: { pairing_code: code, name: "Shared PC", pair_ttl_days: 14 } }]);
+    expect(claims).toEqual([{ type: "pairing", data: { pairing_code: code, name: "Shared PC", visibility: "team", pair_ttl_days: 14 } }]);
     await shoot(page, "37-wizard-shared-computer");
     await page.getByTestId("setup-next").click();
-    await page.getByTestId("grant-team-select").selectOption("labs");
-    await page.getByTestId("grant-input").fill("si:juniper");
+    await page.getByTestId("grant-input").fill("si:atlas");
     await page.getByTestId("grant-submit").click();
-    await expect(page.getByTestId("wizard-done")).toContainText("si:juniper can use it now");
-    await expect(page.getByTestId("wizard-done")).toContainText("extend --team labs device show");
+    await expect(page.getByTestId("wizard-done")).toContainText("si:atlas can use it now");
+    await expect(page.getByTestId("wizard-done")).toContainText("extend --team acme device show");
   });
 
   test("a device I already paired: the claim's 409 names my own pair", async ({ page, mock }) => {
@@ -362,6 +342,7 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("pairing-code-input").fill(code);
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Studio again");
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("pairing-error")).toHaveAttribute("data-code", "conflict");
     await expect(page.getByTestId("pairing-error")).toContainText(`You already paired this device: it's Studio Mac (${DEVICE_STUDIO_MAC}) in your devices.`);
@@ -375,6 +356,7 @@ test.describe("adding a device (1.1)", () => {
     await page.getByTestId("wizard-next").click();
     await page.getByTestId("device-name-input").fill("Bedroom TV");
     const created = page.waitForResponse((r) => r.url().includes("/attachments") && r.status() === 201);
+    await page.getByRole("checkbox", { name: /Visible to members of/ }).check();
     await page.getByTestId("pair-submit").click();
     await expect(page.getByTestId("banner-step")).toBeVisible();
     await page.getByTestId("banner-next").click();
@@ -400,7 +382,7 @@ test.describe("signing out and Silicons", () => {
     await signInWithSlt(page);
     await page.getByTestId("sign-out").click();
     await expect(page.getByTestId("sign-out-effect")).toHaveText(
-      "Signing out ends the running sessions of the Silicons you gave access to, on every device you paired. Silicons other Carbons gave access to carry on. Your Silicons keep their access.",
+      "Signing out ends the running sessions of the Silicons you gave access to, in this organization. Silicons other Carbons gave access to carry on. Your Silicons keep their access.",
     );
     await shoot(page, "39-sign-out");
     await page.getByRole("button", { name: "Stay signed in" }).click();
@@ -447,7 +429,7 @@ test.describe("compatibility", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await signInWithSlt(page);
-    await expect(page.getByTestId("device-row")).toHaveCount(7);
+    await expect(page.getByTestId("device-row")).toHaveCount(6);
     await expect(page.getByTestId("row-awake")).toHaveCount(0);
     await page.goto(`/devices/${DEVICE_PIXEL}`);
     await expect(page.getByTestId("in-use-silicon")).toHaveText("si:chef");
@@ -460,27 +442,23 @@ test.describe("compatibility", () => {
     expect(errors).toEqual([]);
   });
 
-  test("the 1.0 website's calls get answers 1.0 can read from a 1.1 service", async ({ page, mock, request }) => {
-    void mock;
-    await signInWithSlt(page);
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem("extend.auth.production")!).access_token);
-    const headers = { Authorization: `Bearer ${token}`, "X-Org-ID": "labs" };
-    // Every device the Carbon paired, whatever X-Org-ID; always "personal"; the Team tab empty.
-    const mine = (await (await request.get("/api/v1/devices?scope=mine", { headers })).json()).data.items as { visibility: string }[];
-    expect(mine).toHaveLength(7);
-    expect(mine.every((d) => d.visibility === "personal")).toBe(true);
-    expect((await (await request.get("/api/v1/devices?scope=team", { headers })).json()).data.items).toEqual([]);
-    // A grant without ?team goes into X-Org-ID's Team; a revoke without ?team removes every Team's grant.
-    const put = await request.put(`/api/v1/devices/${DEVICE_PIXEL}/access/si:atlas`, { headers });
-    expect((await put.json()).data.team).toBe("labs");
-    await request.put(`/api/v1/devices/${DEVICE_PIXEL}/access/si:atlas`, { headers: { ...headers, "X-Org-ID": "acme" } });
-    await request.delete(`/api/v1/devices/${DEVICE_PIXEL}/access/si:atlas`, { headers });
-    const grants = (await (await request.get(`/api/v1/devices/${DEVICE_PIXEL}/access`, { headers })).json()).data.items as { silicon_id: string }[];
-    expect(grants.some((g) => g.silicon_id === "si:atlas")).toBe(false);
-    // Visibility is accepted and ignored.
-    const patched = await request.patch(`/api/v1/devices/${DEVICE_MAC}`, { headers: { ...headers, "If-Match": '"2"' }, data: { type: "device", data: { visibility: "team" } } });
+  test("org headers cannot broaden a login and private visibility blocks other members", async ({page,mock,request}) => {
+    void mock; await signInWithSlt(page);
+    const token=await page.evaluate(()=>JSON.parse(localStorage.getItem(`extend.auth.production.context.${localStorage.getItem("extend.auth.production.selected")}`)!).access_token);
+    const headers={Authorization:`Bearer ${token}`,"X-Org-ID":"acme"};
+    const wrong=await request.get("/api/v1/devices?scope=mine",{headers:{...headers,"X-Org-ID":"labs"}});
+    expect(wrong.status()).toBe(403);
+    const mine=(await (await request.get("/api/v1/devices?scope=mine",{headers})).json()).data.items;
+    expect(mine).toHaveLength(6);
+    const patched=await request.patch(`/api/v1/devices/${DEVICE_MAC}`,{headers:{...headers,"If-Match":'"2"'},data:{type:"device",data:{visibility:"personal"}}});
     expect((await patched.json()).data.visibility).toBe("personal");
+    const login=await request.post("/api/v1/auth/login",{headers:{"Idempotency-Key":"alice-private-test"},data:{type:"login",data:{slt:"oac_alice"}}});
+    const other={Authorization:`Bearer ${(await login.json()).data.access_token}`,"X-Org-ID":"acme"};
+    expect((await request.get(`/api/v1/devices/${DEVICE_MAC}`,{headers:other})).status()).toBe(404);
+    const shared=(await (await request.get("/api/v1/devices?scope=team",{headers:other})).json()).data.items;
+    expect(shared.some((d:{device_id:string})=>d.device_id===DEVICE_MAC)).toBe(false);
   });
+
 });
 
 test("docs and downloads say 1.1", async ({ page, mock }) => {
