@@ -29,8 +29,9 @@ pub struct Member {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
-    #[default]
     Team,
+    /// Hidden from every other organization member, including administrators.
+    #[default]
     Personal,
 }
 

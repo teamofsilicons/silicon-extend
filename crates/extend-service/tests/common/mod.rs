@@ -34,6 +34,11 @@ pub struct Env {
     pub state: Shared,
 }
 
+fn contexts() -> &'static Mutex<std::collections::HashMap<String, String>> {
+    static CONTEXTS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    CONTEXTS.get_or_init(Default::default)
+}
+
 pub const MEMBERS: &[(&str, &[&str])] = &[
     ("c:alice", &["acme", "globex"]),
     ("c:bob", &["acme"]),
@@ -121,7 +126,14 @@ pub async fn state_only() -> Shared {
 }
 
 pub async fn login(env: &Env, who: &str) -> String {
-    env.client.login(who).await.unwrap().access_token
+    let session = env.client.login(who).await.unwrap();
+    // Older behavioral fixtures exercise several contexts with the local IAM double.
+    // Retain their first explicit context rather than issuing unscoped resource calls.
+    contexts()
+        .lock()
+        .unwrap()
+        .insert(session.access_token.clone(), session.teams[0].clone());
+    session.access_token
 }
 
 /// A raw API call: the status and the parsed body.
@@ -139,7 +151,8 @@ pub async fn api(
             format!("{}{path}", env.base),
         )
         .header("authorization", format!("Bearer {token}"));
-    if let Some(t) = team {
+    let retained = contexts().lock().unwrap().get(token).cloned();
+    if let Some(t) = team.or(retained.as_deref()) {
         r = r.header("x-org-id", t);
     }
     if let Some(b) = body {
@@ -213,7 +226,7 @@ pub async fn pair(
         carbon_token,
         team,
         Some(
-            json!({"type": "pairing", "data": {"pairing_code": e.pairing_code, "name": name, "silicon_ids": silicons}}),
+            json!({"type": "pairing", "data": {"pairing_code": e.pairing_code, "name": name, "visibility": "team", "silicon_ids": silicons}}),
         ),
     )
     .await;
@@ -247,7 +260,7 @@ pub async fn pair_another_raw(
         "/api/v1/pairings",
         carbon_token,
         team,
-        Some(json!({"type": "pairing", "data": {"pairing_code": e["pairing_code"], "name": "Their name", "silicon_ids": silicons}})),
+        Some(json!({"type": "pairing", "data": {"pairing_code": e["pairing_code"], "name": "Their name", "visibility": "team", "silicon_ids": silicons}})),
     )
     .await;
     if status != 201 {
@@ -491,12 +504,37 @@ pub async fn session(env: &Env, token: &str, team: &str, device_id: &str) -> (u1
 }
 
 pub async fn grant(env: &Env, carbon_token: &str, device_id: &str, silicon: &str, team: &str) {
+    // Sharing in a second organization first imports the owner's configured device.
+    let r = reqwest::Client::new()
+        .post(format!("{}/api/v1/devices/{device_id}/import", env.base))
+        .bearer_auth(carbon_token)
+        .header("x-org-id", team)
+        .header("idempotency-key", Uuid::new_v4().to_string())
+        .json(&json!({"type":"device_import","data":{"visibility":"team"}}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        r.status().is_success(),
+        "import before grant: {}",
+        r.text().await.unwrap()
+    );
+    let (status, shared) = api(
+        env,
+        "PATCH",
+        &format!("/api/v1/devices/{device_id}"),
+        carbon_token,
+        Some(team),
+        Some(json!({"type":"device","data":{"visibility":"team"}})),
+    )
+    .await;
+    assert_eq!(status, 200, "sharing before grant: {shared}");
     let (status, g) = api(
         env,
         "PUT",
-        &format!("/api/v1/devices/{device_id}/access/{silicon}?team={team}"),
+        &format!("/api/v1/devices/{device_id}/access/{silicon}"),
         carbon_token,
-        None,
+        Some(team),
         None,
     )
     .await;
@@ -604,7 +642,8 @@ pub async fn api_in(
     if let Some(t) = token {
         r = r.header("authorization", t);
     }
-    if let Some(t) = team {
+    let retained = token.and_then(|t| contexts().lock().unwrap().get(t.trim_start_matches("Bearer ")).cloned());
+    if let Some(t) = team.or(retained.as_deref()) {
         r = r.header("x-org-id", t);
     }
     if let Some(b) = body {
@@ -628,7 +667,12 @@ pub async fn login_in(env: &Env, secret: &str, who: &str) -> String {
     )
     .await;
     assert_eq!(s, 200, "{v}");
-    format!("Bearer {}", v["data"]["access_token"].as_str().unwrap())
+    let token = v["data"]["access_token"].as_str().unwrap();
+    contexts()
+        .lock()
+        .unwrap()
+        .insert(token.to_owned(), v["data"]["teams"][0].as_str().unwrap().to_owned());
+    format!("Bearer {token}")
 }
 
 /// Pairs a device into a test environment. Returns (device id, credential), or the claim's error.
@@ -657,7 +701,7 @@ pub async fn pair_in(
         "/api/v1/pairings",
         Some(carbon),
         Some("acme"),
-        Some(json!({"type": "pairing", "data": {"pairing_code": e["data"]["pairing_code"], "name": name}})),
+        Some(json!({"type": "pairing", "data": {"pairing_code": e["data"]["pairing_code"], "name": name, "visibility": "team"}})),
     )
     .await;
     if s != 201 {

@@ -344,3 +344,96 @@ async fn migration_seeds_private_bindings_without_replacing_configurations_and_c
         .unwrap();
     admin.close().await;
 }
+
+#[tokio::test]
+async fn startup_applies_private_bindings_to_persisted_sessions_and_notifications() {
+    let state = state_only().await;
+    // Simulate persisted work from before schema 7, or a process interrupted after hiding.
+    sqlx::raw_sql("INSERT INTO extend.devices (device_id,team,owner_id,name,os,credential_digest) VALUES ('aabb1234','acme','c:alice','Mac','macos','retained-native-credential');
+        INSERT INTO extend.device_access(device_id,team,silicon_id,granted_by) VALUES ('aabb1234','acme','si:chef','c:alice');
+        INSERT INTO extend.session_ids(session_id) VALUES ('abc');
+        INSERT INTO extend.sessions(session_id,device_id,silicon_id,team,state) VALUES ('abc','aabb1234','si:chef','acme','active');
+        INSERT INTO extend.device_locks(device_id,session_id) VALUES ('aabb1234','abc');
+        INSERT INTO extend.wake_requests(wake_id,device_id,instance_id,team,from_id,to_id,reason,expires_at,wake_detectable,device_notice)
+          SELECT gen_random_uuid(),device_id,instance_id,'acme','si:chef','c:alice','pending before hiding',now()+interval '30 minutes',true,'offline' FROM extend.devices WHERE device_id='aabb1234';
+        INSERT INTO extend.requests(request_id,device_id,team,from_id,to_id,reason)
+          VALUES (gen_random_uuid(),'aabb1234','acme','si:chef','si:sous','pending before hiding');")
+        .execute(&state.pool).await.unwrap();
+    let restarted = extend_service::build(state.cfg.clone()).await.unwrap();
+    let ended: (String, Option<String>) =
+        sqlx::query_as("SELECT state,end_reason FROM extend.sessions WHERE session_id='abc'")
+            .fetch_one(&restarted.pool)
+            .await
+            .unwrap();
+    assert_eq!(ended, ("ended".into(), Some("access_removed".into())));
+    let wake: (String, Option<String>) = sqlx::query_as("SELECT state,end_reason FROM extend.wake_requests")
+        .fetch_one(&restarted.pool)
+        .await
+        .unwrap();
+    assert_eq!(wake, ("withdrawn".into(), Some("access_removed".into())));
+    let delivery: String = sqlx::query_scalar("SELECT delivery FROM extend.requests")
+        .fetch_one(&restarted.pool)
+        .await
+        .unwrap();
+    assert_eq!(delivery, "failed");
+    let locks: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.device_locks")
+        .fetch_one(&restarted.pool)
+        .await
+        .unwrap();
+    assert_eq!(locks, 0);
+    let credential: String = sqlx::query_scalar("SELECT credential_digest FROM extend.devices")
+        .fetch_one(&restarted.pool)
+        .await
+        .unwrap();
+    assert_eq!(credential, "retained-native-credential");
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.device_access")
+        .fetch_one(&restarted.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        grants, 1,
+        "migration leaves grants dormant until the owner explicitly shares"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_host_includes_an_attachment_committing_while_it_waits_for_the_lock() {
+    let env = start().await;
+    let alice = login(&env, "c:alice@acme").await;
+    let (host, _) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Mac", &[]).await;
+    let instance = instance_of(&env, &host).await;
+    let mut attaching = env.pool.begin().await.unwrap();
+    extend_service::domain::lock_instances(&mut attaching, &extend_service::db::World::production(), &[instance])
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO extend.devices(device_id,team,owner_id,name,os,host_device_id) VALUES ('1a2b3c4d','acme','c:alice','TV','tvos',$1)")
+        .bind(&host).execute(&mut *attaching).await.unwrap();
+    let base = env.base.clone();
+    let removing = tokio::spawn(async move {
+        reqwest::Client::new()
+            .delete(format!("{base}/api/v1/devices/{host}"))
+            .bearer_auth(alice)
+            .header("x-org-id", "acme")
+            .send()
+            .await
+            .unwrap()
+    });
+    eventually("removal waiting for the attachment's host lock", || async {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%device_instances%' AND query LIKE '%FOR NO KEY UPDATE%')")
+            .fetch_one(&env.pool).await.unwrap()
+    }).await;
+    attaching.commit().await.unwrap();
+    assert_eq!(removing.await.unwrap().status().as_u16(), 204);
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM extend.device_organizations WHERE org_id='acme' AND removed_at IS NULL",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 0, "the newly committed attachment must leave with its host");
+    let configured: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.devices WHERE removed_at IS NULL")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(configured, 2, "organization removal preserves physical configuration");
+}

@@ -741,11 +741,18 @@ async fn visible_session(
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(not_found)?;
-    // Its Silicon, in the Team it runs in; or the Carbon whose pair it runs through, in any Team.
+    // Its Silicon or configuring Carbon, always within the session's organization.
     let mine = auth.p.is_silicon() && s.silicon_id == auth.p.id() && auth.p.team.as_deref() == Some(s.team.as_str());
     let owner = d.is_owner(&auth.p) && auth.p.team.as_deref() == Some(s.team.as_str());
-    let access = domain::access_of(state, &auth.world, &d, &auth.p).await?;
-    if !(mine || owner) || access.is_none() || (!owner && access != Some(Access::Silicon)) {
+    let allowed = if owner {
+        // An owner keeps the same organization's historical activity/session links after unbinding.
+        crate::organizations::visibility(state, &auth.world, &d.device_id, &s.team, true)
+            .await?
+            .is_some()
+    } else {
+        mine && domain::access_of(state, &auth.world, &d, &auth.p).await? == Some(Access::Silicon)
+    };
+    if !allowed {
         return Err(not_found());
     }
     Ok((s, d))

@@ -143,7 +143,7 @@ async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
         )
         .await
     );
-    // Activity: from the session, or the device's Team for grant rows; others stay NULL.
+    // Activity: infer the session organization, otherwise the configuring organization.
     let teams: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT action, team FROM {s}.activity ORDER BY id"
     )))
@@ -155,7 +155,7 @@ async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
         vec![
             ("command".into(), Some("acme".into())),
             ("access_granted".into(), Some("acme".into())),
-            ("renamed".into(), None)
+            ("renamed".into(), Some("acme".into()))
         ]
     );
     // Requests: the holder columns.

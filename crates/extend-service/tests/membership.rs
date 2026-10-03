@@ -17,9 +17,14 @@ async fn grants(env: &Env, device: &str) -> Vec<(String, String)> {
         .unwrap()
 }
 
-async fn end_reason(env: &Env, token: &str, team: &str, sid: &str) -> Option<String> {
-    let (_, v) = api(env, "GET", &format!("/api/v1/sessions/{sid}"), token, Some(team), None).await;
-    v["data"]["end_reason"].as_str().map(str::to_owned)
+async fn end_reason(env: &Env, _token: &str, _team: &str, sid: &str) -> Option<String> {
+    // Membership revocation may also remove the caller's read authority. Inspect the persisted
+    // lifecycle result directly instead of reading a different organization's session.
+    sqlx::query_scalar("SELECT end_reason FROM extend.sessions WHERE session_id=$1")
+        .bind(sid)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap()
 }
 
 async fn dev_member(env: &Env, id: &str, teams: &[&str]) {
@@ -253,7 +258,7 @@ async fn a_refused_login_keeps_sessions_on_doubt_and_ends_them_only_when_gone() 
         "GET",
         &format!("/api/v1/sessions/{sid}"),
         &alice,
-        Some("acme"),
+        Some("globex"),
         None,
     )
     .await;
@@ -392,21 +397,22 @@ async fn stored_file(env: &Env, member: &str, team: &str, device: &str, name: &s
 }
 
 #[tokio::test]
-async fn a_carbon_sees_files_from_every_team_and_opens_them_in_their_team() {
+async fn files_are_listed_and_opened_only_in_the_selected_organization() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let scout = login(&env, "si:scout").await;
     let (d, _) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &[]).await;
+    grant(&env, &alice, &d, "si:scout", "globex").await;
     let a = stored_file(&env, "si:chef", "acme", &d, "acme.txt").await;
     let g = stored_file(&env, "si:scout", "globex", &d, "globex.txt").await;
     let (_, list) = api(&env, "GET", "/api/v1/files", &alice, None, None).await;
     let items = list["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 2, "{list}");
-    assert!(items.iter().any(|f| f["team"] == "globex") && items.iter().any(|f| f["team"] == "acme"));
+    assert_eq!(items.len(), 1, "{list}");
+    assert!(items.iter().all(|f| f["team"] == "acme"));
     // A Silicon sees its own, in its Team.
     let (_, own) = api(&env, "GET", "/api/v1/files", &scout, Some("globex"), None).await;
     assert_eq!(own["data"]["items"].as_array().unwrap().len(), 1);
-    // alice with a login that reaches acme only: acme's file opens, globex's asks her to sign in.
+    // An acme login can open only acme files; foreign organization IDs reveal nothing.
     let acme_only = env.client.login("c:alice@acme").await.unwrap().access_token;
     let (st, _) = api(
         &env,
@@ -427,13 +433,15 @@ async fn a_carbon_sees_files_from_every_team_and_opens_them_in_their_team() {
         None,
     )
     .await;
-    assert_eq!((st, e["data"]["code"].as_str()), (403, Some("not_a_team_member")));
-    assert!(
-        e["data"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("Sign in to Extend for globex")
-    );
-    let (st, _) = api(&env, "GET", &format!("/api/v1/files/{g}/content"), &alice, None, None).await;
+    assert_eq!((st, e["data"]["code"].as_str()), (404, Some("file_not_found")));
+    let (st, _) = api(
+        &env,
+        "GET",
+        &format!("/api/v1/files/{g}/content"),
+        &alice,
+        Some("globex"),
+        None,
+    )
+    .await;
     assert_eq!(st, 200);
 }

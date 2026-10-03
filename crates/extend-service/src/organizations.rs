@@ -19,6 +19,9 @@ INSERT INTO {s}.device_organizations (device_id, org_id)
 SELECT device_id, team FROM {s}.devices WHERE team <> ''
 UNION SELECT device_id, team FROM {s}.device_access WHERE team <> ''
 ON CONFLICT DO NOTHING;
+UPDATE {s}.activity a SET team = COALESCE(
+    (SELECT ss.team FROM {s}.sessions ss WHERE ss.session_id = a.session_id),
+    (SELECT d.team FROM {s}.devices d WHERE d.device_id = a.device_id)) WHERE a.team IS NULL;
 -- Older native agents still enroll physical pairs; create the initial private binding atomically.
 CREATE OR REPLACE FUNCTION {s}.device_initial_organization() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN
     INSERT INTO {s}.device_organizations (device_id, org_id) VALUES (NEW.device_id, NEW.team) ON CONFLICT DO NOTHING;
@@ -74,6 +77,10 @@ pub async fn disable_in(
     .bind(org)
     .execute(&mut **tx)
     .await?;
+    sqlx::query(sql!(
+        "UPDATE {} SET delivery='failed', ting_next_at=NULL, last_error='Device access was removed in this organization.'
+         WHERE device_id=ANY($1) AND team=$2 AND delivery='pending'", world.t("requests")))
+        .bind(devices).bind(org).execute(&mut **tx).await?;
     let sessions = sqlx::query_scalar(sql!(
         "SELECT session_id FROM {} WHERE device_id = ANY($1) AND team = $2 AND state <> 'ended'",
         world.t("sessions")
@@ -277,45 +284,61 @@ pub async fn import(
 /// A website removal only unbinds this organization. Native revoke remains physical/global.
 pub async fn remove(state: &AppState, auth: &Auth, d: &domain::DeviceRow) -> AppResult<()> {
     let org = auth.team()?;
-    let mut tx = state.pool.begin().await?;
-    let children: Vec<(String, uuid::Uuid)> = sqlx::query_as(sql!(
-        "SELECT device_id, instance_id FROM {} WHERE host_device_id = $1 AND owner_id = $2 AND removed_at IS NULL",
+    for _ in 0..4 {
+        let mut tx = state.pool.begin().await?;
+        let children: Vec<(String, uuid::Uuid)> = sqlx::query_as(sql!(
+        "SELECT device_id, instance_id FROM {} WHERE host_device_id = $1 AND owner_id = $2 AND removed_at IS NULL ORDER BY device_id",
         auth.world.t("devices")
     ))
     .bind(&d.device_id)
     .bind(auth.p.id())
     .fetch_all(&mut *tx)
     .await?;
-    let mut instances: Vec<_> = children.iter().map(|(_, i)| *i).collect();
-    instances.push(d.instance_id);
-    domain::lock_instances(&mut tx, &auth.world, &instances).await?;
-    let mut ids: Vec<_> = children.into_iter().map(|(id, _)| id).collect();
-    ids.push(d.device_id.clone());
-    sqlx::query(sql!(
-        "UPDATE {} SET removed_at = now() WHERE device_id = ANY($1) AND org_id = $2 AND removed_at IS NULL",
-        auth.world.t("device_organizations")
-    ))
-    .bind(&ids)
-    .bind(org)
-    .execute(&mut *tx)
-    .await?;
-    let disabled = disable_in(&mut tx, &auth.world, &ids, org).await?;
-    tx.commit().await?;
-    finish_disable(state, &auth.world, disabled, &auth.p.member).await?;
-    for id in ids {
-        domain::log_in(
-            state,
-            &auth.world,
-            &id,
-            &auth.p.member,
-            "organization_removed",
-            None,
-            Some(org),
-            serde_json::json!({}),
-        )
-        .await;
+        let mut instances: Vec<_> = children.iter().map(|(_, i)| *i).collect();
+        instances.push(d.instance_id);
+        domain::lock_instances(&mut tx, &auth.world, &instances).await?;
+        // An attachment may have committed while this transaction waited for the host lock.
+        // Retry with the complete lock set, preserving global instance lock order.
+        let current: Vec<(String, uuid::Uuid)> = sqlx::query_as(sql!(
+        "SELECT device_id, instance_id FROM {} WHERE host_device_id=$1 AND owner_id=$2 AND removed_at IS NULL ORDER BY device_id",
+        auth.world.t("devices")))
+        .bind(&d.device_id).bind(auth.p.id()).fetch_all(&mut *tx).await?;
+        if current != children {
+            tx.rollback().await?;
+            continue;
+        }
+        let mut ids: Vec<_> = children.into_iter().map(|(id, _)| id).collect();
+        ids.push(d.device_id.clone());
+        sqlx::query(sql!(
+            "UPDATE {} SET removed_at = now() WHERE device_id = ANY($1) AND org_id = $2 AND removed_at IS NULL",
+            auth.world.t("device_organizations")
+        ))
+        .bind(&ids)
+        .bind(org)
+        .execute(&mut *tx)
+        .await?;
+        let disabled = disable_in(&mut tx, &auth.world, &ids, org).await?;
+        tx.commit().await?;
+        finish_disable(state, &auth.world, disabled, &auth.p.member).await?;
+        for id in ids {
+            domain::log_in(
+                state,
+                &auth.world,
+                &id,
+                &auth.p.member,
+                "organization_removed",
+                None,
+                Some(org),
+                serde_json::json!({}),
+            )
+            .await;
+        }
+        return Ok(());
     }
-    Ok(())
+    Err(AppError::new(
+        extend_protocol::ErrorCode::Conflict,
+        "The host attachments changed while removing it. Retry the removal.",
+    ))
 }
 
 /// Recheck inside the instance lock, shared by wake and request writes and visibility changes.
@@ -368,4 +391,25 @@ pub async fn project_removal(
         device.removed_reason = Some("device_removed".into());
     }
     Ok(())
+}
+
+/// Apply private bindings to persisted work before serving after an upgrade/restart, and heal
+/// an interrupted visibility change. Captured IDs cannot include newly authorized work.
+pub async fn reconcile(state: &AppState, world: &World) -> AppResult<()> {
+    let sessions = sqlx::query_scalar(sql!(
+        "SELECT s.session_id FROM {} s WHERE s.state <> 'ended' AND NOT EXISTS
+         (SELECT 1 FROM {} o WHERE o.device_id=s.device_id AND o.org_id=s.team AND o.visibility='team' AND o.removed_at IS NULL)",
+        world.t("sessions"), world.t("device_organizations")))
+        .fetch_all(&state.pool).await?;
+    let wakes = sqlx::query_scalar(sql!(
+        "SELECT w.wake_id FROM {} w WHERE w.state='open' AND NOT EXISTS
+         (SELECT 1 FROM {} o WHERE o.device_id=w.device_id AND o.org_id=w.team AND o.visibility='team' AND o.removed_at IS NULL)",
+        world.t("wake_requests"), world.t("device_organizations")))
+        .fetch_all(&state.pool).await?;
+    sqlx::query(sql!(
+        "UPDATE {} r SET delivery='failed', ting_next_at=NULL, last_error='Device access was removed in this organization.'
+         WHERE r.delivery='pending' AND NOT EXISTS (SELECT 1 FROM {} o WHERE o.device_id=r.device_id AND o.org_id=r.team AND o.visibility='team' AND o.removed_at IS NULL)",
+        world.t("requests"), world.t("device_organizations")))
+        .execute(&state.pool).await?;
+    finish_disable(state, world, DisabledUse { sessions, wakes }, &domain::system_member()).await
 }

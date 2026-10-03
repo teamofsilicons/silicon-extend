@@ -56,6 +56,11 @@ publishing any previously personal device to colleagues. Existing grants are
 ineffective until the owner explicitly chooses Organization visibility. Native
 credentials, instance IDs and existing data remain in place. An insert trigger
 creates the initial private binding in the same transaction as a new pair.
+Existing activity gets its session's organization, or its configuring organization
+for physical lifecycle events. Before serving after startup, persisted sessions,
+open wake requests and pending notifications on private or removed bindings are
+ended or cancelled. Dormant grants and native credentials remain intact. The
+scheduler also repairs an interrupted visibility change.
 Testing cleanup removes bindings with the other test data.
 
 An old service does not enforce organization bindings or hidden visibility.
@@ -70,6 +75,16 @@ Revoking or expiring one organization login affects only that organization's
 sessions and keeps the account's other organization sessions intact. Ordinary
 logout still preserves durable feature OBO grants.
 
+## Client compatibility
+
+The physical device protocol remains compatible. Website/CLI delete now unbinds
+the selected organization; use native Revoke pair to remove the configuration.
+Website stop cannot end another owner's session through a physical alias.
+Released cross-owner stop fixture requests are replayed unchanged and asserted
+to fail without revealing or ending the holder. The current SDK's `device_stopped`
+contract exercises an owner stopping their own carried device through its host.
+A pairing with Silicon grants must explicitly choose `team` visibility.
+
 ## Local validation
 
 `org_devices` exercises the real HTTP service, PostgreSQL and a scripted native
@@ -80,4 +95,10 @@ redaction, removal, logout, and additive schema/cleanup behavior. IAM and provid
 services are local stand-ins in these tests. Live IAM 5 consent and the coordinated
 runtime deployment remain separate release gates.
 
-Verified locally on 2026-10-03: 45 service unit tests, two organization integration/migration tests, four existing migration rehearsals, and strict service all-target Clippy passed. The captured-production-schema rehearsal is intentionally ignored until a capture is supplied. Native changes are copy only; no physical device installation was performed by this task.
+Verified locally on 2026-10-03: the full service suite passed 189 tests. After the
+final host-removal race and private-default changes, all 15 affected integration
+tests passed, including four organization tests. All 37 protocol tests and strict
+service all-target Clippy also passed. The existing captured-production-schema
+rehearsal remains ignored until a capture is supplied; credential-gated live
+provider tests were not exercised. Native changes are copy only; no physical
+device installation was performed by this task.

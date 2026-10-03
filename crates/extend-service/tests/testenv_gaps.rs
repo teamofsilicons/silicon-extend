@@ -272,7 +272,7 @@ fn claim(code: &str) -> PairingClaim {
     PairingClaim {
         pairing_code: code.to_owned(),
         name: "Fake box".into(),
-        visibility: None,
+        visibility: Some(extend_protocol::model::Visibility::Team),
         pair_ttl_days: None,
         silicon_ids: vec!["si:chef".into()],
     }
@@ -804,7 +804,7 @@ async fn where_a_pairing_code_was_made_is_told_only_to_a_signed_in_carbon() {
     } else {
         "0F0F0F"
     };
-    let body = |code: &str| serde_json::json!({"type": "pairing", "data": {"pairing_code": code, "name": "Fake box", "silicon_ids": ["si:chef"]}});
+    let body = |code: &str| serde_json::json!({"type": "pairing", "data": {"pairing_code": code, "name": "Fake box", "visibility": "team", "silicon_ids": ["si:chef"]}});
     type Headers = Vec<(&'static str, Vec<u8>)>;
     let claim_as = |headers: Headers, code: String| {
         let env = &env;

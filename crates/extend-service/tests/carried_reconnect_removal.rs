@@ -69,8 +69,18 @@ async fn removal_is_reconciled(app_version: &str) {
     })
     .await;
     for (id, token) in [(&removed, &alice), (&private_removed, &bob)] {
-        let (status, body) = api(&env, "DELETE", &format!("/api/v1/devices/{id}"), token, None, None).await;
-        assert_eq!(status, 204, "{body}");
+        // Physical revocation (native/scheduler path) still reconciles carried tombstones.
+        // Removing an organization binding deliberately leaves hardware configuration intact.
+        let actor = env.state.iam.authorize(token, Some("acme"), None).await.unwrap().member;
+        extend_service::domain::unpair(
+            &env.state,
+            &extend_service::db::World::production(),
+            id,
+            extend_protocol::model::EndReason::PairRevoked,
+            &actor,
+        )
+        .await
+        .unwrap();
     }
     other_app
         .wait("attach", |f| f["device_id"] == private_removed && f["removed"] == true)

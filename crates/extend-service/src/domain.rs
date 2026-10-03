@@ -1069,7 +1069,34 @@ pub async fn log(
     session_id: Option<&str>,
     details: serde_json::Value,
 ) {
-    log_in(state, world, device_id, actor, action, session_id, None, details).await;
+    // Legacy/native callers do not carry an application context. Session events inherit their
+    // session's organization; physical lifecycle events belong to the configuring organization.
+    let team: Option<String> = if let Some(id) = session_id {
+        sqlx::query_scalar(sql!("SELECT team FROM {} WHERE session_id=$1", world.t("sessions")))
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        sqlx::query_scalar(sql!("SELECT team FROM {} WHERE device_id=$1", world.t("devices")))
+            .bind(device_id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+    };
+    log_in(
+        state,
+        world,
+        device_id,
+        actor,
+        action,
+        session_id,
+        team.as_deref(),
+        details,
+    )
+    .await;
 }
 
 /// Writes one activity row on a pair. `team` is the acting Silicon's Team. Rows stay per pair, so

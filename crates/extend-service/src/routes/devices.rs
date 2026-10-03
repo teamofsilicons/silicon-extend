@@ -83,7 +83,7 @@ async fn check_silicons(
 
 fn test_limit_error() -> AppError {
     AppError::new(ErrorCode::TestDeviceLimit, TEST_DEVICE_LIMIT_MESSAGE)
-        .hint("Remove a device from this test environment first, with `extend device rm <device_id> --yes`.")
+        .hint("Revoke an unused physical pairing in its Extend app first. Removing a device from an organization keeps its physical pairing and does not free this limit.")
 }
 
 /// How many devices a test environment holds: physical devices, so a second Carbon's pair of a
@@ -331,8 +331,8 @@ async fn insert_device(
     Err(AppError::internal("could not allocate a unique device id"))
 }
 
-/// The Team a Carbon's claim is made in: X-Org-ID, or the first Team their login reaches. It is
-/// informational (see [`DeviceRow::team`]).
+/// The configuring organization. Production IAM tokens contain exactly one organization;
+/// older local fixtures explicitly select a context through X-Org-ID.
 fn claim_team(p: &Principal) -> AppResult<String> {
     p.team.clone().or_else(|| p.teams.first().cloned()).ok_or_else(|| {
         AppError::new(
@@ -1678,6 +1678,7 @@ struct RequestRow {
     routed_to_id: Option<String>,
     holder_device_id: Option<String>,
     holder_session_id: Option<String>,
+    holder_team: Option<String>,
     /// The Carbon who owns the requester's pair.
     requester_carbon: Option<String>,
 }
@@ -1688,7 +1689,7 @@ impl RequestRow {
     /// Carbon who gave access to the Silicon using it", never who, nor the holder's session; the
     /// Carbon it went to sees it on their own pair, with the asking Silicon and its reason (Carbon
     /// decision, 2026-09-27), and the asker's Team only when it is their own Silicon.
-    fn view(self, viewer: &str) -> Option<RequestInfo> {
+    fn view(self, viewer: &str, org: &str) -> Option<RequestInfo> {
         let delivery = match self.delivery.as_str() {
             "delivered" => Delivery::Delivered,
             "failed" => Delivery::Failed,
@@ -1716,9 +1717,9 @@ impl RequestRow {
                 from_hidden: false,
             });
         }
-        let recipient = self.routed_to_id.as_deref() == Some(viewer);
+        let recipient = self.routed_to_id.as_deref() == Some(viewer) && self.holder_team.as_deref() == Some(org);
         if recipient {
-            let own_silicon = self.requester_carbon.as_deref() == Some(viewer);
+            let own_silicon = self.requester_carbon.as_deref() == Some(viewer) && self.team == org;
             return Some(RequestInfo {
                 request_id: self.request_id,
                 device_id: self
@@ -1766,7 +1767,7 @@ impl RequestRow {
 fn request_columns(world: &World) -> String {
     format!(
         "r.request_id, r.device_id, r.team, r.from_id, r.to_id, r.session_id, r.reason, r.created_at, r.delivery, r.last_error,
-         r.routed_to, r.routed_to_id, r.holder_device_id, r.holder_session_id,
+         r.routed_to, r.routed_to_id, r.holder_device_id, r.holder_session_id, r.holder_team,
          (SELECT o.owner_id FROM {} o WHERE o.device_id = r.device_id) AS requester_carbon",
         world.t("devices")
     )
@@ -1783,7 +1784,7 @@ pub struct PageQuery {
 async fn request_page(
     state: &Shared,
     world: &World,
-    viewer: &str,
+    viewer: (&str, &str),
     cond: &str,
     binds: Vec<String>,
     q: &PageQuery,
@@ -1797,7 +1798,7 @@ async fn request_page(
         .and_then(|c| c.parse().ok());
     let n = binds.len();
     let sql = format!(
-        "SELECT {} FROM {} r WHERE {cond} AND (${}::uuid IS NULL OR r.request_id < ${}) ORDER BY r.request_id DESC LIMIT ${}",
+        "SELECT {} FROM {} r WHERE ({cond}) AND (${}::uuid IS NULL OR r.request_id < ${}) ORDER BY r.request_id DESC LIMIT ${}",
         request_columns(world),
         world.t("requests"),
         n + 1,
@@ -1813,7 +1814,7 @@ async fn request_page(
     let items: Vec<RequestInfo> = rows
         .into_iter()
         .take(lim as usize)
-        .filter_map(|r| r.view(viewer))
+        .filter_map(|r| r.view(viewer.0, viewer.1))
         .collect();
     let next = more.then(|| encode_cursor(&items.last().map(|i| i.request_id.to_string()).unwrap_or_default()));
     Ok(ok("requests", serde_json::json!({"items": items, "next_cursor": next})))
@@ -1831,8 +1832,8 @@ pub async fn requests_for_device(
     request_page(
         &state,
         &auth.world,
-        auth.p.id(),
-        "r.team = $3 AND (r.device_id = $1 OR (r.routed_to = 'carbon' AND r.routed_to_id = $2 AND r.holder_device_id = $1))",
+        (auth.p.id(), auth.team()?),
+        "(r.team = $3 AND r.device_id = $1) OR (r.routed_to = 'carbon' AND r.routed_to_id = $2 AND r.holder_device_id = $1 AND r.holder_team = $3)",
         vec![device_id, auth.p.id().to_owned(), auth.team()?.to_owned()],
         &q,
     )
@@ -1863,7 +1864,7 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
         binds.push(d.clone());
         cond.push_str(" AND r.device_id = $3");
     }
-    request_page(&state, &auth.world, auth.p.id(), &cond, binds, &q).await
+    request_page(&state, &auth.world, (auth.p.id(), auth.team()?), &cond, binds, &q).await
 }
 
 /// Longest a request reason may be including the whitespace around it, which is kept and
@@ -2028,7 +2029,7 @@ pub async fn request_send(
             .bind(&team)
             .fetch_optional(&mut *tx)
             .await?;
-            if let Some(r) = recent.and_then(|r| r.view(p.id())) {
+            if let Some(r) = recent.and_then(|r| r.view(p.id(), &team)) {
                 tx.commit().await?;
                 return Ok((
                     StatusCode::OK,
@@ -2204,7 +2205,7 @@ pub async fn request_send(
             Ok((
                 StatusCode::CREATED,
                 "request",
-                serde_json::to_value(row.view(p.id())).map_err(AppError::internal)?,
+                serde_json::to_value(row.view(p.id(), &team)).map_err(AppError::internal)?,
             ))
         },
     )
