@@ -43,7 +43,7 @@ test.describe("restyle tour", () => {
 
   test("sign-in, devices, wizard, device page, settings, docs, search", async ({ page, mock, request }) => {
     test.setTimeout(180_000);
-    // Production's layout: IAM's consent screen at <auth origin>/login, so sign-up is /signup beside it.
+    // Production's IAM metadata is supplied before opening the typed identity popup.
     await page.route("**/api/v1/iam", async (route) => {
       const res = await route.fetch();
       const body = await res.json();
@@ -51,7 +51,8 @@ test.describe("restyle tour", () => {
       await route.fulfill({ response: res, json: body });
     });
     await page.goto("/");
-    await expect(page.getByTestId("signup-note")).toContainText("checks your email and phone");
+    await expect(page.getByTestId("signup-note")).toContainText("verifies your email");
+    await expect(page.getByTestId("signup-note")).toContainText("approve Extend");
     await expect(page.getByTestId("sign-in")).toBeVisible();
     await capture(page, "01-sign-in");
     // The print is drawn by WebGL; without it the CSS fallback gradient would show.
