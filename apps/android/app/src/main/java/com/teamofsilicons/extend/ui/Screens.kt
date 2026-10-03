@@ -642,8 +642,8 @@ private fun CarbonsCard(extend: Extend, state: UiState) {
         CardTitle(if (several) "Carbons who paired this $noun" else "The Carbon who paired this $noun")
         Gap(4.dp)
         Muted(
-            if (several) "Each Carbon configures this $noun once and imports it into their organizations on the Extend website. Hidden devices are visible only to their owner. Revoking a pair removes it from every organization."
-            else "Import this configured $noun into your organizations and choose visibility on the Extend website. Hidden devices are visible only to you. Another Carbon can pair it to their account below.",
+            if (several) "Each Carbon configures this $noun once and imports it into their organizations on the Extend website. Devices are visible to their organization by default. Hidden devices are visible only to their owner and Silicons explicitly granted access in that organization. Revoking a pair removes it from every organization."
+            else "Import this configured $noun into your organizations and choose visibility on the Extend website. Devices are visible to their organization by default. Hidden devices are visible only to you and Silicons explicitly granted access in that organization. Another Carbon can pair it to their account below.",
         )
         state.pairs.forEachIndexed { i, pair ->
             Gap(14.dp)

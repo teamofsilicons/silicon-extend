@@ -1570,7 +1570,7 @@ mod tests {
     #[test]
     fn pairing_guidance_distinguishes_organization_visibility_from_physical_revoke() {
         assert!(PAGE.contains("import it into your organizations"));
-        assert!(PAGE.contains("Hidden devices are visible only to their owner."));
+        assert!(PAGE.contains("Hidden devices are visible only to their owner and Silicons explicitly granted access in that organization."));
         assert!(PAGE.contains("from every organization in"));
     }
 }

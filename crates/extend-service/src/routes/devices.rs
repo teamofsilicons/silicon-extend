@@ -12,7 +12,7 @@ use extend_protocol::frames::{EnrollmentFrame, ServiceFrame};
 use extend_protocol::model::{
     AccessGrant, ActivityEntry, AttachmentCreate, Delivery, DeviceSettingsPatch as DevicePatch, DeviceStopped,
     EndReason, InUseIndicator, Member, MemberKind, PairingClaim, RequestCreate, RequestInfo, RequestRoute, RetryResult,
-    SetupRetryInput, StepStatus, TeamReach, TeamSilicons, TestingEnvironment, Visibility,
+    SetupRetryInput, StepStatus, TeamReach, TeamSilicons, TestingEnvironment,
 };
 use extend_protocol::{DeviceId, DeviceOs, ErrorCode, PairingCode, TEST_DEVICE_LIMIT, TEST_DEVICE_LIMIT_MESSAGE, ids};
 use serde::Deserialize;
@@ -389,11 +389,6 @@ pub async fn claim(
     })?;
     let name = clean_name(&input.name)?;
     let ttl = check_ttl(input.pair_ttl_days)?;
-    if input.visibility.unwrap_or(Visibility::Personal) == Visibility::Personal && !input.silicon_ids.is_empty() {
-        return Err(AppError::invalid(
-            "A hidden device cannot be shared with Silicons. Choose organization visibility first.",
-        ));
-    }
     check_silicons(&state, &auth.p, auth.sel.as_ref(), &input.silicon_ids).await?;
     let world = auth.world.clone();
     let hash = hash_json(&input);
@@ -471,7 +466,7 @@ pub async fn claim(
         )
         .await?;
         sqlx::query(sql!("UPDATE {} SET visibility = $3 WHERE device_id = $1 AND org_id = $2", world.t("device_organizations")))
-            .bind(&device_id).bind(&team).bind(input.visibility.unwrap_or(Visibility::Personal).as_str()).execute(&mut *add.tx).await?;
+            .bind(&device_id).bind(&team).bind(input.visibility.unwrap_or_default().as_str()).execute(&mut *add.tx).await?;
 
         // A new pair of a device already paired is ready at once: the app writes the same state
         // into every pair through each pair's hello, and until then it is the sibling's.
@@ -613,7 +608,7 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
         ),
         ("accessible", true) => (
             format!(
-                "o.visibility = 'team' AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id = d.device_id AND a.team = $2 AND a.silicon_id = $1)",
+                "EXISTS (SELECT 1 FROM {} a WHERE a.device_id = d.device_id AND a.team = $2 AND a.silicon_id = $1)",
                 auth.world.t("device_access")
             ),
             Access::Silicon,
@@ -860,13 +855,9 @@ pub async fn update(
     } else {
         false
     };
-    let disabled = if patch.visibility == Some(Visibility::Personal) {
-        crate::organizations::disable_in(&mut tx, &auth.world, std::slice::from_ref(&device_id), auth.team()?).await?
-    } else {
-        Default::default()
-    };
+    // Visibility only controls organization discovery. Explicit Silicon grants and
+    // their active work survive hiding; revocation/removal use their own fences.
     tx.commit().await?;
-    crate::organizations::finish_disable(&state, &auth.world, disabled, &auth.p.member).await?;
     if name.is_some() || ttl.is_some() {
         let mut changes = serde_json::Map::new();
         if let Some(n) = &name {
@@ -1106,7 +1097,7 @@ pub async fn attach(
             )
             .await?;
             sqlx::query(sql!("UPDATE {} SET visibility = $3 WHERE device_id = $1 AND org_id = $2", world.t("device_organizations")))
-                .bind(&device_id).bind(p.team()?).bind(input.visibility.unwrap_or(Visibility::Personal).as_str()).execute(&mut *add.tx).await?;
+                .bind(&device_id).bind(p.team()?).bind(input.visibility.unwrap_or_default().as_str()).execute(&mut *add.tx).await?;
             // Read back on the add's transaction (see claim), then commit.
             let d = domain::load_device_in(&mut *add.tx, &world, &device_id)
                 .await?
@@ -1464,12 +1455,6 @@ pub async fn access_grant(
     if team != auth.team()? || !auth.p.teams.contains(&team) {
         return Err(unreachable());
     }
-    if crate::organizations::visibility(&state, &auth.world, &device_id, &team, false).await? != Some(Visibility::Team)
-    {
-        return Err(AppError::invalid(
-            "A hidden device cannot be shared with Silicons. Make it visible to the organization first.",
-        ));
-    }
     let mut p = state
         .authorize(&auth.p.token, Some(&team), auth.sel.as_ref())
         .await
@@ -1478,15 +1463,15 @@ pub async fn access_grant(
     check_silicons(&state, &p, auth.sel.as_ref(), std::slice::from_ref(&silicon_id)).await?;
     let mut tx = state.pool.begin().await?;
     domain::lock_instances(&mut tx, &auth.world, &[d.instance_id]).await?;
-    let shared: bool = sqlx::query_scalar(sql!(
-        "SELECT EXISTS(SELECT 1 FROM {} WHERE device_id=$1 AND org_id=$2 AND visibility='team' AND removed_at IS NULL)",
+    let bound: bool = sqlx::query_scalar(sql!(
+        "SELECT EXISTS(SELECT 1 FROM {} WHERE device_id=$1 AND org_id=$2 AND removed_at IS NULL)",
         auth.world.t("device_organizations")
     ))
     .bind(&device_id)
     .bind(&team)
     .fetch_one(&mut *tx)
     .await?;
-    if !shared {
+    if !bound {
         return Err(domain::device_not_found(&device_id));
     }
     let inserted = sqlx::query(sql!(
@@ -1857,8 +1842,9 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
     };
     let mut binds = vec![team, auth.p.id().to_owned()];
     let mut cond = format!(
-        "r.team = $1 AND {who} AND EXISTS (SELECT 1 FROM {} o WHERE o.device_id = r.device_id AND o.org_id = $1 AND o.visibility = 'team' AND o.removed_at IS NULL)",
-        auth.world.t("device_organizations")
+        "r.team = $1 AND {who} AND EXISTS (SELECT 1 FROM {} o JOIN {} a ON a.device_id=o.device_id AND a.team=o.org_id WHERE o.device_id = CASE WHEN r.from_id=$2 THEN r.device_id ELSE COALESCE(r.holder_device_id,r.device_id) END AND o.org_id = $1 AND o.removed_at IS NULL AND a.silicon_id=$2)",
+        auth.world.t("device_organizations"),
+        auth.world.t("device_access")
     );
     if let Some(d) = &q.device_id {
         binds.push(d.clone());

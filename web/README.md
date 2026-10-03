@@ -54,7 +54,7 @@ pnpm test:e2e:real   # against a running Rust service (EXTEND_REAL_URL, default 
 pnpm test:e2e:compat # the released 1.0.0 website (built from git tag v1.0.0) against the 1.1 mock
 ```
 
-`pnpm typecheck` is `pnpm check`. `e2e/organization-context.spec.ts` covers saved context switching, private imports and shared device discovery. `e2e/v1-1.spec.ts` retains coverage of multi-Carbon physical setup, waking, Ting, and setup Retry while enforcing the selected organization.
+`pnpm typecheck` is `pnpm check`. `e2e/organization-context.spec.ts` covers saved context switching, visible-by-default imports, explicit hidden import retries and shared device discovery. `e2e/v1-1.spec.ts` retains coverage of multi-Carbon physical setup, waking, Ting, and setup Retry while enforcing the selected organization.
 The compat suite builds the 1.0.0 bundle same-origin and aborts any request that isn't to localhost,
 so it never reaches the production service.
 
@@ -128,23 +128,13 @@ tests/unit/                 vitest
 
 ## Decisions
 
-- **1.1: devices belong to Carbons.** The device list shows every device the Carbon paired, whichever
-  Team the menu selects; the menu is only the default Team for grants (and a Silicon's Team). There is
-  no "Team devices" tab and no visibility setting. Grants are per Team: the access picker chooses from
-  any of the Carbon's Teams (`GET /team/silicons?team=any`), grants are grouped by Team, and a Team the
-  login doesn't reach says "Sign in to Extend for <team>". Several Carbons can pair one device: each
-  sees only their own side ("In use" with Stop for another Carbon's Silicon; a carried device another
-  Carbon paired shows without Stop), and a request routed to the Carbon shows which Silicon asked and
-  why. On a computer several Carbons paired, the page says only Silicons given access by the Carbon who
-  installed Extend there get the terminal (the service reports it as missing for the others). Signing
-  out says it ends the running sessions of the Silicons the Carbon gave access to.
-- **1.1: waking and Ting.** Awake is shown, never a gate. The wake banner answers "It's awake" (every
-  Carbon's side) or "Decline" (the Carbon's own), and turns wake requests off per device or Silicon.
-  Where Ting lacks Extend's types in a Team, the device page and Settings show the exact
-  `ting --org <team> types register …` command.
-- **1.1: setup Retry.** A failed step shows the device's plain-language error and Retry
-  (`POST /devices/{id}/setup/retry`); refusals (nothing failed, offline, an app older than 1.1, too
-  soon) show the service's own message under the step.
+- **Devices belong to Carbons and are scoped to an organization.** The list shows the selected
+  organization's bindings, with a separate organization discovery tab. New pairings and imports are
+  visible by default. Owners can hide a binding from other Carbons and ungranted Silicons while
+  preserving access for explicitly granted Silicons in that organization. Grants never cross
+  organizations. Several Carbons can pair one physical device; only Silicons authorized by the
+  Carbon who installed Extend there receive terminal access. Signing out ends the running sessions
+  authorized by that login in its organization, while ordinary visibility changes preserve them.
 
 - **Sign-in** follows IAM's client docs: `<iam_login_url>?app_id=<app_id>&redirect_uri=<origin>/auth/callback?state=<random>`,
   IAM returns `?slt=…` on that callback, and the website posts it to `POST /api/v1/auth/login`
@@ -213,7 +203,9 @@ their original token store and organization, and pages remount when the context 
 and device state cannot move into another account. Multi-org legacy sessions require a new sign-in.
 
 The device list separates your configured devices from shared organization devices. Add/import starts
-private; the owner can make it organization-visible from Settings. Private devices are hidden from
-every other member, including previously granted Silicons. Shared discovery remains read-only for
-other members; a Silicon still needs an explicit owner grant to control the device. Removing a binding
-affects the selected organization and retains the physical setup for importing later.
+organization-visible; the owner can hide it from Settings. Hidden devices remain visible and usable
+to explicitly granted Silicons in the same organization, but stay hidden from other Carbons (including
+administrators) and ungranted Silicons. Hiding preserves grants and running sessions. Visibility alone
+never grants Silicon control. Existing visibility choices are retained; fresh add/import forms default
+to visible and failed submissions preserve the chosen visibility. Removing a binding affects the
+selected organization and retains the physical setup for importing later.

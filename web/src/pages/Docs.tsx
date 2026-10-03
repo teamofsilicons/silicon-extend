@@ -148,7 +148,7 @@ function Start() {
         signs you in with a code, then asks you to approve Extend and sends you back here.
       </p>
       <h3>1. Add or import a device</h3>
-      <p>Choose Import configured devices to bring your existing setup into a new organization. New devices and imports start private. Turn on organization visibility to share them, then grant a Silicon control explicitly. Private devices are hidden from every other member, including previously granted Silicons.</p>
+      <p>Choose Import configured devices to bring your existing setup into a new organization. New devices and imports are visible to organization members by default. Hiding a device keeps it out of view for other Carbons and Silicons without access. Silicons with an explicit grant in the same organization can still see and use it. Visibility alone never grants Silicon control.</p>
       <ol class="numbered">
         <li>
           Open <Link href="/devices/new">Add a device</Link> and pick what you are pairing.

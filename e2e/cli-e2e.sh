@@ -148,7 +148,7 @@ grep -q -- "--yes" "$WORK/err" && ok "rm without --yes explains and does nothing
 as alice device rm "$DEV" --yes | grep -q Removed && ok "device removed"
 sleep 0.5; ! grep -q "UNPAIRED device_removed" "$FAKE_LOG" && as alice device importable --json | grep -q "$DEV" && ok "organization removal preserves the physical pair for import"
 
-# ── 3.1: configured devices have private organization bindings; physical pairs stay shared ──
+# ── 3.1: organization-visible defaults and explicit hidden Silicon grants; physical pairs stay shared ──
 # Members in a second Team, through the local IAM (a membership change, as IAM's webhook would say).
 member() { curl -sS --fail-with-body -XPOST "$API/dev/iam/members" -H 'content-type: application/json' \
   -d "{\"type\":\"member\",\"data\":{\"id\":\"$1\",\"teams\":$2}}" >/dev/null; }
@@ -167,14 +167,20 @@ TV=$(as alice device pair "$CODE" --name "Family TV" --json | jq_ 'd["device_id"
 [ ${#TV} = 8 ] && ok "a 1.1 device paired: $TV"
 for _ in $(seq 30); do grep -q PAIRED "$TV_LOG" && break; sleep 0.2; done; sleep 0.5
 as bob login c:bob >/dev/null
-[ "$(as alice device show "$TV" --json | jq_ 'd["visibility"]')" = personal ] && ok "new pairing defaults to hidden"
+[ "$(as alice device show "$TV" --json | jq_ 'd["visibility"]')" = team ] && ok "new pairing defaults to organization-visible"
+as bob device show "$TV" >/dev/null; ok "another organization member can discover the new device"
+as alice device visibility "$TV" personal >/dev/null
 expect_exit 5 as bob device show "$TV"; ok "another Carbon cannot open a hidden known device ID"
-expect_exit 2 as alice device access grant "$TV" si:sous; ok "hidden devices cannot grant Silicon access"
+as alice device access grant "$TV" si:sous >/dev/null
+as sous device show "$TV" >/dev/null; ok "hidden devices retain explicit same-organization Silicon access"
 expect_exit 3 as alice --team globex device ls; ok "an organization flag cannot broaden an ordinary login"
 ! as aliceglobex device ls --json | grep -q "$TV" && ok "an owned configuration is not active in another organization before import"
 as aliceglobex device importable --json | grep -q "$TV" && ok "the owner can discover their configured device for import"
-[ "$(as aliceglobex device import "$TV" --json | jq_ '(d["visibility"], d["team"])')" = "('personal', 'globex')" ] && ok "import creates a private binding in the selected organization"
-expect_exit 5 as scout device show "$TV"; ok "import does not grant a Silicon discovery or control"
+[ "$(as aliceglobex device import "$TV" --json | jq_ '(d["visibility"], d["team"])')" = "('team', 'globex')" ] && ok "import defaults visible in the selected organization"
+as scout device show "$TV" >/dev/null; ok "new import is discoverable by another organization member"
+expect_exit 5 as scout session new "$TV"; ok "visible import does not grant Silicon control"
+as aliceglobex device visibility "$TV" personal >/dev/null
+expect_exit 5 as scout device show "$TV"; ok "explicit hide excludes a Silicon without a grant"
 as alice device visibility "$TV" team >/dev/null
 as alice device access grant "$TV" si:sous >/dev/null
 as bob device ls --team-visible --json | grep -q "$TV" && ok "organization-wide discovery shows an explicitly shared device"

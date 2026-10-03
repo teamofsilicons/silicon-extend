@@ -205,10 +205,10 @@ AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — 
         path: "device import",
         usage: "extend device import <device_id> [--visibility personal|team] [--key <key>]",
         who: "Carbon (owner)",
-        purpose: "Import your configured device into this organization, private by default.",
-        used_with: "personal hides it from every other member. team makes it discoverable; Silicon control still requires explicit access. Reuse --key after an uncertain result.",
+        purpose: "Import your configured device into this organization, visible to the organization by default.",
+        used_with: "personal hides it from other members except Silicons with explicit access in this organization. team makes it discoverable; Silicon control still requires explicit access. Reuse --key after an uncertain result.",
         flags: &[
-            ("--visibility", "personal (default) or team"),
+            ("--visibility", "team (default) or personal"),
             ("--key", "stable operation key for retries"),
         ],
         examples: &["extend --team acme device import 7c1e09ab --visibility personal"],
@@ -227,12 +227,12 @@ AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — 
         usage: "extend device pair <pairing_code> --name <name> [--ttl-days <1-30>] [--access <silicon_id>]...",
         who: "Carbon",
         purpose: "Pair the device showing this code to your account. The code is 6 hexadecimal characters, rotates every 5 minutes and works once.",
-        used_with: "New pairs are private by default. Use --visibility team before granting Silicon access. Then follow the device's own setup with `extend device setup <device_id> --watch`. A device another Carbon already paired shows a code under \"Pair with another Carbon\" in its Extend app (1.1 or later); your pair is separate, with its own name, access and lifetime. --access grants in --team's Team (default: the default team).",
+        used_with: "New pairs are visible to the organization by default. Use --visibility personal to hide them from other members; explicitly granted Silicons retain access. Then follow the device's own setup with `extend device setup <device_id> --watch`. A device another Carbon already paired shows a code under \"Pair with another Carbon\" in its Extend app (1.1 or later); your pair is separate, with its own name, access and lifetime. --access grants in --team's Team (default: the default team).",
         flags: &[
             ("--name <name>", "1–64 characters, required"),
             (
                 "--visibility",
-                "personal (default): private to you; team: visible in this organization",
+                "team (default): visible in this organization; personal: hidden except to granted Silicons",
             ),
             (
                 "--ttl-days <n>",
@@ -247,10 +247,10 @@ AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — 
         usage: "extend device attach <host_device_id> --os ios|ipados|tvos|samsung_tv|lg_tv --name <name> [--address <ip>]",
         who: "Carbon",
         purpose: "Pair an iPhone, iPad, Apple TV or Samsung/LG TV through a paired Mac or computer on the same network.",
-        used_with: "The binding is private by default; --visibility team makes it visible in the selected organization. Then `extend device setup <device_id> --watch`; an Apple TV also needs `extend device setup-code <device_id> <code>`.",
+        used_with: "The binding is visible to the organization by default; --visibility personal hides it from other members while preserving explicit Silicon access. Then `extend device setup <device_id> --watch`; an Apple TV also needs `extend device setup-code <device_id> <code>`.",
         flags: &[
             ("--os <os>", "ios, ipados, tvos, samsung_tv or lg_tv; required"),
-            ("--visibility", "personal (default) or team"),
+            ("--visibility", "team (default) or personal"),
             ("--name <name>", "1–64 characters, required"),
             (
                 "--address <ip>",
@@ -303,7 +303,7 @@ AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — 
         path: "device visibility",
         usage: "extend device visibility <device_id> team|personal",
         who: "Carbon (owner)",
-        purpose: "Set visibility in this organization: personal hides it from all other members; team makes it discoverable.",
+        purpose: "Set visibility in this organization: personal hides it from other members except explicitly granted Silicons; team makes it discoverable.",
         used_with: "Choose who can use a device with `extend device access grant <device_id> <silicon_id>`.",
         flags: &[],
         examples: &[],
@@ -349,7 +349,7 @@ AWAKE is yes, no (screen off, locked, asleep, standby, another account), or — 
         usage: "extend device access ls <device_id> | grant <device_id> <silicon_id>... | revoke <device_id> <silicon_id>...",
         who: "Carbon (owner)",
         purpose: "See, give and take away which Silicons can use a device. Taking access away ends that Silicon's running session at once.",
-        used_with: "A grant belongs to the selected organization. Make the device organization-visible first with `device visibility <id> team`; private devices remain hidden from other members even if a grant exists. `extend team silicons` lists eligible Silicons. Revoke removes access in this organization. After a grant it warns when Ting doesn't know Extend's notification types in that Team (`extend ting status`).",
+        used_with: "A grant belongs to the selected organization. Explicitly granted Silicons retain access even when the device is hidden from other members. `extend team silicons` lists eligible Silicons. Revoke removes access in this organization. After a grant it warns when Ting doesn't know Extend's notification types in that Team (`extend ting status`).",
         flags: &[],
         examples: &[
             "extend --team labs device access grant 7c1e09ab si:chef",

@@ -48,13 +48,14 @@ async fn grant_here(env: &Env, id: &str, owner: &str, silicon: &str, org: &str) 
 }
 
 #[tokio::test]
-async fn configured_devices_import_privately_and_all_operations_remain_in_the_selected_organization() {
+async fn new_bindings_are_org_visible_and_hidden_grants_remain_scoped_to_the_selected_organization() {
     let env = start().await;
     let alice = login(&env, "c:alice@acme").await;
     let alice_globex = login(&env, "c:alice@globex").await;
     let bob = login(&env, "c:bob").await;
     let carol = login(&env, "c:carol").await;
     let chef = login(&env, "si:chef@acme").await;
+    let sous = login(&env, "si:sous@acme").await;
     let chef_globex = login(&env, "si:chef@globex").await;
     let enrollment = env
         .client
@@ -77,10 +78,13 @@ async fn configured_devices_import_privately_and_all_operations_remain_in_the_se
     )
     .await;
     assert_eq!(status, 201, "{paired}");
-    assert_eq!(paired["data"]["visibility"], "personal");
+    assert_eq!(
+        paired["data"]["visibility"], "team",
+        "omitted pairing visibility is organization-visible"
+    );
     let id = paired["data"]["device_id"].as_str().unwrap();
     let credential = credential_of(&env, enrollment.enrollment_id, &enrollment.enrollment_secret).await;
-    let _device = App::connect(&env, &credential, hello(DeviceOs::Macos, "1.1.0")).await;
+    let device = App::connect(&env, &credential, hello(DeviceOs::Macos, "1.1.0")).await;
     let path = format!("/api/v1/devices/{id}");
     let before: (String, Uuid) =
         sqlx::query_as("SELECT credential_digest, instance_id FROM extend.devices WHERE device_id=$1")
@@ -88,6 +92,14 @@ async fn configured_devices_import_privately_and_all_operations_remain_in_the_se
             .fetch_one(&env.pool)
             .await
             .unwrap();
+    assert_eq!(read(&env, &path, &bob, "acme").await.0, 200);
+    assert_eq!(read(&env, &path, &chef, "acme").await.0, 200);
+    assert_eq!(
+        session(&env, &chef, "acme", id).await.0,
+        404,
+        "visibility alone never grants control"
+    );
+    visibility(&env, id, &alice, "acme", "personal").await;
     for token in [&bob, &chef] {
         for suffix in ["", "/activity", "/access", "/setup", "/requests", "/wake-requests"] {
             let (code, body) = read(&env, &format!("{path}{suffix}"), token, "acme").await;
@@ -145,7 +157,10 @@ async fn configured_devices_import_privately_and_all_operations_remain_in_the_se
     )
     .await;
     assert_eq!(imported.0, 201, "{}", imported.1);
-    assert_eq!(imported.1["data"]["visibility"], "personal");
+    assert_eq!(
+        imported.1["data"]["visibility"], "team",
+        "omitted import visibility is organization-visible"
+    );
     assert_eq!(imported.1["data"]["team"], "globex");
     assert_eq!(
         mutation(
@@ -170,6 +185,13 @@ async fn configured_devices_import_privately_and_all_operations_remain_in_the_se
         before, after,
         "import must not re-pair or duplicate the physical device"
     );
+    assert_eq!(read(&env, &path, &carol, "globex").await.0, 200);
+    assert_eq!(
+        session(&env, &chef_globex, "globex", id).await.0,
+        404,
+        "imports do not copy another org's grants"
+    );
+    visibility(&env, id, &alice_globex, "globex", "personal").await;
     assert_eq!(read(&env, &path, &carol, "globex").await.0, 404);
     visibility(&env, id, &alice, "acme", "team").await;
     assert_eq!(read(&env, &path, &bob, "acme").await.0, 200);
@@ -202,13 +224,98 @@ async fn configured_devices_import_privately_and_all_operations_remain_in_the_se
     assert!(globex_view["data"]["in_use"].is_null());
     assert!(!globex_view.to_string().contains(acme_session));
     visibility(&env, id, &alice, "acme", "personal").await;
+    for token in [&bob, &sous] {
+        assert_eq!(read(&env, &path, token, "acme").await.0, 404);
+    }
+    assert_eq!(read(&env, &path, &chef, "acme").await.0, 200);
+    assert_eq!(read(&env, &path, &chef_globex, "globex").await.0, 404);
+    assert_eq!(
+        read(&env, "/api/v1/devices?scope=accessible", &chef, "acme").await.1["data"]["items"][0]["device_id"],
+        id
+    );
+    assert_eq!(
+        read(&env, &format!("/api/v1/sessions/{acme_session}"), &chef, "acme")
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        read(&env, "/api/v1/sessions", &chef, "acme").await.1["data"]["items"][0]["session_id"],
+        acme_session
+    );
+    let command = extend_protocol::model::CommandRequest {
+        command: "snapshot".into(),
+        args: vec![],
+        timeout_ms: None,
+        self_destruct_minutes: None,
+        permanent: false,
+        attachments: vec![],
+    };
+    let ran = env
+        .client
+        .authed(&chef, Some("acme"))
+        .run(acme_session, &command)
+        .await
+        .unwrap();
+    assert!(
+        ran.ok,
+        "the current granted Silicon can still dispatch through the physical socket after hiding"
+    );
+    assert!(!device.is_closed());
+    let file_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO extend.files(file_id,team,device_id,session_id,created_by,name,kind,content_type,size_bytes,url) VALUES ($1,'acme',$2,$3,'si:chef','fixture.txt','attachment','text/plain',1,'https://example.test/fixture')")
+        .bind(file_id).bind(id).bind(acme_session).execute(&env.pool).await.unwrap();
+    assert_eq!(
+        read(&env, &format!("/api/v1/files/{file_id}"), &chef, "acme").await.0,
+        200
+    );
+    assert_eq!(
+        read(&env, "/api/v1/files", &chef, "acme").await.1["data"]["items"][0]["file_id"],
+        file_id.to_string()
+    );
+    let state: String = sqlx::query_scalar("SELECT state FROM extend.sessions WHERE session_id=$1")
+        .bind(acme_session)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "active", "hiding is not access revocation");
+    // An owner may also explicitly grant access while the device is already hidden.
+    grant_here(&env, id, &alice, "si:sous", "acme").await;
+    assert_eq!(read(&env, &path, &sous, "acme").await.0, 200);
+    let revoked = api(
+        &env,
+        "DELETE",
+        &format!("{path}/access/si:chef"),
+        &alice,
+        Some("acme"),
+        None,
+    )
+    .await;
+    assert_eq!(revoked.0, 204, "{}", revoked.1);
     assert_eq!(read(&env, &path, &chef, "acme").await.0, 404);
+    assert_eq!(
+        read(&env, &format!("/api/v1/files/{file_id}"), &chef, "acme").await.0,
+        404
+    );
+    assert_eq!(
+        read(&env, &format!("/api/v1/sessions/{acme_session}"), &chef, "acme")
+            .await
+            .0,
+        404
+    );
+    assert!(
+        env.client
+            .authed(&chef, Some("acme"))
+            .run(acme_session, &command)
+            .await
+            .is_err()
+    );
     let ended: String = sqlx::query_scalar("SELECT state FROM extend.sessions WHERE session_id=$1")
         .bind(acme_session)
         .fetch_one(&env.pool)
         .await
         .unwrap();
-    assert_eq!(ended, "ended");
+    assert_eq!(ended, "ended", "actual revocation still stops work");
     visibility(&env, id, &alice_globex, "globex", "team").await;
     grant_here(&env, id, &alice_globex, "si:chef", "globex").await;
     let running = session(&env, &chef_globex, "globex", id).await;
@@ -305,8 +412,7 @@ async fn migration_seeds_private_bindings_without_replacing_configurations_and_c
         world.t("device_access")
     );
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&pool).await.unwrap();
-    db::ensure_world(&pool, &world).await.unwrap();
-    db::ensure_world(&pool, &world).await.unwrap();
+    db::ensure_world_to(&pool, &world, 7).await.unwrap();
     let bindings: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT org_id, visibility FROM {} ORDER BY org_id",
         world.t("device_organizations")
@@ -318,6 +424,35 @@ async fn migration_seeds_private_bindings_without_replacing_configurations_and_c
         bindings,
         vec![("acme".into(), "personal".into()), ("globex".into(), "personal".into())]
     );
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE {} SET visibility='team' WHERE org_id='globex'",
+        world.t("device_organizations")
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    db::ensure_world(&pool, &world).await.unwrap();
+    db::ensure_world(&pool, &world).await.unwrap();
+    let choices: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT org_id,visibility FROM {} ORDER BY org_id",
+        world.t("device_organizations")
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        choices,
+        vec![("acme".into(), "personal".into()), ("globex".into(), "team".into())],
+        "schema7→8 preserves both existing choices"
+    );
+    let grants: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM {}",
+        world.t("device_access")
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(grants, 1, "default migration preserves explicit grants");
     let credential: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT credential_digest FROM {}",
         world.t("devices")
@@ -326,6 +461,16 @@ async fn migration_seeds_private_bindings_without_replacing_configurations_and_c
     .await
     .unwrap();
     assert_eq!(credential, "original-credential");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("INSERT INTO {} (device_id,team,owner_id,name,os,credential_digest) VALUES ('aabb1235','acme','c:alice','New Mac','macos','new-credential')", world.t("devices"))))
+        .execute(&pool).await.unwrap();
+    let new_visibility: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT visibility FROM {} WHERE device_id='aabb1235'",
+        world.t("device_organizations")
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(new_visibility, "team", "schema8 changes only future binding defaults");
     db::truncate_world(&pool, &world).await.unwrap();
     let left: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) FROM {}",
@@ -346,53 +491,88 @@ async fn migration_seeds_private_bindings_without_replacing_configurations_and_c
 }
 
 #[tokio::test]
-async fn startup_applies_private_bindings_to_persisted_sessions_and_notifications() {
+async fn startup_preserves_hidden_granted_work_and_fences_revoked_work() {
     let state = state_only().await;
-    // Simulate persisted work from before schema 7, or a process interrupted after hiding.
     sqlx::raw_sql("INSERT INTO extend.devices (device_id,team,owner_id,name,os,credential_digest) VALUES ('aabb1234','acme','c:alice','Mac','macos','retained-native-credential');
+        UPDATE extend.device_organizations SET visibility='personal';
         INSERT INTO extend.device_access(device_id,team,silicon_id,granted_by) VALUES ('aabb1234','acme','si:chef','c:alice');
-        INSERT INTO extend.session_ids(session_id) VALUES ('abc');
-        INSERT INTO extend.sessions(session_id,device_id,silicon_id,team,state) VALUES ('abc','aabb1234','si:chef','acme','active');
+        INSERT INTO extend.session_ids(session_id) VALUES ('abc'),('abd');
+        INSERT INTO extend.sessions(session_id,device_id,silicon_id,team,state) VALUES ('abc','aabb1234','si:chef','acme','active'),('abd','aabb1234','si:sous','acme','active');
         INSERT INTO extend.device_locks(device_id,session_id) VALUES ('aabb1234','abc');
         INSERT INTO extend.wake_requests(wake_id,device_id,instance_id,team,from_id,to_id,reason,expires_at,wake_detectable,device_notice)
-          SELECT gen_random_uuid(),device_id,instance_id,'acme','si:chef','c:alice','pending before hiding',now()+interval '30 minutes',true,'offline' FROM extend.devices WHERE device_id='aabb1234';
+          SELECT gen_random_uuid(),device_id,instance_id,'acme',silicon,'c:alice','pending while hidden',now()+interval '30 minutes',true,'offline' FROM extend.devices CROSS JOIN (VALUES ('si:chef'),('si:sous')) actors(silicon) WHERE device_id='aabb1234';
         INSERT INTO extend.requests(request_id,device_id,team,from_id,to_id,reason)
-          VALUES (gen_random_uuid(),'aabb1234','acme','si:chef','si:sous','pending before hiding');")
+          VALUES (gen_random_uuid(),'aabb1234','acme','si:chef','si:sous','granted while hidden'),(gen_random_uuid(),'aabb1234','acme','si:sous','si:chef','revoked');")
         .execute(&state.pool).await.unwrap();
     let restarted = extend_service::build(state.cfg.clone()).await.unwrap();
-    let ended: (String, Option<String>) =
-        sqlx::query_as("SELECT state,end_reason FROM extend.sessions WHERE session_id='abc'")
-            .fetch_one(&restarted.pool)
+    let sessions: Vec<(String, String)> =
+        sqlx::query_as("SELECT silicon_id,state FROM extend.sessions ORDER BY silicon_id")
+            .fetch_all(&restarted.pool)
             .await
             .unwrap();
-    assert_eq!(ended, ("ended".into(), Some("access_removed".into())));
-    let wake: (String, Option<String>) = sqlx::query_as("SELECT state,end_reason FROM extend.wake_requests")
-        .fetch_one(&restarted.pool)
+    assert_eq!(
+        sessions,
+        vec![("si:chef".into(), "active".into()), ("si:sous".into(), "ended".into())]
+    );
+    let wakes: Vec<(String, String)> =
+        sqlx::query_as("SELECT from_id,state FROM extend.wake_requests ORDER BY from_id")
+            .fetch_all(&restarted.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        wakes,
+        vec![
+            ("si:chef".into(), "open".into()),
+            ("si:sous".into(), "withdrawn".into())
+        ]
+    );
+    let requests: Vec<(String, String)> =
+        sqlx::query_as("SELECT from_id,delivery FROM extend.requests ORDER BY from_id")
+            .fetch_all(&restarted.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        requests,
+        vec![
+            ("si:chef".into(), "pending".into()),
+            ("si:sous".into(), "failed".into())
+        ]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.device_locks")
+            .fetch_one(&restarted.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT credential_digest FROM extend.devices")
+            .fetch_one(&restarted.pool)
+            .await
+            .unwrap(),
+        "retained-native-credential"
+    );
+    // Removing the organization ends even previously authorized hidden work after restart.
+    sqlx::query("UPDATE extend.device_organizations SET removed_at=now()")
+        .execute(&restarted.pool)
         .await
         .unwrap();
-    assert_eq!(wake, ("withdrawn".into(), Some("access_removed".into())));
-    let delivery: String = sqlx::query_scalar("SELECT delivery FROM extend.requests")
-        .fetch_one(&restarted.pool)
-        .await
-        .unwrap();
-    assert_eq!(delivery, "failed");
-    let locks: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.device_locks")
-        .fetch_one(&restarted.pool)
-        .await
-        .unwrap();
-    assert_eq!(locks, 0);
-    let credential: String = sqlx::query_scalar("SELECT credential_digest FROM extend.devices")
-        .fetch_one(&restarted.pool)
-        .await
-        .unwrap();
-    assert_eq!(credential, "retained-native-credential");
-    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.device_access")
-        .fetch_one(&restarted.pool)
+    extend_service::organizations::reconcile(&restarted, &extend_service::db::World::production())
         .await
         .unwrap();
     assert_eq!(
-        grants, 1,
-        "migration leaves grants dormant until the owner explicitly shares"
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.sessions WHERE state <> 'ended'")
+            .fetch_one(&restarted.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.wake_requests WHERE state='open'")
+            .fetch_one(&restarted.pool)
+            .await
+            .unwrap(),
+        0
     );
 }
 

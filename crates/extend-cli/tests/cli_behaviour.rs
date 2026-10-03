@@ -1235,15 +1235,7 @@ fn visibility_and_pair_are_explicit_and_org_scoped() {
     let changes = fake.requests("PATCH", "/api/v1/devices/7c1e09ab");
     assert_eq!(changes[0].body["data"]["visibility"], "personal");
     assert_eq!(changes[0].headers.get("x-org-id").map(String::as_str), Some("acme"));
-    let o = cli.run(&[
-        "device",
-        "pair",
-        "4f9c2a",
-        "--name",
-        "Family Mac",
-        "--visibility",
-        "team",
-    ]);
+    let o = cli.run(&["device", "pair", "4f9c2a", "--name", "Family Mac"]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(
         fake.requests("POST", "/api/v1/pairings")[0].body["data"]["visibility"],
@@ -1907,7 +1899,7 @@ fn saved_logins_select_their_own_org_tokens_and_session_cache() {
 }
 
 #[test]
-fn import_uses_private_default_and_explicit_retry_key() {
+fn import_uses_organization_default_and_explicit_retry_key() {
     let fake = Fake::start(|r| match (r.method.as_str(), r.path_only()) {
         ("GET", "/api/v1/devices/importable") => Some(ok(
             "devices",
@@ -1915,11 +1907,7 @@ fn import_uses_private_default_and_explicit_retry_key() {
         )),
         ("POST", "/api/v1/devices/7c1e09ab/import") => Some(ok(
             "device",
-            device_with(
-                "7c1e09ab",
-                "Configured Mac",
-                json!({"visibility":"personal","team":"acme"}),
-            ),
+            device_with("7c1e09ab", "Configured Mac", json!({"visibility":"team","team":"acme"})),
         )),
         _ => None,
     });
@@ -1935,7 +1923,7 @@ fn import_uses_private_default_and_explicit_retry_key() {
     for request in fake.requests("POST", "/api/v1/devices/7c1e09ab/import") {
         assert_eq!(
             request.body,
-            json!({"type":"device_import","data":{"visibility":"personal"}})
+            json!({"type":"device_import","data":{"visibility":"team"}})
         );
         assert_eq!(request.headers["x-org-id"], "acme");
         assert_eq!(request.headers["idempotency-key"], key);

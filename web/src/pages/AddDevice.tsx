@@ -37,7 +37,7 @@ function KindIcon(props: { kind: DeviceKind; size?: number }) {
 export default function AddDevice() {
   const s = session();
   const client = s.client();
-  const [shared, setShared] = createSignal(false);
+  const [shared, setShared] = createSignal(true);
   const preset = deviceKind(query().get("kind") ?? undefined)?.id ?? null;
   const [state, setState] = createSignal(initialState(preset));
   const dispatch = (event: WizardEvent) => setState((current) => reduce(current, event));
@@ -297,7 +297,7 @@ export default function AddDevice() {
                   <p class="field-problem">{nameProblem(state().name)}</p>
                 </Show>
                 <label class="checkbox-row"><input type="checkbox" checked={shared()} onChange={e=>setShared(e.currentTarget.checked)}/>Visible to members of {s.team()}</label>
-                <p class="fine">Off keeps this device private to you, hidden from every other organization member. Shared devices need an explicit access grant before a Silicon can control them.</p>
+                <p class="fine">Off hides this device from other Carbons and Silicons without access. Silicons you explicitly grant access in this organization can still see and use it.</p>
                 <TtlSlider value={state().ttlDays} onInput={(days) => dispatch({ type: "set_ttl", days })} />
                 <ErrorNote error={shownError()} testid="pairing-error" />
                 <Nav
@@ -397,9 +397,8 @@ export default function AddDevice() {
                 <p class="eyebrow">Access</p>
                 <h2 class="card-title">Which Silicons can use {device().name}?</h2>
                 <p class="fine">
-                  Choose Silicons in {s.team()}. Only one Silicon uses the device at a time. A private device stays hidden from every other member, even when an access grant exists.
+                  Choose Silicons in {s.team()}. Only one Silicon uses the device at a time. Granted Silicons can see and use this device even when it is hidden from other organization members.
                 </p>
-                <Show when={device().visibility === "team"} fallback={<p class="notice">This device is private. Turn on organization visibility in its settings when you want to give a Silicon access.</p>}>
                 <AccessPicker
                   deviceId={device().device_id}
                   onGranted={(ids, team) => {
@@ -407,7 +406,6 @@ export default function AddDevice() {
                     dispatch({ type: "access_done", granted: [...state().granted, ...ids] });
                   }}
                 />
-                </Show>
                 <div class="wizard-nav">
                   <span />
                   <Button variant="ghost" onClick={() => dispatch({ type: "skip_access" })} data-testid="skip-access">
@@ -434,7 +432,7 @@ export default function AddDevice() {
                   <CopyText text={`extend ${grantTeam() ? `--team ${grantTeam()} ` : ""}device show ${device().device_id}`} />
                 </Show>
                 <div class="wizard-nav">
-                  <Button onClick={() => (setGrantTeam(null), setState(initialState()))}>Add another device</Button>
+                  <Button onClick={() => (setGrantTeam(null), setShared(true), setState(initialState()))}>Add another device</Button>
                   <Link href={`/devices/${device().device_id}`} class="button primary" data-testid="open-device">
                     Open device page <ArrowRight size={16} aria-hidden="true" />
                   </Link>

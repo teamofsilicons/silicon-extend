@@ -495,7 +495,7 @@ pub async fn start(
         domain::lock_instances(&mut tx, &world, &group.members).await?;
         let granted: Option<(i32,)> = sqlx::query_as(sql!(
             "SELECT 1 FROM {} a JOIN {} o ON o.device_id = a.device_id AND o.org_id = a.team
-             WHERE a.device_id = $1 AND a.team = $2 AND a.silicon_id = $3 AND o.visibility = 'team' AND o.removed_at IS NULL",
+             WHERE a.device_id = $1 AND a.team = $2 AND a.silicon_id = $3 AND o.removed_at IS NULL",
             world.t("device_access"), world.t("device_organizations")
         ))
         .bind(&device_id)
@@ -673,8 +673,9 @@ pub async fn list(
     let before = q.cursor.as_deref().map(decode_cursor).transpose()?;
     let who = if auth.p.is_silicon() {
         format!(
-            "s.silicon_id = $2 AND EXISTS (SELECT 1 FROM {} o WHERE o.device_id = s.device_id AND o.org_id = $1 AND o.visibility = 'team' AND o.removed_at IS NULL)",
-            auth.world.t("device_organizations")
+            "s.silicon_id = $2 AND EXISTS (SELECT 1 FROM {} o JOIN {} a ON a.device_id=o.device_id AND a.team=o.org_id WHERE o.device_id=s.device_id AND o.org_id=$1 AND o.removed_at IS NULL AND a.silicon_id=$2)",
+            auth.world.t("device_organizations"),
+            auth.world.t("device_access")
         )
     } else {
         format!(

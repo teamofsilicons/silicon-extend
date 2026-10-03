@@ -411,8 +411,8 @@ pub enum Access {
 }
 
 /// A current organization binding is required for everyone, including the configuring owner.
-/// Private bindings hide the device from every other member; shared bindings allow discovery,
-/// and a separate Silicon grant allows control. Whether the owner is still in T is checked at each use
+/// Hidden bindings remain visible to explicitly granted Silicons; shared bindings allow other
+/// organization members to discover the device, while control always requires a Silicon grant. Whether the owner is still in T is checked at each use
 /// ([`crate::membership::owner_active`]), not here.
 pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Principal) -> AppResult<Option<Access>> {
     let team = p.team()?;
@@ -422,11 +422,8 @@ pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Princ
     if d.is_owner(p) {
         return Ok(Some(Access::Owner));
     }
-    if visibility != Visibility::Team {
-        return Ok(None);
-    }
     if !p.is_silicon() {
-        return Ok(Some(Access::Member));
+        return Ok((visibility == Visibility::Team).then_some(Access::Member));
     }
     let has: Option<(i32,)> = sqlx::query_as(sql!(
         "SELECT 1 FROM {} WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
@@ -437,7 +434,11 @@ pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Princ
     .bind(p.id())
     .fetch_optional(&state.pool)
     .await?;
-    Ok(Some(if has.is_some() { Access::Silicon } else { Access::Member }))
+    Ok(if has.is_some() {
+        Some(Access::Silicon)
+    } else {
+        (visibility == Visibility::Team).then_some(Access::Member)
+    })
 }
 
 fn check_device_id(device_id: &str) -> AppResult<()> {
@@ -981,7 +982,7 @@ async fn same_device(
 ) -> Option<Vec<extend_protocol::DeviceId>> {
     let team = viewer.team?;
     let ids: Vec<(String,)> = sqlx::query_as(sql!(
-        "SELECT o.device_id FROM {} o JOIN {} a ON a.device_id = o.device_id JOIN {} b ON b.device_id = o.device_id AND b.org_id = a.team AND b.visibility = 'team' AND b.removed_at IS NULL
+        "SELECT o.device_id FROM {} o JOIN {} a ON a.device_id = o.device_id JOIN {} b ON b.device_id = o.device_id AND b.org_id = a.team AND b.removed_at IS NULL
          WHERE o.instance_id = $1 AND o.device_id <> $2 AND o.removed_at IS NULL AND a.team = $3 AND a.silicon_id = $4
          ORDER BY o.device_id",
         world.t("devices"),

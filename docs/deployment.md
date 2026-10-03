@@ -108,12 +108,23 @@ workspace/client/protocol versions unchanged. Publish only `silicon-extend-cli` 
 Create its GitHub release with `--latest=false` so the website's latest desktop/Android downloads
 continue pointing at the full app release.
 
-For 3.1.0, publish `silicon-extend-protocol` 1.1.1 before the client and CLI crates. Their minimum
+For 3.1.1, publish `silicon-extend-protocol` 1.1.2 first, then `silicon-extend-client`
+and `silicon-extend-cli` 3.1.1. Their minimum protocol version must preserve the new
+organization-visible default for omitted pair, attach and import visibility. Deploy
+service 3.1.1 with schema 8 and the matching website. Existing stored visibility stays
+unchanged, and explicitly hidden devices still allow their granted same-organization
+Silicons. Follow [the 3.1.1 release checklist](releases/cli-3.1.1.md); this guidance does
+not itself confirm publication or deployment. Physical desktop and Android packages
+need no binary republish for this service policy change.
+
+Historical 3.1.0 packaging: publish `silicon-extend-protocol` 1.1.1 before the client and CLI crates. Their minimum
 protocol dependency is 1.1.1 so installed SDKs preserve the private `Visibility::default()` and
 include the organization import request type. The protocol crate has an independent package
 version: the physical device HTTP API stays v1, desktop/workspace packages stay 1.1.0, and Android
 stays 1.1.2. This packaging correction changes no runtime source or version constants; verified
-3.1.0 binaries already contain the same private default. Verify the packages together with
+3.1.0 binaries already contain that earlier private default. The later default-visible policy
+requires matching protocol, client and CLI packages; do not use 3.1.0 as its verification.
+Verify the packages together with
 `cargo package -p silicon-extend-protocol -p silicon-extend-client -p silicon-extend-cli`, then
 publish in that order, waiting for each registry dependency to become available.
 

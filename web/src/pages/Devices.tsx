@@ -352,7 +352,7 @@ function Overview(props: { items: Device[] | null; scope: Scope; isSilicon: bool
               }
             >
               <Empty eyebrow="Extend · your devices" title="No devices in this organization.">
-                <p>Add a new device or import one you have already configured in another organization. Devices are private until you share them.</p>
+                <p>Add a new device or import one you have already configured in another organization. New devices are visible to organization members. You can hide them while keeping access for Silicons you choose.</p>
                 <Link href="/devices/new" class="button primary">
                   <Plus size={16} aria-hidden="true" /> Add your first device
                 </Link>

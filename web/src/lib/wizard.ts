@@ -7,9 +7,9 @@
  *
  * The device is created when the name is submitted (the pairing endpoint needs code and name
  * together; attaching needs host and name). From then on there is no going back past `banner`:
- * the device exists, and leaving the wizard leaves it paired. Since 1.1 there is no visibility
- * choice (a device is only ever visible to the Carbons who paired it), and access is given after
- * the claim, per Team.
+ * the device exists, and leaving the wizard leaves it paired. Organization visibility is chosen
+ * before creation and defaults to visible. Silicon control is granted after the claim in the
+ * selected organization, including for devices hidden from other members.
  *
  * `banner` asks whether the device shows that a Silicon is using it (UNDERSTANDING, "Add a device"
  * step 5). Neither the claim nor the attach carries it, so the choice is saved with a PATCH of the

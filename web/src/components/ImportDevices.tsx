@@ -12,7 +12,7 @@ export default function ImportDevices(props: { close: () => void }) {
   const [items, setItems] = createSignal<ImportableDevice[]>(),
     [error, setError] = createSignal<ApiError | null>(null);
   const [busy, setBusy] = createSignal<string | null>(null),
-    [shared, setShared] = createSignal(false);
+    [shared, setShared] = createSignal(true);
   const keys = new Map<string, string>();
   onMount(async () => {
     try {
@@ -54,7 +54,7 @@ export default function ImportDevices(props: { close: () => void }) {
         Visible to organization members
       </label>
       <p class="fine">
-        Off keeps imported devices private to you. Shared devices still require an explicit access grant before a Silicon can control them.
+        Off hides imported devices from other Carbons and Silicons without access. Silicons you explicitly grant access in this organization can still see and use them.
       </p>
       <ErrorNote error={error()} />
       <Show

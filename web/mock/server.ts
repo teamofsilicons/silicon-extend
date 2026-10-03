@@ -4,8 +4,8 @@
  * matters to the website: envelopes, X-Org-ID, X-Testing-Application-Secret, Idempotency-Key,
  * If-Match versions, owner-only actions, the test-environment device limit, and token rotation.
  *
- * 1.1: devices belong to the Carbons who paired them (X-Org-ID doesn't filter them), grants are per
- * Team, several Carbons can pair one physical device (an "instance") with separate pairs and sides,
+ * Devices belong to their configuring Carbon and have organization-scoped visibility and grants.
+ * Within that scope, several Carbons can pair one physical device (an "instance") with separate pairs and sides,
  * one Silicon at a time holds the instance, requests are routed to the Carbon who gave the holder
  * access, wake requests, Ting registration per Team, setup retry (contract A), and whether the device
  * shows that a Silicon is using it (in_use_indicator, one setting per physical device).
@@ -1173,7 +1173,8 @@ function ownedDevice(ctx: Ctx, member: Member): DeviceRec {
 function readableDevice(ctx: Ctx, member: Member, team: string | null): DeviceRec {
   team ??= teamOf(ctx, member, false);
   const d = scopedDevice(ctx.world.devices.get(ctx.params.device_id), team);
-  if (!d || (d.owner !== member.id && (d.removed || d.visibility !== "team"))) notFound(ctx, team);
+  const granted = member.type === "silicon" && !!team && !!d && ctx.world.access.get(d.device_id)?.has(gkey(team, member.id));
+  if (!d || (d.owner !== member.id && (d.removed || (d.visibility !== "team" && !granted)))) notFound(ctx, team);
   return d!;
 }
 
@@ -1414,7 +1415,7 @@ route("POST", "/api/v1/pairings", (ctx) => {
   if (typeof code !== "string" || !/^[0-9A-Fa-f]{6}$/.test(code))
     fail(400, "invalid_input", `pairing_code must be 6 hexadecimal characters; got ${JSON.stringify(code)}.`, "Enter the 6 characters the Extend app shows, in any case.", { field: "pairing_code" });
   const name = checkName(data.name);
-  if (data.visibility !== undefined) checkVisibility(data.visibility); // accepted and ignored (1.1)
+  if (data.visibility !== undefined) checkVisibility(data.visibility);
   const ttl = data.pair_ttl_days === undefined ? 14 : checkTtl(data.pair_ttl_days);
   const siliconIds = (data.silicon_ids ?? []) as string[];
   if (!Array.isArray(siliconIds)) fail(422, "invalid_input", "silicon_ids must be a list of si: ids.");
@@ -1453,7 +1454,7 @@ route("POST", "/api/v1/pairings", (ctx) => {
     kind: kindFor(enrollment!.os, enrollment!.model),
     owner: member.id,
     team,
-    visibility: data.visibility === undefined ? "personal" : checkVisibility(data.visibility),
+    visibility: data.visibility === undefined ? "team" : checkVisibility(data.visibility),
     host_device_id: null,
     online: true,
     last_seen_at: iso(now()),
@@ -1530,7 +1531,7 @@ route("POST", "/api/v1/devices/:device_id/attachments", (ctx) => {
     kind: kindFor(os, null),
     owner: member.id,
     team: host.team,
-    visibility: data.visibility === undefined ? "personal" : checkVisibility(data.visibility),
+    visibility: data.visibility === undefined ? "team" : checkVisibility(data.visibility),
     host_device_id: host.device_id,
     online: false,
     last_seen_at: null,
@@ -1641,9 +1642,9 @@ route("GET", "/api/v1/devices", (ctx) => {
     );
   let list = [...ctx.world.devices.values()].map(d => scopedDevice(d, team)).filter((d): d is DeviceRec => !!d && (includeRemoved || !d.removed));
   if (scope === "mine") list = list.filter((d) => d.owner === member.id);
-  // Kept for the 1.0 website's "Team devices" tab: devices are never visible to Team colleagues since 1.1.
+  // Organization discovery is independent from a Silicon's explicit control grant.
   else if (scope === "team") list = list.filter(d => d.visibility === "team");
-  else list = list.filter((d) => d.visibility === "team" && ctx.world.access.get(d.device_id)?.has(gkey(team!, member.id)));
+  else list = list.filter((d) => ctx.world.access.get(d.device_id)?.has(gkey(team!, member.id)));
   if (online !== null) list = list.filter((d) => String(d.online && !d.removed) === online);
   if (os) list = list.filter((d) => d.os === os);
   // The service's order: online first, then paired before removed, then name.
@@ -1661,13 +1662,13 @@ route("GET", "/api/v1/devices/importable", ctx => {
 route("POST", "/api/v1/devices/:device_id/import", ctx => {
   const member = caller(ctx); carbonOnly(member); const org = teamOf(ctx, member)!; requireKey(ctx);
   const data = envelope(ctx,"device_import"); onlyKeys(data,["visibility"]);
-  const visibility = data.visibility === undefined ? "personal" : checkVisibility(data.visibility);
+  const visibility = data.visibility === undefined ? "team" : checkVisibility(data.visibility);
   const d = ctx.world.devices.get(ctx.params.device_id);
   if (!d || d.owner !== member.id) notFound(ctx,org);
   if (scopedDevice(d,org) && !scopedDevice(d,org)!.removed) fail(409,"conflict","This device is already in this organization.");
   bindDevice(d!,org,visibility);
   const host = d!.host_device_id ? ctx.world.devices.get(d!.host_device_id) : null;
-  if (host && (!scopedDevice(host,org) || scopedDevice(host,org)!.removed)) bindDevice(host,org,"personal");
+  if (host && (!scopedDevice(host,org) || scopedDevice(host,org)!.removed)) bindDevice(host,org,visibility);
   return ok(200,"device",deviceView(ctx.world,scopedDevice(d,org)!,{member,team:org}));
 });
 
@@ -1723,7 +1724,7 @@ route("PATCH", "/api/v1/devices/:device_id", (ctx) => {
   onlyKeys(data, ["name", "visibility", "pair_ttl_days", "in_use_indicator"]);
   if (!Object.keys(data).length) fail(422, "invalid_input", "Send at least one of name, visibility, pair_ttl_days, in_use_indicator.");
   // Logged like the service: one entry, "renamed" when only the name changed, else "settings_changed".
-  // Visibility is accepted and ignored since 1.1: the device stays personal.
+  // Changing discovery visibility preserves explicit Silicon grants and active sessions.
   const changes: Record<string, unknown> = {};
   if ("name" in data) {
     const name = checkName(data.name);
@@ -1821,7 +1822,6 @@ route("PUT", "/api/v1/devices/:device_id/access/:silicon_id", (ctx) => {
   if (!team) fail(422, "invalid_input", "Say which Team the Silicon is in: --team <handle>.", "Pick the Team in the access picker.");
   if (!member.teams.includes(team!))
     fail(403, "not_a_team_member", `${member.id}'s Extend login doesn't reach ${team}.`, `Sign in to Extend again and select ${team} (approve Extend for ${team} in Silicon IAM), then retry.`);
-  if (d.visibility !== "team") fail(409,"conflict","Make this device visible to the organization before granting control.");
   checkSilicon(ctx.world, team!, ctx.params.silicon_id);
   if (!ctx.world.ting.has(`${member.id}\n${team}`)) ctx.world.ting.set(`${member.id}\n${team}`, { member: member.id, team: team!, status: "on", last_error: null });
   return ok(200, "access_grant", grantAccess(ctx.world, d, ctx.params.silicon_id, team!, member.id));

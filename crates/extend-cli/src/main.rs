@@ -2156,9 +2156,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let claim = PairingClaim {
                 pairing_code: code,
                 name,
-                visibility: Some(parse_visibility(
-                    a.value("--visibility").as_deref().unwrap_or("personal"),
-                )?),
+                visibility: Some(parse_visibility(a.value("--visibility").as_deref().unwrap_or("team"))?),
                 pair_ttl_days: ttl,
                 silicon_ids: a.values("--access"),
             };
@@ -2207,9 +2205,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             let input = AttachmentCreate {
                 os,
                 name,
-                visibility: Some(parse_visibility(
-                    a.value("--visibility").as_deref().unwrap_or("personal"),
-                )?),
+                visibility: Some(parse_visibility(a.value("--visibility").as_deref().unwrap_or("team"))?),
                 pair_ttl_days: None,
                 address: a.value("--address"),
             };
@@ -2293,7 +2289,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
                 format!(
                     "Visibility saved in this organization: {}.",
                     if visibility == Visibility::Personal {
-                        "private to you"
+                        "hidden from other members; granted Silicons retain access"
                     } else {
                         "organization visible"
                     }
@@ -2333,7 +2329,7 @@ async fn device(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             a.at_most(1)?;
             let id = a.req(0, "device id")?;
             parse_device_id(&id)?;
-            let visibility = parse_visibility(a.value("--visibility").as_deref().unwrap_or("personal"))?;
+            let visibility = parse_visibility(a.value("--visibility").as_deref().unwrap_or("team"))?;
             let key = a.value("--key").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             if !uuid::Uuid::parse_str(&key).is_ok_and(|id| !id.is_nil()) {
                 return Err(CliError::usage(
