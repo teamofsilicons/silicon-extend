@@ -108,6 +108,15 @@ workspace/client/protocol versions unchanged. Publish only `silicon-extend-cli` 
 Create its GitHub release with `--latest=false` so the website's latest desktop/Android downloads
 continue pointing at the full app release.
 
+For 3.1.0, publish `silicon-extend-protocol` 1.1.1 before the client and CLI crates. Their minimum
+protocol dependency is 1.1.1 so installed SDKs preserve the private `Visibility::default()` and
+include the organization import request type. The protocol crate has an independent package
+version: the physical device HTTP API stays v1, desktop/workspace packages stay 1.1.0, and Android
+stays 1.1.2. This packaging correction changes no runtime source or version constants; verified
+3.1.0 binaries already contain the same private default. Verify the packages together with
+`cargo package -p silicon-extend-protocol -p silicon-extend-client -p silicon-extend-cli`, then
+publish in that order, waiting for each registry dependency to become available.
+
 CLI/client/service 2.0.0 use independent crate versions; the CLI follows the same `cli-v` archive
 lane. Publish `silicon-extend-client` before `silicon-extend-cli` and deploy service 2.0.0 as part
 of the release. The ordinary HTTP API remains v1. Android stays at 1.1.2 and desktop applications

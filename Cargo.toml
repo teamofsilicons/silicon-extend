@@ -19,7 +19,7 @@ license = "MIT"
 repository = "https://github.com/teamofsilicons/silicon-extend"
 
 [workspace.dependencies]
-extend-protocol = { package = "silicon-extend-protocol", path = "crates/extend-protocol", version = "1.1.0" }
+extend-protocol = { package = "silicon-extend-protocol", path = "crates/extend-protocol", version = "1.1.1" }
 extend-driver = { path = "crates/extend-driver" }
 extend-hosted = { path = "crates/extend-hosted" }
 silicon-extend-client = { path = "crates/silicon-extend-client", version = "3.1.0" }
