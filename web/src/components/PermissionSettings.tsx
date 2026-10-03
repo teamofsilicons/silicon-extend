@@ -1,4 +1,4 @@
-import { approvalPopup, awaitApproval } from "../lib/approval-popup";
+import { approvalPopup, approvalUrl, awaitApproval } from "../lib/approval-popup";
 import { randomState } from "../lib/auth";
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { toApiError, type ApiError, type FeaturePermission, type FeaturePermissionRequest } from "../lib/api";
@@ -35,10 +35,12 @@ export function PermissionSettings() {
   const [error, setError] = createSignal<ApiError | null>(null);
   const [message, setMessage] = createSignal("");
   let generation = 0;
+  let flow = 0;
   let startKey: string | null = null;
   let popupState: string | null = null;
   let popupAbort: AbortController | null = null;
   let completion: { code: string; key: string } | null = null;
+  let savedRequest: FeaturePermissionRequest | null = null;
 
   async function load(current: number) {
     try {
@@ -50,40 +52,74 @@ export function PermissionSettings() {
   }
   createEffect(on([() => s.member()?.type, () => s.member()?.id, s.team, s.world, s.contextRevision], () => {
     const current = ++generation;
+    ++flow;
     setPending(null); setCode(""); setRows(null); setError(null); setMessage(""); setBusy(false);
-    startKey = null; popupState = null; popupAbort?.abort(); popupAbort = null; completion = null;
+    startKey = null; popupState = null; popupAbort?.abort(); popupAbort = null; completion = null; savedRequest = null;
     if (s.member() && s.team()) void load(current);
   }));
-  onCleanup(() => { generation++; popupAbort?.abort(); completion = null; });
+  onCleanup(() => { generation++; flow++; popupAbort?.abort(); completion = null; });
+
+  // Cancelling the local wait cannot revoke IAM approval or a valid existing grant.
+  // Keep its request/code/key so an explicit retry recovers the same operation.
+  function stopWaiting() {
+    ++flow;
+    popupAbort?.abort(); popupAbort = null;
+    setBusy(false);
+  }
+  function cancel() {
+    stopWaiting(); setPending(null); setError(null);
+    setMessage("Approval paused. Your feature choice and retry are saved; no feature action was started.");
+  }
+  function useManual() {
+    stopWaiting(); setError(null);
+  }
+  function newRequest() {
+    stopWaiting();
+    savedRequest = null; completion = null; startKey = null; popupState = null;
+    setPending(null); setCode("");
+    void start();
+  }
+  function approved(result: FeaturePermission[]) {
+    setRows(result); setPending(null); setCode("");
+    startKey = null; popupState = null; completion = null; savedRequest = null;
+    setMessage("Access approved. Return to the feature and retry your action. You can revoke access in IAM at any time.");
+  }
 
   async function start() {
-    const current = generation;
+    stopWaiting();
+    const current = flow;
     const feature = FEATURES.find((f) => f.id === selected())!;
-    let popup: Window | undefined;
+    const controller = new AbortController();
+    popupAbort = controller;
+    let popup: Window | null = null;
     startKey ??= crypto.randomUUID(); popupState ??= randomState();
     setBusy(true); setError(null); setMessage("");
     try {
-      popup = approvalPopup(); popupAbort = new AbortController();
-      const request = await client.requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey, { redirect_uri: new URL("/auth/obo/callback", location.origin).href, state: popupState });
-      if (current !== generation) { popup.close(); return; }
+      // A blocked popup still creates the same bound request for manual recovery.
+      popup = approvalPopup();
+      controller.signal.addEventListener("abort", () => popup?.close(), { once: true });
+      const request = savedRequest ?? await client.requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey, { redirect_uri: new URL("/auth/obo/callback", location.origin).href, state: popupState });
+      if (current !== flow) { popup?.close(); return; }
       if (request.state !== popupState) throw new Error("This approval did not match its original request. Start again.");
-      setPending(request); setCode(""); completion = null;
+      approvalUrl(request.consent_url);
+      savedRequest = request; setPending(request); setBusy(false);
+      if (!popup) {
+        setMessage("The popup was blocked. Review access in a new tab, then paste the approval code here.");
+        return;
+      }
       await awaitApproval(popup, request.consent_url, request.state, async value => {
-        if (current !== generation) throw new Error("Account or organization changed. Start a new approval.");
-        // Keep the exact code/key after an uncertain exchange so manual retry
-        // continues this same approval instead of spending another one-use code.
+        if (current !== flow) throw new Error("This approval was cancelled or the account changed. Resume it explicitly.");
         setCode(value);
         completion ??= { code: value, key: crypto.randomUUID() };
         if (completion.code !== value) throw new Error("Retry the original approval code.");
+        setBusy(true);
         const result = await client.completePermissions(request.id, value, completion.key, request.state);
-        if (current !== generation) return;
-        setRows(result); setPending(null); setCode(""); startKey = null; popupState = null; completion = null;
-        setMessage("Access approved. Return to the feature and retry your action. You can revoke access in IAM at any time.");
-      }, popupAbort.signal);
+        if (current === flow) approved(result);
+      }, controller.signal);
     } catch (e) {
-      popup?.close(); if (current === generation) setError(toApiError(e));
+      popup?.close(); if (current === flow) setError(toApiError(e));
     } finally {
-      if (current === generation) { setBusy(false); popupAbort = null; }
+      if (current === flow) { setBusy(false); popupAbort = null; }
     }
   }
 
@@ -92,18 +128,21 @@ export function PermissionSettings() {
     const request = pending();
     const value = code().trim();
     if (!request || !value || value.length > 16384) return;
-    const current = generation;
-    if (completion?.code !== value) completion = { code: value, key: crypto.randomUUID() };
+    stopWaiting();
+    const current = flow;
+    if (completion && completion.code !== value) {
+      setError(toApiError(new Error("Retry the original approval code, or choose a new feature request.")));
+      return;
+    }
+    completion ??= { code: value, key: crypto.randomUUID() };
     setBusy(true); setError(null);
     try {
       const result = await client.completePermissions(request.id, value, completion.key, request.state);
-      if (current !== generation) return;
-      setRows(result); setPending(null); setCode(""); startKey = null; popupState = null; completion = null;
-      setMessage("Access approved. Return to the feature and retry your action. You can revoke this access in IAM at any time.");
+      if (current === flow) approved(result);
     } catch (e) {
-      if (current === generation) setError(toApiError(e));
+      if (current === flow) setError(toApiError(e));
     } finally {
-      if (current === generation) setBusy(false);
+      if (current === flow) setBusy(false);
     }
   }
 
@@ -119,22 +158,24 @@ export function PermissionSettings() {
       <Show when={message()}><p role="status">{message()}</p></Show>
       <Show when={!pending()} fallback={
         <form onSubmit={complete} class="testing-form">
-          <p><a class="button primary" href={pending()?.consent_url} target="_blank" rel="noopener noreferrer">Review access in IAM</a></p>
+          <p><a class="button primary" href={pending()?.consent_url} target="_blank" rel="noopener noreferrer" onClick={useManual}>Review access in IAM</a></p>
           <p class="fine">Approve using this account, then paste the single-use code below. Approval does not run the original action.</p>
           <label for="feature-code">IAM approval code</label>
           <div class="input-row">
             <input id="feature-code" type="password" autocomplete="off" spellcheck={false} maxlength={16384} value={code()} onInput={(e) => setCode(e.currentTarget.value)} required />
             <Button type="submit" busy={busy()} disabled={!code().trim()}>Save approval</Button>
           </div>
-          <Button variant="ghost" disabled={busy()} onClick={() => { setPending(null); setCode(""); setError(null); completion = null; startKey = null; popupState = null; popupAbort?.abort(); }}>Cancel</Button>
+          <Button type="button" variant="ghost" onClick={cancel}>Cancel</Button>
+          <Button type="button" variant="ghost" onClick={newRequest}>Start a new request</Button>
         </form>
       }>
         <label for="feature-choice">Feature</label>
         <div class="input-row">
-          <select id="feature-choice" value={selected()} disabled={busy()} onChange={(e) => { setSelected(e.currentTarget.value); startKey = null; popupState = null; setError(null); }}>
+          <select id="feature-choice" value={selected()} disabled={busy()} onChange={(e) => { stopWaiting(); setSelected(e.currentTarget.value); startKey = null; popupState = null; savedRequest = null; completion = null; setCode(""); setError(null); setMessage(""); }}>
             <For each={FEATURES}>{(feature) => <option value={feature.id}>{feature.name}</option>}</For>
           </select>
           <Button onClick={start} busy={busy()} disabled={!s.team()}>Request access</Button>
+          <Show when={busy()}><Button type="button" variant="ghost" onClick={cancel}>Cancel</Button></Show>
         </div>
       </Show>
       <Show when={selected() === "notify"}><p class="fine">For notifications, choose this account and the device organization in IAM. Then turn on notifications below.</p></Show>
