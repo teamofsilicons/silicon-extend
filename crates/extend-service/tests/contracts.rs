@@ -208,7 +208,7 @@ fn tomorrow_midnight(t: OffsetDateTime) -> OffsetDateTime {
 // ───────────── Versioning 6: the compatibility matrix ─────────────
 
 #[tokio::test]
-async fn the_default_matrix_keeps_api_one_for_client_and_cli_two() {
+async fn the_default_matrix_keeps_api_one_for_client_and_cli_three() {
     let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
     let client = Client::connect(&svc.base).await.unwrap();
     assert_eq!(client.api_version(), 1);
@@ -217,7 +217,7 @@ async fn the_default_matrix_keeps_api_one_for_client_and_cli_two() {
     assert_eq!(matrix["current"], 1);
     assert_eq!(
         matrix["versions"][0]["compatible"],
-        json!({"client_crate": ">=1.0.0, <3.0.0", "cli": ">=1.0.0, <3.0.0", "device_app_min": "1.0.0"})
+        json!({"client_crate": ">=1.0.0, <4.0.0", "cli": ">=1.0.0, <4.0.0", "device_app_min": "1.0.0"})
     );
 }
 
@@ -241,7 +241,7 @@ async fn the_matrix_is_built_from_state_and_configuration() {
     assert!(v1["deprecated_at"].is_null() && v1["sunset_at"].is_null() && v1["sunset_earliest_at"].is_null());
     assert_eq!(
         v1["compatible"],
-        json!({"client_crate": ">=1.0.0, <3.0.0", "cli": ">=1.2.0, <2.0.0", "device_app_min": "1.4.0"})
+        json!({"client_crate": ">=1.0.0, <4.0.0", "cli": ">=1.2.0, <2.0.0", "device_app_min": "1.4.0"})
     );
 
     // The app minimum the matrix states is the one enrollment enforces.
