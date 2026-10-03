@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { beginIamLogin, beginIamSignup, finishIamLogin, iamLoginUrl, iamSignupUrl } from "../../src/lib/auth";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beginIamLogin, beginIamSignup, finishIamLogin, finishIamRedirect, signInPopup, iamLoginUrl, iamSignupUrl } from "../../src/lib/auth";
 
 const info = { app_id: "extend", iam_base_url: "https://backend.iam.teamofsilicons.com", api_base_url: "", website_url: "", docs_url: "" };
 
@@ -90,15 +90,72 @@ describe("IAM sign-up", () => {
     const callback = new URL(url.searchParams.get("redirect_uri")!);
     expect(callback.origin + callback.pathname).toBe("https://extend.teamofsilicons.com/auth/callback");
     const state = callback.searchParams.get("state")!;
-    expect(finishIamLogin(new URLSearchParams({ state, slt: "oac_new" }), "production")).toBe("oac_new");
+    expect(finishIamLogin(new URLSearchParams({ state, slt: "oac_new" }), "production", Date.now(), "carbon")).toBe("oac_new");
   });
 
   it("gives a sign-up 30 minutes (email and phone checks come first), and a sign-in still 10", () => {
     const signup = new URL(new URL(beginIamSignup(info, "https://b.test", "production", 0)!).searchParams.get("redirect_uri")!).searchParams.get("state")!;
-    expect(finishIamLogin(new URLSearchParams({ state: signup, slt: "oac_new" }), "production", 25 * 60_000)).toBe("oac_new");
+    expect(finishIamLogin(new URLSearchParams({ state: signup, slt: "oac_new" }), "production", 25 * 60_000, "carbon")).toBe("oac_new");
     const late = new URL(new URL(beginIamSignup(info, "https://b.test", "production", 0)!).searchParams.get("redirect_uri")!).searchParams.get("state")!;
-    expect(() => finishIamLogin(new URLSearchParams({ state: late, slt: "oac_new" }), "production", 31 * 60_000)).toThrow(/older than 30 minutes/);
+    expect(() => finishIamLogin(new URLSearchParams({ state: late, slt: "oac_new" }), "production", 31 * 60_000, "carbon")).toThrow(/older than 30 minutes/);
     const login = new URL(new URL(beginIamLogin(info, "https://b.test", "production", 0)).searchParams.get("redirect_uri")!).searchParams.get("state")!;
     expect(() => finishIamLogin(new URLSearchParams({ state: login, slt: "oac_abc" }), "production", 25 * 60_000)).toThrow(/older than 10 minutes/);
   });
+});
+
+it("locks each popup account kind into the saved attempt and IAM URL", () => {
+  for (const kind of ["carbon", "silicon"] as const) {
+    const url = new URL(beginIamLogin(info, "https://extend.test", "production", 100, kind, "popup"));
+    expect(url.searchParams.get("identity_kind")).toBe(kind); expect(url.searchParams.get("display")).toBe("popup");
+    const params = new URL(url.searchParams.get("redirect_uri")!).searchParams; params.set("slt", "oac_fresh");
+    expect(() => finishIamLogin(params, "production", 101, kind === "carbon" ? "silicon" : "carbon")).toThrow();
+  }
+});
+
+
+it("full-page returns use the saved identity kind and consume state once", () => {
+  for (const kind of ["carbon", "silicon"] as const) {
+    const url = new URL(beginIamLogin(info, "https://extend.test", "production", 100, kind, "redirect", "context-A"));
+    expect(url.searchParams.get("identity_kind")).toBe(kind);
+    expect(url.searchParams.has("display")).toBe(false);
+    const params = new URL(url.searchParams.get("redirect_uri")!).searchParams;
+    params.set("slt", "oac_fresh");
+    expect(finishIamRedirect(params, "production", "context-A", 101)).toEqual({slt: "oac_fresh", kind});
+    expect(() => finishIamRedirect(params, "production", "context-A", 102)).toThrow();
+  }
+});
+
+it("full-page returns reject changed world, context, stale state, and popup receipts", () => {
+  const start = (display: "popup" | "redirect" = "redirect") => {
+    const url = new URL(beginIamLogin(info, "https://extend.test", "production", 100, "silicon", display, "context-A"));
+    const params = new URL(url.searchParams.get("redirect_uri")!).searchParams;
+    params.set("slt", "oac_fresh");
+    return params;
+  };
+  expect(() => finishIamRedirect(start(), "testing", "context-A", 101)).toThrow(/different environment/);
+  expect(() => finishIamRedirect(start(), "production", "context-B", 101)).toThrow(/selected account/);
+  const stale = start(); start();
+  expect(() => finishIamRedirect(stale, "production", "context-A", 101)).toThrow(/doesn't belong/);
+  expect(() => finishIamRedirect(start("popup"), "production", "context-A", 101)).toThrow(/full-page/);
+});
+
+
+it("aborting while popup metadata is in flight cannot replace the new redirect receipt", async () => {
+  let resolveMetadata!: (value: typeof info) => void;
+  const metadata = new Promise<typeof info>(resolve => { resolveMetadata = resolve; });
+  const close = vi.fn();
+  const opened = vi.spyOn(window, "open").mockReturnValue({close} as unknown as Window);
+  try {
+    const controller = new AbortController();
+    const popup = signInPopup(() => metadata, "carbon", () => "production", controller.signal);
+    const rejected = expect(popup).rejects.toThrow(/replaced/);
+    controller.abort();
+    const redirect = new URL(beginIamLogin(info, "https://extend.test", "production", 100, "silicon", "redirect", "new-context"));
+    resolveMetadata(info);
+    await rejected;
+    expect(close).toHaveBeenCalled();
+    const params = new URL(redirect.searchParams.get("redirect_uri")!).searchParams;
+    params.set("slt", "oac_fresh");
+    expect(finishIamRedirect(params, "production", "new-context", 101).kind).toBe("silicon");
+  } finally { opened.mockRestore(); }
 });

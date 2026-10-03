@@ -321,6 +321,8 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
 "#,
     WORLD_1_1,
     WORLD_1_1_BANNER,
+    crate::obo::MIGRATION,
+    crate::organizations::MIGRATION,
 ];
 
 /// Schema version 4 (1.1.0): devices belong to the Carbons who paired them; several Carbons can
@@ -491,7 +493,7 @@ ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text 
 "#;
 
 /// The schema version a 1.1.0 service brings every world to.
-pub const WORLD_VERSION: i32 = 5;
+pub const WORLD_VERSION: i32 = 7;
 
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
     // Serialise migrations across service instances.
@@ -561,7 +563,7 @@ pub async fn truncate_world(pool: &PgPool, world: &World) -> anyhow::Result<()> 
         "TRUNCATE {s}.device_locks, {s}.sessions, {s}.session_ids, {s}.device_access, {s}.activity, {s}.requests,
                   {s}.files, {s}.uploads, {s}.idempotency, {s}.reports, {s}.telemetry, {s}.devices,
                   {s}.device_instances, {s}.wake_requests, {s}.ting_recipients, {s}.ting_type_status,
-                  {s}.membership_checks CASCADE",
+                  {s}.membership_checks, {s}.obo_grants, {s}.obo_requests, {s}.device_organizations CASCADE",
         s = world.schema
     );
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone())).execute(pool).await?;

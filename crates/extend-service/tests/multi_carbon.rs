@@ -15,37 +15,35 @@ use uuid::Uuid;
 // ───────────── 1–3: user-scoped devices, grants across Teams, views ─────────────
 
 #[tokio::test]
-async fn devices_belong_to_the_carbon_whatever_the_team() {
+async fn configured_devices_need_an_explicit_binding_in_each_organization() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
     let (d, _) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &[]).await;
-    for team in [Some("globex"), None, Some("acme")] {
-        let (s, list) = api(&env, "GET", "/api/v1/devices", &alice, team, None).await;
-        assert_eq!(s, 200, "{list}");
-        let items = list["data"]["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1, "{team:?}: {list}");
-        assert_eq!(items[0]["visibility"], "personal");
-        assert!(items[0].get("team").is_none(), "owner views carry no Team: {list}");
-    }
-    let (_, mine) = api(&env, "GET", "/api/v1/devices?scope=mine", &bob, Some("acme"), None).await;
-    assert!(mine["data"]["items"].as_array().unwrap().is_empty());
-    let (s, team) = api(&env, "GET", "/api/v1/devices?scope=team", &bob, Some("acme"), None).await;
-    assert_eq!((s, team["data"]["items"].as_array().unwrap().len()), (200, 0));
-    let (s, e) = api(&env, "GET", &format!("/api/v1/devices/{d}"), &bob, Some("acme"), None).await;
-    assert_eq!((s, e["data"]["code"].as_str()), (404, Some("device_not_found")));
-    // A claim needs no Team; granting in one then does.
-    let (d2, _) = pair(&env, &alice, None, DeviceOs::Android, "Tablet", &[]).await;
-    let team_of: String = sqlx::query_scalar("SELECT team FROM extend.devices WHERE device_id = $1")
-        .bind(&d2)
-        .fetch_one(&env.pool)
-        .await
-        .unwrap();
-    assert_eq!(team_of, "acme", "the first Team the login reaches");
+    let (_, other) = api(&env, "GET", "/api/v1/devices", &alice, Some("globex"), None).await;
+    assert!(other["data"]["items"].as_array().unwrap().is_empty());
+    let (_, current) = api(&env, "GET", "/api/v1/devices", &alice, Some("acme"), None).await;
+    assert_eq!(current["data"]["items"][0]["team"], "acme");
+    let (_, team) = api(&env, "GET", "/api/v1/devices?scope=team", &bob, Some("acme"), None).await;
+    assert_eq!(team["data"]["items"].as_array().unwrap().len(), 1);
+    let (status, _) = api(
+        &env,
+        "DELETE",
+        &format!("/api/v1/devices/{d}"),
+        &bob,
+        Some("acme"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 403, "organization discovery does not confer management");
+    grant(&env, &alice, &d, "si:scout", "globex").await;
+    let (_, imported) = api(&env, "GET", "/api/v1/devices", &alice, Some("globex"), None).await;
+    assert_eq!(imported["data"]["items"][0]["device_id"], d);
+    assert_eq!(imported["data"]["items"][0]["team"], "globex");
 }
 
 #[tokio::test]
-async fn grants_are_per_team() {
+async fn grants_and_revocation_are_per_organization() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let scout = login(&env, "si:scout").await;
@@ -58,11 +56,8 @@ async fn grants_are_per_team() {
     assert_eq!(g["data"]["items"].as_array().unwrap().len(), 1);
     assert_eq!(g["data"]["items"][0]["team"], "globex");
     let (_, g) = api(&env, "GET", "/api/v1/devices", &chef, Some("globex"), None).await;
-    assert!(
-        g["data"]["items"].as_array().unwrap().is_empty(),
-        "chef's grant is in acme only"
-    );
-    let (s, e) = api(
+    assert!(g["data"]["items"].as_array().unwrap().is_empty());
+    let (s, _) = api(
         &env,
         "GET",
         &format!("/api/v1/devices/{d}"),
@@ -71,99 +66,70 @@ async fn grants_are_per_team() {
         None,
     )
     .await;
-    assert_eq!(s, 404);
-    assert!(e["data"]["message"].as_str().unwrap().contains("in team globex"), "{e}");
-    assert!(e["data"]["hint"].as_str().unwrap().contains("--team"), "{e}");
-    // A Team alice's login doesn't reach.
-    let (s, e) = api(
-        &env,
-        "PUT",
-        &format!("/api/v1/devices/{d}/access/si:chef?team=labs"),
-        &alice,
-        None,
-        None,
-    )
-    .await;
-    assert_eq!((s, e["data"]["code"].as_str()), (403, Some("not_a_team_member")));
-    assert!(e["data"]["hint"].as_str().unwrap().contains("select labs"), "{e}");
-    // A Silicon not in the Team.
+    assert_eq!(
+        s, 200,
+        "organization-wide devices are discoverable without a control grant"
+    );
     let (s, _) = api(
-        &env,
-        "PUT",
-        &format!("/api/v1/devices/{d}/access/si:sous?team=globex"),
-        &alice,
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(s, 422);
-    // Neither ?team nor X-Org-ID.
-    let (s, e) = api(
         &env,
         "PUT",
         &format!("/api/v1/devices/{d}/access/si:chef"),
         &alice,
+        Some("labs"),
         None,
+    )
+    .await;
+    assert_eq!(s, 403);
+    let (s, _) = api(
+        &env,
+        "PUT",
+        &format!("/api/v1/devices/{d}/access/si:sous"),
+        &alice,
+        Some("globex"),
         None,
     )
     .await;
     assert_eq!(s, 422);
-    assert!(e["data"]["message"].as_str().unwrap().contains("--team"), "{e}");
-    // The grant is logged with its Team, and the list carries Teams.
-    let (_, list) = api(&env, "GET", &format!("/api/v1/devices/{d}/access"), &alice, None, None).await;
-    let teams: Vec<&str> = list["data"]["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|g| g["team"].as_str().unwrap())
-        .collect();
-    assert_eq!(teams.len(), 3);
-    assert!(teams.contains(&"globex"));
-    // chef in globex too, then revoke per Team, then every Team.
-    grant(&env, &alice, &d, "si:chef", "globex").await;
-    let (s, _) = api(
+    let (_, list) = api(
         &env,
-        "DELETE",
-        &format!("/api/v1/devices/{d}/access/si:chef?team=globex"),
-        &alice,
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(s, 204);
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM extend.device_access WHERE device_id = $1 AND silicon_id = 'si:chef'")
-            .bind(&d)
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    assert_eq!(n, 1);
-    grant(&env, &alice, &d, "si:chef", "globex").await;
-    let (s, _) = api(
-        &env,
-        "DELETE",
-        &format!("/api/v1/devices/{d}/access/si:chef"),
+        "GET",
+        &format!("/api/v1/devices/{d}/access"),
         &alice,
         Some("acme"),
         None,
     )
     .await;
-    assert_eq!(s, 204);
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM extend.device_access WHERE device_id = $1 AND silicon_id = 'si:chef'")
-            .bind(&d)
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    assert_eq!(n, 0, "without ?team every Team's grant goes (the 1.0 meaning)");
-    let revoked: Vec<Option<String>> = activity(&env, &d)
+    let rows = list["data"]["items"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|g| g["team"] == "acme"));
+    grant(&env, &alice, &d, "si:chef", "globex").await;
+    for team in ["globex", "acme"] {
+        let (s, _) = api(
+            &env,
+            "DELETE",
+            &format!("/api/v1/devices/{d}/access/si:chef"),
+            &alice,
+            Some(team),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204);
+        let n: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM extend.device_access WHERE device_id=$1 AND silicon_id='si:chef'")
+                .bind(&d)
+                .fetch_one(&env.pool)
+                .await
+                .unwrap();
+        assert_eq!(n, if team == "globex" { 1 } else { 0 });
+    }
+    let revoked: Vec<_> = activity(&env, &d)
         .await
         .into_iter()
         .filter(|a| a.0 == "access_revoked")
-        .map(|a| a.3)
         .collect();
-    assert_eq!(revoked.len(), 3);
-    assert!(revoked.contains(&Some("globex".into())) && revoked.contains(&Some("acme".into())));
+    assert_eq!(revoked.len(), 2);
+    assert!(revoked.iter().any(|a| a.3.as_deref() == Some("globex")));
+    assert!(revoked.iter().any(|a| a.3.as_deref() == Some("acme")));
 }
 
 #[tokio::test]
@@ -355,20 +321,20 @@ async fn pairs_are_independent_and_share_activity() {
     .await
     .unwrap();
     assert!(fresh, "activity through any pair counts for every pair");
-    // alice removes her pair: only D's socket is unpaired; D2 and its grants stay.
+    // Removing alice's organization binding ends only its session; both native pairs stay.
     let (s, _) = api(&env, "DELETE", &format!("/api/v1/devices/{d}"), &alice, None, None).await;
     assert_eq!(s, 204);
-    app.wait("unpaired", |_| true).await;
+    app.wait("session_ended", |_| true).await;
     let (_, sv) = api(
         &env,
         "GET",
         &format!("/api/v1/sessions/{}", sess["data"]["session_id"].as_str().unwrap()),
-        &sous,
+        &alice,
         Some("acme"),
         None,
     )
     .await;
-    assert_eq!(sv["data"]["end_reason"], "device_removed");
+    assert_eq!(sv["data"]["end_reason"], "access_removed");
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(!app2.is_closed(), "bob's pair keeps its connection");
     assert!(app2.of("unpaired").is_empty());
@@ -379,11 +345,15 @@ async fn pairs_are_independent_and_share_activity() {
         .unwrap();
     assert_eq!(grants, 1);
     assert_eq!(device_api(&env, "GET", "/api/v1/device", &cred2).await.0, 200);
+    assert_eq!(device_api(&env, "GET", "/api/v1/device", &cred).await.0, 200);
+    assert!(!app.is_closed());
+    assert_eq!(device_api(&env, "DELETE", "/api/v1/device", &cred).await.0, 204);
+    app.wait("unpaired", |_| true).await;
     assert_eq!(device_api(&env, "GET", "/api/v1/device", &cred).await.0, 401);
 }
 
 #[tokio::test]
-async fn one_silicon_at_a_time_across_pairs_and_stop_by_another_carbon() {
+async fn physical_lock_is_shared_but_only_the_owning_carbon_can_stop_in_the_web_api() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
@@ -427,14 +397,12 @@ async fn one_silicon_at_a_time_across_pairs_and_stop_by_another_carbon() {
         .execute(&env.pool)
         .await
         .unwrap();
-    // bob stops it from his pair.
+    // A website owner cannot stop another Carbon's session through an alias.
     let (s, stopped) = api(&env, "POST", &format!("/api/v1/devices/{d2}/stop"), &bob, None, None).await;
-    assert_eq!(
-        (s, stopped["type"].as_str()),
-        (200, Some("device_stopped")),
-        "{stopped}"
-    );
-    assert_eq!(stopped["data"]["in_use_by_other"], true);
+    assert_eq!((s, stopped["data"]["code"].as_str()), (409, Some("device_not_in_use")));
+    assert!(!stopped.to_string().contains(&sid));
+    let (s, _) = api(&env, "POST", &format!("/api/v1/devices/{d}/stop"), &alice, None, None).await;
+    assert_eq!(s, 200);
     let (_, sv) = api(
         &env,
         "GET",
@@ -447,10 +415,7 @@ async fn one_silicon_at_a_time_across_pairs_and_stop_by_another_carbon() {
     assert_eq!(sv["data"]["end_reason"], "stopped_by_carbon");
     let log = activity(&env, &d).await;
     let ended = log.iter().find(|a| a.0 == "session_ended").unwrap();
-    assert_eq!(
-        (ended.1.as_str(), &ended.2["stopped_by"]),
-        ("extend", &json!("another_carbon"))
-    );
+    assert_eq!(ended.1, "c:alice");
     assert!(!format!("{log:?}").contains("c:bob"));
     // Nothing running: 409 device_not_in_use.
     let (s, e) = api(&env, "POST", &format!("/api/v1/devices/{d2}/stop"), &bob, None, None).await;
@@ -587,24 +552,24 @@ async fn requests_go_to_the_holder_or_its_carbon() {
         (Some("si:chef"), Some(sid.as_str()))
     );
 
-    // scout (D, globex): alice is its own Carbon; the Ting goes in globex as scout.
+    // scout (D, globex): the request is delivered to the holder in acme, without cross-org session details.
     let (s, r) = send(scout.clone(), "globex", d.clone(), "own carbon").await;
     assert_eq!(s, 201, "{r}");
     assert_eq!(r["data"]["to"], REQUEST_TO_HIDDEN);
     let last = ting.sent_of("device.requested").await.last().unwrap().clone();
     assert_eq!(
         (last["org_id"].as_str(), last["actor"].as_str(), last["for"].as_str()),
-        (Some("globex"), Some("si:scout"), Some("c:alice"))
+        (Some("acme"), Some("c:alice"), Some("c:alice"))
     );
     assert!(!last["data"]["summary"].as_str().unwrap().contains("si:sous"));
-    assert_eq!(last["data"]["team"], "globex");
+    assert!(last["data"].get("team").is_none());
     let rid = r["data"]["request_id"].as_str().unwrap().to_owned();
     let (_, av) = api(
         &env,
         "GET",
         &format!("/api/v1/devices/{d}/requests"),
         &alice,
-        None,
+        Some("globex"),
         None,
     )
     .await;
@@ -619,6 +584,11 @@ async fn requests_go_to_the_holder_or_its_carbon() {
         (ai["from"].as_str(), ai["team"].as_str()),
         (Some("si:scout"), Some("globex"))
     );
+    assert!(
+        ai.get("session_id").is_none(),
+        "source organization cannot see the holder's session"
+    );
+    assert_eq!(ai["to_hidden"], true);
     let (_, mine) = api(&env, "GET", "/api/v1/requests", &scout, Some("globex"), None).await;
     let mi = &mine["data"]["items"][0];
     assert_eq!((mi["to_hidden"].as_bool(), mi.get("session_id")), (Some(true), None));

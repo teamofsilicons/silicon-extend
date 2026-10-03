@@ -39,8 +39,17 @@ export const API_MAJOR = 1;
 /** What PATCH /devices/{id} changes; send only what changed. */
 export interface DevicePatch {
   name?: string;
+  visibility?: "personal" | "team";
   pair_ttl_days?: number;
   in_use_indicator?: InUseIndicator;
+}
+
+export interface ImportableDevice {
+  device_id: string;
+  name: string;
+  os: Device["os"];
+  model?: string | null;
+  host_device_id?: string | null;
 }
 
 export class ApiError extends Error {
@@ -80,6 +89,8 @@ export function toApiError(error: unknown): ApiError {
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
+  /** Persisted before a refresh so an uncertain result retries the same operation. */
+  refresh_key?: string;
   /** Epoch milliseconds when the access token expires. */
   expires_at: number;
   member: Member;
@@ -87,10 +98,29 @@ export interface TokenPair {
   testing_environment?: TestingEnvironment | null;
 }
 
+export interface PermissionEndpoint {
+  audience: string;
+  endpoint_id: string;
+}
+
+export interface FeaturePermission extends PermissionEndpoint {
+  grant_id: string;
+  org_id: string;
+  actor: { public_id?: string; id?: string; kind?: string };
+  expires_at: string;
+}
+
+export interface FeaturePermissionRequest {
+  state?: string;
+  id: string;
+  consent_url: string;
+  expires_at: string;
+}
+
 /** Where one world's token pair lives. `save` must replace the whole pair in one write. */
 export interface TokenStore {
   load(): TokenPair | null;
-  save(pair: TokenPair): void;
+  save(pair: TokenPair, expectedRefreshToken?: string): void;
   clear(): void;
 }
 
@@ -101,8 +131,8 @@ export interface ClientContext {
   /** The test application's app_secret, or null for production. */
   testingSecret: () => string | null;
   /**
-   * The team handle sent as X-Org-ID. Since 1.1 it is the default Team for grants and a Silicon's
-   * Team; it no longer filters a Carbon's devices, grants or history.
+   * Immutable organization handle from this client's saved account+organization login.
+   * Sent as X-Org-ID and validated against the access token by the service.
    */
   team: () => string | null;
   telemetryOff: () => boolean;
@@ -115,6 +145,7 @@ export interface ClientContext {
   lock?: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   /** Called when refreshing fails for good, after the tokens are cleared. */
   onSignedOut?: (error: ApiError) => void;
+  onLogin?: (pair: TokenPair) => void;
 }
 
 type TeamMode = "required" | "optional" | "none";
@@ -127,12 +158,14 @@ interface RequestOptions {
   /** Send the bearer token (default true). */
   auth?: boolean;
   /**
-   * X-Org-ID: "required" fails before sending when no Team is selected; "optional" sends it when
-   * one is. Routes of a Carbon's own devices are "optional" since 1.1: devices belong to the Carbon.
+   * X-Org-ID: "required" fails before sending without an organization; "optional" sends the
+   * client's organization when present. The service always enforces the token's organization.
    */
   team?: TeamMode;
   /** Send an Idempotency-Key, reused on the one retry after a network failure. */
   idempotent?: boolean;
+  /** Retain a mutation's key when the user explicitly retries the same request. */
+  idempotencyKey?: string;
   ifMatch?: string;
   /** Expected envelope `type` of a successful body, or the types a route may answer with. */
   expect?: string | string[];
@@ -287,11 +320,12 @@ export class ExtendClient {
   async request<T>(options: RequestOptions): Promise<ApiResponse<T>> {
     const auth = options.auth ?? true;
     const headers = this.baseHeaders(options);
-    if (options.idempotent) headers["Idempotency-Key"] = (this.ctx.newKey ?? defaultKey)();
+    if (options.idempotent) headers["Idempotency-Key"] = options.idempotencyKey ?? (this.ctx.newKey ?? defaultKey)();
+    const body = options.body ? JSON.stringify(options.body) : undefined;
     const init = (token?: string): RequestInit => ({
       method: options.method,
       headers: token ? { ...headers, Authorization: `Bearer ${token}` } : headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body,
     });
     const url = this.url(options.path, options.query);
     const retry = !!options.idempotent || options.method === "GET";
@@ -332,31 +366,40 @@ export class ExtendClient {
     if (this.refreshing) return this.refreshing;
     const lock = this.ctx.lock ?? (<R,>(_name: string, fn: () => Promise<R>) => fn());
     this.refreshing = lock(`extend-refresh:${this.ctx.worldKey}`, async () => {
-      const current = this.ctx.tokens.load();
+      let current = this.ctx.tokens.load();
       if (!current)
         throw new ApiError(401, {
           code: "not_signed_in",
           message: "You were signed out in another tab.",
           hint: "Sign in again.",
         });
+      const sameContext = (a: TokenPair, b: TokenPair) => a.member.id === b.member.id && a.member.type === b.member.type && JSON.stringify(a.teams) === JSON.stringify(b.teams) && a.testing_environment?.environment_id === b.testing_environment?.environment_id;
+      if (!sameContext(current, stale)) throw new ApiError(409, {code: "context_changed", message: "This operation belongs to another account or organization. Return to that context to retry."});
       if (current.refresh_token !== stale.refresh_token && current.expires_at - this.now() >= REFRESH_EARLY_MS)
         return current;
       try {
+        if (!current.refresh_key) {
+          current = { ...current, refresh_key: (this.ctx.newKey ?? defaultKey)() };
+          this.ctx.tokens.save(current);
+        }
         const { data } = await this.request<AuthSession>({
           method: "POST",
           path: "/api/v1/auth/refresh",
           auth: false,
           team: "none",
           idempotent: true,
+          idempotencyKey: current.refresh_key,
           expect: "refresh",
           body: { type: "refresh", data: { refresh_token: current.refresh_token } },
         });
         const next = pairFromSession(data, this.now());
-        this.ctx.tokens.save(next);
+        if (!sameContext(next,current)) throw new ApiError(409,{code:"context_changed",message:"IAM returned a different account or organization during refresh."});
+        this.ctx.tokens.save(next, current.refresh_token);
         return next;
       } catch (error) {
         const apiError = toApiError(error);
-        if (apiError.status === 401 && apiError.code !== "testing_secret_invalid") {
+        if (apiError.status === 401 && apiError.code !== "testing_secret_invalid"
+          && this.ctx.tokens.load()?.refresh_token === current.refresh_token) {
           this.ctx.tokens.clear();
           this.ctx.onSignedOut?.(apiError);
         }
@@ -403,7 +446,7 @@ export class ExtendClient {
   // ───────────── Auth ─────────────
 
   /** Exchanges an SLT (or, in a test environment, a test member id) and stores the pair. */
-  async login(slt: string): Promise<TokenPair> {
+  async login(slt: string, kind?: "carbon" | "silicon"): Promise<TokenPair> {
     const { data } = await this.request<AuthSession>({
       method: "POST",
       path: "/api/v1/auth/login",
@@ -414,7 +457,14 @@ export class ExtendClient {
       body: { type: "login", data: { slt } },
     });
     const pair = pairFromSession(data, this.now());
-    this.ctx.tokens.save(pair);
+    if (pair.teams.length !== 1) throw new ApiError(401,{code:"context_required",message:"Select exactly one organization in IAM and sign in again."});
+    if (kind) {
+      const { data: verified } = await this.request<Me>({ method: "GET", path: "/api/v1/auth/me", auth: false, team: "none", expect: "me", headers: { Authorization: `Bearer ${pair.access_token}`, "X-Org-ID": pair.teams[0] } });
+      if (!verified.authenticated || verified.member.type !== kind || pair.member.type !== kind || verified.member.id !== pair.member.id)
+        throw new ApiError(401, { code: "identity_kind_mismatch", message: `This sign-in did not return a ${kind} account. Start again with the matching account button.` });
+    }
+    if (this.ctx.onLogin) this.ctx.onLogin(pair);
+    else this.ctx.tokens.save(pair);
     return pair;
   }
 
@@ -446,7 +496,7 @@ export class ExtendClient {
    * Carbon's removed devices, marked with `removed_at` and `removed_reason`.
    */
   async listDevices(params: {
-    scope: "mine" | "accessible";
+    scope: "mine" | "accessible" | "team";
     cursor?: string | null;
     limit?: number;
     include_removed?: boolean;
@@ -478,6 +528,14 @@ export class ExtendClient {
     return removed.sort((a, b) => Date.parse(b.removed_at!) - Date.parse(a.removed_at!) || a.name.localeCompare(b.name));
   }
 
+  async importableDevices(cursor?: string | null): Promise<Page<ImportableDevice>> {
+    return (await this.request<Page<ImportableDevice>>({method:"GET",path:"/api/v1/devices/importable",query:{cursor,limit:100},expect:"devices"})).data;
+  }
+
+  async importDevice(id: string, visibility: "personal" | "team", key: string): Promise<Device> {
+    return (await this.request<Device>({method:"POST",path:`/api/v1/devices/${encodeURIComponent(id)}/import`,body:{type:"device_import",data:{visibility}},idempotent:true,idempotencyKey:key,expect:"device"})).data;
+  }
+
   async getDevice(deviceId: string): Promise<{ device: DeviceDetail; etag: string | null }> {
     const res = await this.request<DeviceDetail>({
       method: "GET",
@@ -491,7 +549,7 @@ export class ExtendClient {
   /**
    * Renames the Carbon's pair of a device, sets how long it stays paired, or shows or hides what the
    * device itself shows while a Silicon uses it (`in_use_indicator`, one setting for the whole
-   * device, shared by every Carbon who paired it). Visibility is gone in 1.1.
+   * device, shared by every Carbon who paired it). Visibility belongs to the selected organization.
    */
   async updateDevice(deviceId: string, patch: DevicePatch, ifMatch: string): Promise<{ device: Device; etag: string | null }> {
     const res = await this.request<Device>({
@@ -531,7 +589,7 @@ export class ExtendClient {
    * Claims a pairing code, the first pair of a device or "Pair with another Carbon". Access is given
    * afterwards, per Team, so no `silicon_ids` go with it (1.1 refuses them without X-Org-ID).
    */
-  async claimPairing(input: { pairing_code: string; name: string; pair_ttl_days?: number }): Promise<{ device: Device; etag: string | null }> {
+  async claimPairing(input: { pairing_code: string; name: string; pair_ttl_days?: number; visibility?: "personal" | "team" }): Promise<{ device: Device; etag: string | null }> {
     const res = await this.request<Device>({
       method: "POST",
       path: "/api/v1/pairings",
@@ -544,7 +602,7 @@ export class ExtendClient {
   }
 
   /** Adds a device that pairs through one of the Carbon's computers. */
-  async attachDevice(hostId: string, input: { os: AttachOs; name: string; pair_ttl_days?: number }): Promise<Device> {
+  async attachDevice(hostId: string, input: { os: AttachOs; name: string; pair_ttl_days?: number; visibility?: "personal" | "team" }): Promise<Device> {
     return (
       await this.request<Device>({
         method: "POST",
@@ -594,7 +652,7 @@ export class ExtendClient {
 
   // ───────────── Access ─────────────
 
-  /** Every grant on the Carbon's pair, in every Team, each with its `team`. */
+  /** The owner's grants in the selected organization. */
   async listAccess(deviceId: string): Promise<AccessGrant[]> {
     return (
       await this.request<{ items: AccessGrant[] }>({
@@ -607,8 +665,7 @@ export class ExtendClient {
   }
 
   /**
-   * Gives a Silicon access in one of the Carbon's Teams: `team` goes as ?team= (the selected Team,
-   * X-Org-ID, when absent). The Carbon's Extend login must reach that Team.
+   * Gives a Silicon access in the selected organization. An explicit `team` must match the saved login.
    */
   async grantAccess(deviceId: string, siliconId: string, team?: string | null): Promise<AccessGrant> {
     return (
@@ -622,7 +679,7 @@ export class ExtendClient {
     ).data;
   }
 
-  /** Takes a Silicon's access away: in one Team with `team`, in every Team without it. Works on ownership alone. */
+  /** Takes a Silicon's access away in the saved login's organization. */
   async revokeAccess(deviceId: string, siliconId: string, team?: string | null): Promise<void> {
     await this.request<null>({
       method: "DELETE",
@@ -645,9 +702,8 @@ export class ExtendClient {
   }
 
   /**
-   * The Silicons of every Team the Carbon's login reaches (team=any), each tagged with its Team, and
-   * which Teams couldn't be read and why. A 1.0 service ignores team=any and answers the selected
-   * Team's Silicons without `teams`; `across` is false then.
+   * Reads the selected organization's directory and availability metadata. The legacy `team=any`
+   * spelling remains wire-compatible but does not broaden IAM5's saved context.
    */
   async listAllTeamSilicons(): Promise<{ items: TeamSilicon[]; teams: NonNullable<TeamSilicons["teams"]>; across: boolean }> {
     const data = (
@@ -658,7 +714,7 @@ export class ExtendClient {
 
   // ───────────── Waking ─────────────
 
-  /** Wake requests on the Carbon's pair (every Team's, tagged), or a Silicon's own. */
+  /** Wake requests visible to this member in the selected organization. */
   async listWakeRequests(deviceId: string, params: { state?: "open" | "all"; cursor?: string | null; limit?: number } = {}): Promise<Page<WakeRequest>> {
     return (
       await this.request<Page<WakeRequest>>({
@@ -672,9 +728,7 @@ export class ExtendClient {
   }
 
   /**
-   * The Carbon's answer. "woken" ("It's awake") is a fact about the device: it ends every open wake
-   * request on it, through every Carbon's pair and in every Team. "declined" ends only this pair's
-   * requests (or the ones listed).
+   * Answers wake requests in the selected organization. Native device wake signals remain physical.
    */
   async answerWake(deviceId: string, answer: "woken" | "declined", wakeIds?: string[]): Promise<WakeAnswered> {
     return (
@@ -689,7 +743,7 @@ export class ExtendClient {
     ).data;
   }
 
-  /** Turns wake requests off or on for the pair, or for one Silicon (in every Team, or only in `team`). */
+  /** Turns wake requests off or on for this organization binding, or one Silicon in it. */
   async setWakeSettings(deviceId: string, settings: { muted: boolean; silicon_id?: string; team?: string }): Promise<WakeSettingsView> {
     return (
       await this.request<WakeSettingsView>({
@@ -705,9 +759,26 @@ export class ExtendClient {
   // ───────────── Ting ─────────────
 
   /**
-   * Whether Extend's Tings reach the member in a Team, and which of Extend's Ting types the Team is
-   * missing. "any" (Carbons) lists every Team of the login plus the Teams of the Carbon's grants.
+   * Delegated feature permissions for the selected organization.
    */
+  async permissions(): Promise<FeaturePermission[]> {
+    return (await this.request<{ items: FeaturePermission[] }>({ method: "GET", path: "/api/v1/permissions", expect: "permissions" })).data.items;
+  }
+
+  async requestPermissions(endpoints: PermissionEndpoint[], idempotencyKey: string, callback?: { redirect_uri: string; state: string }): Promise<FeaturePermissionRequest> {
+    return (await this.request<FeaturePermissionRequest>({
+      method: "POST", path: "/api/v1/permissions", body: { type: "permission", data: { endpoints, ...(callback ? { callback } : {}) } },
+      idempotent: true, idempotencyKey, expect: "permission",
+    })).data;
+  }
+
+  async completePermissions(id: string, code: string, idempotencyKey: string, state?: string): Promise<FeaturePermission[]> {
+    return (await this.request<{ items: FeaturePermission[] }>({
+      method: "POST", path: `/api/v1/permissions/${encodeURIComponent(id)}/complete`, body: { type: "permission", data: { code, ...(state ? { state } : {}) } },
+      idempotent: true, idempotencyKey, expect: "permissions",
+    })).data.items;
+  }
+
   async getTingRegistrations(team: string | "any" = "any"): Promise<TingRegistration[]> {
     const res = await this.request<TingRegistration | Page<TingRegistration> | TingRegistration[]>({
       method: "GET",

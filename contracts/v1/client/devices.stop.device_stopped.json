@@ -2,11 +2,10 @@
   "api_version": 1,
   "call": "Authed::stop",
   "consumer": "silicon-extend-client",
-  "consumer_version": "2.0.0",
+  "consumer_version": "3.1.0",
   "contract": 1,
   "given": [
-    "shared_device",
-    "session"
+    "carried_session"
   ],
   "operation": "devices.stop.device_stopped",
   "request": {
@@ -15,13 +14,13 @@
       "type": "stop"
     },
     "headers": {
-      "authorization": "Bearer {other_carbon_token}",
+      "authorization": "Bearer {carbon_token}",
       "content-type": "application/json",
       "silicon-extend-api-version": "1",
       "x-org-id": "{team}"
     },
     "method": "POST",
-    "path": "/api/v1/devices/{shared_device_id}/stop"
+    "path": "/api/v1/devices/{host_id}/stop"
   },
   "response": {
     "non_null": [

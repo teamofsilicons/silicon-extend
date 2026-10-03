@@ -32,8 +32,7 @@ export function MissingTingTypes(props: { registration: TingRegistration; compac
 }
 
 /**
- * The device page's Ting banner: the Teams of this device's grants where Extend's Ting types are
- * missing. Settings shows every Team, with Turn on.
+ * Missing notification types for this device in the selected organization.
  */
 export function TingBanner(props: { registrations: TingRegistration[] }) {
   return (
@@ -44,7 +43,7 @@ export function TingBanner(props: { registrations: TingRegistration[] }) {
         </p>
         <For each={props.registrations}>{(r) => <MissingTingTypes registration={r} compact />}</For>
         <p class="fine">
-          Until then, wake requests and requests for this device still show here. See every Team in <Link href="/settings">Settings</Link>.
+          Until then, wake requests and requests for this device still show here. Manage this organization in <Link href="/settings">Settings</Link>.
         </p>
       </div>
     </Show>

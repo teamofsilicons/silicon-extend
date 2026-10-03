@@ -112,6 +112,7 @@ async fn rotate_codes(state: &AppState) -> crate::error::AppResult<()> {
 }
 
 async fn sessions(state: &AppState, world: &World) -> crate::error::AppResult<()> {
+    crate::organizations::reconcile(state, world).await?;
     let actor = domain::system_member();
     // Idle (and takeovers that ran out). A command in flight pushes idle_ends_at past its deadline,
     // so a long command never counts as idle.

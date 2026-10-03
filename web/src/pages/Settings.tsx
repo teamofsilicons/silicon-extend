@@ -7,6 +7,7 @@ import { toApiError, type ApiError } from "../lib/api";
 import type { TingRegistration } from "../lib/types";
 import { Button, ErrorNote, MemberTag, Spinner, toast } from "../components/ui";
 import { TestingSecretForm } from "../components/TestingSecretForm";
+import { PermissionSettings } from "../components/PermissionSettings";
 import { SignOutButton, signOutEffect } from "../components/SignOut";
 import { MissingTingTypes } from "../components/Ting";
 import { applyTheme, currentTheme, type Theme } from "../lib/theme";
@@ -23,7 +24,7 @@ export default function Settings() {
         <div>
           <p class="eyebrow">This browser · your account</p>
           <h1 class="page-title">Settings.</h1>
-          <p class="lead">Who you are signed in as, Ting notifications, test environments, telemetry and how the site looks.</p>
+          <p class="lead">Your account, feature access, Ting notifications, test environments and appearance.</p>
         </div>
       </header>
 
@@ -39,10 +40,7 @@ export default function Settings() {
                 {world().kind === "testing" ? " in the test environment" : ""}.
               </p>
               <p class="fine">
-                Teams: {s.teams().join(", ")}.{" "}
-                {m().type === "silicon"
-                  ? "The Team menu at the top chooses the Team you use devices in."
-                  : "Your device list shows every device you paired, whichever Team is selected. The Team menu at the top is your default Team when you give Silicons access."}
+                Organization: {s.team()}. The account and organization selector restores a separate saved login. Devices, feature access and requests stay in this context.
               </p>
               <SignOutButton />
               <p class="fine sign-out-note" data-testid="settings-sign-out-note">
@@ -54,6 +52,7 @@ export default function Settings() {
       </div>
 
       <Show when={s.member()}>
+        <PermissionSettings />
         <TingSettings />
       </Show>
 
@@ -155,13 +154,14 @@ export default function Settings() {
  */
 function TingSettings() {
   const s = session();
+  const client = s.client();
   const [rows, setRows] = createSignal<TingRegistration[] | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [busy, setBusy] = createSignal<string | null>(null);
   const [rowErrors, setRowErrors] = createSignal<Record<string, ApiError>>({});
   async function load() {
     try {
-      const list = await s.client().getTingRegistrations("any");
+      const list = await client.getTingRegistrations("any");
       const order = s.teams();
       setRows(list.sort((a, b) => (order.includes(a.team) ? order.indexOf(a.team) : 1e6) - (order.includes(b.team) ? order.indexOf(b.team) : 1e6) || a.team.localeCompare(b.team)));
       setError(null);
@@ -175,7 +175,7 @@ function TingSettings() {
     setBusy(team);
     setRowErrors(({ [team]: _gone, ...rest }) => rest);
     try {
-      const r = await s.client().turnOnTing(team);
+      const r = await client.turnOnTing(team);
       toast(
         r.status !== "on"
           ? `Asked Ting again for ${team}`

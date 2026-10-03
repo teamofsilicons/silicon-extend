@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Authed::retry_setup",
   "consumer": "silicon-extend-client",
-  "consumer_version": "2.0.0",
+  "consumer_version": "3.1.0",
   "contract": 1,
   "given": [
     "failed_setup"

@@ -81,6 +81,7 @@ fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf) -> Config {
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir,
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
@@ -236,7 +237,7 @@ impl Device {
         let claim = PairingClaim {
             pairing_code: pairing_code.to_lowercase(),
             name: format!("{} device", os.as_str()),
-            visibility: None,
+            visibility: Some(extend_protocol::model::Visibility::Team),
             pair_ttl_days: None,
             silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
         };
@@ -564,32 +565,31 @@ async fn removing_the_device_mid_command_ends_the_session_and_answers_at_once() 
     assert_ended_mid_command(
         answer(t.run).await,
         t.started,
-        "device_removed",
-        "the device was removed",
+        "access_removed",
+        "access to the device was removed",
     );
     assert_eq!(
         session_row(&t.env.pool, &t.session_id).await,
-        ("ended".into(), Some("device_removed".into()))
+        ("ended".into(), Some("access_removed".into()))
     );
-    let frames = t.device.finished().await;
-    let ended = position(&frames, |f| {
-        matches!(
-            f,
-            ServiceFrame::SessionEnded {
-                reason: EndReason::DeviceRemoved,
-                ..
-            }
-        )
-    });
-    let unpaired = position(&frames, |f| {
-        matches!(
-            f,
-            ServiceFrame::Unpaired {
-                reason: EndReason::DeviceRemoved
-            }
-        )
-    });
-    assert!(ended < unpaired, "{frames:?}");
+    t.device
+        .wait_for("organization access ending", |f| {
+            matches!(
+                f,
+                ServiceFrame::SessionEnded {
+                    reason: EndReason::AccessRemoved,
+                    ..
+                }
+            )
+        })
+        .await;
+    assert!(
+        !t.device
+            .frames()
+            .iter()
+            .any(|f| matches!(f, ServiceFrame::Unpaired { .. }))
+    );
+    assert!(t.env.client.device_self(&t.device.credential).await.is_ok());
     // The command is in the activity log with an unknown outcome: it may have run.
     let (outcome, error): (String, Option<String>) = sqlx::query_as(
         "SELECT outcome, details->>'error' FROM extend.activity WHERE action = 'command' AND session_id = $1",
@@ -1660,9 +1660,10 @@ async fn briefcase_display_reads_are_delegated_and_bounded_even_without_content_
         axum::routing::post(
             |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| async move {
                 assert_eq!(
-                    headers["X-IAM-OBO-Access-Proof"],
+                    headers["X-IAM-OBO-Access-Token"],
                     "obo_local:briefcase:briefcase.files.read:si:chef"
                 );
+                assert!(!headers.contains_key("X-IAM-OBO-Access-Proof"));
                 assert_eq!(headers["X-Org-ID"], "acme");
                 assert!(body["entry_id"].as_str().unwrap().parse::<Uuid>().is_ok());
                 let chunks = futures::stream::iter([Ok::<_, std::io::Error>("123"), Ok("456")]);

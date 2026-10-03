@@ -125,7 +125,7 @@ pub async fn open_views(state: &AppState, world: &World, d: &DeviceRow, viewer: 
     let owner = viewer.access == Access::Owner;
     let rows: Vec<WakeRow> = sqlx::query_as(sql!(
         "SELECT {WAKE_COLUMNS} FROM {} WHERE device_id = $1 AND state = 'open'
-           AND ($2 OR (from_id = $3 AND team = $4)) ORDER BY created_at",
+           AND (($2 AND ($4 = '' OR team = $4)) OR (NOT $2 AND from_id = $3 AND team = $4)) ORDER BY created_at",
         world.t("wake_requests")
     ))
     .bind(&d.device_id)
@@ -266,7 +266,13 @@ pub enum Withdraw<'a> {
         team: &'a str,
     },
     /// Every request through one pair (the pair ended, or its Carbon turned wake requests off).
-    Pair { device_id: &'a str },
+    Pair {
+        device_id: &'a str,
+    },
+    Organization {
+        device_id: &'a str,
+        team: &'a str,
+    },
     /// One Silicon's requests through one pair, in every Team or one (its Carbon muted it).
     Muted {
         device_id: &'a str,
@@ -274,7 +280,10 @@ pub enum Withdraw<'a> {
         team: Option<&'a str>,
     },
     /// Every request in a Team through a Carbon's pairs (the Carbon left the Team).
-    CarbonTeam { carbon_id: &'a str, team: &'a str },
+    CarbonTeam {
+        carbon_id: &'a str,
+        team: &'a str,
+    },
     /// A Silicon's request on a physical device in a Team (it started a session there).
     Session {
         instance: Uuid,
@@ -282,7 +291,9 @@ pub enum Withdraw<'a> {
         team: &'a str,
     },
     /// One request (the Silicon cancelled it).
-    One { wake_id: Uuid },
+    One {
+        wake_id: Uuid,
+    },
 }
 
 /// Ends open requests as withdrawn: the device forgets them, a Carbon Ting that hadn't gone
@@ -300,6 +311,9 @@ pub async fn withdraw(state: &AppState, world: &World, which: Withdraw<'_>, reas
             Some(team),
             None,
         ),
+        Withdraw::Organization { device_id, team } => {
+            ("device_id = $1 AND team = $2", Some(device_id), Some(team), None, None)
+        }
         Withdraw::Pair { device_id } => ("device_id = $1", Some(device_id), None, None, None),
         Withdraw::Muted {
             device_id,
@@ -435,6 +449,10 @@ pub enum WokenHow {
 /// Ends every open request on a physical device as woken, in every pair and every Team, and sends
 /// each asking Silicon its own `woken` Ting in its own Team. Returns the ended rows.
 pub async fn resolve_woken(state: &AppState, world: &World, instance: Uuid, how: WokenHow) -> Vec<WakeRow> {
+    let organization = match &how {
+        WokenHow::Device => None,
+        WokenHow::Carbon { carbon, .. } => carbon.team.clone(),
+    };
     let reason = match how {
         WokenHow::Device => WakeEndReason::WokenOnDevice,
         WokenHow::Carbon { .. } => WakeEndReason::ConfirmedByCarbon,
@@ -445,11 +463,12 @@ pub async fn resolve_woken(state: &AppState, world: &World, instance: Uuid, how:
                 ting_last_error = CASE WHEN ting_delivery IN ('pending', 'deferred') THEN 'The request ended before delivery.'
                                        ELSE ting_last_error END,
                 ting_next_at = NULL
-         WHERE instance_id = $1 AND state = 'open' RETURNING {WAKE_COLUMNS}",
+         WHERE instance_id = $1 AND ($3::text IS NULL OR team = $3) AND state = 'open' RETURNING {WAKE_COLUMNS}",
         world.t("wake_requests")
     ))
     .bind(instance)
     .bind(reason.as_str())
+    .bind(&organization)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -501,11 +520,12 @@ pub async fn decline(
         "UPDATE {} SET state = 'declined', ended_at = now(), end_reason = 'declined', answer_ting = 'pending', answer_ting_next_at = now(),
                 ting_delivery = CASE WHEN ting_delivery IN ('pending', 'deferred') THEN 'failed' ELSE ting_delivery END,
                 ting_next_at = NULL
-         WHERE device_id = $1 AND state = 'open' AND ($2::uuid[] IS NULL OR wake_id = ANY($2)) RETURNING {WAKE_COLUMNS}",
+         WHERE device_id = $1 AND team = $3 AND state = 'open' AND ($2::uuid[] IS NULL OR wake_id = ANY($2)) RETURNING {WAKE_COLUMNS}",
         world.t("wake_requests")
     ))
     .bind(device_id)
     .bind(wake_ids)
+    .bind(carbon.team.as_deref().unwrap_or_default())
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();

@@ -18,6 +18,7 @@ import { indicatorShown } from "../lib/wizard";
 
 export default function DevicePage(props: { id: string }) {
   const s = session();
+  const client = s.client();
   const [device, setDevice] = createSignal<DeviceDetail | null>(null);
   const [etag, setEtag] = createSignal<string | null>(null);
   const [loadError, setLoadError] = createSignal<ApiError | null>(null);
@@ -28,7 +29,9 @@ export default function DevicePage(props: { id: string }) {
 
   async function load() {
     try {
-      const { device: d, etag: tag } = await s.client().getDevice(props.id);
+      const requestedId = props.id;
+      const { device: d, etag: tag } = await client.getDevice(requestedId);
+      if (props.id !== requestedId) return;
       setDevice(d);
       setEtag(tag);
       setLoadError(null);
@@ -37,9 +40,9 @@ export default function DevicePage(props: { id: string }) {
       setLoadError(toApiError(e));
     }
   }
-  // A Carbon's device doesn't depend on the selected Team (1.1): only a Silicon's view does.
+  // Device details belong to the selected organization and this page's immutable client.
   createEffect(
-    on([() => props.id, () => (isSilicon() ? s.team() : null), s.world], () => {
+    on([() => props.id, s.contextKey], () => {
       setDevice(null);
       load();
     }),
@@ -57,7 +60,7 @@ export default function DevicePage(props: { id: string }) {
     on([() => props.id, teamsKey, s.world], async ([, teams]) => {
       if (isSilicon()) return setTing([]);
       try {
-        const all = await s.client().getTingRegistrations("any");
+        const all = await client.getTingRegistrations("any");
         const relevant = new Set((teams as string).split(",").filter(Boolean));
         setTing(all.filter((r) => r.missing_types?.length && relevant.has(r.team)));
       } catch {
@@ -72,16 +75,16 @@ export default function DevicePage(props: { id: string }) {
     if (!d) return null;
     const started = performance.now();
     try {
-      const { device: updated, etag: tag } = await s.client().updateDevice(d.device_id, change, ifMatchValue(etag(), d.version));
+      const { device: updated, etag: tag } = await client.updateDevice(d.device_id, change, ifMatchValue(etag(), d.version));
       setDevice({ ...d, ...updated });
       setEtag(tag);
       devicesChanged();
-      void s.client().telemetry({ event: "device_update", step: `web.device.${Object.keys(change).join("+")}`, success: true, duration_ms: performance.now() - started, device_os: d.os });
+      void client.telemetry({ event: "device_update", step: `web.device.${Object.keys(change).join("+")}`, success: true, duration_ms: performance.now() - started, device_os: d.os });
       return null;
     } catch (e) {
       const error = toApiError(e);
       if (error.status === 412) await load();
-      void s.client().telemetry({ event: "device_update", step: `web.device.${Object.keys(change).join("+")}`, success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: d.os });
+      void client.telemetry({ event: "device_update", step: `web.device.${Object.keys(change).join("+")}`, success: false, duration_ms: performance.now() - started, error_code: error.code, request_id: error.requestId, device_os: d.os });
       return error;
     }
   }
@@ -95,7 +98,8 @@ export default function DevicePage(props: { id: string }) {
       <Show when={device()} fallback={<Show when={!loadError()}><Spinner label="Loading the device…" /></Show>}>
         {(d) => (
           <Show when={!d().removed_at} fallback={<RemovedDevice device={d()} />}>
-            <Header device={d()} patch={patch} />
+            <Header device={d()} patch={s.member()?.id===d().owner.id ? patch : undefined} />
+            <Show when={s.member()?.type==="carbon" && s.member()?.id===d().owner.id} fallback={<div class="card"><p>Shared by {d().owner.display_name || d().owner.id} in {d().team}. Visibility does not grant device control.</p><Capabilities device={d()}/></div>}>
             <SharedNote device={d()} />
             <WakeBanner device={d()} requests={d().wake_requests ?? []} onChanged={load} />
             <Show when={d().state === "setup"}>
@@ -107,12 +111,13 @@ export default function DevicePage(props: { id: string }) {
             </Show>
             <InUse device={d()} now={now()} onStopped={load} />
             <TingBanner registrations={ting()} />
-            <Access device={d()} onChanged={load} onTeams={setGrantTeams} />
+            <Show when={d().visibility === "team"} fallback={<p class="notice">Private to you. Turn on organization visibility below before giving Silicons access.</p>}><Access device={d()} onChanged={load} onTeams={setGrantTeams} /></Show>
             <Settings device={d()} patch={patch} onChanged={load} />
             <Capabilities device={d()} />
             <Activity device={d()} />
             <Requests device={d()} />
             <DangerZone device={d()} etag={etag()} />
+            </Show>
           </Show>
         )}
       </Show>
@@ -124,6 +129,7 @@ const KIND_WORD: Record<Device["kind"], string> = { tv: "TV", computer: "Compute
 
 function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => Promise<ApiError | null> }) {
   const s = session();
+  const client = s.client();
   const [editing, setEditing] = createSignal(false);
   const [name, setName] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -152,7 +158,7 @@ function Header(props: { device: DeviceDetail; patch?: (c: { name: string }) => 
       <DeviceIcon device={d()} size={26} />
       <div class="device-header-main">
         <p class="eyebrow" data-testid="device-eyebrow">
-          {KIND_WORD[d().kind] ?? "Device"} · {d().removed_at ? "Removed" : d().paired_by_others ? "Also paired by another Carbon" : "Only you see it"}
+          {KIND_WORD[d().kind] ?? "Device"} · {d().removed_at ? "Removed" : d().visibility === "team" ? `Shared in ${d().team ?? s.team()}` : "Private to you"}
         </p>
         <Show
           when={editing()}
@@ -268,7 +274,7 @@ function SharedNote(props: { device: DeviceDetail }) {
  */
 function RemovedDevice(props: { device: DeviceDetail }) {
   const d = () => props.device;
-  const kind = () => DEVICE_KINDS.find((k) => k.os === d().os);
+
   return (
     <>
       <Header device={d()} />
@@ -278,11 +284,11 @@ function RemovedDevice(props: { device: DeviceDetail }) {
           Removed on {dateTime(d().removed_at)} ({relativeTime(d().removed_at)}). {removedWhy(d())}.
         </p>
         <p class="fine">
-          Nothing on it can be changed or used any more, and no Silicon can reach it. Its activity log and requests below stay readable. To use the device again, pair it again.
+          Nothing on it can be changed or used any more, and no Silicon can reach it. Its activity log and requests below stay readable. To use the device here again, import it.
         </p>
         <div class="removed-actions">
-          <Link href={kind() ? `/devices/new?kind=${kind()!.id}` : "/devices/new"} class="button secondary" data-testid="pair-again">
-            Pair it again
+          <Link href="/devices?import=1" class="button secondary" data-testid="pair-again">
+            Import it again
           </Link>
         </div>
       </div>
@@ -294,6 +300,7 @@ function RemovedDevice(props: { device: DeviceDetail }) {
 
 function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void }) {
   const s = session();
+  const client = s.client();
   const [busy, setBusy] = createSignal<"stop" | "done" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [takeover, setTakeover] = createSignal<Takeover | null>(null);
@@ -309,7 +316,7 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
         setTakeover(null);
         if (!sessionId) return;
         try {
-          setTakeover(await s.client().getTakeover(sessionId));
+          setTakeover(await client.getTakeover(sessionId));
         } catch (e) {
           setError(toApiError(e));
         }
@@ -321,7 +328,7 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
     setBusy("stop");
     setError(null);
     try {
-      const ended = await s.client().stopDevice(props.device.device_id);
+      const ended = await client.stopDevice(props.device.device_id);
       toast(
         ended.kind === "session"
           ? `Stopped ${ended.session.silicon_id} (session ${ended.session.session_id})`
@@ -340,7 +347,7 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
     setBusy("done");
     setError(null);
     try {
-      await s.client().releaseTakeover(sessionId);
+      await client.releaseTakeover(sessionId);
       setTakeover(null);
       toast(`${siliconId} can carry on`);
       devicesChanged();
@@ -394,11 +401,9 @@ function InUse(props: { device: DeviceDetail; now: number; onStopped: () => void
                     <StatusDot status="in-use" /> In use
                   </p>
                   <p class="in-use-line">A Silicon another Carbon gave access to is using it.</p>
-                  <p class="fine">Only one Silicon uses a device at a time, whoever gave it access. You can stop it, because the device is yours too.</p>
+                  <p class="fine">Only one Silicon uses a device at a time, whoever gave it access. This session belongs to another account or organization. Stop it from the physical device or its owning context.</p>
                 </div>
-                <Button variant="danger" class="stop" onClick={stop} busy={busy() === "stop"} data-testid="stop-session">
-                  <CircleStop size={16} aria-hidden="true" /> Stop
-                </Button>
+
               </div>
             </Show>
           </Show>
@@ -461,13 +466,14 @@ const grantTeam = (g: AccessGrant, device: Device, fallback: string | null) => g
 
 function Access(props: { device: DeviceDetail; onChanged: () => void; onTeams?: (teams: string[]) => void }) {
   const s = session();
+  const client = s.client();
   const [grants, setGrants] = createSignal<AccessGrant[] | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [confirm, setConfirm] = createSignal<AccessGrant | null>(null);
   const [busy, setBusy] = createSignal<string | null>(null);
   async function load() {
     try {
-      const list = await s.client().listAccess(props.device.device_id);
+      const list = await client.listAccess(props.device.device_id);
       setGrants(list);
       setError(null);
       props.onTeams?.([...new Set(list.map((g) => grantTeam(g, props.device, s.team())))].sort());
@@ -505,7 +511,7 @@ function Access(props: { device: DeviceDetail; onChanged: () => void; onTeams?: 
     setConfirm(null);
     setBusy(`revoke:${key(g)}`);
     try {
-      await s.client().revokeAccess(props.device.device_id, g.silicon_id, g.team ?? null);
+      await client.revokeAccess(props.device.device_id, g.silicon_id, g.team ?? null);
       toast(`${g.silicon_id} can no longer use ${props.device.name}${g.team ? ` (in ${g.team})` : ""}`);
       devicesChanged();
       await load();
@@ -520,7 +526,7 @@ function Access(props: { device: DeviceDetail; onChanged: () => void; onTeams?: 
   async function unmute(g: AccessGrant) {
     setBusy(`unmute:${key(g)}`);
     try {
-      await s.client().setWakeSettings(props.device.device_id, { muted: false, silicon_id: g.silicon_id, team: g.team ?? undefined });
+      await client.setWakeSettings(props.device.device_id, { muted: false, silicon_id: g.silicon_id, team: g.team ?? undefined });
       toast(`${g.silicon_id} can ask you to wake ${props.device.name} again`);
       await load();
     } catch (e) {
@@ -628,9 +634,10 @@ function Access(props: { device: DeviceDetail; onChanged: () => void; onTeams?: 
 
 function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Promise<ApiError | null>; onChanged: () => void }) {
   const s = session();
+  const client = s.client();
   const [ttl, setTtl] = createSignal(props.device.pair_ttl_days ?? 14);
   const [dirty, setDirty] = createSignal(false);
-  const [busy, setBusy] = createSignal<"ttl" | "wake" | "banner" | null>(null);
+  const [busy, setBusy] = createSignal<"ttl" | "wake" | "banner" | "visibility" | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [bannerError, setBannerError] = createSignal<ApiError | null>(null);
   const kind = () => kindOfDevice(props.device);
@@ -672,7 +679,7 @@ function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Prom
     setBusy("wake");
     setError(null);
     try {
-      await s.client().setWakeSettings(props.device.device_id, { muted: !on });
+      await client.setWakeSettings(props.device.device_id, { muted: !on });
       toast(on ? `Silicons can ask you to wake ${props.device.name}` : `Wake requests for ${props.device.name} are off`);
       props.onChanged();
     } catch (e) {
@@ -684,6 +691,8 @@ function Settings(props: { device: DeviceDetail; patch: (c: DevicePatch) => Prom
   return (
     <div class="card" data-testid="settings-card">
       <h2 class="card-title">Settings.</h2>
+      <label class="checkbox-row"><input type="checkbox" checked={props.device.visibility==="team"} disabled={!!busy()} onChange={async e=>{const input=e.currentTarget;const shared=input.checked;setBusy("visibility");const err=await props.patch({visibility:shared?"team":"personal"});setError(err);if(err)input.checked=!shared;setBusy(null);}}/>Visible to members of {s.team()}</label>
+      <p class="fine">Private devices are hidden from every other organization member, including Silicons with a previous access grant.</p>
       <TtlSlider
         id="device-ttl"
         value={ttl()}
@@ -818,6 +827,7 @@ function Capabilities(props: { device: DeviceDetail }) {
 
 function Activity(props: { device: DeviceDetail }) {
   const s = session();
+  const client = s.client();
   const [items, setItems] = createSignal<ActivityEntry[] | null>(null);
   const [next, setNext] = createSignal<string | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
@@ -838,7 +848,7 @@ function Activity(props: { device: DeviceDetail }) {
   async function load(cursor?: string | null) {
     setBusy(true);
     try {
-      const page = await s.client().listActivity(props.device.device_id, { ...filters(), cursor });
+      const page = await client.listActivity(props.device.device_id, { ...filters(), cursor });
       setItems(cursor ? [...(items() ?? []), ...page.items] : page.items);
       setNext(page.next_cursor);
       setError(null);
@@ -978,13 +988,14 @@ function Activity(props: { device: DeviceDetail }) {
  */
 function Requests(props: { device: DeviceDetail }) {
   const s = session();
+  const client = s.client();
   const [items, setItems] = createSignal<ExtendRequest[] | null>(null);
   const [next, setNext] = createSignal<string | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [wakes, setWakes] = createSignal<WakeRequest[] | null>(null);
   async function load(cursor?: string | null) {
     try {
-      const page = await s.client().listDeviceRequests(props.device.device_id, cursor);
+      const page = await client.listDeviceRequests(props.device.device_id, cursor);
       setItems(cursor ? [...(items() ?? []), ...page.items] : page.items);
       setNext(page.next_cursor);
       setError(null);
@@ -994,7 +1005,7 @@ function Requests(props: { device: DeviceDetail }) {
   }
   async function loadWakes() {
     try {
-      setWakes((await s.client().listWakeRequests(props.device.device_id, { state: "all", limit: 20 })).items);
+      setWakes((await client.listWakeRequests(props.device.device_id, { state: "all", limit: 20 })).items);
     } catch {
       // A service without wake requests (1.0) has nothing to show here.
       setWakes(null);
@@ -1119,20 +1130,16 @@ function Requests(props: { device: DeviceDetail }) {
   );
 }
 
-/**
- * Remove device. The copy says exactly what DELETE /devices/{id} does (domain::unpair): the running
- * session ends, every Silicon's access goes, devices paired through it are removed with it, a device
- * with its own Extend app is told to unpair (at once, or when it next connects), a device paired
- * through a computer is dropped by that computer, and the activity log stays readable under Removed.
- */
+/** Remove the selected organization binding and its children, retaining physical setup for imports. */
 function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
   const s = session();
+  const client = s.client();
   const [open, setOpen] = createSignal(false);
   const [typed, setTyped] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [children, setChildren] = createSignal<Device[]>([]);
-  const [hostName, setHostName] = createSignal<string | null>(null);
+
   const matches = () => typed().trim() === props.device.name.trim();
   const d = () => props.device;
 
@@ -1141,9 +1148,9 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
     setError(null);
     setOpen(true);
     try {
-      const page = await s.client().listDevices({ scope: "mine", limit: 100 });
+      const page = await client.listDevices({ scope: "mine", limit: 100 });
       setChildren(page.items.filter((x) => x.host_device_id === d().device_id));
-      setHostName(page.items.find((x) => x.device_id === d().host_device_id)?.name ?? null);
+
     } catch {
       setChildren([]);
     }
@@ -1153,7 +1160,7 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
     setBusy(true);
     setError(null);
     try {
-      await s.client().removeDevice(d().device_id, ifMatchValue(props.etag, d().version));
+      await client.removeDevice(d().device_id, ifMatchValue(props.etag, d().version));
       setOpen(false);
       toast(`Removed ${d().name}. Its activity log is under Removed.`);
       devicesChanged();
@@ -1171,8 +1178,7 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
     <div class="card danger" data-testid="danger-zone">
       <h2 class="card-title">Remove device.</h2>
       <p class="fine">
-        Ends any session, takes access away from every Silicon and unpairs the device, and any device paired through it. Its activity log stays readable under Removed. To use it
-        again, pair it again.
+        Removes this device and its attached devices from this organization and ends their sessions here. Physical setup stays connected, so you can import them again. Its activity log stays readable under Removed.
       </p>
       <Button variant="danger" class="quiet" onClick={openDialog} data-testid="remove-device">
         <Trash2 size={16} aria-hidden="true" /> Remove {d().name}
@@ -1187,29 +1193,18 @@ function DangerZone(props: { device: DeviceDetail; etag: string | null }) {
             )}
           </Show>
           <Show when={d().paired_by_others}>
-            <li data-testid="remove-others">Only your pair ends. The other Carbons who paired it keep theirs, with their own Silicons.</li>
+            <li data-testid="remove-others">Only your binding in this organization is removed. Other Carbons keep their own devices.</li>
           </Show>
           <Show when={access() > 0}>
             <li data-testid="remove-access">{access() === 1 ? "1 Silicon loses access." : `${access()} Silicons lose access.`}</li>
           </Show>
-          <Show
-            when={d().host_device_id}
-            fallback={
-              <li data-testid="remove-unpair">
-                {d().online
-                  ? "The Extend app on it unpairs now and shows a new pairing code."
-                  : "It's offline, so the Extend app on it unpairs the next time it connects, then shows a new pairing code."}
-              </li>
-            }
-          >
-            <li data-testid="remove-unpair">Extend stops reaching it through {hostName() ?? d().host_device_id}.</li>
-          </Show>
+          <li data-testid="remove-unpair">Its configured connection stays available for importing. Other organizations keep their bindings.</li>
           <Show when={children().length}>
             <li data-testid="remove-children">
-              Also removed, because they pair through it: <strong>{children().map((c) => c.name).join(", ")}</strong>.
+              Also removed from this organization, because they connect through it: <strong>{children().map((c) => c.name).join(", ")}</strong>.
             </li>
           </Show>
-          <li>Its activity log stays readable: find it under Removed in your device list. To use the device again, pair it again.</li>
+          <li>Its activity log stays readable: find it under Removed in your device list. To use the device here again, import it.</li>
         </ul>
         <form
           onSubmit={(e) => {

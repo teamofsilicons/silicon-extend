@@ -10,9 +10,7 @@ import { ApiError, ExtendClient, type TokenPair, type TokenStore } from "./api";
 import { read, readJson, remove, write, writeJson } from "./storage";
 import type { TestingEnvironment } from "./types";
 
-export type World =
-  | { kind: "production" }
-  | { kind: "testing"; secret: string; environment: TestingEnvironment };
+export type World = { kind: "production" } | { kind: "testing"; secret: string; environment: TestingEnvironment };
 
 export const KEYS = {
   productionAuth: "extend.auth.production",
@@ -32,6 +30,13 @@ function areaFor(world: World): "local" | "session" {
 }
 function authKey(world: World): string {
   return world.kind === "production" ? KEYS.productionAuth : KEYS.testingAuth(world.environment.environment_id);
+}
+
+/** Stable account+organization binding; unscoped legacy credentials must be reauthenticated. */
+export function contextId(pair: TokenPair): string | null {
+  return pair.teams?.length === 1 && typeof pair.teams[0] === "string" && !!pair.teams[0].trim() && pair.member?.id && (pair.member?.type === "carbon" || pair.member?.type === "silicon")
+    ? encodeURIComponent(JSON.stringify([pair.member.type, pair.member.id, pair.teams[0]]))
+    : null;
 }
 
 /** A token store over browser storage; `changed` fires after every save or clear. */
@@ -66,50 +71,108 @@ function loadWorld(): World {
   return { kind: "production" };
 }
 
-function createSession() {
+export function createSession() {
   const [world, setWorld] = createSignal<World>(loadWorld());
   const [authTick, setAuthTick] = createSignal(0);
-  const [teamTick, setTeamTick] = createSignal(0);
+  const [contextRevision, setContextRevision] = createSignal(0);
+  const changedContext = (persist = true) => {
+    // Survives a full-page IAM round trip, including account A → B → A in another tab.
+    if (persist) write("local", "extend.login.context-epoch", crypto.randomUUID());
+    setContextRevision(n => n + 1);
+  };
   const [telemetryOff, setTelemetryOff] = createSignal(read("local", KEYS.telemetry) === "off");
   const [signedOutReason, setSignedOutReason] = createSignal<ApiError | null>(null);
   const bump = () => setAuthTick((n) => n + 1);
-
+  const selectedKey = (w: World) => `${authKey(w)}.selected`;
+  const indexKey = (w: World) => `${authKey(w)}.contexts`;
+  const contextKey = (w: World, id: string) => `${authKey(w)}.context.${id}`;
+  function savedIds(w: World): string[] {
+    return readJson<string[]>(areaFor(w), indexKey(w)) ?? [];
+  }
+  function remember(w: World, p: TokenPair, select = false) {
+    const id = contextId(p);
+    if (!id) throw new ApiError(401, { code: "context_required", message: "Sign in again and select exactly one organization." });
+    const area = areaFor(w);
+    writeJson(area, contextKey(w, id), p);
+    const ids = savedIds(w);
+    if (!ids.includes(id)) writeJson(area, indexKey(w), [...ids, id]);
+    if (select) { write(area, selectedKey(w), id); changedContext(); }
+    bump();
+  }
+  // Import only already scoped legacy sessions. IAM revokes older unscoped credentials.
+  createMemo(() => {
+    const w = world();
+    const legacy = readJson<TokenPair>(areaFor(w), authKey(w));
+    if (legacy && contextId(legacy)) remember(w, legacy, !read(areaFor(w), selectedKey(w)));
+    remove(areaFor(w), authKey(w));
+  });
   if (typeof window !== "undefined")
     window.addEventListener("storage", (event) => {
-      if (event.key === KEYS.productionAuth) bump();
+      if (!event.key || event.key.startsWith(KEYS.productionAuth)) { changedContext(false); bump(); }
     });
-
-  const store = createMemo(() => {
-    const w = world();
-    return storageTokenStore(areaFor(w), authKey(w), bump);
+  const selected = createMemo(() => {
+    authTick();
+    return read(areaFor(world()), selectedKey(world()));
   });
-
+  const contexts = createMemo(() => {
+    authTick();
+    const w = world();
+    return savedIds(w)
+      .map((id) => readJson<TokenPair>(areaFor(w), contextKey(w, id)))
+      .filter((p): p is TokenPair => !!p && !!contextId(p));
+  });
+  const store = createMemo<TokenStore>(() => {
+    const w = world(),
+      id = selected(),
+      area = areaFor(w);
+    const key = id ? contextKey(w, id) : `${authKey(w)}.empty`;
+    return {
+      load: () => {
+        const p = readJson<TokenPair>(area, key);
+        return p && contextId(p) === id ? p : null;
+      },
+      save: (p, expectedRefreshToken) => {
+        if (!id || contextId(p) !== id)
+          throw new ApiError(401, { code: "context_changed", message: "The account or organization changed during this request." });
+        if (expectedRefreshToken && readJson<TokenPair>(area, key)?.refresh_token !== expectedRefreshToken)
+          throw new ApiError(409, { code: "context_changed", message: "This saved login changed while refreshing. Retry in its original context." });
+        writeJson(area, key, p);
+        bump();
+      },
+      clear: () => {
+        remove(area, key);
+        if (read(area, selectedKey(w)) === id) { remove(area, selectedKey(w)); changedContext(); }
+        bump();
+      },
+    };
+  });
   const pair = createMemo(() => {
     authTick();
     return store().load();
   });
-
-  const team = createMemo(() => {
-    teamTick();
-    const p = pair();
-    if (!p) return null;
-    const saved = read(areaFor(world()), KEYS.team(world()));
-    if (saved && p.teams.includes(saved)) return saved;
-    return p.teams[0] ?? null;
-  });
-
+  const team = createMemo(() => pair()?.teams[0] ?? null);
+  const contextKeyValue = createMemo(() => `${authKey(world())}:${selected() ?? "signed-out"}`);
   const client = createMemo(() => {
-    const w = world();
-    const tokens = store();
+    const w = world(),
+      tokens = store(),
+      id = selected(), revision = contextRevision();
+    const org = id ? (contexts().find((p) => contextId(p) === id)?.teams[0] ?? null) : null;
     return new ExtendClient({
       baseUrl: apiBaseUrl(),
       tokens,
-      worldKey: w.kind === "production" ? "production" : `testing:${w.environment.environment_id}`,
+      worldKey: `${authKey(w)}:${id ?? "signed-out"}`,
       testingSecret: () => (w.kind === "testing" ? w.secret : null),
-      team: () => team(),
+      team: () => org,
       telemetryOff: () => telemetryOff(),
       lock: webLock,
-      onSignedOut: (error) => setSignedOutReason(error),
+      onLogin: (p) => {
+        if (revision !== contextRevision() || world() !== w || selected() !== id)
+          throw new ApiError(409, { code: "context_changed", message: "The selected account or environment changed during sign-in. Start sign-in again." });
+        remember(w, p, true);
+      },
+      onSignedOut: (error) => {
+        if (world() === w && (!selected() || selected() === id)) setSignedOutReason(error);
+      },
     });
   });
 
@@ -117,6 +180,18 @@ function createSession() {
     world,
     client,
     pair,
+    contexts,
+    contextKey: contextKeyValue,
+    contextRevision,
+    invalidateLogin: () => changedContext(),
+    loginContext: () => `${contextKeyValue()}:${read("local", "extend.login.context-epoch") ?? "initial"}`,
+    selectContext(id: string) {
+      if (!contexts().some((p) => contextId(p) === id)) return;
+      changedContext();
+      write(areaFor(world()), selectedKey(world()), id);
+      setSignedOutReason(null);
+      bump();
+    },
     team,
     telemetryOff,
     signedOutReason,
@@ -126,15 +201,23 @@ function createSession() {
     isTesting: () => world().kind === "testing",
 
     setTeam(handle: string) {
-      write(areaFor(world()), KEYS.team(world()), handle);
-      setTeamTick((n) => n + 1);
+      const found = contexts().find(
+        (p) => p.member.id === pair()?.member.id && p.member.type === pair()?.member.type && p.teams[0] === handle,
+      );
+      if (found) {
+        changedContext();
+        write(areaFor(world()), selectedKey(world()), contextId(found)!);
+        bump();
+      }
     },
 
-    /** Replaces the team list with the live one from `/auth/me`, keeping the rest of the pair. */
+    /** IAM5 never broadens a stored application context with a directory result. */
     updateTeams(teams: string[]) {
       const p = store().load();
-      if (!p || JSON.stringify(p.teams) === JSON.stringify(teams)) return;
-      store().save({ ...p, teams });
+      if (p && (teams.length !== 1 || teams[0] !== p.teams[0])) {
+        store().clear();
+        setSignedOutReason(new ApiError(401, { code: "context_changed", message: "Choose your account and organization again in IAM." }));
+      }
     },
 
     setTelemetry(on: boolean) {
@@ -146,6 +229,7 @@ function createSession() {
     enterTesting(secret: string, environment: TestingEnvironment) {
       writeJson("session", KEYS.testing, { secret, environment });
       setSignedOutReason(null);
+      changedContext();
       setWorld({ kind: "testing", secret, environment });
     },
 
@@ -157,6 +241,7 @@ function createSession() {
       // including the read that called this, and loop.
       if (JSON.stringify(w.environment) === JSON.stringify(environment)) return;
       writeJson("session", KEYS.testing, { secret: w.secret, environment });
+      changedContext();
       setWorld({ ...w, environment });
     },
 
@@ -173,10 +258,14 @@ function createSession() {
       } catch {
         /* the test tokens are forgotten either way */
       }
+      for (const id of savedIds(w)) remove("session", contextKey(w, id));
+      remove("session", indexKey(w));
+      remove("session", selectedKey(w));
       remove("session", KEYS.testingAuth(w.environment.environment_id));
       remove("session", KEYS.testing);
       remove("session", KEYS.team(w));
       setSignedOutReason(null);
+      changedContext();
       setWorld({ kind: "production" });
     },
 

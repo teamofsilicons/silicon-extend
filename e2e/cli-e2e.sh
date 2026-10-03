@@ -61,13 +61,13 @@ expect_exit 2 as nobody config get bogus; grep -q "Settings: api_url" "$WORK/err
 as nobody version | grep -q "Status: current" && ok "version reads the compatibility matrix: current"
 
 # ── Carbon pairs a device ──
-as alice login c:alice >/dev/null
+as alice login c:alice@acme >/dev/null
 [ "$(as alice login status --json | jq_ 'd["member"]["id"]')" = c:alice ] && ok "Carbon logged in with an SLT; login status says authenticated"
 [ "$(as alice login status --json | jq_ '(d["authenticated"], d["team"], "team_role" in d)')" = "(True, 'acme', True)" ] && ok "login status --json: authenticated, team and team_role at the top level"
 start_fake linux
 expect_exit 5 as alice device pair 000000 --name nope
 ok "wrong pairing code → exit 5"
-DEV=$(as alice device pair "$(echo "$CODE" | tr A-F a-f)" --name "CLI box" --access si:chef --json | jq_ 'd["device_id"]')
+DEV=$(as alice device pair "$(echo "$CODE" | tr A-F a-f)" --name "CLI box" --visibility team --access si:chef --json | jq_ 'd["device_id"]')
 [ ${#DEV} = 8 ] && ok "paired device $DEV (lowercase code accepted)"
 for _ in $(seq 30); do grep -q PAIRED "$FAKE_LOG" && break; sleep 0.2; done
 sleep 0.5
@@ -79,7 +79,7 @@ ok "31 days refused (exit 2)"
 as alice device access ls "$DEV" | grep -q si:chef && ok "access list shows si:chef"
 
 # ── Silicon uses it ──
-as chef login si:chef >/dev/null
+as chef login si:chef@acme >/dev/null
 as chef device ls | grep -q "$DEV" && ok "Silicon lists the device it has access to"
 as chef -v device ls 2>&1 >/dev/null | grep -q "GET /api/v1/devices: ok in" && ok "-v shows each call and its time on stderr"
 as chef device show "$DEV" | grep -q "terminal" && ok "device show lists terminal for a computer"
@@ -146,9 +146,9 @@ as chef version | grep -q "API v1" && ok "version shows the negotiated API"
 expect_exit 2 as alice device rm "$DEV"
 grep -q -- "--yes" "$WORK/err" && ok "rm without --yes explains and does nothing"
 as alice device rm "$DEV" --yes | grep -q Removed && ok "device removed"
-sleep 0.5; grep -q "UNPAIRED device_removed" "$FAKE_LOG" && ok "device was told it's unpaired"
+sleep 0.5; ! grep -q "UNPAIRED device_removed" "$FAKE_LOG" && as alice device importable --json | grep -q "$DEV" && ok "organization removal preserves the physical pair for import"
 
-# ── 1.1: devices belong to their Carbons, across Teams; several Carbons; waking ──
+# ── 3.1: configured devices have private organization bindings; physical pairs stay shared ──
 # Members in a second Team, through the local IAM (a membership change, as IAM's webhook would say).
 member() { curl -sS --fail-with-body -XPOST "$API/dev/iam/members" -H 'content-type: application/json' \
   -d "{\"type\":\"member\",\"data\":{\"id\":\"$1\",\"teams\":$2}}" >/dev/null; }
@@ -158,31 +158,40 @@ curl -sS --fail-with-body -XPOST "$API/dev/ting/missing" -H 'content-type: appli
   -d '{"type":"missing","data":{"team":"globex","event":"device.wake_requested","missing":true}}' >/dev/null \
   || echo "  (this service has no /dev/ting/missing; the missing-type checks below will fail)"
 for who in alice chef scout; do rm -rf "$WORK/$who"; done
-as alice login c:alice >/dev/null; as chef login si:chef >/dev/null; as scout login si:scout >/dev/null
+as alice login c:alice@acme >/dev/null; as chef login si:chef@acme >/dev/null; as scout login si:scout@globex >/dev/null; as aliceglobex login c:alice@globex >/dev/null
 [ "$(as scout team ls --json | jq_ 'd["default"]')" = globex ] && ok "a Silicon in one Team defaults to it"
 # A 1.1 app that reports itself not awake (standby), and shows a code for another Carbon.
 FAKE_ENV="FAKE_APP_VERSION=1.1.0 FAKE_AWAKE=false FAKE_SLEEP_STATE=standby FAKE_PAIR_ANOTHER=1" start_fake android_tv
 TV_LOG=$FAKE_LOG
-TV=$(as alice device pair "$CODE" --name "Family TV" --access si:sous --json | jq_ 'd["device_id"]')
+TV=$(as alice device pair "$CODE" --name "Family TV" --json | jq_ 'd["device_id"]')
 [ ${#TV} = 8 ] && ok "a 1.1 device paired: $TV"
 for _ in $(seq 30); do grep -q PAIRED "$TV_LOG" && break; sleep 0.2; done; sleep 0.5
-A=$(as alice --team acme device ls --json | jq_ 'sorted(x["device_id"] for x in d["items"])')
-G=$(as alice --team globex device ls --json | jq_ 'sorted(x["device_id"] for x in d["items"])')
-[ "$A" = "$G" ] && grep -q "$TV" <<<"$A" && ok "a Carbon's device ls is the same in every Team"
-o=$(as alice device ls --team-visible 2>&1 >/dev/null); [ -z "$(as alice device ls --team-visible 2>/dev/null)" ] && grep -q "only ever visible to the Carbons who paired them" <<<"$o" && ok "--team-visible lists nothing, with a note"
-expect_exit 2 as alice device visibility "$TV" team; grep -q "Visibility is gone in Extend 1.1" "$WORK/err" && ok "device visibility exits 2"
+as bob login c:bob >/dev/null
+[ "$(as alice device show "$TV" --json | jq_ 'd["visibility"]')" = personal ] && ok "new pairing defaults to hidden"
+expect_exit 5 as bob device show "$TV"; ok "another Carbon cannot open a hidden known device ID"
+expect_exit 2 as alice device access grant "$TV" si:sous; ok "hidden devices cannot grant Silicon access"
+expect_exit 3 as alice --team globex device ls; ok "an organization flag cannot broaden an ordinary login"
+! as aliceglobex device ls --json | grep -q "$TV" && ok "an owned configuration is not active in another organization before import"
+as aliceglobex device importable --json | grep -q "$TV" && ok "the owner can discover their configured device for import"
+[ "$(as aliceglobex device import "$TV" --json | jq_ '(d["visibility"], d["team"])')" = "('personal', 'globex')" ] && ok "import creates a private binding in the selected organization"
+expect_exit 5 as scout device show "$TV"; ok "import does not grant a Silicon discovery or control"
+as alice device visibility "$TV" team >/dev/null
+as alice device access grant "$TV" si:sous >/dev/null
+as bob device ls --team-visible --json | grep -q "$TV" && ok "organization-wide discovery shows an explicitly shared device"
 as alice device ls | grep "$TV" | grep -q "no (standby)" && ok "device ls says the device isn't awake, and why"
 
-# Grants per Team.
-as alice --team globex device access grant "$TV" si:scout si:chef | grep -q "in globex" && ok "access grant in another Team with --team"
-expect_exit 4 as alice --team labs device access grant "$TV" si:other; grep -qi "sign in" "$WORK/err" && ok "a grant in a Team the login doesn't reach says where to sign in (exit 4)"
-as alice device access ls "$TV" | grep -q "globex  si:scout" && ok "access ls has a TEAM column"
-as alice team silicons --all-teams | grep -q "globex  si:scout" && ok "team silicons --all-teams lists every Team's Silicons"
-as alice --team globex device access revoke "$TV" si:chef | grep -q "in globex" && ok "revoke with --team takes one Team's grant"
-as alice --team acme device access grant "$TV" si:chef >/dev/null
-as alice --team globex device access grant "$TV" si:chef >/dev/null
-as alice device access revoke "$TV" si:chef | grep -q "si:chef (in acme and globex), in every Team" && ok "revoke without --team takes every Team's, and lists them"
-as alice --team acme device access grant "$TV" si:chef >/dev/null
+# Grants remain in the organization whose separate login made them.
+as aliceglobex device visibility "$TV" team >/dev/null
+as aliceglobex device access grant "$TV" si:scout si:chef | grep -q "in globex" && ok "a separate organization login can grant its imported binding"
+expect_exit 3 as alice --team labs device access grant "$TV" si:other; grep -qi "extend login" "$WORK/err" && ok "a grant outside the selected login says where to sign in"
+! as alice device access ls "$TV" | grep -q "si:scout" && ok "access ls does not reveal another organization's grants"
+! as alice team silicons --all-teams | grep -q "si:scout" && ok "all-teams cannot broaden the selected ordinary login"
+as aliceglobex device access revoke "$TV" si:chef | grep -q "in globex" && ok "revoke takes only the selected organization's grant"
+as alice device access grant "$TV" si:chef >/dev/null
+as aliceglobex device access grant "$TV" si:chef >/dev/null
+as alice device access revoke "$TV" si:chef >/dev/null
+as aliceglobex device access ls "$TV" | grep -q "si:chef" && ok "revoking in acme preserves the independent globex grant"
+as alice device access grant "$TV" si:chef >/dev/null
 
 # Not awake is no gate; the note says what won't work and how to ask.
 SID=$(as sous session new "$TV" 2>"$WORK/err")
@@ -192,11 +201,12 @@ grep -q "extend --team acme session end $SID" "$WORK/err" && ok "commands sugges
 # Asking for it: the same side gets the Silicon, another Team gets its Carbon.
 as chef request send "$TV" --reason "Two minutes for an OTP" | grep -q "Sent to si:sous (using $TV in session $SID)" && ok "request send on the same side names the Silicon using it"
 as scout request send "$TV" --reason "Need the TV for the globex demo" | grep -q "Sent to the Carbon who gave access to the Silicon using it; it's in use by a Silicon you can't see." && ok "request send from another Team goes to the Carbon, naming no one"
-as alice device requests "$TV" | grep "si:scout" | grep -q " you " && ok "the Carbon sees the routed request from si:scout, to them"
+as alice device requests "$TV" | grep "si:scout" | grep -q " you " && ok "only the explicit Carbon recipient sees a request routed from another organization"
+expect_exit 4 as bob device requests "$TV"; ok "organization discovery does not reveal another owner's routed requests"
 expect_exit 2 as scout request send "$TV"; grep -q "extend --team globex request send $TV" "$WORK/err" && ok "a Silicon's usage hint names its Team"
 expect_exit 6 as scout device wake "$TV" --reason "Need it"; ok "wake while another Silicon uses it: exit 6"
 
-# Another Carbon pairs the same device, and can stop the Silicon using it.
+# Another Carbon configures the same physical device but cannot stop the other owner's session.
 for _ in $(seq 50); do CODE2=$(grep -m1 '^PAIRING_CODE_2 ' "$TV_LOG" | awk '{print $2}' || true); [ -n "$CODE2" ] && break; sleep 0.2; done
 as bob login c:bob >/dev/null
 # Needs a fake device that shows a code for another Carbon (FAKE_PAIR_ANOTHER); without one these
@@ -206,32 +216,34 @@ if [ -n "$CODE2" ]; then
   [ ${#TV2} = 8 ] && [ "$TV2" != "$TV" ] && ok "a second Carbon pairs the same device, as their own pair"
   as bob device ls | grep "$TV2" | grep -q "Bob's TV (shared)" && ok "each Carbon sees it as shared"
   as bob device ls | grep "$TV2" | grep -q "yes (another Carbon's Silicon)" && ok "the other Carbon sees only that it is in use"
-  as bob device stop "$TV2" | grep -q "Stopped the Silicon using Bob's TV (another Carbon gave it access)." && ok "device stop across pairs"
-  expect_exit 6 as sous --session "$SID" snapshot; ok "the stopped Silicon's session is over"
+  expect_exit 6 as bob device stop "$TV2"; ok "another physical pair cannot stop the owner's session"
+  as sous session ls --json | grep -q "$SID" && ok "the original Silicon session survives the cross-owner stop denial"
+  as alice device stop "$TV" >/dev/null
+  expect_exit 6 as sous --session "$SID" snapshot; ok "the owner can still stop their own session"
 else
   echo "  (the fake device showed no code for another Carbon)"
   as sous session end "$SID" >/dev/null
 fi
 
 # Waking it.
-as alice --team globex device access grant "$TV" si:chef >/dev/null
+as aliceglobex device access grant "$TV" si:chef >/dev/null
 [ "$(as scout --json device wake "$TV" --reason "Need the TV on for the globex demo" | jq_ '(d["state"], d["asks"], d["team"])')" = "('open', 1, 'globex')" ] && ok "device wake --json prints the wake request"
 expect_exit 12 as scout device wake "$TV" --reason "Again"; ok "asking again within 5 minutes: exit 12"
 as chef device wake "$TV" --reason "Need the TV on" >"$WORK/out" || true
 grep -q "Asked c:alice to wake Family TV ($TV); the request expires at" "$WORK/out" && grep -q "then run: extend --team acme session new $TV" "$WORK/out" && ok "device wake says who was asked, and what to run once it wakes"
 grep -Eq "Its Carbon (was|will be|was already) told through Ting" "$WORK/out" && ok "device wake says how the Carbon hears of it"
-as alice ting status --all-teams | grep -q "ting --org '<owning-team>' types register --type extend.device.wake_requested" && ok "ting status shows the missing type, with the command for a Ting manager"
-as alice --team globex device access grant "$TV" si:scout 2>&1 >/dev/null | grep -q "ting --org '<owning-team>' types register --type extend.device.wake_requested" && ok "a grant warns when Ting lacks Extend's types in that Team"
-as alice device wake-requests ls "$TV" --open | grep -q "si:scout" && ok "wake-requests ls shows the open requests, every Team's"
+as aliceglobex ting status --all-teams | grep -q "ting --org '<owning-team>' types register --type extend.device.wake_requested" && ok "ting status shows the missing type, with the command for a Ting manager"
+as aliceglobex device access grant "$TV" si:scout 2>&1 >/dev/null | grep -q "ting --org '<owning-team>' types register --type extend.device.wake_requested" && ok "a grant warns when Ting lacks Extend's types in that Team"
+as aliceglobex device wake-requests ls "$TV" --open | grep -q "si:scout" && ! as alice device wake-requests ls "$TV" --open | grep -q "si:scout" && ok "wake requests are limited to their organization"
 as alice device show "$TV" | grep -q "Open wake requests:" && ok "device show lists the open wake requests"
 as alice device wake-requests answer "$TV" woken | grep -q "is awake: every open request to wake it has ended" && ok "answer woken ends every open request"
 as alice device wake-requests mute "$TV" --silicon si:chef | grep -q "are off" && ok "wake requests muted for one Silicon"
 expect_exit 6 as chef device wake "$TV" --reason "Please"; ok "a muted Silicon's ask: exit 6"
 as alice device wake-requests unmute "$TV" --silicon si:chef | grep -q "are on" && ok "…and on again"
-as alice --team acme ting on | grep -q "acme  on" && ok "ting on turns Extend's Tings on in a Team"
+as alice ting on | grep -q "acme  on" && ok "ting on turns Extend's Tings on in a Team"
 # A 1.0 app can't tell Extend when it wakes.
 FAKE_ENV= start_fake linux
-OLD=$(as alice device pair "$CODE" --name "Old box" --access si:chef --json | jq_ 'd["device_id"]')
+OLD=$(as alice device pair "$CODE" --name "Old box" --visibility team --access si:chef --json | jq_ 'd["device_id"]')
 for _ in $(seq 30); do grep -q PAIRED "$FAKE_LOG" && break; sleep 0.2; done; sleep 0.5
 as chef device wake "$OLD" --reason "Need the screen" | grep -q "Extend can't tell when Old box wakes; its Carbon will say so." && ok "device wake says when Extend can't tell"
 as chef device wake "$OLD" --cancel | grep -q "Withdrew your request to wake $OLD" && ok "device wake --cancel withdraws it"
@@ -247,10 +259,10 @@ as alice device setup "$SB" --retry >"$WORK/out" || true; grep -q "^Retrying .* 
 # Signing out ends the running sessions of the Silicons the Carbon gave access to.
 as chef session new "$OLD" >/dev/null 2>&1 || true
 as alice logout | grep -q "Ended the sessions of the Silicons you gave access to: si:chef" && ok "a Carbon's logout names the sessions it ended"
-as alice login c:alice >/dev/null
+as alice login c:alice@acme >/dev/null
 
 # ── State directory ──
-as mover login si:chef >/dev/null
+as mover login si:chef@acme >/dev/null
 as mover config set telemetry off >/dev/null
 mkdir -p "$WORK/mover-new"
 as mover config home "$WORK/mover-new" | grep -q "Moved the login for si:chef" && ok "config home moves the state"
@@ -271,7 +283,7 @@ set +e; printf %s "$SECRET" | as alice config test add "$OTHER" >"$WORK/out" 2>"
 printf %s "$SECRET" | as alice config test add "$ENV" | grep -q cli-e2e && ok "test environment added from stdin"
 expect_exit 11 as alice env show
 ok "test-only command without --test exits 11"
-as alice --test "$ENV" login c:alice >/dev/null 2>"$WORK/err"
+as alice --test "$ENV" login c:alice@acme >/dev/null 2>"$WORK/err"
 grep -q "test environment: cli-e2e" "$WORK/err" && ok "--test prints the environment on stderr"
 as alice --test "$ENV" env show 2>/dev/null | grep -q "0 of 5" && ok "env show: 0 of 5 devices"
 start_fake linux "$SECRET"

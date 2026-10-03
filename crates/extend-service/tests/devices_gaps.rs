@@ -59,6 +59,7 @@ async fn start() -> Env {
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir: data,
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
@@ -122,7 +123,7 @@ fn claim(code: &str, name: &str, silicons: &[&str]) -> PairingClaim {
     PairingClaim {
         pairing_code: code.to_owned(),
         name: name.to_owned(),
-        visibility: None,
+        visibility: Some(extend_protocol::model::Visibility::Team),
         pair_ttl_days: None,
         silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
     }
@@ -305,23 +306,12 @@ async fn removed_device_stays_readable_to_its_owner() {
         .to_string();
     assert!(c.run(&sid, &cmd("snapshot", &["-i"])).await.unwrap().ok);
     a.remove_device(&id, None).await.unwrap();
-    let ended = c.session(&sid).await.unwrap();
+    assert_eq!(api_err(c.session(&sid).await).code, ErrorCode::SessionNotFound);
+    let ended = a.session(&sid).await.unwrap();
     assert_eq!(ended.state, SessionState::Ended);
-    assert_eq!(ended.end_reason, Some(EndReason::DeviceRemoved));
-    let frames = frames.await.unwrap();
-    assert!(frames.iter().any(|f| matches!(
-        f,
-        ServiceFrame::SessionEnded {
-            reason: EndReason::DeviceRemoved,
-            ..
-        }
-    )));
-    assert!(matches!(
-        frames.last(),
-        Some(ServiceFrame::Unpaired {
-            reason: EndReason::DeviceRemoved
-        })
-    ));
+    assert_eq!(ended.end_reason, Some(EndReason::AccessRemoved));
+    // The physical connection stays configured; the organization binding alone was removed.
+    assert!(!frames.is_finished());
 
     // The default list leaves it out; include_removed brings it back, flagged.
     let live = a.devices(DeviceQuery::default()).await.unwrap();
@@ -357,10 +347,16 @@ async fn removed_device_stays_readable_to_its_owner() {
     assert_eq!(d.commands.as_deref(), Some(&[][..]));
     let log = a.activity(&id, ActivityQuery::default()).await.unwrap();
     let actions: Vec<&str> = log.items.iter().map(|e| e.action.as_str()).collect();
-    for want in ["paired", "session_started", "command", "session_ended", "removed"] {
+    for want in [
+        "paired",
+        "session_started",
+        "command",
+        "session_ended",
+        "organization_removed",
+    ] {
         assert!(actions.contains(&want), "{want} missing from {actions:?}");
     }
-    assert_eq!(log.items[0].action, "removed", "newest first");
+    assert_eq!(log.items[0].action, "organization_removed", "newest first");
     assert!(
         a.device_requests(&id, ListQuery::default())
             .await
@@ -401,7 +397,7 @@ async fn removed_device_stays_readable_to_its_owner() {
             &AttachmentCreate {
                 os: DeviceOs::Tvos,
                 name: "TV".into(),
-                visibility: None,
+                visibility: Some(extend_protocol::model::Visibility::Team),
                 pair_ttl_days: None,
                 address: None,
             },
@@ -454,6 +450,7 @@ async fn removed_device_stays_readable_to_its_owner() {
         body["data"]["message"].as_str().unwrap().contains("include_removed"),
         "{body}"
     );
+    frames.abort();
 }
 
 async fn test_environment(env: &Env) -> Client {
@@ -638,7 +635,7 @@ async fn test_device_limit_holds_under_concurrent_adds() {
                 &AttachmentCreate {
                     os: DeviceOs::Tvos,
                     name: format!("attach {i}"),
-                    visibility: None,
+                    visibility: Some(extend_protocol::model::Visibility::Team),
                     pair_ttl_days: None,
                     address: None,
                 },
@@ -655,7 +652,12 @@ async fn test_device_limit_holds_under_concurrent_adds() {
         let e = r.api().expect("an API error");
         assert_eq!(e.code, ErrorCode::TestDeviceLimit, "{e:?}");
         assert_eq!(e.message, TEST_DEVICE_LIMIT_MESSAGE);
-        assert!(e.hint.as_deref().unwrap_or_default().contains("extend device rm"));
+        assert!(
+            e.hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Revoke an unused physical pairing")
+        );
     }
     assert_eq!(a.devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
     drop(host);
@@ -889,7 +891,7 @@ async fn hosted_device_end_to_end() {
     let tv = |os| AttachmentCreate {
         os,
         name: "Living room TV".into(),
-        visibility: None,
+        visibility: Some(extend_protocol::model::Visibility::Team),
         pair_ttl_days: None,
         address: Some("192.168.1.40".into()),
     };
@@ -983,8 +985,18 @@ async fn hosted_device_end_to_end() {
     assert!(seen.online);
     assert_eq!(seen.state, DeviceState::Ready);
     assert_eq!(seen.os_version.as_deref(), Some("18.2"));
+    assert!(
+        seen.host_device_id.is_none(),
+        "a Silicon must not discover an ungranted host"
+    );
     assert_eq!(
-        seen.host_device_id.as_ref().map(ToString::to_string).as_deref(),
+        a.device(&atv_id)
+            .await
+            .unwrap()
+            .host_device_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some(host_id.as_str())
     );
     assert!(seen.commands.as_ref().unwrap().contains(&"tv-remote".to_owned()));
@@ -1118,14 +1130,9 @@ async fn hosted_device_end_to_end() {
     assert!(a.device(&host_id).await.unwrap().in_use.is_some());
     assert!(a.device(&atv_id).await.unwrap().in_use.is_none());
 
-    // Removing the TV tells the host to forget it; the Mac stays paired and in use.
+    // Removing this organization binding preserves the configured attachment and host.
     a.remove_device(&atv_id, None).await.unwrap();
-    let f = host
-        .expect("attach removed", |f| {
-            matches!(f, ServiceFrame::Attach { removed: true, .. })
-        })
-        .await;
-    assert!(matches!(f, ServiceFrame::Attach { ref device_id, .. } if *device_id == atv.device_id));
+    assert!(a.device(&atv_id).await.unwrap().removed_at.is_some());
     assert!(a.device(&host_id).await.unwrap().removed_at.is_none());
     assert_eq!(s.session(mac_sid.as_str()).await.unwrap().state, SessionState::Active);
 
@@ -1138,14 +1145,9 @@ async fn hosted_device_end_to_end() {
     a.remove_device(&host_id, None).await.unwrap();
     let gone = a.device(second.device_id.as_str()).await.unwrap();
     assert_eq!(gone.removed_reason, Some(EndReason::DeviceRemoved));
-    let f = host
-        .expect("unpaired", |f| matches!(f, ServiceFrame::Unpaired { .. }))
-        .await;
     assert_eq!(
-        f,
-        ServiceFrame::Unpaired {
-            reason: EndReason::DeviceRemoved
-        }
+        a.session(mac_sid.as_str()).await.unwrap().end_reason,
+        Some(EndReason::AccessRemoved)
     );
 }
 

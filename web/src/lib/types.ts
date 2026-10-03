@@ -136,7 +136,7 @@ export interface Device {
   model?: string | null;
   kind: "phone" | "tablet" | "tv" | "computer";
   owner: Member;
-  /** 1.0: the device's Team. 1.1: absent for the Carbon who paired it; the Silicon's Team for a Silicon. */
+  /** The selected organization for this device binding. */
   team?: string | null;
   visibility: Visibility;
   host_device_id?: string | null;

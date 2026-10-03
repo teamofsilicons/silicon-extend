@@ -84,9 +84,7 @@ pub struct Spec {
     pub flags: &'static [(&'static str, bool)],
 }
 
-/// Every Extend command and the flags it takes (besides the global flags). Deprecated flags stay
-/// accepted so 1.0 scripts keep running: `device ls --team-visible` and `device pair --visibility`
-/// (a device is only visible to the Carbons who paired it from 1.1).
+/// Every Extend command and its flags, besides the global flags.
 pub const SPECS: &[Spec] = &[
     Spec {
         path: "login",
@@ -97,12 +95,32 @@ pub const SPECS: &[Spec] = &[
         flags: &[],
     },
     Spec {
+        path: "login contexts",
+        flags: &[],
+    },
+    Spec {
+        path: "login use",
+        flags: &[],
+    },
+    Spec {
         path: "logout",
         flags: &[],
     },
     Spec {
         path: "iam",
         flags: &[],
+    },
+    Spec {
+        path: "permission ls",
+        flags: &[],
+    },
+    Spec {
+        path: "permission request",
+        flags: &[("--idempotency", true)],
+    },
+    Spec {
+        path: "permission complete",
+        flags: &[("--code-file", true), ("--idempotency", true)],
     },
     Spec {
         path: "team ls",
@@ -162,6 +180,14 @@ pub const SPECS: &[Spec] = &[
         flags: &[],
     },
     Spec {
+        path: "device importable",
+        flags: &[],
+    },
+    Spec {
+        path: "device import",
+        flags: &[("--visibility", true), ("--key", true)],
+    },
+    Spec {
         path: "device pair",
         flags: &[
             ("--name", true),
@@ -172,7 +198,12 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "device attach",
-        flags: &[("--os", true), ("--name", true), ("--address", true)],
+        flags: &[
+            ("--os", true),
+            ("--name", true),
+            ("--address", true),
+            ("--visibility", true),
+        ],
     },
     Spec {
         path: "device setup",

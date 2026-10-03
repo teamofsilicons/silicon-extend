@@ -57,6 +57,9 @@ const FILE_ID: &str = "33333333-3333-4333-8333-333333333333";
 const WAKE_ID: &str = "55555555-5555-4555-8555-555555555555";
 const PAIRING_CODE: &str = "A1B2C3";
 const TESTING_SECRET: &str = "ask_sentinel-testing-secret";
+const PERMISSION_ID: &str = "77777777-7777-4777-8777-777777777777";
+const PERMISSION_CODE: &str = "obc_sentinel-permission-code";
+const PERMISSION_KEY: &str = "88888888-8888-4888-8888-888888888888";
 const ISI: &str = "sentinel-isi";
 const DEVICE_VERSION: i64 = 4242;
 
@@ -71,6 +74,8 @@ const PLACEHOLDERS: &[(&str, &str)] = &[
     (DEVICE_CREDENTIAL, "{device_credential}"),
     (ENROLLMENT_SECRET, "{enrollment_secret}"),
     (TESTING_SECRET, "{testing_secret}"),
+    (PERMISSION_ID, "{permission_id}"),
+    (PERMISSION_CODE, "{permission_code}"),
     (ENROLLMENT_ID, "{enrollment_id}"),
     (UPLOAD_ID, "{upload_id}"),
     (FILE_ID, "{file_id}"),
@@ -289,10 +294,6 @@ impl Ctx {
     fn other_silicon(&self) -> silicon_extend_client::Authed<'_> {
         self.client.authed(OTHER_SILICON_TOKEN, Some(TEAM))
     }
-    /// c:bob, who paired the same device as c:alice (`shared_device`).
-    fn other_carbon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(OTHER_CARBON_TOKEN, Some(TEAM))
-    }
 }
 
 struct Op {
@@ -381,6 +382,11 @@ fn ting_registration() -> Value {
            "last_error": "Sign in to Extend for sentinel-team", "missing_types": ["extend.device.wake_requested"]})
 }
 
+fn permissions() -> Value {
+    json!({"items": [{"audience":"briefcase", "endpoint_id":"briefcase.uploads.reserve", "grant_id": PERMISSION_ID,
+        "org_id":TEAM, "actor":{"public_id":"c:alice", "kind":"carbon"}, "expires_at":LATER}]})
+}
+
 fn enrollment_created() -> Value {
     json!({"enrollment_id": ENROLLMENT_ID, "enrollment_secret": ENROLLMENT_SECRET, "pairing_code": PAIRING_CODE,
            "code_expires_at": LATER, "rotates_every_s": 300})
@@ -443,6 +449,41 @@ fn command() -> CommandRequest {
 
 fn ops() -> Vec<Op> {
     vec![
+        op!(
+            "permissions.list",
+            "Authed::permissions",
+            ["permission_grant"],
+            200,
+            "permissions",
+            Some(permissions()),
+            |c| c.carbon().permissions()
+        ),
+        op!(
+            "permissions.start",
+            "Authed::request_permissions",
+            [],
+            200,
+            "permission",
+            Some(json!({"id":PERMISSION_ID,"consent_url":"https://iam.example/obo/consent","expires_at":LATER})),
+            |c| c.carbon().request_permissions(
+                &[silicon_extend_client::PermissionEndpoint {
+                    audience: "briefcase".into(),
+                    endpoint_id: "briefcase.uploads.reserve".into()
+                }],
+                PERMISSION_KEY
+            )
+        ),
+        op!(
+            "permissions.complete",
+            "Authed::complete_permissions",
+            ["permission_request"],
+            200,
+            "permissions",
+            Some(permissions()),
+            |c| c
+                .carbon()
+                .complete_permissions(PERMISSION_ID.parse().unwrap(), PERMISSION_CODE, PERMISSION_KEY)
+        ),
         op!(
             "version.negotiate",
             "Client::connect",
@@ -657,6 +698,28 @@ fn ops() -> Vec<Op> {
             })
         ),
         op!(
+            "devices.importable",
+            "Authed::importable_devices",
+            ["importable_device"],
+            200,
+            "devices",
+            Some(page(
+                json!({"device_id":DEVICE_ID,"name":"Pixel","os":"android","model":null,"host_device_id":null})
+            )),
+            |c| c.carbon().importable_devices(Some(10), None)
+        ),
+        op!(
+            "devices.import",
+            "Authed::import_device",
+            ["importable_device"],
+            200,
+            "device",
+            Some(device()),
+            |c| c
+                .carbon()
+                .import_device(DEVICE_ID, Visibility::Personal, PERMISSION_KEY)
+        ),
+        op!(
             "devices.get",
             "Authed::device",
             ["device"],
@@ -745,11 +808,11 @@ fn ops() -> Vec<Op> {
         op!(
             "devices.stop.device_stopped",
             "Authed::stop",
-            ["shared_device", "session"],
+            ["carried_session"],
             200,
             "device_stopped",
-            Some(json!({"device_id": SHARED_DEVICE_ID, "stopped_at": TS, "in_use_by_other": true})),
-            |c| c.other_carbon().stop(SHARED_DEVICE_ID)
+            Some(json!({"device_id": HOST_ID, "stopped_at": TS, "in_use_by_other": true})),
+            |c| c.carbon().stop(HOST_ID)
         ),
         op!(
             "team.silicons",

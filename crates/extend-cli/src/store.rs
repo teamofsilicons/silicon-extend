@@ -71,7 +71,7 @@ pub fn point_to(new_root: &Path) -> anyhow::Result<()> {
 }
 
 /// The state files and directories, relative to the state directory.
-pub const STATE_ENTRIES: &[&str] = &["auth.json", "config.toml", "test", "sessions"];
+pub const STATE_ENTRIES: &[&str] = &["auth.json", "config.toml", "test", "sessions", "contexts"];
 
 /// Which of [`STATE_ENTRIES`] exist in `root`.
 pub fn state_in(root: &Path) -> Vec<&'static str> {
@@ -223,6 +223,7 @@ pub fn save_test(id: &str, env: &TestEnv) -> anyhow::Result<()> {
 }
 
 pub fn remove_test(id: &str) -> bool {
+    let _ = fs::remove_dir_all(root().join("contexts").join(format!("test-{id}")));
     fs::remove_file(test_path(id)).is_ok()
 }
 
@@ -251,6 +252,19 @@ pub fn load_auth(plane: &Plane) -> Option<Auth> {
 }
 
 pub fn save_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
+    let _lock = Lock::acquire("auth-context");
+    if let Some(auth) = auth {
+        if let Some(previous) = load_auth(plane) {
+            save_context(plane, &previous)?;
+        }
+        save_context(plane, auth)?;
+    } else if let Some(old) = load_auth(plane) {
+        let _ = fs::remove_file(context_path(plane, &old));
+    }
+    save_selected_auth(plane, auth)
+}
+
+fn save_selected_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
     match plane {
         Plane::Production => match auth {
             Some(a) => write_private(&plane.auth_path(), &serde_json::to_vec_pretty(a)?),
@@ -265,6 +279,82 @@ pub fn save_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
             save_test(id, &env)
         }
     }
+}
+
+impl Auth {
+    pub fn same_context(&self, other: &Self) -> bool {
+        self.api_url == other.api_url
+            && self.member_kind == other.member_kind
+            && self.member_id == other.member_id
+            && self.team == other.team
+    }
+}
+
+fn contexts_dir(plane: &Plane) -> PathBuf {
+    let world = match plane {
+        Plane::Production => "production".to_owned(),
+        Plane::Test { id, .. } => format!("test-{id}"),
+    };
+    root().join("contexts").join(world)
+}
+
+fn context_digest(auth: &Auth) -> String {
+    let binding = serde_json::to_string(&(&auth.api_url, &auth.member_kind, &auth.member_id, &auth.team))
+        .expect("serializable identity");
+    extend_protocol::ids::secret_digest(&binding)
+}
+fn context_path(plane: &Plane, auth: &Auth) -> PathBuf {
+    contexts_dir(plane).join(format!("{}.json", context_digest(auth)))
+}
+
+pub fn save_context(plane: &Plane, auth: &Auth) -> anyhow::Result<()> {
+    write_private(&context_path(plane, auth), &serde_json::to_vec_pretty(auth)?)
+}
+
+pub fn load_context(plane: &Plane, original: &Auth) -> Option<Auth> {
+    let saved: Option<Auth> = fs::read(context_path(plane, original))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    saved
+        .filter(|a| a.same_context(original))
+        .or_else(|| load_auth(plane).filter(|a| a.same_context(original)))
+}
+
+/// Refresh an original context without changing a concurrently selected account or organization.
+pub fn save_refreshed_context(plane: &Plane, original: &Auth, auth: &Auth) -> anyhow::Result<bool> {
+    let _lock = Lock::acquire("auth-context");
+    if !load_context(plane, original).is_some_and(|saved| saved.refresh_token == original.refresh_token) {
+        return Ok(false);
+    }
+    save_context(plane, auth)?;
+    if load_auth(plane).is_some_and(|current| current.same_context(auth)) {
+        save_selected_auth(plane, Some(auth))?;
+    }
+    Ok(true)
+}
+
+pub fn remove_context(plane: &Plane, auth: &Auth) -> anyhow::Result<()> {
+    let _lock = Lock::acquire("auth-context");
+    let _ = fs::remove_file(context_path(plane, auth));
+    if load_auth(plane).is_some_and(|selected| selected.same_context(auth)) {
+        save_selected_auth(plane, None)?;
+    }
+    Ok(())
+}
+
+pub fn contexts(plane: &Plane) -> Vec<Auth> {
+    let mut items: Vec<Auth> = fs::read_dir(contexts_dir(plane))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| serde_json::from_slice(&fs::read(e.path()).ok()?).ok())
+        .collect();
+    if let Some(auth) = load_auth(plane) {
+        items.retain(|a| !a.same_context(&auth));
+        items.push(auth);
+    }
+    items.sort_by(|a, b| (&a.member_id, &a.team).cmp(&(&b.member_id, &b.team)));
+    items
 }
 
 /// A simple lock so two CLI processes don't refresh the same token at once. After 10 s the caller
@@ -415,22 +505,25 @@ pub struct SessionCache {
     pub team: Option<String>,
 }
 
-fn sessions_dir(plane: &Plane) -> PathBuf {
+fn sessions_dir(plane: &Plane, auth: Option<&Auth>) -> PathBuf {
+    let base = auth
+        .map(|a| root().join("sessions").join(context_digest(a)))
+        .unwrap_or_else(|| root().join("sessions"));
     match plane {
-        Plane::Production => root().join("sessions"),
-        Plane::Test { id, .. } => root().join("sessions").join(format!("test-{id}")),
+        Plane::Production => base.clone(),
+        Plane::Test { id, .. } => base.join(format!("test-{id}")),
     }
 }
 
-pub fn current_session(plane: &Plane) -> Option<String> {
-    fs::read_to_string(sessions_dir(plane).join("current"))
+pub fn current_session(plane: &Plane, auth: Option<&Auth>) -> Option<String> {
+    fs::read_to_string(sessions_dir(plane, auth).join("current"))
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
 }
 
-pub fn set_current_session(plane: &Plane, id: Option<&str>) -> anyhow::Result<()> {
-    let path = sessions_dir(plane).join("current");
+pub fn set_current_session(plane: &Plane, auth: Option<&Auth>, id: Option<&str>) -> anyhow::Result<()> {
+    let path = sessions_dir(plane, auth).join("current");
     match id {
         Some(id) => write_private(&path, id.as_bytes()),
         None => {
@@ -440,19 +533,19 @@ pub fn set_current_session(plane: &Plane, id: Option<&str>) -> anyhow::Result<()
     }
 }
 
-pub fn save_session_cache(plane: &Plane, c: &SessionCache) -> anyhow::Result<()> {
+pub fn save_session_cache(plane: &Plane, auth: Option<&Auth>, c: &SessionCache) -> anyhow::Result<()> {
     write_private(
-        &sessions_dir(plane).join(format!("{}.json", c.session_id)),
+        &sessions_dir(plane, auth).join(format!("{}.json", c.session_id)),
         &serde_json::to_vec_pretty(c)?,
     )
 }
 
-pub fn load_session_cache(plane: &Plane, id: &str) -> Option<SessionCache> {
-    serde_json::from_slice(&fs::read(sessions_dir(plane).join(format!("{id}.json"))).ok()?).ok()
+pub fn load_session_cache(plane: &Plane, auth: Option<&Auth>, id: &str) -> Option<SessionCache> {
+    serde_json::from_slice(&fs::read(sessions_dir(plane, auth).join(format!("{id}.json"))).ok()?).ok()
 }
 
-pub fn remove_session_cache(plane: &Plane, id: &str) {
-    let _ = fs::remove_file(sessions_dir(plane).join(format!("{id}.json")));
+pub fn remove_session_cache(plane: &Plane, auth: Option<&Auth>, id: &str) {
+    let _ = fs::remove_file(sessions_dir(plane, auth).join(format!("{id}.json")));
 }
 
 #[cfg(test)]

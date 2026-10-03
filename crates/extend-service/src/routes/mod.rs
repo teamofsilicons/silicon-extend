@@ -8,6 +8,7 @@ mod display_files;
 pub mod enroll;
 mod files;
 mod idempotency;
+mod permissions;
 pub use idempotency::idempotent;
 mod ops;
 pub mod sessions;
@@ -44,11 +45,15 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v1/auth/refresh", post(auth::refresh))
         .route("/api/v1/auth/logout", post(auth::logout))
         .route("/api/v1/auth/me", get(auth::me))
+        .route("/api/v1/permissions", get(permissions::list).post(permissions::start))
+        .route("/api/v1/permissions/{id}/complete", post(permissions::complete))
         .route("/api/v1/enrollments", post(enroll::create))
         .route("/api/v1/enrollments/{enrollment_id}", get(enroll::get).delete(enroll::discard))
         .route("/api/v1/enrollments/{enrollment_id}/connect", get(enroll::socket))
         .route("/api/v1/pairings", post(devices::claim))
         .route("/api/v1/devices", get(devices::list))
+        .route("/api/v1/devices/importable", get(crate::organizations::importable))
+        .route("/api/v1/devices/{device_id}/import", post(crate::organizations::import))
         .route("/api/v1/devices/{device_id}", get(devices::get).patch(devices::update).delete(devices::remove))
         .route("/api/v1/devices/{device_id}/stop", post(devices::stop))
         .route("/api/v1/devices/{device_id}/attachments", post(devices::attach))

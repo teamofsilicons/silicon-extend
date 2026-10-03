@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { Marked } from "marked";
 import { errorTable, normalizeCommand } from "./docs-model.mjs";
+import { applyOrganizationReference } from "./org-docs.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..", "understanding");
@@ -44,6 +45,8 @@ for (const line of lines) {
   if (usage && group) group.usages.push(usage[1].replace(/^'|'$/g, ""));
 }
 
+applyOrganizationReference(cli, groups);
+
 const commands = (list, device) => (list ?? []).map((c) => normalizeCommand(c, device));
 
 const allCommands = [...commands(cli.commands, false), ...commands(cli.device_commands, true)];
@@ -78,14 +81,16 @@ const marked = new Marked({
     },
   },
 });
-const technicalHtml = marked.parse(technical);
+const currentContract = join(root, "..", "docs", "ORGANIZATION_DEVICES.md");
+const current = existsSync(currentContract) ? readFileSync(currentContract, "utf8").split("## Migration and deployment")[0] : "";
+const technicalHtml = marked.parse(current + "\n## Historical technical baseline\n\nThe following 1.1 design is retained as historical reference. The organization contract above supersedes its visibility, authority, import and removal behavior.\n\n" + technical);
 
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(
   out,
   JSON.stringify(
     {
-      generated_from: ["understanding/cli.yaml", "understanding/TECHNICAL.md"],
+      generated_from: ["understanding/cli.yaml", "understanding/TECHNICAL.md", "docs/ORGANIZATION_DEVICES.md", "web/scripts/org-docs.mjs"],
       cli: {
         name: cli.name,
         summary: cli.summary,

@@ -83,7 +83,27 @@ async fn host_app_can_only_change_a_device_carried_by_its_authenticated_pair() {
     let (s, body) = api(&env, "DELETE", &format!("/api/v1/devices/{ipad}"), &alice, None, None).await;
     assert_eq!(s, 204, "{body}");
     let (s, _) = device_patch_path(&env, &credential, &path, banner("shown")).await;
-    assert_eq!(s, 404, "removed carried devices stay removed");
+    assert_eq!(s, 200, "an organization removal retains native device configuration");
+    let actor = env
+        .state
+        .iam
+        .authorize(&alice, Some("acme"), None)
+        .await
+        .unwrap()
+        .member;
+    extend_service::domain::unpair(
+        &env.state,
+        &extend_service::db::World::production(),
+        ipad,
+        extend_protocol::model::EndReason::PairRevoked,
+        &actor,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        device_patch_path(&env, &credential, &path, banner("shown")).await.0,
+        404
+    );
 }
 
 fn banner(value: &str) -> Value {
@@ -355,6 +375,7 @@ async fn a_conditional_settings_patch_is_atomic() {
         reqwest::Client::new()
             .patch(format!("{}/api/v1/devices/{d}", env.base))
             .bearer_auth(&alice)
+            .header("x-org-id", "acme")
             .header("if-match", format!("\"{version}\""))
             .json(&json!({"type":"device","data":{"name":name,"in_use_indicator":indicator}}))
             .send()

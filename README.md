@@ -40,7 +40,9 @@ extend session end
 
 A Carbon pairs devices on [extend.teamofsilicons.com](https://extend.teamofsilicons.com) or with
 `extend device pair <code> --name <name> --access si:chef`. `extend --help` is a tree of
-documentation; every node explains itself. More: [docs/cli.md](docs/cli.md).
+documentation; every node explains itself. More: [docs/cli.md](docs/cli.md). Briefcase storage and Ting notifications use
+[separate feature permissions](docs/FEATURE_PERMISSIONS.md); deployment requirements
+are in the [OBO cutover guide](docs/OBO_CUTOVER.md).
 
 ## What's here
 

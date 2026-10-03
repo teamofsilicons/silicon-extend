@@ -55,6 +55,7 @@ export function tingToCarbon(r: Pick<WakeRequest, "ting">): string | null {
  */
 export function WakeBanner(props: { device: DeviceDetail; requests: WakeRequest[]; onChanged: () => void }) {
   const s = session();
+  const client = s.client();
   const [busy, setBusy] = createSignal<string | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const d = () => props.device;
@@ -83,23 +84,23 @@ export function WakeBanner(props: { device: DeviceDetail; requests: WakeRequest[
 
   const woken = () =>
     act("woken", async () => {
-      await s.client().answerWake(d().device_id, "woken");
+      await client.answerWake(d().device_id, "woken");
       return `Told every Silicon that asked: ${d().name} is awake`;
     });
   const decline = (ids?: string[]) =>
     act(ids?.length ? `decline:${ids[0]}` : "decline", async () => {
-      const answered = await s.client().answerWake(d().device_id, "declined", ids);
+      const answered = await client.answerWake(d().device_id, "declined", ids);
       const who = [...new Set(answered.ended.map((r) => r.from))];
       return who.length ? `Declined: ${who.join(", ")} ${who.length === 1 ? "was" : "were"} told` : "Declined";
     });
   const muteDevice = () =>
     act("mute", async () => {
-      await s.client().setWakeSettings(d().device_id, { muted: true });
+      await client.setWakeSettings(d().device_id, { muted: true });
       return `Wake requests for ${d().name} are off. Turn them back on under Pairing.`;
     });
   const muteSilicon = (r: WakeRequest) =>
     act(`mute:${r.wake_id}`, async () => {
-      await s.client().setWakeSettings(d().device_id, { muted: true, silicon_id: r.from, team: r.team });
+      await client.setWakeSettings(d().device_id, { muted: true, silicon_id: r.from, team: r.team });
       return `${r.from} can't ask you to wake ${d().name} any more (in ${r.team})`;
     });
 

@@ -26,3 +26,12 @@ let devices = me.devices(DeviceQuery::default()).await?;
 The full guide is [docs/client.md](https://github.com/teamofsilicons/silicon-extend/blob/main/docs/client.md),
 and the HTTP contract is [api.yaml](https://github.com/teamofsilicons/silicon-extend/blob/main/understanding/api.yaml).
 MIT licensed.
+
+With IAM 5, keep a distinct token pair for each account and organization and bind `Authed` to the
+organization returned by that login. Refresh and retry within the original context. An organization
+header cannot expand the token's permissions. Production and testing credentials stay separate.
+
+`Authed::importable_devices` lists the caller's configured devices outside the selected organization.
+`Authed::import_device(id, Visibility::Personal, key)` imports one privately with a stable UUID operation
+key. `Visibility::Team` enables organization discovery, while control still requires an owner grant.
+Deleting a device removes its selected organization binding, preserving its physical setup.

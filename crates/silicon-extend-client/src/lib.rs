@@ -27,9 +27,37 @@ use extend_protocol::{
     TESTING_SECRET_HEADER,
 };
 use reqwest::{Method, StatusCode};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// One separately approved feature endpoint.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PermissionEndpoint {
+    pub audience: String,
+    pub endpoint_id: String,
+}
+/// Provider context approved for a feature; credentials remain in Extend.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturePermission {
+    pub audience: String,
+    pub endpoint_id: String,
+    pub grant_id: Uuid,
+    pub org_id: String,
+    pub actor: serde_json::Value,
+    pub expires_at: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturePermissions {
+    pub items: Vec<FeaturePermission>,
+}
+/// Open this review URL, then redeem the single-use approval code with its id.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturePermissionRequest {
+    pub id: Uuid,
+    pub consent_url: String,
+    pub expires_at: String,
+}
 
 /// Versions of the API this crate speaks.
 pub const SUPPORTED_API_VERSIONS: &[u32] = &[API_VERSION];
@@ -451,15 +479,23 @@ impl Client {
 /// Filters for listing devices.
 #[derive(Debug, Clone, Default)]
 pub struct DeviceQuery {
-    /// `mine` (Carbons: every device they paired, whatever the Team) or `accessible` (Silicons:
-    /// the devices they were given access to in their Team). Default depends on the member. `team`
-    /// is deprecated: from 1.1 a device is only visible to the Carbons who paired it, so it always
-    /// lists nothing.
+    /// `mine` (owned devices in this organization), `team` (organization-visible devices), or
+    /// `accessible` (devices a Silicon has explicit access to). Private devices are owner-only.
     pub scope: Option<String>,
     pub online: Option<bool>,
     pub os: Option<String>,
     pub limit: Option<u32>,
     pub cursor: Option<String>,
+}
+
+/// An owned physical device available to import; other organizations are not disclosed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportableDevice {
+    pub device_id: String,
+    pub name: String,
+    pub os: extend_protocol::DeviceOs,
+    pub model: Option<String>,
+    pub host_device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -516,9 +552,8 @@ pub enum StopOutcome {
 
 /// Calls made as a signed-in member.
 ///
-/// The Team (`X-Org-ID`) is the Silicon's Team for everything a Silicon does. A Carbon's calls on
-/// their own devices work in every Team, so the Team may be left out; it is still the Team a
-/// [`Authed::grant`] gives access in.
+/// The organization (`X-Org-ID`) must match this account's IAM application session. Requests,
+/// devices and delegated permissions remain bound to that context.
 #[derive(Debug, Clone, Copy)]
 pub struct Authed<'a> {
     c: &'a Client,
@@ -584,6 +619,28 @@ impl Authed<'_> {
 
     pub async fn device(&self, id: &str) -> Result<Device> {
         self.get(&format!("/api/v1/devices/{id}")).await
+    }
+
+    /// Owned configured devices that can be imported into the current organization.
+    pub async fn importable_devices(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> Result<Page<ImportableDevice>> {
+        self.get(&format!(
+            "/api/v1/devices/importable{}",
+            qs(&[("limit", limit.map(|v| v.to_string())), ("cursor", cursor)])
+        ))
+        .await
+    }
+
+    /// Add an owned device to this organization. Reuse `idempotency_key` after an uncertain result.
+    pub async fn import_device(&self, id: &str, visibility: Visibility, idempotency_key: &str) -> Result<Device> {
+        let request = self
+            .req(Method::POST, &format!("/api/v1/devices/{id}/import"))
+            .header("Idempotency-Key", idempotency_key)
+            .json(&env("device_import", serde_json::json!({"visibility": visibility})));
+        decode(self.c.send(request).await?).await
     }
 
     pub async fn pair(&self, claim: &PairingClaim) -> Result<Device> {
@@ -900,6 +957,49 @@ impl Authed<'_> {
                         &format!("/api/v1/ting-registration{}", qs(&[("team", Some(team.to_owned()))])),
                     )
                     .json(&env("ting_registration", serde_json::json!({}))),
+                )
+                .await?,
+        )
+        .await
+    }
+
+    /// Lists feature permissions for the current account, organization and environment.
+    pub async fn permissions(&self) -> Result<FeaturePermissions> {
+        self.get("/api/v1/permissions").await
+    }
+
+    /// Starts a separate approval without running the feature. Reuse the key on retry.
+    pub async fn request_permissions(
+        &self,
+        endpoints: &[PermissionEndpoint],
+        idempotency_key: &str,
+    ) -> Result<FeaturePermissionRequest> {
+        Uuid::parse_str(idempotency_key).map_err(|_| Error::Invalid("idempotency key must be a UUID".into()))?;
+        decode(
+            self.c
+                .send(
+                    self.req(Method::POST, "/api/v1/permissions")
+                        .header("Idempotency-Key", idempotency_key)
+                        .json(&env("permission", serde_json::json!({"endpoints":endpoints}))),
+                )
+                .await?,
+        )
+        .await
+    }
+    /// Saves explicitly approved credentials on the server. The same key safely retries this code.
+    pub async fn complete_permissions(
+        &self,
+        id: Uuid,
+        code: &str,
+        idempotency_key: &str,
+    ) -> Result<FeaturePermissions> {
+        Uuid::parse_str(idempotency_key).map_err(|_| Error::Invalid("idempotency key must be a UUID".into()))?;
+        decode(
+            self.c
+                .send(
+                    self.req(Method::POST, &format!("/api/v1/permissions/{id}/complete"))
+                        .header("Idempotency-Key", idempotency_key)
+                        .json(&env("permission", serde_json::json!({"code":code}))),
                 )
                 .await?,
         )

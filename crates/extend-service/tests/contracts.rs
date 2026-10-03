@@ -15,6 +15,9 @@
 //! Needs a PostgreSQL the tests can create databases on:
 //! `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+#[path = "common/permissions.rs"]
+mod permission_fixture;
+
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -70,6 +73,7 @@ fn config(database_url: String, addr: SocketAddr, device_app_min: &str) -> Confi
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir: std::env::temp_dir().join(format!("extend_contracts_{}", Uuid::new_v4().simple())),
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
@@ -104,7 +108,9 @@ impl Svc {
         let url = database().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
+        let mut state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
+        let iam = permission_fixture::decorate(state.iam.clone(), state.pool.clone()).await;
+        Arc::get_mut(&mut state).unwrap().iam = iam;
         let pool = state.pool.clone();
         let versions = Registry::start_with_clock(pool.clone(), policy, clock).await.unwrap();
         tokio::spawn(extend_service::serve_versioned(listener, state, versions.clone()));
@@ -202,7 +208,7 @@ fn tomorrow_midnight(t: OffsetDateTime) -> OffsetDateTime {
 // ───────────── Versioning 6: the compatibility matrix ─────────────
 
 #[tokio::test]
-async fn the_default_matrix_keeps_api_one_for_client_and_cli_two() {
+async fn the_default_matrix_keeps_api_one_for_client_and_cli_three() {
     let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
     let client = Client::connect(&svc.base).await.unwrap();
     assert_eq!(client.api_version(), 1);
@@ -211,7 +217,7 @@ async fn the_default_matrix_keeps_api_one_for_client_and_cli_two() {
     assert_eq!(matrix["current"], 1);
     assert_eq!(
         matrix["versions"][0]["compatible"],
-        json!({"client_crate": ">=1.0.0, <3.0.0", "cli": ">=1.0.0, <3.0.0", "device_app_min": "1.0.0"})
+        json!({"client_crate": ">=1.0.0, <4.0.0", "cli": ">=1.0.0, <4.0.0", "device_app_min": "1.0.0"})
     );
 }
 
@@ -235,7 +241,7 @@ async fn the_matrix_is_built_from_state_and_configuration() {
     assert!(v1["deprecated_at"].is_null() && v1["sunset_at"].is_null() && v1["sunset_earliest_at"].is_null());
     assert_eq!(
         v1["compatible"],
-        json!({"client_crate": ">=1.0.0, <3.0.0", "cli": ">=1.2.0, <2.0.0", "device_app_min": "1.4.0"})
+        json!({"client_crate": ">=1.0.0, <4.0.0", "cli": ">=1.2.0, <2.0.0", "device_app_min": "1.4.0"})
     );
 
     // The app minimum the matrix states is the one enrollment enforces.
@@ -595,14 +601,18 @@ fn load(dir: &Path) -> Vec<(String, Value)> {
 /// Provider states a fixture can name in `given`, and the placeholders they fill.
 const STATES: &[(&str, &[&str])] = &[
     ("refresh_token", &["refresh_token"]),
+    ("permission_request", &["permission_id", "permission_code"]),
+    ("permission_grant", &[]),
     ("enrollment", &["enrollment_id", "enrollment_secret", "pairing_code"]),
     ("device", &["device_id", "device_credential", "device_version"]),
+    ("importable_device", &["device_id"]),
     ("session", &["session_id"]),
     ("takeover", &[]),
     ("file", &["file_id"]),
     ("upload", &["upload_id"]),
     ("host", &["host_id"]),
     ("attached", &["attached_id"]),
+    ("carried_session", &["session_id"]),
     ("test_environment", &["testing_secret"]),
     (
         "honeycomb_environment",
@@ -628,9 +638,11 @@ const STATES: &[(&str, &[&str])] = &[
 /// States a state sets up first.
 fn implies(state: &str) -> &'static [&'static str] {
     match state {
+        "permission_grant" => &["permission_request"],
         "session" | "upload" | "shared_device" | "wake_request" => &["device"],
         "takeover" | "file" => &["session"],
         "attached" | "shared_computer" => &["host"],
+        "carried_session" => &["attached"],
         _ => &[],
     }
 }
@@ -870,7 +882,7 @@ async fn pair_another(
         .pair(&PairingClaim {
             pairing_code: data["pairing_code"].as_str().unwrap_or_default().into(),
             name: name.into(),
-            visibility: None,
+            visibility: Some(extend_protocol::model::Visibility::Team),
             pair_ttl_days: None,
             silicon_ids: vec!["si:chef".into()],
         })
@@ -939,7 +951,7 @@ async fn pair(client: &Client, carbon_token: &str, os: DeviceOs, silicons: &[&st
         .pair(&PairingClaim {
             pairing_code: e.pairing_code,
             name: format!("Contract {}", os.as_str()),
-            visibility: None,
+            visibility: Some(extend_protocol::model::Visibility::Team),
             pair_ttl_days: None,
             silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
         })
@@ -1095,6 +1107,33 @@ impl<'a> Provider<'a> {
             }
             let base = self.svc.base.clone();
             match state {
+                "permission_request" => {
+                    let response = self
+                        .carbon()
+                        .request_permissions(
+                            &[silicon_extend_client::PermissionEndpoint {
+                                audience: "briefcase".into(),
+                                endpoint_id: "briefcase.uploads.reserve".into(),
+                            }],
+                            &Uuid::new_v4().to_string(),
+                        )
+                        .await
+                        .unwrap();
+                    self.vars.insert("permission_id".into(), response.id.to_string());
+                    self.vars
+                        .insert("permission_code".into(), "obc_sentinel-permission-code".into());
+                }
+                "permission_grant" => {
+                    self.given("permission_request").await;
+                    self.carbon()
+                        .complete_permissions(
+                            self.var("permission_id").parse().unwrap(),
+                            &self.var("permission_code"),
+                            &Uuid::new_v4().to_string(),
+                        )
+                        .await
+                        .unwrap();
+                }
                 "refresh_token" => {
                     let s = self.client.login("c:alice").await.unwrap();
                     self.vars.insert("refresh_token".into(), s.refresh_token);
@@ -1114,6 +1153,10 @@ impl<'a> Provider<'a> {
                     self.vars.insert("enrollment_id".into(), e.enrollment_id.to_string());
                     self.vars.insert("enrollment_secret".into(), e.enrollment_secret);
                     self.vars.insert("pairing_code".into(), e.pairing_code);
+                }
+                "importable_device" => {
+                    self.given("device").await;
+                    self.carbon().remove_device(&self.var("device_id"), None).await.unwrap();
                 }
                 "device" => {
                     let d = pair(
@@ -1301,7 +1344,7 @@ impl<'a> Provider<'a> {
                             &AttachmentCreate {
                                 os: DeviceOs::Tvos,
                                 name: "Living room".into(),
-                                visibility: None,
+                                visibility: Some(extend_protocol::model::Visibility::Team),
                                 pair_ttl_days: None,
                                 address: None,
                             },
@@ -1309,6 +1352,18 @@ impl<'a> Provider<'a> {
                         .await
                         .unwrap();
                     self.vars.insert("attached_id".into(), d.device_id.to_string());
+                }
+                "carried_session" => {
+                    self.given("attached").await;
+                    let id = self.var("attached_id");
+                    self.carbon().grant(&id, "si:chef").await.unwrap();
+                    let report = json!({"type":"attached", "device_id":id, "online":true,
+                        "capabilities":["input.remote", "nav.system"], "missing":[],
+                        "setup":{"state":"complete", "steps":[]}});
+                    self.inject[&self.var("host_id")].send(report.clone()).unwrap();
+                    wait_for_device_report(self.carbon(), &id, &report).await.unwrap();
+                    let session = self.silicon().start_session(&id.parse().unwrap()).await.unwrap();
+                    self.vars.insert("session_id".into(), session.session_id.to_string());
                 }
                 "test_environment" => {
                     let env = Uuid::new_v4();
@@ -1494,6 +1549,27 @@ async fn replay_http(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     let resp = r.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    // IAM5 deliberately closes the released cross-owner website-stop behavior. Replay the
+    // original request unchanged, assert its safe refusal, and prove the holder stays active.
+    if f["operation"] == "devices.stop.device_stopped"
+        && f["given"]
+            .as_array()
+            .is_some_and(|g| g.iter().any(|v| v == "shared_device"))
+    {
+        let body: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if status.as_u16() != 409 || body["data"]["code"] != "device_not_in_use" {
+            return Err(format!("legacy cross-owner stop must be refused: {status} {body}"));
+        }
+        let session = p
+            .silicon()
+            .session(&p.var("session_id"))
+            .await
+            .map_err(|e| e.to_string())?;
+        if session.state != SessionState::Active || body["data"]["details"].get("session_id").is_some() {
+            return Err("refused cross-owner stop changed or disclosed the active holder".into());
+        }
+        return Ok(());
+    }
     if !status.is_success() {
         return Err(format!(
             "{method} {path} was refused with {status}: {}",
@@ -1520,7 +1596,7 @@ async fn device_enrollment_effect(p: &mut Provider<'_>, bytes: &[u8]) -> Result<
         .pair(&PairingClaim {
             pairing_code: data["pairing_code"].as_str().unwrap_or_default().into(),
             name: "Contract, bob's".into(),
-            visibility: None,
+            visibility: Some(extend_protocol::model::Visibility::Team),
             pair_ttl_days: None,
             silicon_ids: vec![],
         })
@@ -1612,7 +1688,7 @@ async fn replay_enrollment_socket(p: &mut Provider<'_>, f: &Value) -> Result<(),
         .pair(&PairingClaim {
             pairing_code: p.var("pairing_code"),
             name: "Contract".into(),
-            visibility: None,
+            visibility: Some(extend_protocol::model::Visibility::Team),
             pair_ttl_days: None,
             silicon_ids: vec![],
         })
@@ -1862,7 +1938,7 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                         &AttachmentCreate {
                             os: DeviceOs::Tvos,
                             name: "Living room".into(),
-                            visibility: None,
+                            visibility: Some(extend_protocol::model::Visibility::Team),
                             pair_ttl_days: None,
                             address: None,
                         },

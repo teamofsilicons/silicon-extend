@@ -163,6 +163,7 @@ async fn briefcase_and_ting_through_real_obo() {
         .store(
             &chef,
             NewFile {
+                operation_id: uuid::Uuid::new_v4(),
                 name: "real-services.txt",
                 content_type: "text/plain",
                 bytes: text.clone(),
@@ -176,6 +177,7 @@ async fn briefcase_and_ting_through_real_obo() {
         .store(
             &chef,
             NewFile {
+                operation_id: uuid::Uuid::new_v4(),
                 name: "real-services.txt",
                 content_type: "text/plain",
                 bytes: b"second".to_vec(),

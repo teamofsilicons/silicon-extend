@@ -129,7 +129,9 @@ async fn on_refused(state: &Shared, parts: &mut Parts, err: AppError) -> AppErro
         };
         left_team(state, &world, sel.as_ref(), silicon.id(), &team, err).await
     } else {
-        logged_out_later(state, world, sel, silicon.id().to_owned(), token).await;
+        if let Some(org) = silicon.team {
+            logged_out_later(state, world, sel, silicon.member.id, token, org).await;
+        }
         err
     }
 }
@@ -200,19 +202,26 @@ async fn left_team(
 /// IAM refused the Silicon's access token. Checks back after [`LOGOUT_GRACE`]: if the Silicon has
 /// not used a live login since (a refresh after an ordinary expiry would have), it logged out, and
 /// its running sessions end.
-async fn logged_out_later(state: &Shared, world: World, sel: Option<TestingSelection>, silicon: String, token: String) {
-    if running_sessions(state, &world, &silicon, None).await.is_empty() {
+async fn logged_out_later(
+    state: &Shared,
+    world: World,
+    sel: Option<TestingSelection>,
+    silicon: String,
+    token: String,
+    org: String,
+) {
+    if running_sessions(state, &world, &silicon, Some(&org)).await.is_empty() {
         return;
     }
     // One pending check per Silicon and world.
-    let key = format!("logout-check:{}:{silicon}", world.schema);
+    let key = format!("logout-check:{}:{silicon}:{org}", world.schema);
     if state.rate_limit(key, 1, LOGOUT_GRACE, "logout checks").await.is_err() {
         return;
     }
     let state = state.clone();
     tokio::spawn(async move {
         tokio::time::sleep(LOGOUT_GRACE).await;
-        match has_live_login(&state, &world, sel.as_ref(), &silicon, &token).await {
+        match has_live_login(&state, &world, sel.as_ref(), &silicon, &token, &org).await {
             Some(false) => {}
             Some(true) => return,
             None => {
@@ -220,7 +229,7 @@ async fn logged_out_later(state: &Shared, world: World, sel: Option<TestingSelec
                 return;
             }
         }
-        for sid in running_sessions(&state, &world, &silicon, None).await {
+        for sid in running_sessions(&state, &world, &silicon, Some(&org)).await {
             match domain::end_session(
                 &state,
                 &world,
@@ -248,23 +257,31 @@ async fn has_live_login(
     sel: Option<&TestingSelection>,
     silicon: &str,
     refused: &str,
+    org: &str,
 ) -> Option<bool> {
     let mut tokens: Vec<String> = Vec::new();
     if let Some(p) = state
         .auth_cache
-        .latest(world.environment_id, |p| p.id() == silicon && p.token != refused)
+        .latest(world.environment_id, |p| {
+            p.id() == silicon && p.team.as_deref() == Some(org) && p.token != refused
+        })
         .await
     {
         tokens.push(p.token);
     }
     for ((schema, _), (p, _)) in state.session_principals.read().await.iter() {
-        if schema == &world.schema && p.id() == silicon && p.token != refused && !tokens.contains(&p.token) {
+        if schema == &world.schema
+            && p.id() == silicon
+            && p.team.as_deref() == Some(org)
+            && p.token != refused
+            && !tokens.contains(&p.token)
+        {
             tokens.push(p.token.clone());
         }
     }
     let mut unsure = false;
     for token in tokens {
-        match state.iam.authorize(&token, None, sel).await {
+        match state.iam.authorize(&token, Some(org), sel).await {
             Ok(_) => return Some(true),
             Err(e)
                 if matches!(
@@ -281,7 +298,8 @@ async fn has_live_login(
 /// only when it is on the caller's side (same Team, given access through the same pair) or is the
 /// caller itself; otherwise nothing about it is said.
 pub fn in_use_error(d: &domain::DeviceRow, team: &str, me: &str) -> AppError {
-    let same_side = d.in_use_silicon.as_deref() == Some(me) || (d.held_here() && d.held_by_side(team));
+    let same_side = d.in_use_team.as_deref() == Some(team)
+        && (d.in_use_silicon.as_deref() == Some(me) || (d.held_here() && d.held_by_side(team)));
     let hint = format!(
         "Ask for it with: extend --team {team} request send {} --reason \"<why, up to 300 characters>\"",
         d.device_id
@@ -476,8 +494,9 @@ pub async fn start(
         let group = domain::lock_group(&mut *tx, &world, d.instance_id).await?;
         domain::lock_instances(&mut tx, &world, &group.members).await?;
         let granted: Option<(i32,)> = sqlx::query_as(sql!(
-            "SELECT 1 FROM {} WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
-            world.t("device_access")
+            "SELECT 1 FROM {} a JOIN {} o ON o.device_id = a.device_id AND o.org_id = a.team
+             WHERE a.device_id = $1 AND a.team = $2 AND a.silicon_id = $3 AND o.visibility = 'team' AND o.removed_at IS NULL",
+            world.t("device_access"), world.t("device_organizations")
         ))
         .bind(&device_id)
         .bind(&team)
@@ -649,19 +668,19 @@ pub async fn list(
 ) -> AppResult<Response> {
     // A Silicon sees its own sessions in the Team it acts in; a Carbon, the sessions through
     // their pairs in every Team.
-    let team = if auth.p.is_silicon() {
-        Some(auth.team()?.to_owned())
-    } else {
-        None
-    };
+    let team = Some(auth.team()?.to_owned());
     let lim = limit(q.limit)?;
     let before = q.cursor.as_deref().map(decode_cursor).transpose()?;
     let who = if auth.p.is_silicon() {
-        "s.silicon_id = $2".to_owned()
+        format!(
+            "s.silicon_id = $2 AND EXISTS (SELECT 1 FROM {} o WHERE o.device_id = s.device_id AND o.org_id = $1 AND o.visibility = 'team' AND o.removed_at IS NULL)",
+            auth.world.t("device_organizations")
+        )
     } else {
         format!(
-            "EXISTS (SELECT 1 FROM {} d WHERE d.device_id = s.device_id AND d.owner_id = $2)",
-            auth.world.t("devices")
+            "EXISTS (SELECT 1 FROM {} d JOIN {} o ON o.device_id = d.device_id WHERE d.device_id = s.device_id AND d.owner_id = $2 AND o.org_id = $1 AND o.removed_at IS NULL)",
+            auth.world.t("devices"),
+            auth.world.t("device_organizations")
         )
     };
     let state_filter = match q.state.as_deref() {
@@ -722,10 +741,18 @@ async fn visible_session(
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(not_found)?;
-    // Its Silicon, in the Team it runs in; or the Carbon whose pair it runs through, in any Team.
+    // Its Silicon or configuring Carbon, always within the session's organization.
     let mine = auth.p.is_silicon() && s.silicon_id == auth.p.id() && auth.p.team.as_deref() == Some(s.team.as_str());
-    let owner = d.is_owner(&auth.p);
-    if !(mine || owner) {
+    let owner = d.is_owner(&auth.p) && auth.p.team.as_deref() == Some(s.team.as_str());
+    let allowed = if owner {
+        // An owner keeps the same organization's historical activity/session links after unbinding.
+        crate::organizations::visibility(state, &auth.world, &d.device_id, &s.team, true)
+            .await?
+            .is_some()
+    } else {
+        mine && domain::access_of(state, &auth.world, &d, &auth.p).await? == Some(Access::Silicon)
+    };
+    if !allowed {
         return Err(not_found());
     }
     Ok((s, d))
@@ -1377,6 +1404,7 @@ pub async fn command(
             .store(
                 &auth.p,
                 NewFile {
+                    operation_id: f.upload_id,
                     name: &f.name,
                     content_type: &f.content_type,
                     bytes,

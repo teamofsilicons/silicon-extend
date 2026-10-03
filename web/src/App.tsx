@@ -1,7 +1,7 @@
 import { createEffect, createSignal, For, Match, on, onMount, Show, Switch, type JSX } from "solid-js";
 import { BookOpen, ChevronDown, FlaskConical, LogIn, Plus, Search, Settings as SettingsIcon, Smartphone } from "lucide-solid";
 import { Link, match, navigate, useLocation } from "./lib/router";
-import { session } from "./lib/session";
+import { contextId, session } from "./lib/session";
 import { toApiError, type ApiError } from "./lib/api";
 import { ErrorNote, MemberTag, Toasts } from "./components/ui";
 import { ExtendMark } from "./components/ExtendMark";
@@ -32,15 +32,16 @@ export default function App() {
     }
   });
 
-  // Keep the team list live (IAM is the authority) whenever the signed-in member or world changes.
+  // Verify the selected organization without letting an older request affect a newly selected login.
   createEffect(
     on(
-      () => [s.pair()?.member.id, s.world()] as const,
-      async ([memberId]) => {
-        if (!memberId) return;
+      () => [s.contextKey(), s.world()] as const,
+      async ([contextKey]) => {
+        if (!contextKey) return;
+        const client = s.client();
         try {
-          const me = await s.client().me();
-          s.updateTeams(me.teams);
+          const me = await client.me();
+          if (s.contextKey() === contextKey) s.updateTeams(me.teams);
         } catch {
           /* a 401 has already signed the tab out; anything else shows on the page that needs it */
         }
@@ -79,7 +80,7 @@ export default function App() {
         />
       }
     >
-      {page()}
+      <Show when={s.contextKey()} keyed>{(_context) => page()}</Show>
     </Show>
   );
 
@@ -217,7 +218,7 @@ export default function App() {
             </Match>
             <Match when={devicesRoute()}>{guarded(() => <Devices selected={deviceParams()?.id ?? null} />)}</Match>
             <Match when={path() === "/settings"}>
-              <Settings />
+              <Show when={s.contextKey()} keyed>{(_context) => <Settings />}</Show>
             </Match>
             <Match when={path() === "/docs"}>
               <Docs page="start" />
@@ -247,28 +248,17 @@ function RailLink(props: { href: string; label: string; short: string; active: b
   );
 }
 
-/**
- * The Team menu. Since 1.1 it doesn't filter a Carbon's devices (they belong to the Carbon): it is the
- * default Team for new grants, and a Silicon's Team.
- */
+/** Every choice restores its own account and organization credentials. */
 function TeamPicker() {
   const s = session();
-  return (
-    <label
-      class={`team-picker ${s.teams().length < 2 ? "single" : ""}`}
-      title={s.member()?.type === "silicon" ? "The Team you use devices in" : "Your default Team for giving Silicons access. Your device list shows every device you paired, whichever Team is selected."}
-    >
-      <span class="visually-hidden">Team</span>
-      <select value={s.team() ?? ""} data-testid="team-picker" disabled={s.teams().length < 2} onChange={(e) => s.setTeam(e.currentTarget.value)}>
-        {s.teams().map((t) => (
-          <option value={t}>{t}</option>
-        ))}
+  return <div class="team-picker" title="Account and organization">
+    <label><span class="visually-hidden">Account and organization</span>
+      <select value={s.pair()?(contextId(s.pair()!) ?? ""):""} data-testid="team-picker" onChange={e=>{s.selectContext(e.currentTarget.value);navigate("/devices");}}>
+        <For each={s.contexts()}>{p=><option value={contextId(p)!}>{p.member.display_name || p.member.id} · {p.teams[0]}</option>}</For>
       </select>
-      <Show when={s.teams().length > 1}>
-        <ChevronDown size={11} aria-hidden="true" />
-      </Show>
     </label>
-  );
+    <Link href="/sign-in" class="icon-button" aria-label="Add account or organization" title="Add account or organization"><Plus size={14}/></Link>
+  </div>;
 }
 
 function TestingBanner(props: { error: ApiError | null }) {

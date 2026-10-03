@@ -57,6 +57,7 @@ async fn start() -> Env {
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir: data,
         iam: IamMode::Local,
+        delegation_key: None,
         iam_public_url: format!("{base}/dev/iam"),
         iam_login_url: format!("{base}/dev/iam/login"),
         webhook_secret: None,
@@ -146,7 +147,11 @@ impl Device {
         let claim = PairingClaim {
             pairing_code: pairing_code.to_lowercase(),
             name: format!("{} device", os.as_str()),
-            visibility: None,
+            visibility: Some(if silicons.is_empty() {
+                Visibility::Personal
+            } else {
+                Visibility::Team
+            }),
             pair_ttl_days: None,
             silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
         };
@@ -288,6 +293,7 @@ async fn pairing_sessions_commands_and_files() {
 
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef", "si:sous"], None).await;
     let id = device.id.clone();
+    let credential = device.credential.clone();
     let seen = device.serve(env.base.clone());
 
     // Silicon sees it, online, with the commands Android allows.
@@ -412,7 +418,8 @@ async fn pairing_sessions_commands_and_files() {
         .session_id
         .to_string();
     a.revoke(&id, "si:sous").await.unwrap();
-    let ended = s.session(&s2).await.unwrap();
+    assert_eq!(code_of(s.session(&s2).await), ErrorCode::SessionNotFound);
+    let ended = a.session(&s2).await.unwrap();
     assert_eq!(ended.end_reason, Some(EndReason::AccessRemoved));
 
     // Idle timeout (the scheduler honours idle_ends_at).
@@ -451,8 +458,10 @@ async fn pairing_sessions_commands_and_files() {
         Some(EndReason::SiliconLoggedOut | EndReason::AccessRemoved)
     ));
 
-    // The device saw sessions start and end.
+    // Organization removal keeps native credentials; native revoke finishes the physical pair.
     a.remove_device(&id, None).await.unwrap();
+    assert!(env.client.device_self(&credential).await.is_ok());
+    env.client.revoke_pair(&credential).await.unwrap();
     let frames = seen.await.unwrap();
     assert!(frames.iter().any(|f| matches!(f, ServiceFrame::SessionStarted { .. })));
     assert!(frames.iter().any(|f| matches!(
@@ -466,11 +475,11 @@ async fn pairing_sessions_commands_and_files() {
     assert!(matches!(
         frames.last(),
         Some(ServiceFrame::Unpaired {
-            reason: EndReason::DeviceRemoved
+            reason: EndReason::PairRevoked
         })
     ));
     // The credential no longer works.
-    assert!(env.client.device_self("edc_").await.is_err());
+    assert!(env.client.device_self(&credential).await.is_err());
 }
 
 #[tokio::test]
@@ -487,7 +496,7 @@ async fn pairing_rules_and_device_management() {
     let claim = |code: &str| PairingClaim {
         pairing_code: code.into(),
         name: "x".into(),
-        visibility: None,
+        visibility: Some(extend_protocol::model::Visibility::Team),
         pair_ttl_days: None,
         silicon_ids: vec![],
     };
@@ -501,8 +510,8 @@ async fn pairing_rules_and_device_management() {
     let mut d = Device::pair(&env, "c:bob", DeviceOs::Macos, &[], None).await;
     let id = d.id.clone();
 
-    // 1.1: a device belongs to the Carbon who paired it, and nobody else sees it, whatever the
-    // Team. The 1.0 website's "Team devices" list is empty, and visibility changes nothing.
+    // Hidden devices belong only to their configuring Carbon. Explicit organization visibility
+    // makes discovery possible, while management remains owner-only.
     let team = a
         .devices(DeviceQuery {
             scope: Some("team".into()),
@@ -524,8 +533,8 @@ async fn pairing_rules_and_device_management() {
         )
         .await
         .unwrap();
-    assert_eq!(still.visibility, Visibility::Personal);
-    assert!(
+    assert_eq!(still.visibility, Visibility::Team);
+    assert_eq!(
         a.devices(DeviceQuery {
             scope: Some("team".into()),
             ..Default::default()
@@ -533,8 +542,10 @@ async fn pairing_rules_and_device_management() {
         .await
         .unwrap()
         .items
-        .is_empty()
+        .len(),
+        1
     );
+    assert_eq!(code_of(a.stop_device(&id).await), ErrorCode::NotOwner);
 
     // Rename, TTL bounds, stale version.
     let v = b.device(&id).await.unwrap().version.unwrap();
@@ -758,7 +769,7 @@ async fn test_environments_are_isolated() {
         .pair(&PairingClaim {
             pairing_code: e.pairing_code,
             name: "six".into(),
-            visibility: None,
+            visibility: Some(extend_protocol::model::Visibility::Team),
             pair_ttl_days: None,
             silicon_ids: vec![],
         })

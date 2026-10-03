@@ -29,8 +29,9 @@ pub struct Member {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
-    #[default]
     Team,
+    /// Hidden from every other organization member, including administrators.
+    #[default]
     Personal,
 }
 
@@ -338,6 +339,13 @@ pub struct AttachmentCreate {
     /// Network address of a TV the host should reach (optional; the host discovers otherwise).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+}
+
+/// Import a configured device owned by the current account into its selected organization.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeviceImport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

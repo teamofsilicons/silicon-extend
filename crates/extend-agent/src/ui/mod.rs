@@ -1562,8 +1562,15 @@ mod tests {
     #[test]
     fn page_has_no_forbidden_words() {
         let lower = PAGE.to_ascii_lowercase();
-        for w in ["human", "ai agent", "frontend", "backend", "organization", " org "] {
+        for w in ["human", "ai agent", "frontend", "backend", " org "] {
             assert!(!lower.contains(w), "page.html says {w:?}");
         }
+    }
+
+    #[test]
+    fn pairing_guidance_distinguishes_organization_visibility_from_physical_revoke() {
+        assert!(PAGE.contains("import it into your organizations"));
+        assert!(PAGE.contains("Hidden devices are visible only to their owner."));
+        assert!(PAGE.contains("from every organization in"));
     }
 }

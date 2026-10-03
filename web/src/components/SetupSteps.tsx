@@ -37,6 +37,7 @@ const RETRY_READ_MS = 400;
  */
 export function SetupSteps(props: { device: Device; onComplete?: (setup: Setup) => void }) {
   const s = session();
+  const client = s.client();
   const [setup, setSetup] = createSignal<Setup | null>(null);
   const [error, setError] = createSignal<ApiError | null>(null);
   const [code, setCode] = createSignal("");
@@ -69,7 +70,7 @@ export function SetupSteps(props: { device: Device; onComplete?: (setup: Setup) 
 
   async function poll() {
     try {
-      const next = await s.client().getSetup(props.device.device_id);
+      const next = await client.getSetup(props.device.device_id);
       if (disposed) return;
       settleRetries(next.steps);
       setSetup(next);
@@ -113,7 +114,7 @@ export function SetupSteps(props: { device: Device; onComplete?: (setup: Setup) 
     setSendingRetry(step.key);
     setRetryErrors(({ [step.key]: _gone, ...rest }) => rest);
     try {
-      const { retrying: keys } = await s.client().retrySetup(props.device.device_id, step.key);
+      const { retrying: keys } = await client.retrySetup(props.device.device_id, step.key);
       const since = Date.now();
       setRetrying((current) => {
         const next = { ...current };
@@ -138,7 +139,7 @@ export function SetupSteps(props: { device: Device; onComplete?: (setup: Setup) 
     setSending(true);
     setCodeError(null);
     try {
-      setSetup(await s.client().enterSetupCode(props.device.device_id, value));
+      setSetup(await client.enterSetupCode(props.device.device_id, value));
       setCode("");
     } catch (e) {
       setCodeError(toApiError(e));

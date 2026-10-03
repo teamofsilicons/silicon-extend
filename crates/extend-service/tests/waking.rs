@@ -127,7 +127,7 @@ async fn asking_to_wake_a_device() {
     let (s, _) = wake(&env, &alice, "acme", &d, "x").await;
     assert_eq!(s, 403);
     let (s, _) = wake(&env, &chef, "globex", &d, "x").await;
-    assert_eq!(s, 404, "chef has no grant in globex");
+    assert_eq!(s, 403, "organization discovery does not grant wake access");
     let (s, _) = wake(&env, &sous, "acme", &d, "   ").await;
     assert_eq!(s, 422);
     // Asking again within 5 minutes: 429 with its own request only.
@@ -162,17 +162,17 @@ async fn asking_to_wake_a_device() {
         (last["actor"].as_str(), last["org_id"].as_str()),
         (Some("si:scout"), Some("globex"))
     );
-    // The owner sees every Team's request on the pair; a Silicon only its own.
+    // The owner sees the selected organization; a Silicon only its own requests there.
     let (_, all) = api(
         &env,
         "GET",
         &format!("/api/v1/devices/{d}/wake-requests?state=open"),
         &alice,
-        None,
+        Some("globex"),
         None,
     )
     .await;
-    assert_eq!(all["data"]["items"].as_array().unwrap().len(), 3);
+    assert_eq!(all["data"]["items"].as_array().unwrap().len(), 1);
     let (_, own) = api(
         &env,
         "GET",
@@ -314,7 +314,7 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
         "PUT",
         &format!("/api/v1/devices/{d}/wake-settings"),
         &alice,
-        None,
+        Some("globex"),
         Some(json!({"type": "wake_settings", "data": {"muted": true, "silicon_id": "si:scout"}})),
     )
     .await;
@@ -395,7 +395,7 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
         "PUT",
         &format!("/api/v1/devices/{d}/wake-settings"),
         &alice,
-        None,
+        Some("globex"),
         Some(json!({"type": "wake_settings", "data": {"muted": false, "silicon_id": "si:scout"}})),
     )
     .await;
@@ -454,7 +454,7 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
         "GET",
         &format!("/api/v1/devices/{d}/wake-requests?state=open"),
         &alice,
-        None,
+        Some("globex"),
         None,
     )
     .await;
@@ -491,7 +491,7 @@ async fn answering_ending_and_no_gate() {
     let (d, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &["si:sous"]).await;
     grant(&env, &alice, &d, "si:scout", "globex").await;
     let a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
-    let (d2, _cred2) = pair_another(&env, &cred, &bob, Some("acme"), &["si:chef"]).await;
+    let (d2, cred2) = pair_another(&env, &cred, &bob, Some("acme"), &["si:chef"]).await;
     a.send(awake_frame(false, Some("locked"), None, Uuid::new_v4(), 1));
     eventually("locked", || async {
         owner_view(&env, &alice, &d).await["awake"] == false
@@ -546,45 +546,49 @@ async fn answering_ending_and_no_gate() {
     )
     .await;
     assert_eq!(s, 422);
-    // "It's awake": every open request on the device, both pairs and both Teams, named no one.
+    // Website answers affect only the selected organization and owner. Other bindings stay open.
+    let (s, _) = api(
+        &env,
+        "POST",
+        &format!("/api/v1/devices/{d}/wake-requests/answer"),
+        &alice,
+        Some("acme"),
+        Some(json!({"type":"wake_answer","data":{"answer":"woken"}})),
+    )
+    .await;
+    assert_eq!(s, 409, "the selected organization's only request was declined");
     let (s, woke) = api(
         &env,
         "POST",
         &format!("/api/v1/devices/{d}/wake-requests/answer"),
         &alice,
-        None,
-        Some(json!({"type": "wake_answer", "data": {"answer": "woken"}})),
+        Some("globex"),
+        Some(json!({"type":"wake_answer","data":{"answer":"woken"}})),
     )
     .await;
     assert_eq!(s, 200, "{woke}");
-    assert_eq!(
-        woke["data"]["ended"].as_array().unwrap().len(),
-        1,
-        "only alice's own pair's are listed"
-    );
-    for w in [&wg, &wc] {
-        let row = wake_row(&env, w["data"]["wake_id"].as_str().unwrap()).await;
-        assert_eq!(
-            (row.0.as_str(), row.1.as_deref()),
-            ("woken", Some("confirmed_by_carbon"))
-        );
-    }
+    assert_eq!(woke["data"]["ended"].as_array().unwrap().len(), 1);
+    assert_eq!(wake_row(&env, wg["data"]["wake_id"].as_str().unwrap()).await.0, "woken");
+    assert_eq!(wake_row(&env, wc["data"]["wake_id"].as_str().unwrap()).await.0, "open");
+    let (s, _) = api(
+        &env,
+        "POST",
+        &format!("/api/v1/devices/{d2}/wake-requests/answer"),
+        &bob,
+        Some("acme"),
+        Some(json!({"type":"wake_answer","data":{"answer":"woken"}})),
+    )
+    .await;
+    assert_eq!(s, 200);
     let woken = ting.sent_of("device.woken").await;
     let chef_t = woken.iter().find(|t| t["for"] == "si:chef").unwrap();
-    assert_eq!(chef_t["data"]["woken_by"], "carbon");
-    assert_eq!(chef_t["actor"], "c:bob", "on bob's pair: bob's held login");
+    assert_eq!(chef_t["actor"], "c:bob");
     let scout_t = woken.iter().find(|t| t["for"] == "si:scout").unwrap();
     assert_eq!(
         (scout_t["actor"].as_str(), scout_t["org_id"].as_str()),
         (Some("c:alice"), Some("globex"))
     );
     assert!(!chef_t.to_string().contains("c:alice"));
-    let log2 = activity(&env, &d2).await;
-    let confirmed = log2.iter().find(|x| x.0 == "wake_confirmed").unwrap();
-    assert_eq!(
-        confirmed.1, "extend",
-        "another Carbon's pair doesn't name the answering Carbon"
-    );
     // Nothing open: 409.
     let (s, _) = api(
         &env,
@@ -672,9 +676,9 @@ async fn answering_ending_and_no_gate() {
     let _ = api(
         &env,
         "DELETE",
-        &format!("/api/v1/devices/{d}/access/si:scout?team=globex"),
+        &format!("/api/v1/devices/{d}/access/si:scout"),
         &alice,
-        None,
+        Some("globex"),
         None,
     )
     .await;
@@ -686,7 +690,7 @@ async fn answering_ending_and_no_gate() {
         Some("access_removed")
     );
     let (_, w) = wake(&env, &chef, "acme", &d2, "unpair me").await;
-    let _ = api(&env, "DELETE", &format!("/api/v1/devices/{d2}"), &bob, None, None).await;
+    assert_eq!(device_api(&env, "DELETE", "/api/v1/device", &cred2).await.0, 204);
     assert_eq!(
         wake_row(&env, w["data"]["wake_id"].as_str().unwrap())
             .await
@@ -773,7 +777,7 @@ async fn ting_types_and_registrations_per_team() {
         "GET",
         &format!("/api/v1/devices/{d}/wake-requests"),
         &alice,
-        None,
+        Some("globex"),
         None,
     )
     .await;
@@ -808,7 +812,7 @@ async fn ting_types_and_registrations_per_team() {
         .await
         .unwrap();
     assert_eq!(left, 0);
-    // team=any lists every Team her login reaches.
+    // team=any retains the selected organization; it cannot enumerate another login context.
     let (_, all) = api(&env, "GET", "/api/v1/ting-registration?team=any", &alice, None, None).await;
     let teams: Vec<&str> = all["data"]["items"]
         .as_array()
@@ -816,7 +820,7 @@ async fn ting_types_and_registrations_per_team() {
         .iter()
         .map(|r| r["team"].as_str().unwrap())
         .collect();
-    assert_eq!(teams, vec!["acme", "globex"]);
+    assert_eq!(teams, vec!["acme"]);
     // A Team the login doesn't reach: 403.
     let (s, _) = api(&env, "GET", "/api/v1/ting-registration?team=labs", &alice, None, None).await;
     assert_eq!(s, 403);

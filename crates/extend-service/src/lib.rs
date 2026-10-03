@@ -19,6 +19,8 @@ pub mod files;
 pub mod hub;
 pub mod iam;
 pub mod membership;
+pub mod obo;
+pub mod organizations;
 pub mod revocation;
 pub mod routes;
 pub mod scheduler;
@@ -59,7 +61,13 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
                     cfg.webhook_secret.clone(),
                     cfg.webhook_previous_secret.clone(),
                 )
-                .await?,
+                .await?
+                .with_delegations(
+                    pool.clone(),
+                    cfg.delegation_key
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("EXTEND_DELEGATION_ENCRYPTION_KEY is required with SDK IAM"))?,
+                ),
             ),
             None,
         ),
@@ -109,12 +117,18 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
     });
     // Tings that wait for a member's login go at that member's next call; which members those
     // are is rebuilt from the database (the logins Extend held died with the last process).
+    organizations::reconcile(&state, &db::World::production())
+        .await
+        .map_err(|e| anyhow::anyhow!("Reconcile organization access: {}", e.0.message))?;
     scheduler::rebuild_waiting(&state, &db::World::production()).await;
     for schema in &test_worlds {
         if let Some(id) = schema
             .strip_prefix("extend_test_")
             .and_then(|s| uuid::Uuid::parse_str(s).ok())
         {
+            organizations::reconcile(&state, &db::World::test(id))
+                .await
+                .map_err(|e| anyhow::anyhow!("Reconcile organization access: {}", e.0.message))?;
             scheduler::rebuild_waiting(&state, &db::World::test(id)).await;
         }
     }

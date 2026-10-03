@@ -639,7 +639,10 @@ impl FromRequestParts<Shared> for Auth {
         {
             return Err(AppError::invalid("X-Org-ID must be one team handle."));
         }
-        let p = state.authorize(token, team, sel.as_ref()).await?;
+        let mut p = state.authorize(token, team, sel.as_ref()).await?;
+        if p.team.is_none() && p.teams.len() == 1 {
+            p.team = p.teams.first().cloned();
+        }
         auth_hook(state, &world, &p).await;
         let isi = header(parts, "x-silicon-isi")
             .map(str::trim)

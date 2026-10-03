@@ -406,18 +406,28 @@ pub enum Access {
     Owner,
     /// A Silicon with a grant on this pair in the Team it acts in.
     Silicon,
+    /// An organization member may discover a shared device; control still requires a grant.
+    Member,
 }
 
-/// The owner of the pair (whatever X-Org-ID says), or a Silicon acting in Team T with a grant
-/// (pair, T, itself). Nobody else. Whether the owner is still in T is checked at each use
+/// A current organization binding is required for everyone, including the configuring owner.
+/// Private bindings hide the device from every other member; shared bindings allow discovery,
+/// and a separate Silicon grant allows control. Whether the owner is still in T is checked at each use
 /// ([`crate::membership::owner_active`]), not here.
 pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Principal) -> AppResult<Option<Access>> {
+    let team = p.team()?;
+    let Some(visibility) = crate::organizations::visibility(state, world, &d.device_id, team, false).await? else {
+        return Ok(None);
+    };
     if d.is_owner(p) {
         return Ok(Some(Access::Owner));
     }
-    let (true, Some(team)) = (p.is_silicon(), p.team.as_deref()) else {
+    if visibility != Visibility::Team {
         return Ok(None);
-    };
+    }
+    if !p.is_silicon() {
+        return Ok(Some(Access::Member));
+    }
     let has: Option<(i32,)> = sqlx::query_as(sql!(
         "SELECT 1 FROM {} WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
         world.t("device_access")
@@ -427,7 +437,7 @@ pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Princ
     .bind(p.id())
     .fetch_optional(&state.pool)
     .await?;
-    Ok(has.map(|_| Access::Silicon))
+    Ok(Some(if has.is_some() { Access::Silicon } else { Access::Member }))
 }
 
 fn check_device_id(device_id: &str) -> AppResult<()> {
@@ -448,9 +458,18 @@ pub async fn visible_device(
     p: &Principal,
 ) -> AppResult<(DeviceRow, Access)> {
     check_device_id(device_id)?;
-    let d = load_device_any(state, world, device_id)
+    let mut d = load_device_any(state, world, device_id)
         .await?
         .ok_or_else(|| not_found_for(device_id, p))?;
+    if crate::organizations::visibility(state, world, device_id, p.team()?, true)
+        .await?
+        .is_none()
+    {
+        return Err(not_found_for(device_id, p));
+    }
+    if d.is_owner(p) {
+        crate::organizations::project_removal(state, world, &mut d, p.team()?).await?;
+    }
     if d.is_removed() {
         return Err(if d.is_owner(p) {
             device_removed(&d)
@@ -473,9 +492,18 @@ pub async fn readable_device(
     p: &Principal,
 ) -> AppResult<(DeviceRow, Access)> {
     check_device_id(device_id)?;
-    let d = load_device_any(state, world, device_id)
+    let mut d = load_device_any(state, world, device_id)
         .await?
         .ok_or_else(|| not_found_for(device_id, p))?;
+    if crate::organizations::visibility(state, world, device_id, p.team()?, true)
+        .await?
+        .is_none()
+    {
+        return Err(not_found_for(device_id, p));
+    }
+    if d.is_owner(p) {
+        crate::organizations::project_removal(state, world, &mut d, p.team()?).await?;
+    }
     if d.is_removed() {
         return if d.is_owner(p) {
             Ok((d, Access::Owner))
@@ -614,6 +642,13 @@ pub async fn setup_of(state: &AppState, world: &World, d: &DeviceRow) -> Setup {
 
 /// A device as `viewer` may see it (see the module docs for sides).
 pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer: Viewer<'_>, detail: bool) -> Device {
+    let mut scoped = d.clone();
+    if viewer.access == Access::Owner
+        && let Some(team) = viewer.team
+    {
+        let _ = crate::organizations::project_removal(state, world, &mut scoped, team).await;
+    }
+    let d = &scoped;
     let os = d.os();
     // A removed device's host may still be connected; the device itself is gone.
     let removed = d.is_removed();
@@ -642,7 +677,7 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
     let busy = d.carried_busy();
     let (in_use, in_use_by_other, in_use_by_other_carried) = if owner_view {
         let other_carried: Vec<&CarriedBusy> = busy.iter().filter(|b| b.carbon != viewer.id).collect();
-        if d.held_here() {
+        if d.held_here() && viewer.team.is_none_or(|team| d.in_use_team.as_deref() == Some(team)) {
             (
                 holder().map(|mut u| {
                     u.team = d.in_use_team.clone();
@@ -661,9 +696,14 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
         }
     } else {
         let team = viewer.team.unwrap_or_default();
-        let own = d.in_use_silicon.as_deref() == Some(viewer.id);
+        let own = viewer.access != Access::Member
+            && d.in_use_silicon.as_deref() == Some(viewer.id)
+            && d.in_use_team.as_deref() == Some(team);
         let other_carried = busy.iter().any(|b| !(b.team == team && b.carbon == d.owner_id));
-        if d.in_use_session.is_some() && (own || (d.held_here() && d.held_by_side(team))) {
+        if viewer.access != Access::Member
+            && d.in_use_session.is_some()
+            && (own || (d.held_here() && d.held_by_side(team)))
+        {
             (holder(), false, false)
         } else if d.in_use_session.is_some() || other_carried {
             (None, true, false)
@@ -680,7 +720,10 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
     let last_sleep_state = if !online && !removed { d.sleep() } else { None };
     let wakes = d.open_wakes();
     let open_wake_requests = if owner_view {
-        wakes.iter().filter(|w| w.device_id == d.device_id).count()
+        wakes
+            .iter()
+            .filter(|w| w.device_id == d.device_id && viewer.team.is_none_or(|team| w.team == team))
+            .count()
     } else {
         wakes
             .iter()
@@ -688,7 +731,7 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
             .count()
     } as i64;
     let mut caps = d.capabilities();
-    if !online {
+    if !online || viewer.access == Access::Member {
         caps.clear();
     }
     let same_device = if !owner_view && d.paired_by_others && !removed {
@@ -712,13 +755,21 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
         model: d.model.clone(),
         kind: os.kind(),
         owner,
-        team: if owner_view {
-            None
+        team: viewer.team.map(str::to_owned),
+        visibility: if let Some(team) = viewer.team {
+            crate::organizations::visibility(state, world, &d.device_id, team, true)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(Visibility::Personal)
         } else {
-            viewer.team.map(str::to_owned)
+            Visibility::Personal
         },
-        visibility: Visibility::Personal,
-        host_device_id: d.host_device_id.as_ref().and_then(|h| h.parse().ok()),
+        host_device_id: if owner_view {
+            d.host_device_id.as_ref().and_then(|h| h.parse().ok())
+        } else {
+            None
+        },
         state: if d.is_ready() {
             DeviceState::Ready
         } else {
@@ -733,11 +784,7 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
         // A removed device's pair no longer runs out; it already ended.
         pair_expires_at: (!removed).then_some(expires),
         days_left: (!removed).then_some(days_left),
-        access_count: Some(if owner_view {
-            d.access_count
-        } else {
-            d.access_in(viewer.team.unwrap_or_default())
-        }),
+        access_count: Some(viewer.team.map(|team| d.access_in(team)).unwrap_or(d.access_count)),
         app_version: d.app_version.clone(),
         version: Some(d.version),
         capabilities: detail.then(|| caps.clone()),
@@ -783,7 +830,17 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
         in_use_by_other_carried,
         open_wake_requests: (!removed).then_some(open_wake_requests),
         wake_requests,
-        wake_muted: owner_view.then_some(d.wake_muted),
+        wake_muted: if owner_view {
+            Some(if let Some(team) = viewer.team {
+                crate::organizations::wake_muted(state, world, &d.device_id, team)
+                    .await
+                    .unwrap_or(true)
+            } else {
+                d.wake_muted
+            })
+        } else {
+            None
+        },
         paired_by_others: owner_view.then_some(d.paired_by_others),
         same_device,
         in_use_indicator: d.in_use_indicator(),
@@ -924,11 +981,12 @@ async fn same_device(
 ) -> Option<Vec<extend_protocol::DeviceId>> {
     let team = viewer.team?;
     let ids: Vec<(String,)> = sqlx::query_as(sql!(
-        "SELECT o.device_id FROM {} o JOIN {} a ON a.device_id = o.device_id
+        "SELECT o.device_id FROM {} o JOIN {} a ON a.device_id = o.device_id JOIN {} b ON b.device_id = o.device_id AND b.org_id = a.team AND b.visibility = 'team' AND b.removed_at IS NULL
          WHERE o.instance_id = $1 AND o.device_id <> $2 AND o.removed_at IS NULL AND a.team = $3 AND a.silicon_id = $4
          ORDER BY o.device_id",
         world.t("devices"),
-        world.t("device_access")
+        world.t("device_access"),
+        world.t("device_organizations")
     ))
     .bind(d.instance_id)
     .bind(&d.device_id)
@@ -1011,7 +1069,34 @@ pub async fn log(
     session_id: Option<&str>,
     details: serde_json::Value,
 ) {
-    log_in(state, world, device_id, actor, action, session_id, None, details).await;
+    // Legacy/native callers do not carry an application context. Session events inherit their
+    // session's organization; physical lifecycle events belong to the configuring organization.
+    let team: Option<String> = if let Some(id) = session_id {
+        sqlx::query_scalar(sql!("SELECT team FROM {} WHERE session_id=$1", world.t("sessions")))
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        sqlx::query_scalar(sql!("SELECT team FROM {} WHERE device_id=$1", world.t("devices")))
+            .bind(device_id)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+    };
+    log_in(
+        state,
+        world,
+        device_id,
+        actor,
+        action,
+        session_id,
+        team.as_deref(),
+        details,
+    )
+    .await;
 }
 
 /// Writes one activity row on a pair. `team` is the acting Silicon's Team. Rows stay per pair, so

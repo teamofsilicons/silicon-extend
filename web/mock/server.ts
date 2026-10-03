@@ -76,6 +76,7 @@ interface DeviceRec {
   owner: string;
   team: string;
   visibility: "team" | "personal";
+  organizations?: Record<string, { visibility: "team" | "personal"; removed: boolean; removed_at: string | null; removed_reason: string | null }>;
   host_device_id: string | null;
   online: boolean;
   last_seen_at: string | null;
@@ -204,6 +205,8 @@ interface Environment {
 }
 
 interface World {
+  featureRequests: Map<string, { member: string; team: string; endpoints: { audience: string; endpoint_id: string }[]; expires: number; approved: boolean; callback?: {redirect_uri: string; state: string} }>;
+  featureGrants: Map<string, unknown[]>;
   key: string;
   environment: Environment | null;
   members: Map<string, Member>;
@@ -219,8 +222,8 @@ interface World {
   sessions: Map<string, SessionRec>;
   activity: Map<string, Activity[]>;
   requests: RequestRec[];
-  accessTokens: Map<string, { member: string; expires: number; family: string }>;
-  refreshTokens: Map<string, { member: string; family: string; used: boolean }>;
+  accessTokens: Map<string, { member: string; expires: number; family: string; org: string }>;
+  refreshTokens: Map<string, { member: string; family: string; used: boolean; org: string }>;
   revokedFamilies: Set<string>;
   failedClaims: Map<string, number[]>;
 }
@@ -268,6 +271,8 @@ const b64 = (n: number) => randomBytes(n).toString("base64url");
 
 function newWorld(key: string, environment: Environment | null): World {
   return {
+    featureRequests: new Map(),
+    featureGrants: new Map(),
     key,
     environment,
     members: new Map(),
@@ -438,7 +443,7 @@ function seed() {
       os_version: null,
       model: null,
       kind: kindFor(d.os, d.model ?? null),
-      visibility: "personal",
+      visibility: "team",
       host_device_id: null,
       online: true,
       last_seen_at: iso(t - 5000),
@@ -799,14 +804,16 @@ function caller(ctx: Ctx): Member {
   if (record!.expires < now()) fail(401, "token_expired", "The access token expired.", "Refresh it with POST /api/v1/auth/refresh.");
   const member = ctx.world.members.get(record!.member);
   if (!member) fail(401, "token_expired", "The member behind this token no longer exists.", "Sign in again.");
-  return member!;
+  const org = header(ctx, "x-org-id");
+  if (org && org !== record!.org) fail(403, "not_a_team_member", "The requested organization does not match this login.");
+  return { ...member!, teams: [record!.org] };
 }
 
 function teamOf(ctx: Ctx, member: Member, required = true): string | null {
   const team = header(ctx, "x-org-id");
   if (!team) {
     if (required) fail(400, "invalid_input", "X-Org-ID is required: it names the team (IAM handle) this request is for.", "Send the team handle in X-Org-ID, or pass --team.");
-    return null;
+    return member.teams[0] ?? null;
   }
   if (!member.teams.includes(team))
     fail(403, "not_a_team_member", `${member.id} is not an active member of team ${team}.`, `Pick one of your teams: ${member.teams.join(", ")}.`);
@@ -978,10 +985,9 @@ function deviceView(world: World, d: DeviceRec, viewer: Viewer, detail = false) 
     os: d.os,
     kind: d.kind,
     owner: { type: "carbon", id: d.owner, display_name: owner?.display_name ?? null },
-    // Always personal since 1.1: only the Carbons who paired a device see it.
-    visibility: "personal",
+    visibility: d.visibility,
     online: d.removed ? false : d.online,
-    ...(ownerView ? {} : { team: viewer.team }),
+    team: viewer.team ?? d.team,
   };
   if (d.removed) {
     // Like the service: a removed device reads offline, with no in_use, pair_expires_at or days_left.
@@ -1011,7 +1017,7 @@ function deviceView(world: World, d: DeviceRec, viewer: Viewer, detail = false) 
   let byOther = false;
   let byOtherCarried = false;
   if (ownerView) {
-    if (holder && holder.device_id === d.device_id) inUse = inUseView(holder, true);
+    if (holder && holder.device_id === d.device_id && holder.team === (viewer.team ?? d.team)) inUse = inUseView(holder, true);
     else if (holder) byOther = true;
     else {
       const others = carried.filter((x) => sideOf(world, x).carbon !== viewer.member.id);
@@ -1026,8 +1032,8 @@ function deviceView(world: World, d: DeviceRec, viewer: Viewer, detail = false) 
     if (sameSide || holder.silicon_id === viewer.member.id) inUse = inUseView(holder, false);
     else byOther = true;
   } else if (carried.some((x) => !(x.team === viewer.team && sideOf(world, x).carbon === d.owner))) byOther = true;
-  const grants = [...(world.access.get(d.device_id)?.values() ?? [])];
-  const wakes = world.wakes.filter((w) => w.instance_id === d.instance_id && w.state === "open");
+  const grants = [...(world.access.get(d.device_id)?.values() ?? [])].filter(g => g.team === (viewer.team ?? d.team));
+  const wakes = world.wakes.filter((w) => w.instance_id === d.instance_id && w.state === "open" && w.team === (viewer.team ?? d.team));
   const visibleWakes = ownerView ? wakes.filter((w) => w.device_id === d.device_id) : wakes.filter((w) => w.from === viewer.member.id && w.team === viewer.team);
   const hostApp = d.host_device_id ? world.devices.get(d.host_device_id)?.app_version : d.app_version;
   const wakeDetectable = !!hostApp && hostApp >= "1.1" && d.os !== "ios" && d.os !== "ipados";
@@ -1129,8 +1135,25 @@ function notFound(ctx: Ctx, team: string | null): never {
  * like the service refuses it: its Carbon hears when and why it was removed; anyone else gets the
  * plain device_not_found.
  */
+/** Select an independent organization binding while sharing physical configuration. */
+function scopedDevice(d: DeviceRec | undefined, org: string | null): DeviceRec | undefined {
+  if (!d || !org) return undefined;
+  if (d.team === org) return d;
+  const binding = d.organizations?.[org];
+  if (!binding) return undefined;
+  return new Proxy(d, {
+    get(target, key) { return key === "team" ? org : key in binding ? Reflect.get(binding, key) : Reflect.get(target, key); },
+    set(target, key, value) { return key in binding ? Reflect.set(binding, key, value) : Reflect.set(target, key, value); },
+  });
+}
+
+function bindDevice(d: DeviceRec, org: string, visibility: "personal" | "team") {
+  if (org === d.team) { d.removed = false; d.removed_at = null; d.removed_reason = null; d.visibility = visibility; }
+  else { d.organizations ??= {}; d.organizations[org] = { visibility, removed: false, removed_at: null, removed_reason: null }; }
+}
+
 function ownedDevice(ctx: Ctx, member: Member): DeviceRec {
-  const d = ctx.world.devices.get(ctx.params.device_id);
+  const d = scopedDevice(ctx.world.devices.get(ctx.params.device_id), teamOf(ctx, member, false));
   if (!/^[0-9a-f]{8}$/.test(ctx.params.device_id))
     fail(400, "invalid_input", `${ctx.params.device_id} is not a device id (8 lowercase hexadecimal characters).`);
   if (d && d.removed && d.owner === member.id)
@@ -1148,16 +1171,10 @@ function ownedDevice(ctx: Ctx, member: Member): DeviceRec {
 
 /** A device the caller may read: a Carbon's own pair (paired or removed), or a Silicon's grant in its Team. */
 function readableDevice(ctx: Ctx, member: Member, team: string | null): DeviceRec {
-  const d = ctx.world.devices.get(ctx.params.device_id);
-  if (member.type === "silicon") {
-    if (!d || d.removed || !team || !ctx.world.access.get(d.device_id)?.has(gkey(team, member.id))) notFound(ctx, team);
-    return d!;
-  }
-  if (d && d.removed) {
-    if (d.owner === member.id) return d;
-    notFound(ctx, null);
-  }
-  return ownedDevice(ctx, member);
+  team ??= teamOf(ctx, member, false);
+  const d = scopedDevice(ctx.world.devices.get(ctx.params.device_id), team);
+  if (!d || (d.owner !== member.id && (d.removed || d.visibility !== "team"))) notFound(ctx, team);
+  return d!;
 }
 
 function logActivity(world: World, deviceId: string, a: Omit<Activity, "id" | "at" | "files" | "args" | "command" | "outcome" | "session_id" | "details" | "team"> & Partial<Activity>) {
@@ -1226,18 +1243,18 @@ function paginate<T>(items: T[], url: URL): { items: T[]; next_cursor: string | 
   return { items: page, next_cursor: start + limit < items.length ? String(start + limit) : null };
 }
 
-function issueTokens(world: World, member: Member, family: string = randomUUID()) {
+function issueTokens(world: World, member: Member, family: string = randomUUID(), org = member.teams[0]) {
   const access = `oat_${b64(32)}`;
   const refresh = `ort_${b64(32)}`;
-  world.accessTokens.set(access, { member: member.id, expires: now() + config.accessTtlS * 1000, family });
-  world.refreshTokens.set(refresh, { member: member.id, family, used: false });
+  world.accessTokens.set(access, { member: member.id, expires: now() + config.accessTtlS * 1000, family, org });
+  world.refreshTokens.set(refresh, { member: member.id, family, used: false, org });
   return {
     access_token: access,
     refresh_token: refresh,
     token_type: "Bearer",
     expires_in: config.accessTtlS,
     member: { type: member.type, id: member.id, display_name: member.display_name },
-    teams: member.teams,
+    teams: [org],
     testing_environment: environmentView(world),
   };
 }
@@ -1293,7 +1310,7 @@ route("POST", "/api/v1/auth/login", (ctx) => {
   onlyKeys(data, ["slt"]);
   const slt = data.slt;
   if (typeof slt !== "string" || !slt || slt.length > 4096) fail(422, "invalid_input", "slt must be a non-empty string of at most 4096 characters.");
-  const s = (slt as string).trim();
+  const [s, requestedOrg] = (slt as string).trim().split("@", 2);
   const w = ctx.world;
   let member: Member | undefined;
   if (/^(c|si):/.test(s)) {
@@ -1314,7 +1331,8 @@ route("POST", "/api/v1/auth/login", (ctx) => {
     }
     if (!member) fail(401, "slt_invalid", "IAM rejected the short-lived token: expired, used, or for another application.", "Get a new SLT and sign in again.");
   }
-  return ok(200, "login", issueTokens(w, member!), { "Cache-Control": "no-store" });
+  if (requestedOrg && !member!.teams.includes(requestedOrg)) fail(403, "not_a_team_member", "Select an organization you belong to.");
+  return ok(200, "login", issueTokens(w, member!, undefined, requestedOrg), { "Cache-Control": "no-store" });
 });
 
 route("POST", "/api/v1/auth/refresh", (ctx) => {
@@ -1331,7 +1349,7 @@ route("POST", "/api/v1/auth/refresh", (ctx) => {
   }
   rec!.used = true;
   const member = ctx.world.members.get(rec!.member)!;
-  return ok(200, "refresh", issueTokens(ctx.world, member, rec!.family), { "Cache-Control": "no-store" });
+  return ok(200, "refresh", issueTokens(ctx.world, member, rec!.family, rec!.org), { "Cache-Control": "no-store" });
 });
 
 route("POST", "/api/v1/auth/logout", (ctx) => {
@@ -1435,7 +1453,7 @@ route("POST", "/api/v1/pairings", (ctx) => {
     kind: kindFor(enrollment!.os, enrollment!.model),
     owner: member.id,
     team,
-    visibility: "personal",
+    visibility: data.visibility === undefined ? "personal" : checkVisibility(data.visibility),
     host_device_id: null,
     online: true,
     last_seen_at: iso(now()),
@@ -1512,7 +1530,7 @@ route("POST", "/api/v1/devices/:device_id/attachments", (ctx) => {
     kind: kindFor(os, null),
     owner: member.id,
     team: host.team,
-    visibility: "personal",
+    visibility: data.visibility === undefined ? "personal" : checkVisibility(data.visibility),
     host_device_id: host.device_id,
     online: false,
     last_seen_at: null,
@@ -1621,17 +1639,36 @@ route("GET", "/api/v1/devices", (ctx) => {
       `include_removed=true works only with scope=mine: a Carbon can list the devices they paired after they're removed, to read their activity log. This request lists scope=${scope}, which shows paired devices only.`,
       "Drop include_removed, or, as the Carbon who paired the devices, send scope=mine&include_removed=true.",
     );
-  let list = [...ctx.world.devices.values()].filter((d) => includeRemoved || !d.removed);
+  let list = [...ctx.world.devices.values()].map(d => scopedDevice(d, team)).filter((d): d is DeviceRec => !!d && (includeRemoved || !d.removed));
   if (scope === "mine") list = list.filter((d) => d.owner === member.id);
   // Kept for the 1.0 website's "Team devices" tab: devices are never visible to Team colleagues since 1.1.
-  else if (scope === "team") list = [];
-  else list = list.filter((d) => ctx.world.access.get(d.device_id)?.has(gkey(team!, member.id)));
+  else if (scope === "team") list = list.filter(d => d.visibility === "team");
+  else list = list.filter((d) => d.visibility === "team" && ctx.world.access.get(d.device_id)?.has(gkey(team!, member.id)));
   if (online !== null) list = list.filter((d) => String(d.online && !d.removed) === online);
   if (os) list = list.filter((d) => d.os === os);
   // The service's order: online first, then paired before removed, then name.
   list.sort((a, b) => Number(b.online && !b.removed) - Number(a.online && !a.removed) || Number(a.removed) - Number(b.removed) || a.name.localeCompare(b.name));
   const page = paginate(list, ctx.url);
   return ok(200, "devices", { items: page.items.map((d) => deviceView(ctx.world, d, { member, team })), next_cursor: page.next_cursor });
+});
+
+route("GET", "/api/v1/devices/importable", ctx => {
+  const member = caller(ctx); carbonOnly(member); const org = teamOf(ctx, member)!;
+  const items = [...ctx.world.devices.values()].filter(d => d.owner === member.id && (!scopedDevice(d, org) || scopedDevice(d, org)!.removed))
+    .map(d => ({device_id:d.device_id,name:d.name,os:d.os,model:d.model,host_device_id:d.host_device_id}));
+  return ok(200,"devices",paginate(items,ctx.url));
+});
+route("POST", "/api/v1/devices/:device_id/import", ctx => {
+  const member = caller(ctx); carbonOnly(member); const org = teamOf(ctx, member)!; requireKey(ctx);
+  const data = envelope(ctx,"device_import"); onlyKeys(data,["visibility"]);
+  const visibility = data.visibility === undefined ? "personal" : checkVisibility(data.visibility);
+  const d = ctx.world.devices.get(ctx.params.device_id);
+  if (!d || d.owner !== member.id) notFound(ctx,org);
+  if (scopedDevice(d,org) && !scopedDevice(d,org)!.removed) fail(409,"conflict","This device is already in this organization.");
+  bindDevice(d!,org,visibility);
+  const host = d!.host_device_id ? ctx.world.devices.get(d!.host_device_id) : null;
+  if (host && (!scopedDevice(host,org) || scopedDevice(host,org)!.removed)) bindDevice(host,org,"personal");
+  return ok(200,"device",deviceView(ctx.world,scopedDevice(d,org)!,{member,team:org}));
 });
 
 route("GET", "/api/v1/devices/:device_id", (ctx) => {
@@ -1693,7 +1730,7 @@ route("PATCH", "/api/v1/devices/:device_id", (ctx) => {
     changes.name = { from: d.name, to: name };
     d.name = name;
   }
-  if ("visibility" in data) checkVisibility(data.visibility);
+  if ("visibility" in data) changes.visibility = d.visibility = checkVisibility(data.visibility);
   if ("pair_ttl_days" in data) changes.pair_ttl_days = d.pair_ttl_days = checkTtl(data.pair_ttl_days);
   // One setting for the physical device: every Carbon's pair of it reads the new value (and a new version).
   if ("in_use_indicator" in data) {
@@ -1714,23 +1751,25 @@ route("PATCH", "/api/v1/devices/:device_id", (ctx) => {
 });
 
 /** Ends one Carbon's pair; the device's other pairs, and their sessions, are untouched. */
-function removeDevice(w: World, d: DeviceRec, by: string, reason = "device_removed") {
-  for (const s of w.sessions.values()) if (s.device_id === d.device_id && s.state !== "ended") endSession(w, s, reason);
-  for (const child of w.devices.values()) if (child.host_device_id === d.device_id && !child.removed) removeDevice(w, child, by, reason);
-  endWakes(w, (x) => x.device_id === d.device_id, "withdrawn", "device_removed");
-  w.access.delete(d.device_id);
-  d.removed = true;
-  d.removed_at = iso(now());
-  d.removed_reason = reason;
-  d.online = false;
-  logActivity(w, d.device_id, { actor: { type: "carbon", id: by }, action: "removed", details: { reason } });
+function removeDevice(w: World, d: DeviceRec, by: string, reason = "device_removed", org?: string) {
+  for (const sess of w.sessions.values()) if (sess.device_id === d.device_id && sess.state !== "ended" && (!org || sess.team === org)) endSession(w, sess, reason);
+  for (const raw of w.devices.values()) {
+    const child = org ? scopedDevice(raw,org) : raw;
+    if (child && child.host_device_id === d.device_id && !child.removed) removeDevice(w,child,by,reason,org);
+  }
+  endWakes(w, x => x.device_id === d.device_id && (!org || x.team === org), "withdrawn", "device_removed");
+  const grants=w.access.get(d.device_id);
+  if (!org) w.access.delete(d.device_id);
+  else for(const [key,grant] of grants ?? []) if(grant.team===org) grants!.delete(key);
+  d.removed = true; d.removed_at = iso(now()); d.removed_reason = reason;
+  logActivity(w,d.device_id,{actor:{type:"carbon",id:by},action:"removed",team:org,details:{reason}});
 }
 
 route("DELETE", "/api/v1/devices/:device_id", (ctx) => {
   const member = caller(ctx);
   const d = ownedDevice(ctx, member);
   checkIfMatch(ctx, d);
-  removeDevice(ctx.world, d, member.id);
+  removeDevice(ctx.world, d, member.id, "device_removed", member.teams[0]);
   return none();
 });
 
@@ -1743,8 +1782,9 @@ route("POST", "/api/v1/devices/:device_id/stop", (ctx) => {
   const member = caller(ctx);
   const d = ownedDevice(ctx, member);
   const w = ctx.world;
-  const holder = holderOf(w, d);
-  const stoppable = carriedSessions(w, d).filter((x) => pairsOf(w, w.devices.get(x.device_id)!.instance_id).some((p) => p.owner === member.id));
+  const active = holderOf(w, d);
+  const holder = active && active.team === member.teams[0] && w.devices.get(active.device_id)?.owner === member.id ? active : null;
+  const stoppable = carriedSessions(w, d).filter((x) => x.team === member.teams[0] && w.devices.get(x.device_id)?.owner === member.id);
   const unstoppable = carriedSessions(w, d).filter((x) => !stoppable.includes(x));
   if (!holder && !stoppable.length) {
     if (unstoppable.length)
@@ -1769,7 +1809,7 @@ route("POST", "/api/v1/devices/:device_id/stop", (ctx) => {
 route("GET", "/api/v1/devices/:device_id/access", (ctx) => {
   const member = caller(ctx);
   const d = readableDevice(ctx, member, teamOf(ctx, member, member.type === "silicon"));
-  const items = [...(ctx.world.access.get(d.device_id)?.values() ?? [])].sort((a, b) => a.team.localeCompare(b.team) || a.silicon_id.localeCompare(b.silicon_id));
+  const items = [...(ctx.world.access.get(d.device_id)?.values() ?? [])].filter(g => g.team === member.teams[0]).sort((a, b) => a.team.localeCompare(b.team) || a.silicon_id.localeCompare(b.silicon_id));
   return ok(200, "access", { items });
 });
 
@@ -1781,6 +1821,7 @@ route("PUT", "/api/v1/devices/:device_id/access/:silicon_id", (ctx) => {
   if (!team) fail(422, "invalid_input", "Say which Team the Silicon is in: --team <handle>.", "Pick the Team in the access picker.");
   if (!member.teams.includes(team!))
     fail(403, "not_a_team_member", `${member.id}'s Extend login doesn't reach ${team}.`, `Sign in to Extend again and select ${team} (approve Extend for ${team} in Silicon IAM), then retry.`);
+  if (d.visibility !== "team") fail(409,"conflict","Make this device visible to the organization before granting control.");
   checkSilicon(ctx.world, team!, ctx.params.silicon_id);
   if (!ctx.world.ting.has(`${member.id}\n${team}`)) ctx.world.ting.set(`${member.id}\n${team}`, { member: member.id, team: team!, status: "on", last_error: null });
   return ok(200, "access_grant", grantAccess(ctx.world, d, ctx.params.silicon_id, team!, member.id));
@@ -1790,7 +1831,8 @@ route("DELETE", "/api/v1/devices/:device_id/access/:silicon_id", (ctx) => {
   const member = caller(ctx);
   const d = ownedDevice(ctx, member);
   // With ?team= that Team's grant; without it, every Team's (the 1.0 meaning). Ownership alone decides.
-  const team = ctx.url.searchParams.get("team");
+  const team = ctx.url.searchParams.get("team") ?? member.teams[0];
+  if (team !== member.teams[0]) fail(403,"not_a_team_member","Select this organization first.");
   const grants = ctx.world.access.get(d.device_id);
   for (const g of [...(grants?.values() ?? [])]) {
     if (g.silicon_id !== ctx.params.silicon_id || (team && g.team !== team)) continue;
@@ -1812,7 +1854,7 @@ route("GET", "/api/v1/sessions", (ctx) => {
   let list = [...ctx.world.sessions.values()].filter((s) => {
     const d = ctx.world.devices.get(s.device_id);
     if (!d) return false;
-    return member.type === "carbon" ? d.owner === member.id : s.silicon_id === member.id && s.team === team;
+    return s.team === team && (member.type === "carbon" ? d.owner === member.id : s.silicon_id === member.id);
   });
   if (deviceId) list = list.filter((s) => s.device_id === deviceId);
   if (state) list = list.filter((s) => s.state === state);
@@ -1937,7 +1979,7 @@ route("GET", "/api/v1/devices/:device_id/activity", (ctx) => {
   const member = caller(ctx);
   const d = readableDevice(ctx, member, teamOf(ctx, member, member.type === "silicon"));
   const q = ctx.url.searchParams;
-  let list = ctx.world.activity.get(d.device_id) ?? [];
+  let list = (ctx.world.activity.get(d.device_id) ?? []).filter(a => !a.team || a.team === member.teams[0]);
   const silicon = q.get("silicon_id");
   const session = q.get("session_id");
   const since = q.get("since");
@@ -2068,15 +2110,66 @@ function tingView(world: World, member: Member, team: string) {
   };
 }
 
+route("GET", "/api/v1/permissions", (ctx) => {
+  const member = caller(ctx), team = teamOf(ctx, member)!;
+  return ok(200, "permissions", { items: ctx.world.featureGrants.get(gkey(team, member.id)) ?? [] });
+});
+
+route("POST", "/api/v1/permissions", (ctx) => {
+  requireKey(ctx);
+  const member = caller(ctx), team = teamOf(ctx, member)!;
+  const data = envelope(ctx, "permission");
+  const endpoints = data.endpoints as { audience: string; endpoint_id: string }[];
+  if (!Array.isArray(endpoints) || !endpoints.length || endpoints.length > 16 || endpoints.some((e) => !e.audience || !e.endpoint_id))
+    fail(422, "invalid_input", "Choose between one and sixteen endpoints.");
+  const id = randomUUID(), expires = now() + 10 * MIN;
+  const callback = data.callback as {redirect_uri: string; state: string} | undefined;
+  if (callback && (callback.redirect_uri !== `${ctx.origin}/auth/obo/callback` || !/^[A-Za-z0-9_-]{32,512}$/.test(callback.state))) fail(422,"invalid_input","Use the bound local callback.");
+  ctx.world.featureRequests.set(id, { member: member.id, team, endpoints, expires, approved: false, callback });
+  return ok(200, "permission", { id, ...(callback ? {state:callback.state} : {}), consent_url: `${ctx.origin}/__mock/iam/feature?request=${id}`, expires_at: iso(expires) });
+});
+
+route("POST", "/api/v1/permissions/:id/complete", (ctx) => {
+  requireKey(ctx);
+  const member = caller(ctx), team = teamOf(ctx, member)!;
+  const request = ctx.world.featureRequests.get(ctx.params.id);
+  if (!request || request.member !== member.id || request.team !== team) fail(404, "not_found", "Approval request not found for this account and organization.");
+  const data = envelope(ctx, "permission");
+  if (request!.callback && data.state !== request!.callback.state) fail(422,"invalid_input","Use the original approval state.");
+  if (!request!.approved || request!.expires < now() || data.code !== `obc_mock_${ctx.params.id}`)
+    fail(422, "confirmation_required", "Approve this request and copy its demo code.", "Your login remains active.");
+  const key = gkey(team, member.id);
+  const items = request!.endpoints.map((endpoint) => ({ ...endpoint, grant_id: ctx.params.id, actor: { public_id: member.id, type: member.type }, org_id: team, expires_at: iso(now() + 30 * MIN) }));
+  const previous = ctx.world.featureGrants.get(key) as { audience: string; endpoint_id: string }[] | undefined;
+  ctx.world.featureGrants.set(key, [...(previous ?? []).filter((old) => !items.some((item) => item.audience === old.audience && item.endpoint_id === old.endpoint_id)), ...items]);
+  return ok(200, "permissions", { items: ctx.world.featureGrants.get(key) });
+});
+
+route("GET", "/__mock/iam/feature", (ctx) => {
+  const id = ctx.url.searchParams.get("request") ?? "";
+  const request = [...worlds.values()].map((world) => world.featureRequests.get(id)).find(Boolean);
+  if (!request || request.expires < now()) fail(404, "not_found", "This demo approval expired.");
+  if (ctx.url.searchParams.get("decline") === "yes" && request!.callback) {
+    const callback = new URL(request!.callback.redirect_uri); callback.searchParams.set("state",request!.callback.state); callback.searchParams.set("error","access_denied");
+    return {status:302,redirect:callback.href};
+  }
+  if (ctx.url.searchParams.get("approve") === "yes") {
+    request!.approved = true;
+    if (request!.callback) {
+      const callback = new URL(request!.callback.redirect_uri); callback.searchParams.set("state",request!.callback.state); callback.searchParams.set("code",`obc_mock_${id}`);
+      return {status:302,redirect:callback.href};
+    }
+    return { status: 200, html: `<h1>Demo feature approval</h1><p>This is local test data. Copy this single-use demo code into Extend:</p><code>obc_mock_${escapeHtml(id)}</code>` };
+  }
+  return { status: 200, html: `<h1>Demo feature approval</h1><p>Local test data only. Extend requests access for ${escapeHtml(request!.member)} in ${escapeHtml(request!.team)}.</p><ul>${request!.endpoints.map((e) => `<li>${escapeHtml(e.audience)} · ${escapeHtml(e.endpoint_id)}</li>`).join("")}</ul><form><input type="hidden" name="request" value="${escapeHtml(id)}"><button name="approve" value="yes">Approve demo request</button><button name="decline" value="yes">Decline demo request</button></form>` };
+});
+
 route("GET", "/api/v1/ting-registration", (ctx) => {
   const member = caller(ctx);
   const team = ctx.url.searchParams.get("team");
   if (!team) fail(422, "invalid_input", "Say which Team: ?team=<handle>, or ?team=any.");
   if (team === "any") {
-    const grantTeams = [...ctx.world.devices.values()]
-      .filter((d) => d.owner === member.id && !d.removed)
-      .flatMap((d) => [...(ctx.world.access.get(d.device_id)?.values() ?? [])].map((g) => g.team));
-    const teams = [...new Set([...member.teams, ...grantTeams])];
+    const teams = member.teams;
     return ok(200, "ting_registrations", { items: teams.map((t) => tingView(ctx.world, member, t)) });
   }
   if (!member.teams.includes(team!)) fail(403, "not_a_team_member", `${member.id}'s Extend login doesn't reach ${team}.`, `Sign in to Extend again and select ${team}.`);
@@ -2239,7 +2332,8 @@ const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", 
 route("GET", "/__mock/iam/login", (ctx) => {
   const appId = ctx.url.searchParams.get("app_id") ?? "";
   const redirect = ctx.url.searchParams.get("redirect_uri") ?? "";
-  const carbons = [...worlds.get("production")!.members.values()].filter((m) => m.type === "carbon");
+  const kind = ctx.url.searchParams.get("identity_kind") ?? "carbon";
+  const carbons = [...worlds.get("production")!.members.values()].filter((m) => m.type === kind);
   const buttons = carbons
     .map((m) => `<button name="member" value="${escapeHtml(m.id)}">Continue as ${escapeHtml(m.display_name)} <small>${escapeHtml(m.id)} · ${escapeHtml(m.teams.join(", "))}</small></button>`)
     .join("");
@@ -2325,7 +2419,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
 
     // Idempotent replay: same key and body → same answer.
     const key = req.method === "POST" ? header(ctx, "idempotency-key") : null;
-    const replayKey = key ? `${world.key}|${req.method}|${url.pathname}|${key}` : null;
+    const replayKey = key ? `${world.key}|${header(ctx,"authorization") ?? "anonymous"}|${header(ctx,"x-org-id") ?? ""}|${req.method}|${url.pathname}|${key}` : null;
     const hash = createHash("sha256").update(rawBody).digest("hex");
     if (replayKey && idempotency.has(replayKey)) {
       const prior = idempotency.get(replayKey)!;

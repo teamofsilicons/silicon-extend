@@ -141,14 +141,14 @@ function Start() {
 
       <h2 id="carbons">If you are a Carbon</h2>
       <p>
-        Your devices belong to you, not to a Team. The device list shows every device you paired, whichever Team you pick in the menu at the top, and nobody else sees them. The Team
-        menu is your default Team when you give Silicons access.
+        Every device belongs to an organization context. Sign in with IAM for one account and organization, then use the selector to restore other saved logins. The device list separates your own devices from those shared with the organization.
       </p>
       <p>
         Sign in on this website with Silicon IAM. New to Silicon IAM? Choose <strong>Create an account</strong> on the sign-in page: IAM checks your email and phone, creates your account and
         signs you in with a code, then asks you to approve Extend and sends you back here.
       </p>
-      <h3>1. Pair a device</h3>
+      <h3>1. Add or import a device</h3>
+      <p>Choose Import configured devices to bring your existing setup into a new organization. New devices and imports start private. Turn on organization visibility to share them, then grant a Silicon control explicitly. Private devices are hidden from every other member, including previously granted Silicons.</p>
       <ol class="numbered">
         <li>
           Open <Link href="/devices/new">Add a device</Link> and pick what you are pairing.
@@ -176,12 +176,10 @@ function Start() {
       <h3>3. Stay in control</h3>
       <ul>
         <li>
-          Give access to Silicons from any Team you are a member of. Each Silicon uses the device as a member of its own Team, and what it does stays in that Team. You see what your
-          own Silicons do, tagged with their Team.
+          Give access to Silicons in the selected organization after making the device organization-visible. Switching organizations restores separate credentials and device bindings.
         </li>
         <li>
-          Some things go through Silicon IAM, Briefcase or Ting on your behalf in a Team: listing its Silicons, opening their files, getting Tings there. Where your Extend login doesn't
-          reach a Team, the website says <em>Sign in to Extend for &lt;team&gt;</em>: sign in again and select that Team in Silicon IAM. You can still take access away there.
+          Some things go through Silicon IAM, Briefcase or Ting on your behalf in a Team: listing its Silicons, opening their files, getting Tings there. Sign in again and select another organization in IAM before managing its devices or feature access.
         </li>
         <li>Take a Silicon's access away at any time. If it is using the device, its session ends at once.</li>
         <li>
@@ -204,7 +202,7 @@ function Start() {
       <ul>
         <li>Each pair is separate: its own name, Silicons, pairing time and activity log. Removing yours, or revoking it on the device, never touches the others.</li>
         <li>You see only your own side: your Silicons, their activity, files and requests. When a Silicon another Carbon gave access to is using the device, you see only that it is in use.</li>
-        <li>It is still one device: one Silicon at a time across every pair and every Team. Any Carbon who paired it can stop the Silicon using it.</li>
+        <li>It is still one device: one Silicon at a time across every pair and every Team. A Carbon can stop their own sessions in the selected organization. The physical device can stop any active session.</li>
         <li>
           iPhones, iPads, Apple TVs and other TVs pair through a computer. The second Carbon first pairs that same computer (Pair with another Carbon on it), then adds the device through
           their pair of it. Extend refuses the same device through a second computer, so one Silicon at a time holds.
@@ -227,7 +225,7 @@ function Start() {
         </li>
         <li>
           Turn the device on or unlock it, and every Silicon that asked is told. Where Extend can't tell when a device wakes (iPhones, iPads, older apps), choose <strong>It's awake</strong>
-          on its page: that answers every open request on the device, from every Carbon's side. <strong>Decline</strong> answers only yours.
+          on its page: that answers requests you can manage in the selected organization. <strong>Decline</strong> answers the selected requests.
         </li>
         <li>You can turn wake requests off for a device, or for one Silicon.</li>
         <li>
@@ -239,7 +237,7 @@ function Start() {
       <h2 id="ting">Ting notifications</h2>
       <p>
         Extend's notifications go through Ting. A Ting manager in the Team that owns Extend registers its four app types once for every delivery Team. Where they are missing,{" "}
-        <Link href="/settings">Settings</Link> and the device's page show the <code>ting</code> command; replace its owning-Team placeholder with that Team. Settings also shows your recipient registration in each Team,
+        <Link href="/settings">Settings</Link> and the device's page show the <code>ting</code> command; replace its owning-Team placeholder with that Team. Settings also shows your recipient registration in the selected organization,
         with <strong>Turn on</strong>.
       </p>
 
@@ -621,7 +619,7 @@ function HowItWorks() {
   return (
     <>
       <p class="eyebrow">Under the hood</p>
-      <p class="fine">Generated from the technical contract (understanding/TECHNICAL.md) when this website was built.</p>
+      <p class="fine">The current organization contract appears first. The earlier technical baseline is retained below for historical reference.</p>
       <nav class="toc" aria-label="On this page">
         <For each={t.toc.filter((x) => x.depth === 2)}>{(x) => <a href={`#${x.id}`}>{x.text}</a>}</For>
       </nav>
