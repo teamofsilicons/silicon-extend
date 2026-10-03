@@ -1,3 +1,5 @@
+import { approvalPopup, awaitApproval } from "../lib/approval-popup";
+import { randomState } from "../lib/auth";
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { toApiError, type ApiError, type FeaturePermission, type FeaturePermissionRequest } from "../lib/api";
 import { session } from "../lib/session";
@@ -34,6 +36,8 @@ export function PermissionSettings() {
   const [message, setMessage] = createSignal("");
   let generation = 0;
   let startKey: string | null = null;
+  let popupState: string | null = null;
+  let popupAbort: AbortController | null = null;
   let completion: { code: string; key: string } | null = null;
 
   async function load(current: number) {
@@ -44,26 +48,42 @@ export function PermissionSettings() {
       if (current === generation) setError(toApiError(e));
     }
   }
-  createEffect(on([() => s.member()?.type, () => s.member()?.id, s.team, s.world], () => {
+  createEffect(on([() => s.member()?.type, () => s.member()?.id, s.team, s.world, s.contextRevision], () => {
     const current = ++generation;
     setPending(null); setCode(""); setRows(null); setError(null); setMessage(""); setBusy(false);
-    startKey = null; completion = null;
+    startKey = null; popupState = null; popupAbort?.abort(); popupAbort = null; completion = null;
     if (s.member() && s.team()) void load(current);
   }));
-  onCleanup(() => { generation++; completion = null; });
+  onCleanup(() => { generation++; popupAbort?.abort(); completion = null; });
 
   async function start() {
     const current = generation;
     const feature = FEATURES.find((f) => f.id === selected())!;
-    startKey ??= crypto.randomUUID();
+    let popup: Window | undefined;
+    startKey ??= crypto.randomUUID(); popupState ??= randomState();
     setBusy(true); setError(null); setMessage("");
     try {
-      const request = await client.requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey);
-      if (current === generation) { setPending(request); setCode(""); completion = null; }
+      popup = approvalPopup(); popupAbort = new AbortController();
+      const request = await client.requestPermissions(feature.endpoints.map((endpoint_id) => ({ audience: feature.audience, endpoint_id })), startKey, { redirect_uri: new URL("/auth/obo/callback", location.origin).href, state: popupState });
+      if (current !== generation) { popup.close(); return; }
+      if (request.state !== popupState) throw new Error("This approval did not match its original request. Start again.");
+      setPending(request); setCode(""); completion = null;
+      await awaitApproval(popup, request.consent_url, request.state, async value => {
+        if (current !== generation) throw new Error("Account or organization changed. Start a new approval.");
+        // Keep the exact code/key after an uncertain exchange so manual retry
+        // continues this same approval instead of spending another one-use code.
+        setCode(value);
+        completion ??= { code: value, key: crypto.randomUUID() };
+        if (completion.code !== value) throw new Error("Retry the original approval code.");
+        const result = await client.completePermissions(request.id, value, completion.key, request.state);
+        if (current !== generation) return;
+        setRows(result); setPending(null); setCode(""); startKey = null; popupState = null; completion = null;
+        setMessage("Access approved. Return to the feature and retry your action. You can revoke access in IAM at any time.");
+      }, popupAbort.signal);
     } catch (e) {
-      if (current === generation) setError(toApiError(e));
+      popup?.close(); if (current === generation) setError(toApiError(e));
     } finally {
-      if (current === generation) setBusy(false);
+      if (current === generation) { setBusy(false); popupAbort = null; }
     }
   }
 
@@ -76,9 +96,9 @@ export function PermissionSettings() {
     if (completion?.code !== value) completion = { code: value, key: crypto.randomUUID() };
     setBusy(true); setError(null);
     try {
-      const result = await client.completePermissions(request.id, value, completion.key);
+      const result = await client.completePermissions(request.id, value, completion.key, request.state);
       if (current !== generation) return;
-      setRows(result); setPending(null); setCode(""); startKey = null; completion = null;
+      setRows(result); setPending(null); setCode(""); startKey = null; popupState = null; completion = null;
       setMessage("Access approved. Return to the feature and retry your action. You can revoke this access in IAM at any time.");
     } catch (e) {
       if (current === generation) setError(toApiError(e));
@@ -106,12 +126,12 @@ export function PermissionSettings() {
             <input id="feature-code" type="password" autocomplete="off" spellcheck={false} maxlength={16384} value={code()} onInput={(e) => setCode(e.currentTarget.value)} required />
             <Button type="submit" busy={busy()} disabled={!code().trim()}>Save approval</Button>
           </div>
-          <Button variant="ghost" disabled={busy()} onClick={() => { setPending(null); setCode(""); setError(null); completion = null; startKey = null; }}>Cancel</Button>
+          <Button variant="ghost" disabled={busy()} onClick={() => { setPending(null); setCode(""); setError(null); completion = null; startKey = null; popupState = null; popupAbort?.abort(); }}>Cancel</Button>
         </form>
       }>
         <label for="feature-choice">Feature</label>
         <div class="input-row">
-          <select id="feature-choice" value={selected()} disabled={busy()} onChange={(e) => { setSelected(e.currentTarget.value); startKey = null; setError(null); }}>
+          <select id="feature-choice" value={selected()} disabled={busy()} onChange={(e) => { setSelected(e.currentTarget.value); startKey = null; popupState = null; setError(null); }}>
             <For each={FEATURES}>{(feature) => <option value={feature.id}>{feature.name}</option>}</For>
           </select>
           <Button onClick={start} busy={busy()} disabled={!s.team()}>Request access</Button>

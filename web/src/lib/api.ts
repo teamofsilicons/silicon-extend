@@ -111,6 +111,7 @@ export interface FeaturePermission extends PermissionEndpoint {
 }
 
 export interface FeaturePermissionRequest {
+  state?: string;
   id: string;
   consent_url: string;
   expires_at: string;
@@ -445,7 +446,7 @@ export class ExtendClient {
   // ───────────── Auth ─────────────
 
   /** Exchanges an SLT (or, in a test environment, a test member id) and stores the pair. */
-  async login(slt: string): Promise<TokenPair> {
+  async login(slt: string, kind?: "carbon" | "silicon"): Promise<TokenPair> {
     const { data } = await this.request<AuthSession>({
       method: "POST",
       path: "/api/v1/auth/login",
@@ -457,6 +458,11 @@ export class ExtendClient {
     });
     const pair = pairFromSession(data, this.now());
     if (pair.teams.length !== 1) throw new ApiError(401,{code:"context_required",message:"Select exactly one organization in IAM and sign in again."});
+    if (kind) {
+      const { data: verified } = await this.request<Me>({ method: "GET", path: "/api/v1/auth/me", auth: false, team: "none", expect: "me", headers: { Authorization: `Bearer ${pair.access_token}`, "X-Org-ID": pair.teams[0] } });
+      if (!verified.authenticated || verified.member.type !== kind || pair.member.type !== kind || verified.member.id !== pair.member.id)
+        throw new ApiError(401, { code: "identity_kind_mismatch", message: `This sign-in did not return a ${kind} account. Start again with the matching account button.` });
+    }
     if (this.ctx.onLogin) this.ctx.onLogin(pair);
     else this.ctx.tokens.save(pair);
     return pair;
@@ -759,16 +765,16 @@ export class ExtendClient {
     return (await this.request<{ items: FeaturePermission[] }>({ method: "GET", path: "/api/v1/permissions", expect: "permissions" })).data.items;
   }
 
-  async requestPermissions(endpoints: PermissionEndpoint[], idempotencyKey: string): Promise<FeaturePermissionRequest> {
+  async requestPermissions(endpoints: PermissionEndpoint[], idempotencyKey: string, callback?: { redirect_uri: string; state: string }): Promise<FeaturePermissionRequest> {
     return (await this.request<FeaturePermissionRequest>({
-      method: "POST", path: "/api/v1/permissions", body: { type: "permission", data: { endpoints } },
+      method: "POST", path: "/api/v1/permissions", body: { type: "permission", data: { endpoints, ...(callback ? { callback } : {}) } },
       idempotent: true, idempotencyKey, expect: "permission",
     })).data;
   }
 
-  async completePermissions(id: string, code: string, idempotencyKey: string): Promise<FeaturePermission[]> {
+  async completePermissions(id: string, code: string, idempotencyKey: string, state?: string): Promise<FeaturePermission[]> {
     return (await this.request<{ items: FeaturePermission[] }>({
-      method: "POST", path: `/api/v1/permissions/${encodeURIComponent(id)}/complete`, body: { type: "permission", data: { code } },
+      method: "POST", path: `/api/v1/permissions/${encodeURIComponent(id)}/complete`, body: { type: "permission", data: { code, ...(state ? { state } : {}) } },
       idempotent: true, idempotencyKey, expect: "permissions",
     })).data.items;
   }

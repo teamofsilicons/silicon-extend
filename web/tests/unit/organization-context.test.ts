@@ -125,3 +125,38 @@ it("a refused old refresh cannot clear a newer login in the same organization", 
   await expect(c.listDevices({scope:"mine"})).rejects.toMatchObject({code:"token_expired"});
   expect(tokens.value).toEqual(newer);
 });
+
+
+it("late typed-popup verification cannot switch back after an account round trip", async () => createRoot(async dispose => {
+  const s = createSession(), original = pair(), other = pair({teams:["labs"],access_token:"labs",refresh_token:"labs-r"});
+  s.client().ctx.onLogin!(original);
+  const c = s.client();
+  let finish!: () => void, began!: () => void;
+  const started = new Promise<void>(resolve => began = resolve);
+  const hold = new Promise<void>(resolve => finish = resolve);
+  c.ctx.fetch = async input => {
+    if (String(input).endsWith("/auth/login")) return json(200,{type:"login",data:authSession("late-login","late-refresh")});
+    began(); await hold;
+    return json(200,{type:"me",data:{authenticated:true,member:original.member,teams:original.teams}});
+  };
+  const pending = c.login("oac_popup", "carbon");
+  await started;
+  s.client().ctx.onLogin!(other);
+  s.selectContext(contextId(original)!);
+  finish();
+  await expect(pending).rejects.toMatchObject({code:"context_changed"});
+  expect(s.pair()?.access_token).toBe(original.access_token);
+  expect(s.contexts()).toHaveLength(2);
+  dispose();
+}));
+
+it("refreshing an existing family does not invalidate the selected popup context", () => createRoot(dispose => {
+  const s = createSession(), original = pair();
+  s.client().ctx.onLogin!(original);
+  const c = s.client(), revision = s.contextRevision();
+  c.ctx.tokens.save({...original,access_token:"rotated",refresh_token:"rotated-r"},original.refresh_token);
+  expect(s.contextRevision()).toBe(revision);
+  c.ctx.onLogin!(pair({access_token:"popup-login",refresh_token:"popup-r"}));
+  expect(s.pair()?.access_token).toBe("popup-login");
+  dispose();
+}));

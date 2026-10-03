@@ -74,6 +74,8 @@ function loadWorld(): World {
 export function createSession() {
   const [world, setWorld] = createSignal<World>(loadWorld());
   const [authTick, setAuthTick] = createSignal(0);
+  const [contextRevision, setContextRevision] = createSignal(0);
+  const changedContext = () => setContextRevision(n => n + 1);
   const [telemetryOff, setTelemetryOff] = createSignal(read("local", KEYS.telemetry) === "off");
   const [signedOutReason, setSignedOutReason] = createSignal<ApiError | null>(null);
   const bump = () => setAuthTick((n) => n + 1);
@@ -90,7 +92,7 @@ export function createSession() {
     writeJson(area, contextKey(w, id), p);
     const ids = savedIds(w);
     if (!ids.includes(id)) writeJson(area, indexKey(w), [...ids, id]);
-    if (select) write(area, selectedKey(w), id);
+    if (select) { write(area, selectedKey(w), id); changedContext(); }
     bump();
   }
   // Import only already scoped legacy sessions. IAM revokes older unscoped credentials.
@@ -102,7 +104,7 @@ export function createSession() {
   });
   if (typeof window !== "undefined")
     window.addEventListener("storage", (event) => {
-      if (!event.key || event.key.startsWith(KEYS.productionAuth)) bump();
+      if (!event.key || event.key.startsWith(KEYS.productionAuth)) { changedContext(); bump(); }
     });
   const selected = createMemo(() => {
     authTick();
@@ -135,7 +137,7 @@ export function createSession() {
       },
       clear: () => {
         remove(area, key);
-        if (read(area, selectedKey(w)) === id) remove(area, selectedKey(w));
+        if (read(area, selectedKey(w)) === id) { remove(area, selectedKey(w)); changedContext(); }
         bump();
       },
     };
@@ -149,7 +151,7 @@ export function createSession() {
   const client = createMemo(() => {
     const w = world(),
       tokens = store(),
-      id = selected();
+      id = selected(), revision = contextRevision();
     const org = id ? (contexts().find((p) => contextId(p) === id)?.teams[0] ?? null) : null;
     return new ExtendClient({
       baseUrl: apiBaseUrl(),
@@ -159,7 +161,11 @@ export function createSession() {
       team: () => org,
       telemetryOff: () => telemetryOff(),
       lock: webLock,
-      onLogin: (p) => remember(w, p, true),
+      onLogin: (p) => {
+        if (revision !== contextRevision() || world() !== w || selected() !== id)
+          throw new ApiError(409, { code: "context_changed", message: "The selected account or environment changed during sign-in. Start sign-in again." });
+        remember(w, p, true);
+      },
       onSignedOut: (error) => {
         if (world() === w && (!selected() || selected() === id)) setSignedOutReason(error);
       },
@@ -172,8 +178,10 @@ export function createSession() {
     pair,
     contexts,
     contextKey: contextKeyValue,
+    contextRevision,
     selectContext(id: string) {
       if (!contexts().some((p) => contextId(p) === id)) return;
+      changedContext();
       write(areaFor(world()), selectedKey(world()), id);
       setSignedOutReason(null);
       bump();
@@ -191,6 +199,7 @@ export function createSession() {
         (p) => p.member.id === pair()?.member.id && p.member.type === pair()?.member.type && p.teams[0] === handle,
       );
       if (found) {
+        changedContext();
         write(areaFor(world()), selectedKey(world()), contextId(found)!);
         bump();
       }

@@ -57,12 +57,16 @@ test.describe("signing in", () => {
   test("through the Silicon IAM consent screen", async ({ page, mock }) => {
     void mock;
     await page.goto("/");
-    await page.getByTestId("sign-in-iam").click();
-    await expect(page).toHaveURL(/\/__mock\/iam\/login\?app_id=extend&redirect_uri=/);
-    const redirect = new URL(page.url()).searchParams.get("redirect_uri")!;
+    const opened = page.waitForEvent("popup");
+    await page.getByTestId("sign-in-carbon").click();
+    const popup = await opened;
+    await expect(popup).toHaveURL(/\/__mock\/iam\/login/);
+    expect(new URL(popup.url()).searchParams.get("identity_kind")).toBe("carbon");
+    const redirect = new URL(popup.url()).searchParams.get("redirect_uri")!;
     expect(new URL(redirect).pathname).toBe("/auth/callback");
     expect(new URL(redirect).searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    await page.getByRole("button", { name: /Continue as Saket/ }).click();
+    await popup.getByRole("button", { name: /Continue as Saket/ }).click();
+    await expect.poll(() => popup.isClosed()).toBe(true);
     await expect(page.getByTestId("devices-page")).toBeVisible();
     await expect(page).toHaveURL(/\/devices$/);
     await expect(page.getByTestId("member-id")).toHaveText("c:saket");
@@ -84,7 +88,7 @@ test.describe("signing in", () => {
     });
     await page.goto("/");
     await expect(page.getByTestId("signup")).toContainText("New to Silicon IAM?");
-    await expect(page.getByTestId("signup-note")).toContainText("checks your email and phone, creates your Carbon account and signs you in with a code");
+    await expect(page.getByTestId("signup-note")).toContainText("verifies your email, creates your Carbon account and signs you in with a code");
     await page.getByTestId("sign-up-iam").click();
     await expect(page.getByRole("heading", { name: "Silicon IAM sign-up" })).toBeVisible();
     const url = landed as unknown as URL;

@@ -41,3 +41,17 @@ describe("separate feature approval", () => {
     expect(tokens.value?.access_token).toBe("oat_old");
   });
 });
+
+
+it("retains popup correlation with the same pinned organization for completion retry", async () => {
+  const callback={redirect_uri:"https://extend.example/auth/obo/callback",state:"a".repeat(43)};
+  const {client:c,calls}=client(call => json(200,call.url.endsWith("/complete") ? {type:"permissions",data:{items:[]}} : {type:"permission",data:REQUEST}));
+  await c.requestPermissions(ROOTS,KEY,callback);
+  await c.completePermissions(ID,"obc_same_code",KEY,callback.state);
+  await c.completePermissions(ID,"obc_same_code",KEY,callback.state);
+  expect(calls[0].body).toEqual({type:"permission",data:{endpoints:ROOTS,callback}});
+  expect(calls[1].body).toEqual({type:"permission",data:{code:"obc_same_code",state:callback.state}});
+  expect(calls[2].body).toEqual(calls[1].body);
+  expect(calls[1].headers["Idempotency-Key"]).toBe(calls[2].headers["Idempotency-Key"]);
+  expect(calls.every(c=>c.headers["X-Org-ID"]==="acme")).toBe(true);
+});

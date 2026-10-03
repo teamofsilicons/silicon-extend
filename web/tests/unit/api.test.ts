@@ -346,3 +346,26 @@ describe("removed devices", () => {
     expect(calls.every((call) => new URL(call.url).searchParams.get("include_removed") === "true")).toBe(true);
   });
 });
+
+describe("typed popup session verification", () => {
+  it("never saves a mismatched account kind", async () => {
+    const store = memoryStore();
+    const { client: c } = client((call) => call.url.endsWith("/auth/login") ? json(200, { type: "login", data: session("oat_fresh", "ort_fresh") }) : json(200, { type: "me", data: { authenticated: true, member: { type: "carbon", id: "c:saket" } } }), { tokens: store });
+    await expect(c.login("oac_fresh", "silicon")).rejects.toMatchObject({ code: "identity_kind_mismatch" });
+    expect(store.saves).toBe(0);
+  });
+});
+
+
+it("typed popup verification uses only its fresh token and verified organization before context registration", async () => {
+  let registered: unknown;
+  const {client:c,calls,tokens} = client(call => call.url.endsWith("/auth/login")
+    ? json(200,{type:"login",data:{...session("oat_popup","ort_popup"),teams:["labs"]}})
+    : json(200,{type:"me",data:{authenticated:true,member:{type:"carbon",id:"c:saket"},teams:["labs"]}}),
+    {onLogin: pair => registered = pair});
+  await c.login("oac_popup","carbon");
+  expect(calls[1].headers.Authorization).toBe("Bearer oat_popup");
+  expect(calls[1].headers["X-Org-ID"]).toBe("labs");
+  expect(registered).toMatchObject({access_token:"oat_popup",teams:["labs"]});
+  expect(tokens.saves).toBe(0);
+});
