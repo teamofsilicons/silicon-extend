@@ -20,6 +20,7 @@ pub mod hub;
 pub mod iam;
 pub mod membership;
 pub mod obo;
+pub mod organizations;
 pub mod revocation;
 pub mod routes;
 pub mod scheduler;

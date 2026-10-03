@@ -12,7 +12,7 @@ use extend_protocol::frames::{EnrollmentFrame, ServiceFrame};
 use extend_protocol::model::{
     AccessGrant, ActivityEntry, AttachmentCreate, Delivery, DeviceSettingsPatch as DevicePatch, DeviceStopped,
     EndReason, InUseIndicator, Member, MemberKind, PairingClaim, RequestCreate, RequestInfo, RequestRoute, RetryResult,
-    SetupRetryInput, StepStatus, TeamReach, TeamSilicons, TestingEnvironment,
+    SetupRetryInput, StepStatus, TeamReach, TeamSilicons, TestingEnvironment, Visibility,
 };
 use extend_protocol::{DeviceId, DeviceOs, ErrorCode, PairingCode, TEST_DEVICE_LIMIT, TEST_DEVICE_LIMIT_MESSAGE, ids};
 use serde::Deserialize;
@@ -389,14 +389,18 @@ pub async fn claim(
     })?;
     let name = clean_name(&input.name)?;
     let ttl = check_ttl(input.pair_ttl_days)?;
-    // `visibility` is accepted and ignored: every device is personal.
+    if input.visibility.unwrap_or(Visibility::Personal) == Visibility::Personal && !input.silicon_ids.is_empty() {
+        return Err(AppError::invalid(
+            "A hidden device cannot be shared with Silicons. Choose organization visibility first.",
+        ));
+    }
     check_silicons(&state, &auth.p, auth.sel.as_ref(), &input.silicon_ids).await?;
     let world = auth.world.clone();
     let hash = hash_json(&input);
     let sel = auth.sel.clone();
     let p = auth.p.clone();
     let st = state.clone();
-    idempotent(&state, &auth.world, auth.p.id(), "pairings", &headers, &hash, || async move {
+    idempotent(&state, &auth.world, auth.p.id(), &format!("pairings:{team}"), &headers, &hash, || async move {
         // A successful fifth claim must replay before the now-full environment rejects new
         // devices. New claims still get the fast precheck and the transaction's atomic limit.
         if !joins_device(&st, &world, &code).await? {
@@ -466,6 +470,9 @@ pub async fn claim(
             },
         )
         .await?;
+        sqlx::query(sql!("UPDATE {} SET visibility = $3 WHERE device_id = $1 AND org_id = $2", world.t("device_organizations")))
+            .bind(&device_id).bind(&team).bind(input.visibility.unwrap_or(Visibility::Personal).as_str()).execute(&mut *add.tx).await?;
+
         // A new pair of a device already paired is ready at once: the app writes the same state
         // into every pair through each pair's hello, and until then it is the sibling's.
         match &joined {
@@ -555,7 +562,7 @@ pub async fn claim(
             domain::log_in(&st, &world, &device_id, &p.member, "access_granted", None, Some(&team), serde_json::json!({"silicon_id": s})).await;
         }
         delivery::register_carbon_if_new(&st, &world, &p, &team);
-        let view = domain::device_view(&st, &world, &d, Viewer::owner(&d), false).await;
+        let view = domain::device_view(&st, &world, &d, Viewer::of(Access::Owner, &p), false).await;
         tracing::info!(world = %world.schema, device_id, os = os.as_str(), joined = joined.is_some(), "device paired");
         Ok((StatusCode::CREATED, "device", serde_json::to_value(view).map_err(AppError::internal)?))
     })
@@ -594,21 +601,25 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
         }
     });
     let lim = limit(q.limit)?;
+    let selected_team = auth.team()?.to_owned();
     let (cond, access, team) = match (scope.as_str(), auth.p.is_silicon()) {
-        // A Carbon's devices, whichever Team is selected: devices belong to the Carbons who paired them.
-        ("mine", false) => ("d.owner_id = $1".to_owned(), Access::Owner, String::new()),
-        // Devices are never visible to Team colleagues any more; kept (empty) for the 1.0
-        // website's "Team devices" tab.
-        ("team", false) => ("false".to_owned(), Access::Silicon, String::new()),
+        // Configurations imported into this organization by the current Carbon.
+        ("mine", false) => ("d.owner_id = $1".to_owned(), Access::Owner, selected_team.clone()),
+        // Discovery is read-only; control still requires an explicit Silicon grant.
+        ("team", _) => (
+            "o.visibility = 'team' AND d.owner_id <> $1".to_owned(),
+            Access::Member,
+            selected_team.clone(),
+        ),
         ("accessible", true) => (
             format!(
-                "EXISTS (SELECT 1 FROM {} a WHERE a.device_id = d.device_id AND a.team = $2 AND a.silicon_id = $1)",
+                "o.visibility = 'team' AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id = d.device_id AND a.team = $2 AND a.silicon_id = $1)",
                 auth.world.t("device_access")
             ),
             Access::Silicon,
             auth.team()?.to_owned(),
         ),
-        ("mine" | "team", true) => {
+        ("mine", true) => {
             return Err(AppError::invalid(
                 "A Silicon lists the devices it has access to: use scope=accessible (the default).",
             ));
@@ -620,7 +631,7 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
         }
         (other, _) => {
             return Err(AppError::invalid(format!(
-                "scope must be mine or accessible; got {other:?}."
+                "scope must be mine, team or accessible; got {other:?}."
             )));
         }
     };
@@ -644,16 +655,14 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
             "Drop include_removed, or, as the Carbon who paired the devices, send scope=mine&include_removed=true.",
         ));
     }
-    if scope == "team" {
-        return Ok(ok("devices", serde_json::json!({"items": [], "next_cursor": null})));
-    }
     // `$2` (the Team) is mentioned in every scope so PostgreSQL can type it.
     let mut sql = format!(
-        "{} WHERE ($2::text IS NULL OR $2 IS NOT NULL) AND {cond}",
-        domain::device_select(&auth.world)
+        "{} JOIN {} o ON o.device_id = d.device_id AND o.org_id = $2 WHERE {cond}",
+        domain::device_select(&auth.world),
+        auth.world.t("device_organizations")
     );
     if !include_removed {
-        sql.push_str(" AND d.removed_at IS NULL");
+        sql.push_str(" AND d.removed_at IS NULL AND o.removed_at IS NULL");
     }
     if let Some(os) = &q.os {
         let os: DeviceOs = serde_json::from_value(serde_json::Value::String(os.clone())).map_err(|_| {
@@ -791,10 +800,11 @@ pub async fn update(
     .execute(&mut *tx)
     .await?;
     let current: Option<i64> = sqlx::query_scalar(sql!(
-        "SELECT version FROM {} WHERE device_id = $1 AND removed_at IS NULL FOR UPDATE",
-        auth.world.t("devices")
+        "SELECT d.version FROM {} d JOIN {} o ON o.device_id = d.device_id WHERE d.device_id = $1 AND d.removed_at IS NULL AND o.org_id = $2 AND o.removed_at IS NULL FOR UPDATE OF d",
+        auth.world.t("devices"), auth.world.t("device_organizations")
     ))
     .bind(&device_id)
+    .bind(auth.team()?)
     .fetch_optional(&mut *tx)
     .await?;
     if current.is_none() {
@@ -807,8 +817,24 @@ pub async fn update(
         )
         .hint("Read it again and retry."));
     }
-    // `visibility` is accepted and ignored: a device is only ever visible to the Carbons who
-    // paired it (a 1.0 website may still send it).
+    if let Some(visibility) = patch.visibility {
+        sqlx::query(sql!(
+            "UPDATE {} SET visibility = $3 WHERE device_id = $1 AND org_id = $2 AND removed_at IS NULL",
+            auth.world.t("device_organizations")
+        ))
+        .bind(&device_id)
+        .bind(auth.team()?)
+        .bind(visibility.as_str())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(sql!(
+            "UPDATE {} SET version = version + 1 WHERE device_id = $1",
+            auth.world.t("devices")
+        ))
+        .bind(&device_id)
+        .execute(&mut *tx)
+        .await?;
+    }
     if name.is_some() || ttl.is_some() {
         let updated = sqlx::query(sql!(
             "UPDATE {} SET name = COALESCE($2, name), pair_ttl_days = COALESCE($3, pair_ttl_days),
@@ -818,7 +844,7 @@ pub async fn update(
         .bind(&device_id)
         .bind(&name)
         .bind(ttl)
-        .bind(d.version)
+        .bind(d.version + i64::from(patch.visibility.is_some()))
         .execute(&mut *tx)
         .await?;
         if updated.rows_affected() == 0 {
@@ -834,7 +860,13 @@ pub async fn update(
     } else {
         false
     };
+    let disabled = if patch.visibility == Some(Visibility::Personal) {
+        crate::organizations::disable_in(&mut tx, &auth.world, std::slice::from_ref(&device_id), auth.team()?).await?
+    } else {
+        Default::default()
+    };
     tx.commit().await?;
+    crate::organizations::finish_disable(&state, &auth.world, disabled, &auth.p.member).await?;
     if name.is_some() || ttl.is_some() {
         let mut changes = serde_json::Map::new();
         if let Some(n) = &name {
@@ -848,13 +880,14 @@ pub async fn update(
         } else {
             "settings_changed"
         };
-        domain::log(
+        domain::log_in(
             &state,
             &auth.world,
             &device_id,
             &auth.p.member,
             action,
             None,
+            Some(auth.team()?),
             serde_json::Value::Object(changes),
         )
         .await;
@@ -886,7 +919,7 @@ pub async fn update(
     let d = domain::load_device(&state, &auth.world, &device_id)
         .await?
         .ok_or_else(|| domain::device_not_found(&device_id))?;
-    let view = domain::device_view(&state, &auth.world, &d, Viewer::owner(&d), true).await;
+    let view = domain::device_view(&state, &auth.world, &d, Viewer::of(Access::Owner, &auth.p), true).await;
     Ok(with_etag(ok("device", view), d.version))
 }
 
@@ -898,14 +931,7 @@ pub async fn remove(
 ) -> AppResult<Response> {
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     if_match(&headers, d.version)?;
-    domain::unpair(
-        &state,
-        &auth.world,
-        &device_id,
-        EndReason::DeviceRemoved,
-        &auth.p.member,
-    )
-    .await?;
+    crate::organizations::remove(&state, &auth, &d).await?;
     tracing::info!(world = %world_name(&auth.world), device_id, "device removed");
     Ok(no_content())
 }
@@ -920,53 +946,30 @@ fn world_name(w: &World) -> &str {
 /// carried device the caller didn't pair: the computer's own Stop does that.
 pub async fn stop(State(state): State<Shared>, auth: Auth, Path(device_id): Path<String>) -> AppResult<Response> {
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
-    let me = auth.p.id();
+    let org = auth.team()?;
     let mut here = None;
     let mut ended_other = false;
-    if let Some(sid) = d.in_use_session.clone() {
-        if d.held_here() {
-            here = domain::end_session(&state, &auth.world, &sid, EndReason::StoppedByCarbon, &auth.p.member).await?;
-        } else {
-            // Logged on the session's pair, for its owner, as a Carbon who paired the device.
-            ended_other = domain::end_session_with(
-                &state,
-                &auth.world,
-                &sid,
-                EndReason::StoppedByCarbon,
-                &domain::system_member(),
-                serde_json::json!({"stopped_by": "another_carbon"}),
-            )
-            .await?
-            .is_some();
-        }
-    }
     let mut carried_blocked = false;
+    if d.held_here()
+        && d.in_use_team.as_deref() == Some(org)
+        && let Some(sid) = &d.in_use_session
+    {
+        here = domain::end_session(&state, &auth.world, sid, EndReason::StoppedByCarbon, &auth.p.member).await?;
+    }
     for b in d.carried_busy() {
-        if !b.owners.iter().any(|o| o == me) {
+        if b.carbon != auth.p.id() || b.team != org {
             carried_blocked = true;
             continue;
         }
-        let ended = if b.carbon == me {
-            domain::end_session(
-                &state,
-                &auth.world,
-                &b.session_id,
-                EndReason::StoppedByCarbon,
-                &auth.p.member,
-            )
-            .await?
-        } else {
-            domain::end_session_with(
-                &state,
-                &auth.world,
-                &b.session_id,
-                EndReason::StoppedByCarbon,
-                &domain::system_member(),
-                serde_json::json!({"stopped_by": "another_carbon"}),
-            )
-            .await?
-        };
-        ended_other |= ended.is_some();
+        ended_other |= domain::end_session(
+            &state,
+            &auth.world,
+            &b.session_id,
+            EndReason::StoppedByCarbon,
+            &auth.p.member,
+        )
+        .await?
+        .is_some();
     }
     if let Some(row) = here {
         return Ok(ok("session", row.view()));
@@ -1037,7 +1040,7 @@ pub async fn attach(
         &state,
         &auth.world,
         auth.p.id(),
-        "attachments",
+        &format!("attachments:{}:{}", auth.team()?, host.device_id),
         &headers,
         &hash,
         || async move {
@@ -1069,6 +1072,10 @@ pub async fn attach(
                 test_limit(&st, &world).await?;
             }
             let mut add = begin_device_add(&st, &world).await?;
+            domain::lock_instances(&mut add.tx, &world, &[host.instance_id]).await?;
+            let bound: bool = sqlx::query_scalar(sql!("SELECT EXISTS (SELECT 1 FROM {} WHERE device_id = $1 AND org_id = $2 AND removed_at IS NULL)", world.t("device_organizations")))
+                .bind(&host.device_id).bind(p.team()?).fetch_one(&mut *add.tx).await?;
+            if !bound { return Err(domain::device_not_found(&host.device_id)); }
             let provisional_until = if world.is_test() && add.paired_before >= TEST_DEVICE_LIMIT {
                 if !candidate {
                     return Err(test_limit_error());
@@ -1081,8 +1088,7 @@ pub async fn attach(
                 &mut add.tx,
                 &world,
                 NewPair {
-                    // Informational: the host's (the Carbon's own pair of the computer).
-                    team: &host.team,
+                    team: p.team()?,
                     owner: p.id(),
                     name: &name,
                     os: input.os,
@@ -1099,6 +1105,8 @@ pub async fn attach(
                 },
             )
             .await?;
+            sqlx::query(sql!("UPDATE {} SET visibility = $3 WHERE device_id = $1 AND org_id = $2", world.t("device_organizations")))
+                .bind(&device_id).bind(p.team()?).bind(input.visibility.unwrap_or(Visibility::Personal).as_str()).execute(&mut *add.tx).await?;
             // Read back on the add's transaction (see claim), then commit.
             let d = domain::load_device_in(&mut *add.tx, &world, &device_id)
                 .await?
@@ -1115,7 +1123,7 @@ pub async fn attach(
                 serde_json::json!({"name": name, "through": host.device_id, "provisional": provisional_until.is_some()}),
             )
             .await;
-            let view = domain::device_view(&st, &world, &d, Viewer::owner(&d), false).await;
+            let view = domain::device_view(&st, &world, &d, Viewer::of(Access::Owner, &p), false).await;
             Ok((
                 StatusCode::CREATED,
                 "device",
@@ -1355,13 +1363,14 @@ pub async fn setup_retry(
         )
         .status(409));
     }
-    domain::log(
+    domain::log_in(
         &state,
         &auth.world,
         &device_id,
         &auth.p.member,
         "setup_retry",
         None,
+        Some(auth.team()?),
         serde_json::json!({"steps": retrying}),
     )
     .await;
@@ -1415,10 +1424,11 @@ pub async fn access_list(
         bool,
     )> = sqlx::query_as(sql!(
         "SELECT device_id, silicon_id, granted_by, granted_at, last_used_at, team, wake_muted FROM {}
-         WHERE device_id = $1 ORDER BY granted_at",
+         WHERE device_id = $1 AND team = $2 ORDER BY granted_at",
         auth.world.t("device_access")
     ))
     .bind(&device_id)
+    .bind(auth.team()?)
     .fetch_all(&state.pool)
     .await?;
     let items: Vec<AccessGrant> = rows.into_iter().filter_map(grant_view).collect();
@@ -1451,8 +1461,14 @@ pub async fn access_grant(
             "Sign in to Extend again and select {team} (approve Extend for {team} in Silicon IAM), then retry."
         ))
     };
-    if !auth.p.teams.contains(&team) {
+    if team != auth.team()? || !auth.p.teams.contains(&team) {
         return Err(unreachable());
+    }
+    if crate::organizations::visibility(&state, &auth.world, &device_id, &team, false).await? != Some(Visibility::Team)
+    {
+        return Err(AppError::invalid(
+            "A hidden device cannot be shared with Silicons. Make it visible to the organization first.",
+        ));
     }
     let mut p = state
         .authorize(&auth.p.token, Some(&team), auth.sel.as_ref())
@@ -1460,6 +1476,19 @@ pub async fn access_grant(
         .map_err(|_| unreachable())?;
     p.team = Some(team.clone());
     check_silicons(&state, &p, auth.sel.as_ref(), std::slice::from_ref(&silicon_id)).await?;
+    let mut tx = state.pool.begin().await?;
+    domain::lock_instances(&mut tx, &auth.world, &[d.instance_id]).await?;
+    let shared: bool = sqlx::query_scalar(sql!(
+        "SELECT EXISTS(SELECT 1 FROM {} WHERE device_id=$1 AND org_id=$2 AND visibility='team' AND removed_at IS NULL)",
+        auth.world.t("device_organizations")
+    ))
+    .bind(&device_id)
+    .bind(&team)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !shared {
+        return Err(domain::device_not_found(&device_id));
+    }
     let inserted = sqlx::query(sql!(
         "INSERT INTO {} (device_id, team, silicon_id, granted_by) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         auth.world.t("device_access")
@@ -1468,8 +1497,9 @@ pub async fn access_grant(
     .bind(&team)
     .bind(&silicon_id)
     .bind(auth.p.id())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     if inserted.rows_affected() > 0 {
         domain::log_in(
             &state,
@@ -1518,7 +1548,11 @@ pub async fn access_revoke(
     Query(q): Query<TeamQuery>,
 ) -> AppResult<Response> {
     domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
-    let team = q.team.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let current = auth.team()?;
+    if q.team.as_deref().is_some_and(|team| team != current) {
+        return Err(AppError::invalid("Select that organization's session first."));
+    }
+    let team = Some(current);
     domain::revoke_grants(
         &state,
         &auth.world,
@@ -1568,8 +1602,7 @@ pub async fn activity(
     Path(device_id): Path<String>,
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
-    // The log outlives the pair: the owner reads it after the device is removed too. Every Team's
-    // rows, each tagged with its Team.
+    // Owner history is scoped to the selected organization and outlives its binding.
     domain::owned_readable_device(&state, &auth.world, &device_id, &auth.p).await?;
     let lim = limit(q.limit)?;
     let before: Option<Uuid> = q
@@ -1585,7 +1618,7 @@ pub async fn activity(
            AND ($3::text IS NULL OR session_id = $3)
            AND ($4::timestamptz IS NULL OR at >= $4)
            AND ($5::timestamptz IS NULL OR at <= $5)
-           AND ($6::uuid IS NULL OR id < $6)
+           AND ($6::uuid IS NULL OR id < $6) AND team = $8
          ORDER BY id DESC LIMIT $7",
         auth.world.t("activity")
     ))
@@ -1596,6 +1629,7 @@ pub async fn activity(
     .bind(q.until)
     .bind(before)
     .bind(lim + 1)
+    .bind(auth.team()?)
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > lim;
@@ -1798,8 +1832,8 @@ pub async fn requests_for_device(
         &state,
         &auth.world,
         auth.p.id(),
-        "(r.device_id = $1 OR (r.routed_to = 'carbon' AND r.routed_to_id = $2 AND r.holder_device_id = $1))",
-        vec![device_id, auth.p.id().to_owned()],
+        "r.team = $3 AND (r.device_id = $1 OR (r.routed_to = 'carbon' AND r.routed_to_id = $2 AND r.holder_device_id = $1))",
+        vec![device_id, auth.p.id().to_owned(), auth.team()?.to_owned()],
         &q,
     )
     .await
@@ -1821,7 +1855,10 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
         }
     };
     let mut binds = vec![team, auth.p.id().to_owned()];
-    let mut cond = format!("r.team = $1 AND {who}");
+    let mut cond = format!(
+        "r.team = $1 AND {who} AND EXISTS (SELECT 1 FROM {} o WHERE o.device_id = r.device_id AND o.org_id = $1 AND o.visibility = 'team' AND o.removed_at IS NULL)",
+        auth.world.t("device_organizations")
+    );
     if let Some(d) = &q.device_id {
         binds.push(d.clone());
         cond.push_str(" AND r.device_id = $3");
@@ -1961,7 +1998,7 @@ pub async fn request_send(
                 )
                 .hint(format!("Start using it: extend --team {team} session new {device_id}")));
             };
-            if holder == p.id() {
+            if holder == p.id() && holder_team == team {
                 return Err(AppError::new(
                     ErrorCode::Conflict,
                     format!("You are already using {} in session {session}.", d.name),
@@ -1972,6 +2009,8 @@ pub async fn request_send(
                 .map_err(AppError::internal)?;
             let app_id = st.notifier.app_id().to_owned();
             let mut tx = begin_request_fold(&st, &fold_key).await?;
+            domain::lock_instances(&mut tx, &world, &[d.instance_id]).await?;
+            crate::organizations::require_grant(&mut *tx, &world, &device_id, &team, p.id()).await?;
             // Validate/replay the idempotency key before folding a recent same-reason request.
             // A repeat without a stored key keeps its 200 response and sends nothing; a new
             // reason is a new request. Team and holder session keep unrelated requests separate.
@@ -2027,7 +2066,7 @@ pub async fn request_send(
                 let their = domain::load_device_in(&mut *tx, &world, &holder_pair)
                     .await?
                     .ok_or_else(|| domain::device_not_found(&holder_pair))?;
-                let own_carbon = holder_carbon == d.owner_id;
+                let own_carbon = holder_carbon == d.owner_id && holder_team == team;
                 // The Ting goes as the asking Silicon when it shares a Team with the recipient (the
                 // Carbon's own Team with it, or the holder's Team when the asker's login reaches it);
                 // otherwise as the recipient, to themselves, from their own login. Never as the

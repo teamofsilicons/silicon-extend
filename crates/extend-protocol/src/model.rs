@@ -340,6 +340,13 @@ pub struct AttachmentCreate {
     pub address: Option<String>,
 }
 
+/// Import a configured device owned by the current account into its selected organization.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeviceImport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DevicePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]

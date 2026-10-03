@@ -52,6 +52,8 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v1/enrollments/{enrollment_id}/connect", get(enroll::socket))
         .route("/api/v1/pairings", post(devices::claim))
         .route("/api/v1/devices", get(devices::list))
+        .route("/api/v1/devices/importable", get(crate::organizations::importable))
+        .route("/api/v1/devices/{device_id}/import", post(crate::organizations::import))
         .route("/api/v1/devices/{device_id}", get(devices::get).patch(devices::update).delete(devices::remove))
         .route("/api/v1/devices/{device_id}/stop", post(devices::stop))
         .route("/api/v1/devices/{device_id}/attachments", post(devices::attach))

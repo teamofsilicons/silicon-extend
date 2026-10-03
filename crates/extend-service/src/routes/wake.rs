@@ -187,7 +187,7 @@ pub async fn create(
             .bind(p.id())
             .fetch_optional(&st.pool)
             .await?;
-            if d.wake_muted || grant_muted == Some(true) {
+            if crate::organizations::wake_muted(&st, &world, &device_id, &team).await? || grant_muted == Some(true) {
                 return Err(muted_error(&d));
             }
             ask(&st, &world, &d, &team, &p, sel, input.reason).await
@@ -212,11 +212,12 @@ async fn ask(
     let mut tx = state.pool.begin().await?;
     let group = domain::lock_group(&mut *tx, world, d.instance_id).await?;
     domain::lock_instances(&mut tx, world, &group.members).await?;
+    crate::organizations::require_grant(&mut *tx, world, &d.device_id, team, p.id()).await?;
     // Another Silicon holds the device, or (for a computer) a device it carries.
     let holders = group_sessions(&mut *tx, world, &group.members).await?;
-    for (instance, _, silicon, _, _) in &holders {
+    for (instance, _, silicon, holder_team, _) in &holders {
         let relevant = *instance == d.instance_id || (d.host_device_id.is_none() && group.host == d.instance_id);
-        if relevant && silicon != me {
+        if relevant && (silicon != me || holder_team != team) {
             drop(tx);
             let fresh = domain::load_device(state, world, &d.device_id)
                 .await?
@@ -468,7 +469,7 @@ pub async fn list(
         .transpose()?
         .and_then(|c| c.parse().ok());
     let rows: Vec<WakeRow> = sqlx::query_as(sql!(
-        "SELECT {WAKE_COLUMNS} FROM {} WHERE device_id = $1 AND ($2 OR (from_id = $3 AND team = $4))
+        "SELECT {WAKE_COLUMNS} FROM {} WHERE device_id = $1 AND team = $4 AND ($2 OR from_id = $3)
            AND (NOT $5 OR state = 'open') AND ($6::uuid IS NULL OR wake_id < $6)
          ORDER BY wake_id DESC LIMIT $7",
         auth.world.t("wake_requests")
@@ -508,6 +509,7 @@ pub async fn cancel(
         )
         .hint("List yours with `extend device show <device_id>`.")
     };
+    domain::visible_device(&state, &auth.world, &device_id, &auth.p).await?;
     let id: Uuid = wake_id.parse().map_err(|_| not_found())?;
     let w = wake::load(&state, &auth.world, id).await.ok_or_else(not_found)?;
     if !auth.p.is_silicon()
@@ -551,15 +553,17 @@ pub async fn answer(
         &state,
         &auth.world,
         auth.p.id(),
-        &format!("wake-answer:{device_id}"),
+        &format!("wake-answer:{}:{device_id}", auth.team()?),
         &headers,
         &hash,
         || async move {
             let open: Vec<WakeRow> = sqlx::query_as(sql!(
-                "SELECT {WAKE_COLUMNS} FROM {} WHERE instance_id = $1 AND state = 'open'",
+                "SELECT {WAKE_COLUMNS} FROM {} WHERE instance_id = $1 AND team = $2 AND device_id = $3 AND state = 'open'",
                 world.t("wake_requests")
             ))
             .bind(d.instance_id)
+            .bind(p.team()?)
+            .bind(&d.device_id)
             .fetch_all(&st.pool)
             .await?;
             let ended = match input.answer {
@@ -608,7 +612,7 @@ pub async fn answer(
             // Only this Carbon's own pair's requests are listed; other Carbons' are never shown.
             let host = wake::host_of(&st, &world, &d).await;
             let mut views = Vec::new();
-            for w in ended.iter().filter(|w| w.device_id == d.device_id) {
+            for w in ended.iter().filter(|w| w.device_id == d.device_id && p.team.as_deref() == Some(w.team.as_str())) {
                 let fresh = wake::load(&st, &world, w.wake_id).await.unwrap_or_else(|| w.clone());
                 if let Some(v) = fresh.view(true, host.clone()) {
                     views.push(v);
@@ -634,21 +638,29 @@ pub async fn settings(
     auth.require_carbon()?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let world = &auth.world;
+    let org = auth.team()?;
+    if input.team.as_deref().is_some_and(|team| team != org) {
+        return Err(AppError::invalid("Select that organization's session first."));
+    }
     match &input.silicon_id {
         None => {
             sqlx::query(sql!(
-                "UPDATE {} SET wake_muted = $2 WHERE device_id = $1",
-                world.t("devices")
+                "UPDATE {} SET wake_muted = $2 WHERE device_id = $1 AND org_id = $3",
+                world.t("device_organizations")
             ))
             .bind(&device_id)
             .bind(input.muted)
+            .bind(org)
             .execute(&state.pool)
             .await?;
             if input.muted {
                 wake::withdraw(
                     &state,
                     world,
-                    Withdraw::Pair { device_id: &device_id },
+                    Withdraw::Organization {
+                        device_id: &device_id,
+                        team: org,
+                    },
                     WakeEndReason::Muted,
                 )
                 .await;
@@ -661,7 +673,7 @@ pub async fn settings(
             ))
             .bind(&device_id)
             .bind(silicon)
-            .bind(&input.team)
+            .bind(Some(org))
             .bind(input.muted)
             .execute(&state.pool)
             .await?
@@ -683,7 +695,7 @@ pub async fn settings(
                     Withdraw::Muted {
                         device_id: &device_id,
                         silicon_id: silicon,
-                        team: input.team.as_deref(),
+                        team: Some(org),
                     },
                     WakeEndReason::Muted,
                 )
@@ -701,22 +713,20 @@ pub async fn settings(
         serde_json::json!({"silicon_id": input.silicon_id, "team": input.team}),
     )
     .await;
-    Ok(ok("wake_settings", settings_view(&state, world, &device_id).await?))
+    Ok(ok(
+        "wake_settings",
+        settings_view(&state, world, &device_id, org).await?,
+    ))
 }
 
-async fn settings_view(state: &AppState, world: &World, device_id: &str) -> AppResult<WakeSettingsView> {
-    let muted: bool = sqlx::query_scalar(sql!(
-        "SELECT wake_muted FROM {} WHERE device_id = $1",
-        world.t("devices")
-    ))
-    .bind(device_id)
-    .fetch_one(&state.pool)
-    .await?;
+async fn settings_view(state: &AppState, world: &World, device_id: &str, org: &str) -> AppResult<WakeSettingsView> {
+    let muted = crate::organizations::wake_muted(state, world, device_id, org).await?;
     let silicons: Vec<(String, String)> = sqlx::query_as(sql!(
-        "SELECT silicon_id, team FROM {} WHERE device_id = $1 AND wake_muted ORDER BY team, silicon_id",
+        "SELECT silicon_id, team FROM {} WHERE device_id = $1 AND team = $2 AND wake_muted ORDER BY team, silicon_id",
         world.t("device_access")
     ))
     .bind(device_id)
+    .bind(org)
     .fetch_all(&state.pool)
     .await?;
     let mut view = WakeSettingsView::new(device_id.parse().map_err(AppError::internal)?, muted);
@@ -769,17 +779,7 @@ pub async fn ting_get(State(state): State<Shared>, auth: Auth, Query(q): Query<T
     let world = &auth.world;
     if team == "any" {
         auth.require_carbon()?;
-        let mut teams: Vec<String> = auth.p.teams.clone();
-        let granted: Vec<String> = sqlx::query_scalar(sql!(
-            "SELECT DISTINCT team FROM {} WHERE granted_by = $1",
-            world.t("device_access")
-        ))
-        .bind(auth.p.id())
-        .fetch_all(&state.pool)
-        .await?;
-        teams.extend(granted);
-        teams.sort();
-        teams.dedup();
+        let teams = vec![auth.team()?.to_owned()];
         let mut items = Vec::new();
         for t in teams {
             let reachable = auth.p.teams.contains(&t);

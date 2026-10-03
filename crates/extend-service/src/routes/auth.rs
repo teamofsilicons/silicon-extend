@@ -95,12 +95,12 @@ pub async fn logout(
         )
         .hint("Retry `extend logout` in a moment; if it keeps failing, report it with `extend report`.")
     };
-    let mut member = state.iam.identify(&token, sel.as_ref()).await.map_err(unsure)?;
+    let mut member = state.iam.identify_context(&token, sel.as_ref()).await.map_err(unsure)?;
     if member.is_none()
         && let Some(b) = &bearer
     {
         member = match state.iam.authorize(b, None, sel.as_ref()).await {
-            Ok(p) => Some(p.member),
+            Ok(p) => p.team.clone().map(|org| (p.member, org)),
             Err(e) if crate::iam::refuses_token(&e) => None,
             Err(e) => return Err(unsure(e)),
         };
@@ -110,22 +110,24 @@ pub async fn logout(
     if let Some(b) = &bearer {
         state.auth_cache.forget_token(b).await;
     }
-    tracing::info!(member = ?member.as_ref().map(|m| m.id.clone()), world = %world.schema, "logout");
-    if let Some(m) = member {
+    tracing::info!(member = ?member.as_ref().map(|(m, _)| m.id.clone()), world = %world.schema, "logout");
+    if let Some((m, org)) = member {
         state.auth_cache.forget(std::slice::from_ref(&m.id)).await;
         if m.kind == extend_protocol::model::MemberKind::Silicon {
             let running: Vec<(String,)> = sqlx::query_as(sql!(
-                "SELECT session_id FROM {} WHERE silicon_id = $1 AND state <> 'ended'",
+                "SELECT session_id FROM {} WHERE silicon_id = $1 AND team = $2 AND state <> 'ended'",
                 world.t("sessions")
             ))
             .bind(&m.id)
+            .bind(&org)
             .fetch_all(&state.pool)
             .await?;
             for (sid,) in running {
                 domain::end_session(&state, &world, &sid, EndReason::SiliconLoggedOut, &m).await?;
             }
         } else {
-            let ended = domain::end_carbon_side(&state, &world, &m.id, None, EndReason::AccessRemoved, &m).await?;
+            let ended =
+                domain::end_carbon_side(&state, &world, &m.id, Some(&org), EndReason::AccessRemoved, &m).await?;
             if !ended.is_empty() {
                 tracing::info!(member = m.id, world = %world.schema, sessions = ?ended, "the Carbon logged out; the sessions of the Silicons they gave access to ended");
             }

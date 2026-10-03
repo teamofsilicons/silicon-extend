@@ -216,6 +216,17 @@ pub trait Iam: Send + Sync {
     /// Whose login `token` (an access or a refresh token) is, asked live before the token is
     /// revoked. `Ok(None)` when IAM no longer accepts the token (it expired or was already revoked);
     /// `Err` when IAM could not be asked.
+    async fn identify_context(
+        &self,
+        token: &str,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<Option<(Member, String)>> {
+        match self.authorize(token, None, sel).await {
+            Ok(p) => Ok(p.team.clone().map(|org| (p.member, org))),
+            Err(e) if refuses_token(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
     async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
         match self.authorize(token, None, sel).await {
             Ok(p) => Ok(Some(p.member)),
@@ -400,13 +411,19 @@ impl SdkIam {
             .actor
             .ok_or_else(|| AppError::unavailable("Silicon IAM", "login returned no actor"))?;
         let member = member_from_public_id(&actor.public_id)?;
+        let org = tokens.org_id.clone().filter(|o| !o.is_empty()).ok_or_else(|| {
+            AppError::new(
+                ErrorCode::TokenExpired,
+                "This login is not bound to an organization. Sign in again and choose one organization.",
+            )
+        })?;
         Ok(AuthSession {
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
             token_type: "Bearer".into(),
             expires_in: tokens.expires_in,
             member,
-            teams: tokens.org_id.into_iter().collect(),
+            teams: vec![org],
             testing_environment: sel.map(|s| extend_protocol::model::TestingEnvironment {
                 environment_id: s.environment_id,
                 name: s.name.clone(),
@@ -485,12 +502,7 @@ impl Iam for SdkIam {
             .login(&self.app_id, slt, &mutation(key)?)
             .await
             .map_err(login_error)?;
-        let mut session = self.session(tokens, sel)?;
-        if let Ok(Some(list)) = self.client(sel)?.oauth().authorizations(&session.access_token).await {
-            session.teams = list.into_iter().map(|a| a.org_id).collect();
-            session.teams.sort();
-            session.teams.dedup();
-        }
+        let session = self.session(tokens, sel)?;
         Ok(session)
     }
 
@@ -511,10 +523,7 @@ impl Iam for SdkIam {
                 }
                 err
             })?;
-        let mut session = self.session(tokens, sel)?;
-        if let Ok(Some(list)) = self.client(sel)?.oauth().authorizations(&session.access_token).await {
-            session.teams = list.into_iter().map(|a| a.org_id).collect();
-        }
+        let session = self.session(tokens, sel)?;
         Ok(session)
     }
 
@@ -558,6 +567,12 @@ impl Iam for SdkIam {
             .into_iter()
             .filter(|a| a.audience == self.app_id && a.testing_environment_id == env)
             .collect();
+        if all.len() > 1 {
+            return Err(AppError::new(
+                ErrorCode::TokenExpired,
+                "This older login spans organizations. Sign in again and choose one organization.",
+            ));
+        }
         let first = all.first().ok_or_else(|| {
             AppError::new(
                 ErrorCode::NotATeamMember,
@@ -577,7 +592,7 @@ impl Iam for SdkIam {
         teams.sort();
         teams.dedup();
         let (team, role) = match team {
-            None => (None, None),
+            None => (Some(first.org_id.clone()), first.org_role.clone()),
             Some(t) => {
                 let a = all.iter().find(|a| a.org_id == t).ok_or_else(|| {
                     AppError::new(
@@ -802,7 +817,11 @@ impl Iam for SdkIam {
             .await
     }
 
-    async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
+    async fn identify_context(
+        &self,
+        token: &str,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<Option<(Member, String)>> {
         let hint = if token.starts_with("ort_") {
             models::TokenIntrospectionRequestTokenTypeHint::RefreshToken
         } else {
@@ -824,13 +843,17 @@ impl Iam for SdkIam {
             return Ok(None);
         }
         // A token for another application says nothing about Extend's sessions.
-        if inspected.client_id.as_ref().is_some_and(|c| c.as_str() != self.app_id) {
+        if inspected.client_id.as_deref() != Some(self.app_id.as_str()) {
             return Ok(None);
         }
-        match inspected.public_id {
-            Some(id) => member_from_public_id(&id).map(Some),
-            None => Ok(None),
+        match (inspected.public_id, inspected.org_id) {
+            (Some(id), Some(org)) => Ok(Some((member_from_public_id(&id)?, org))),
+            _ => Ok(None),
         }
+    }
+
+    async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {
+        Ok(self.identify_context(token, sel).await?.map(|(member, _)| member))
     }
 
     async fn test_webhook_digest(&self, environment_id: Uuid) -> Option<String> {
@@ -1231,7 +1254,7 @@ impl Iam for LocalIam {
         {
             // Only this world's logins: production and each test environment are separate IAM
             // planes, so signing out of a test environment leaves the production login alone.
-            t.retain(|_, x| x.member != found.member || x.env != found.env);
+            t.retain(|_, x| x.member != found.member || x.env != found.env || x.teams != found.teams);
         }
         Ok(())
     }
@@ -1400,6 +1423,31 @@ impl Iam for LocalIam {
             testing_app_secret: None,
             testing_iam_key: None,
         })
+    }
+
+    async fn identify_context(
+        &self,
+        token: &str,
+        sel: Option<&TestingSelection>,
+    ) -> AppResult<Option<(Member, String)>> {
+        Ok(self
+            .tokens
+            .read()
+            .await
+            .get(token)
+            .filter(|t| t.env == sel.map(|s| s.environment_id))
+            .and_then(|t| {
+                t.teams.first().map(|org| {
+                    (
+                        Member {
+                            kind: ids::member_kind(&t.member).unwrap_or(MemberKind::Carbon),
+                            id: t.member.clone(),
+                            display_name: None,
+                        },
+                        org.clone(),
+                    )
+                })
+            }))
     }
 
     async fn identify(&self, token: &str, sel: Option<&TestingSelection>) -> AppResult<Option<Member>> {

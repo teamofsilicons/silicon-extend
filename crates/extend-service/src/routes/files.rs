@@ -70,22 +70,20 @@ pub struct ListQuery {
 /// A Silicon sees the files it made in the Team it acts in; a Carbon, the files made on their pairs
 /// in every Team (`$1`, the Team, is still mentioned so PostgreSQL can type it).
 fn who(auth: &Auth) -> String {
-    if auth.p.is_silicon() {
-        "f.team = $1 AND f.created_by = $2".into()
+    let member = if auth.p.is_silicon() {
+        "f.created_by = $2 AND o.visibility = 'team'"
     } else {
-        format!(
-            "($1::text IS NULL OR $1 IS NOT NULL) AND EXISTS (SELECT 1 FROM {} d WHERE d.device_id = f.device_id AND d.owner_id = $2)",
-            auth.world.t("devices")
-        )
-    }
+        "d.owner_id = $2"
+    };
+    format!(
+        "f.team = $1 AND EXISTS (SELECT 1 FROM {} d JOIN {} o ON o.device_id = d.device_id WHERE d.device_id = f.device_id AND o.org_id = $1 AND o.removed_at IS NULL AND {member})",
+        auth.world.t("devices"),
+        auth.world.t("device_organizations")
+    )
 }
 
 fn team_of(auth: &Auth) -> AppResult<Option<String>> {
-    if auth.p.is_silicon() {
-        Ok(Some(auth.team()?.to_owned()))
-    } else {
-        Ok(auth.p.team.clone())
-    }
+    Ok(Some(auth.team()?.to_owned()))
 }
 
 pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
