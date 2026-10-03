@@ -1,6 +1,6 @@
 # Organization-scoped devices
 
-This candidate adds organization bindings without pairing a physical device again.
+Extend 3.1 adds organization bindings without pairing a physical device again.
 The configured pair keeps its device ID, physical instance, credential, host
 attachment and socket. Each organization has its own visibility, Silicon grants,
 notifications, sessions and activity. The physical device lock still prevents
@@ -64,10 +64,26 @@ scheduler also repairs an interrupted visibility change.
 Testing cleanup removes bindings with the other test data.
 
 An old service does not enforce organization bindings or hidden visibility.
-Rolling back only the binary is therefore unsafe after this candidate is enabled.
-Keep this candidate private until its backend, website, CLI and SDK can be cut over
-together; take the normal database backup and validate IAM 5 before deployment.
+Rolling back only the binary is therefore unsafe after schema 7 is enabled.
+Restore matching database, runtime configuration and durable-session backups while
+access is stopped or restricted, then reapply schema 7 before exposing the service.
+Do not reopen an older globally visible runtime against the migrated database.
 The physical agent transport needs no new credential or re-pairing step.
+
+The paired service and website cutover completed on 2026-10-03. Both production and
+the existing testing schema reached version 7; all backfilled bindings were private,
+old grants had organization bindings, and physical credential/instance/salt
+fingerprints and live pairing counts were unchanged. Encrypted RDS and host-volume
+snapshots captured the stopped-writer database, runtime configuration and session
+state before migration. Runtime source `67c7469` and the matching website passed
+readiness, version, anonymous-access and canonical static-asset checks.
+
+CLI 3.1.0 binaries were built at `b74e712`. The `cli-v3.1.0` release at `5bb6e40`
+adds only packaging metadata, a regression test and deployment documentation:
+protocol crate 1.1.1 is required by SDK/CLI 3.1.0 so registry installs retain the
+private default. The runtime implementation is identical. All three Rust crates
+and the six-platform GitHub archive were published and their public checksums
+verified. Physical desktop and Android application versions remain unchanged.
 
 IAM production login and authorization now accept a single account and
 organization. Legacy multi-organization application sessions prompt a new login.
@@ -92,13 +108,20 @@ WebSocket: own-device import, private defaults, wrong owner and testing-world
 refusal, separate organization credentials, discovery versus control, hiding an
 active session, physical credential preservation, cross-organization session
 redaction, removal, logout, and additive schema/cleanup behavior. IAM and provider
-services are local stand-ins in these tests. Live IAM 5 consent and the coordinated
-runtime deployment remain separate release gates.
+services are local stand-ins in these tests. They establish local authorization
+behavior; authenticated live consent and resource acceptance remain separate.
 
 Verified locally on 2026-10-03: the full service suite passed 189 tests. After the
 final host-removal race and private-default changes, all 15 affected integration
 tests passed, including four organization tests. All 37 protocol tests and strict
-service all-target Clippy also passed. The existing captured-production-schema
-rehearsal remains ignored until a capture is supplied; credential-gated live
-provider tests were not exercised. Native changes are copy only; no physical
-device installation was performed by this task.
+service all-target Clippy also passed. Before the production cutover, an additional
+captured-schema 6-to-7 rehearsal passed on isolated PostgreSQL 17 using synthetic
+rows, including private backfill, preserved physical credentials, idempotent
+reapplication, backup restoration and private creation by the native-pair trigger.
+The older ignored suite fixture is not the evidence for that operator rehearsal.
+
+Authenticated live own-device import, known-ID privacy denials for another
+member/admin/Silicon, and old-grant denial still await designated disposable
+identities and devices. Credential-gated live provider tests and physical control
+were not exercised. Anonymous production UI checks and unchanged pairing
+fingerprints must not be described as those authenticated or physical tests.
