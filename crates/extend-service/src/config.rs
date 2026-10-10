@@ -583,6 +583,17 @@ mod tests {
     }
 
     #[test]
+    fn the_docker_image_defaults_to_production() {
+        let dockerfile = include_str!("../../../Dockerfile");
+        let runtime = dockerfile.split("AS runtime").nth(1).expect("a runtime stage");
+        assert!(runtime.contains("EXTEND_ENVIRONMENT=production"), "{runtime}");
+        assert!(
+            !dockerfile.contains("vendor/silicon-iam-client"),
+            "the image builds without the IAM client"
+        );
+    }
+
+    #[test]
     fn production_refuses_every_local_stand_in() {
         for (name, value) in [
             ("EXTEND_ACCOUNTS_MODE", "local"),

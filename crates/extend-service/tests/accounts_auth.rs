@@ -31,6 +31,19 @@ async fn an_access_token_from_silicon_accounts_says_who_is_calling() {
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["data"]["type"], "carbon");
     assert!(v["data"].get("custodian").is_none_or(Value::is_null), "{v}");
+    // The actor every route sees: uuid, kind and current id, the sign-in family and its scopes.
+    let p = env
+        .state
+        .accounts
+        .authenticate(&login(&env, "si:chef").await)
+        .await
+        .unwrap();
+    assert_eq!(
+        (p.uuid.as_str(), p.is_silicon(), p.id.as_str(), p.scope.as_deref()),
+        (uuid("si:chef").as_str(), true, "si:chef", Some("profile"))
+    );
+    assert!(p.family.as_deref().is_some_and(|f| f.starts_with("fam_")), "{p:?}");
+    assert!(p.issued_at.is_some());
 }
 
 #[tokio::test]

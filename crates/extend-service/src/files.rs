@@ -244,17 +244,20 @@ impl BriefcaseFiles {
         .await
     }
 
-    fn file_url(&self, owner_id: &str, name: &str) -> String {
+    /// The permanent Briefcase link of a file in Extend's folder of an account's drive:
+    /// `{web}/org/{account uuid}/apps/extend/{name}` (Briefcase names a drive by its account's
+    /// uuid, and an app acting for an account writes under `apps/{app}/`).
+    pub fn file_url(&self, owner_uuid: &str, name: &str) -> String {
         match url::Url::parse(&self.web_url) {
             Ok(mut url) => {
                 if let Ok(mut segments) = url.path_segments_mut() {
                     segments
                         .pop_if_empty()
-                        .extend([owner_id, "apps", self.app_id.as_str(), name]);
+                        .extend(["org", owner_uuid, "apps", self.app_id.as_str(), name]);
                 }
                 url.to_string()
             }
-            Err(_) => format!("{}/{owner_id}/apps/{}/{name}", self.web_url, self.app_id),
+            Err(_) => format!("{}/org/{owner_uuid}/apps/{}/{name}", self.web_url, self.app_id),
         }
     }
 }
@@ -356,10 +359,13 @@ impl FileStore for BriefcaseFiles {
                 .get("capability")
                 .and_then(Value::as_str)
                 .ok_or_else(|| AppError::unavailable("Briefcase", "the upload reservation has no capability"))?;
+            // The transfer carries no proof: the capability authorizes the bytes, inside the drive
+            // of the account the reservation belongs to (Briefcase reads it from X-Org-ID).
             let sent = self
                 .http
                 .put(format!("{}/api/v1/obo/uploads/{upload_id}/content", self.api_url))
                 .header("x-briefcase-upload-capability", capability)
+                .header("x-org-id", silicon.uuid())
                 .header("content-type", "application/octet-stream")
                 .header("content-length", size)
                 .body(file.bytes)
@@ -407,7 +413,9 @@ impl FileStore for BriefcaseFiles {
                 )
                 .hint("Run the command again; Extend never makes a second copy of the same upload.")
             })?;
-        let url = self.file_url(who, &name);
+        let url = self.file_url(silicon.uuid(), &name);
+        // The Carbon is named by uuid (Briefcase takes a uuid or a current id; the uuid can't
+        // have moved to someone else since the device was paired).
         let share = self
             .call(
                 &proof,
@@ -416,7 +424,7 @@ impl FileStore for BriefcaseFiles {
                     "operation_id": trash_operation_id(file.operation_id),
                     "entry_id": file_id,
                     "invitation": {
-                        "principal": {"type": "carbon", "id": file.owner_carbon.id},
+                        "principal": {"type": "carbon", "id": file.owner_carbon.uuid},
                         "access": ["read", "update"],
                         "inherit": true,
                     },

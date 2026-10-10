@@ -6,10 +6,9 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::response::Response;
 use extend_protocol::account::{AccountMe, AccountRef, SignOut};
-use extend_protocol::model::{EndReason, MemberKind};
+use extend_protocol::model::MemberKind;
 
 use super::{no_content, ok};
-use crate::domain;
 use crate::error::{AppError, AppResult};
 use crate::state::{Auth, Shared};
 
@@ -56,27 +55,15 @@ pub async fn logout(State(state): State<Shared>, auth: Auth, body: Bytes) -> App
         )
         .hint("Retry `extend logout` in a moment; if it keeps failing, report it with `extend report`.")
     })?;
-    state.accounts.forget(auth.p.uuid()).await;
-    state.proofs.drop_account(auth.p.uuid()).await;
-    let ended = if auth.p.is_silicon() {
-        domain::end_silicon_sessions(
-            &state,
-            &auth.world,
-            auth.p.uuid(),
-            EndReason::SiliconLoggedOut,
-            &auth.p.actor(),
-        )
-        .await?
-    } else {
-        domain::end_carbon_side(
-            &state,
-            &auth.world,
-            auth.p.uuid(),
-            EndReason::AccessRemoved,
-            &auth.p.actor(),
-        )
-        .await?
-    };
+    let ended = crate::lifecycle::logged_out(
+        &state,
+        &auth.world,
+        auth.p.uuid(),
+        Some(auth.p.kind),
+        None,
+        &auth.p.actor(),
+    )
+    .await?;
     tracing::info!(account = auth.p.public_id(), uuid = auth.p.uuid(), sessions = ?ended, "signed out of Extend");
     Ok(no_content())
 }

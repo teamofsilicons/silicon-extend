@@ -37,8 +37,8 @@ pub const JWKS_REFETCH_EVERY: Duration = Duration::from_secs(10);
 /// A fetched JWKS is refreshed in the background after this long.
 pub const JWKS_MAX_AGE: Duration = Duration::from_secs(3600);
 
-/// A signed-in Carbon or Silicon, from a verified access token.
-#[derive(Debug, Clone)]
+/// A signed-in Carbon or Silicon, from a verified access token. (`Debug` leaves the token out.)
+#[derive(Clone)]
 pub struct Principal {
     /// The permanent Silicon Accounts uuid: what Extend stores.
     pub uuid: String,
@@ -51,8 +51,26 @@ pub struct Principal {
     pub token: String,
     /// `iat` of the token (unix seconds).
     pub issued_at: Option<i64>,
-    /// The sign-in family (`fid`).
+    /// The sign-in family (`fid`): one sign-in of the account at Extend (a machine's CLI, the
+    /// website), across its refreshes.
     pub family: Option<String>,
+    /// The scopes the sign-in was granted (`scope`, space-separated), as Silicon Accounts issued them.
+    pub scope: Option<String>,
+}
+
+impl std::fmt::Debug for Principal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Principal")
+            .field("uuid", &self.uuid)
+            .field("kind", &self.kind)
+            .field("id", &self.id)
+            .field("display_name", &self.display_name)
+            .field("token", &"<redacted>")
+            .field("issued_at", &self.issued_at)
+            .field("family", &self.family)
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 impl Principal {
@@ -302,5 +320,6 @@ fn principal_of(claims: &Claims, token: &str) -> AppResult<Principal> {
         token: token.to_owned(),
         issued_at: claims.iat,
         family: claims.fid.clone(),
+        scope: claims.scope.clone().filter(|s| !s.trim().is_empty()),
     })
 }

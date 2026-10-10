@@ -1227,21 +1227,23 @@ pub async fn end_device_sessions(
 }
 
 /// Ends the running sessions of the Silicons one Carbon gave access to: every session through that
-/// Carbon's pairs. Never another Carbon's side.
+/// Carbon's pairs (with `started_before`, only those started earlier). Never another Carbon's side.
 pub async fn end_carbon_side(
     state: &AppState,
     world: &World,
     carbon: &str,
+    started_before: Option<OffsetDateTime>,
     reason: EndReason,
     actor: &Member,
 ) -> AppResult<Vec<String>> {
     let ids: Vec<(String,)> = sqlx::query_as(sql!(
         "SELECT s.session_id FROM {} s JOIN {} d ON d.device_id = s.device_id
-         WHERE d.owner_id = $1 AND s.state <> 'ended'",
+         WHERE d.owner_id = $1 AND s.state <> 'ended' AND ($2::timestamptz IS NULL OR s.started_at < $2)",
         world.t("sessions"),
         world.t("devices")
     ))
     .bind(carbon)
+    .bind(started_before)
     .fetch_all(&state.pool)
     .await?;
     let mut ended = Vec::new();
@@ -1254,19 +1256,22 @@ pub async fn end_carbon_side(
 }
 
 /// Ends every running session of one Silicon (it signed out, removed Extend's access, or was
-/// deleted).
+/// deleted); with `started_before`, only those started earlier.
 pub async fn end_silicon_sessions(
     state: &AppState,
     world: &World,
     silicon: &str,
+    started_before: Option<OffsetDateTime>,
     reason: EndReason,
     actor: &Member,
 ) -> AppResult<Vec<String>> {
     let ids: Vec<(String,)> = sqlx::query_as(sql!(
-        "SELECT session_id FROM {} WHERE silicon_id = $1 AND state <> 'ended'",
+        "SELECT session_id FROM {} WHERE silicon_id = $1 AND state <> 'ended'
+           AND ($2::timestamptz IS NULL OR started_at < $2)",
         world.t("sessions")
     ))
     .bind(silicon)
+    .bind(started_before)
     .fetch_all(&state.pool)
     .await?;
     let mut ended = Vec::new();
@@ -1551,6 +1556,15 @@ pub fn unpair_with<'a>(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+        // A device attached through this pair while it waited for the lock (after `hosted` was
+        // read) leaves with its host; attachments that come later find the host removed.
+        let late: Vec<String> = sqlx::query_scalar(sql!(
+            "SELECT device_id FROM {} WHERE host_device_id = $1 AND removed_at IS NULL",
+            world.t("devices")
+        ))
+        .bind(device_id)
+        .fetch_all(&mut *tx)
+        .await?;
         sqlx::query(sql!("DELETE FROM {} WHERE device_id = $1", world.t("device_access")))
             .bind(device_id)
             .execute(&mut *tx)
@@ -1574,6 +1588,9 @@ pub fn unpair_with<'a>(
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
+        for child in late {
+            unpair(state, world, &child, reason, actor).await?;
+        }
         if ended == 0 {
             return Ok(());
         }

@@ -258,10 +258,22 @@ async fn a_deleted_carbons_pairs_end_and_others_history_keeps_a_placeholder() {
     let app = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
     let (_, sess) = session(&env, &chef, &d).await;
     let sid = sess["data"]["session_id"].as_str().unwrap().to_owned();
+    // She turned Extend's notifications on in Ting.
+    let (s, t) = api(&env, "PUT", "/api/v2/ting-registration", &alice, None).await;
+    assert_eq!(s, 200, "{t}");
+    let enrolled = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.ting_enrolments WHERE account_uuid = $1")
+            .bind(uuid("c:alice"))
+            .fetch_one(&env.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(enrolled().await, 1);
     assert_eq!(
         deliver(&env, "account.deleted", json!({"uuid": uuid("c:alice")})).await,
         204
     );
+    assert_eq!(enrolled().await, 0, "her enrolment record goes with her");
     // Her pair is unpaired; the device app is told.
     app.wait("unpaired", |_| true).await;
     let removed: Option<String> = sqlx::query_scalar("SELECT removed_reason FROM extend.devices WHERE device_id = $1")

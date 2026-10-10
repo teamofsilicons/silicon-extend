@@ -196,7 +196,11 @@ async fn a_silicons_files_go_to_its_briefcase_with_its_own_proof() {
         }))
         .route("/api/v1/obo/uploads/{id}/content", put(move |State(s): State<Arc<Mutex<Briefcase>>>, h: HeaderMap, Path(id): Path<Uuid>, body: Bytes| async move {
             assert_eq!(id, upload);
+            // Briefcase's transfer: the capability, and the drive (the Silicon's uuid) it belongs
+            // to; never a proof or a token.
             assert_eq!(h["x-briefcase-upload-capability"], "cap-1");
+            assert_eq!(h["x-org-id"], uuid("si:chef").as_str());
+            assert!(!h.contains_key("authorization"), "no credential on the transfer");
             s.lock().unwrap().calls.push(("content".into(), auth(&h), json!({"bytes": body.len()})));
             axum::Json(json!({"state": "staged", "upload_id": upload}))
         }))
@@ -251,9 +255,10 @@ async fn a_silicons_files_go_to_its_briefcase_with_its_own_proof() {
         (entry, Some(alice.as_str()))
     );
     assert!(
-        stored
-            .url
-            .starts_with("https://briefcase.example/si:chef/apps/extend/shot-"),
+        stored.url.starts_with(&format!(
+            "https://briefcase.example/org/{}/apps/extend/shot-",
+            uuid("si:chef")
+        )),
         "{}",
         stored.url
     );
@@ -268,7 +273,7 @@ async fn a_silicons_files_go_to_its_briefcase_with_its_own_proof() {
     );
     assert_eq!(
         calls[3].2["invitation"]["principal"],
-        json!({"type": "carbon", "id": "c:alice"})
+        json!({"type": "carbon", "id": alice})
     );
     assert_eq!(calls[3].2["invitation"]["access"], json!(["read", "update"]));
     // The proof is chef's, for Briefcase, with exactly the scopes Extend uses there.

@@ -1411,7 +1411,11 @@ async fn display_resolves_own_stored_files_into_compatible_device_attachments() 
         );
     }
     // A public URL is passed through unchanged, without fetching it from the service.
-    let private_url = format!("https://briefcase.example/si:chef/apps/extend/shot-{}.png", f.file_id);
+    let private_url = format!(
+        "https://briefcase.example/org/{}/apps/extend/shot-{}.png",
+        uuid("si:chef"),
+        f.file_id
+    );
     sqlx::query("UPDATE extend.files SET url = $2 WHERE file_id = $1")
         .bind(f.file_id)
         .bind(&private_url)
@@ -1460,7 +1464,11 @@ async fn display_files_enforce_owner_expiry_type_and_attachment_limits_before_re
         .to_string();
     let f = c.run(&sid, &cmd("screenshot", &[])).await.unwrap().files.remove(0);
     let display = cmd("display", &["show", "--image", &format!("file:{}", f.file_id)]);
-    let private_url = format!("https://briefcase.example/si:chef/apps/extend/shot-{}.png", f.file_id);
+    let private_url = format!(
+        "https://briefcase.example/org/{}/apps/extend/shot-{}.png",
+        uuid("si:chef"),
+        f.file_id
+    );
     sqlx::query("UPDATE extend.files SET url = $2 WHERE file_id = $1")
         .bind(f.file_id)
         .bind(&private_url)

@@ -1038,14 +1038,34 @@ async fn a_carbons_sign_out_everywhere_ends_their_side() {
     let _app = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
     let (_, s) = session(&env, &sous, &d).await;
     let sid = s["data"]["session_id"].as_str().unwrap().to_owned();
-    // Extend revoking one sign-in itself (another machine's logout) ends nothing more.
-    let status = deliver(&env, "membership.signed_out", json!({"uuid": uuid("c:alice"), "membership_id": format!("extend:{}", uuid("c:alice")), "reason": "app_revoked"})).await;
+    let signed_out = |reason: &str| json!({"uuid": uuid("c:alice"), "membership_id": format!("extend:{}", uuid("c:alice")), "reason": reason});
+    // Extend revoking one of her sign-ins (a logout the CLI or website could only send to Silicon
+    // Accounts) ends her side like `POST /api/v2/auth/logout`, but never a session started after
+    // that logout: here, one delivered late.
+    let earlier = time::OffsetDateTime::now_utc() - time::Duration::minutes(5);
+    let status = deliver_at(
+        &env,
+        &Uuid::now_v7().to_string(),
+        "membership.signed_out",
+        signed_out("app_revoked"),
+        earlier,
+    )
+    .await;
     assert_eq!(status, 204);
     let (_, v) = api(&env, "GET", &format!("/api/v2/sessions/{sid}"), &sous, None).await;
-    assert_eq!(v["data"]["state"], "active");
+    assert_eq!(v["data"]["state"], "active", "{v}");
+    let status = deliver(&env, "membership.signed_out", signed_out("app_revoked")).await;
+    assert_eq!(status, 204);
+    let (_, v) = api(&env, "GET", &format!("/api/v2/sessions/{sid}"), &sous, None).await;
+    assert_eq!(v["data"]["end_reason"], "access_removed", "{v}");
+    // Her other sign-ins stay valid.
+    let (s, _) = api(&env, "GET", "/api/v2/devices", &alice, None).await;
+    assert_eq!(s, 200);
     // Signed out everywhere (her sessions on the account site were revoked).
+    let (_, s) = session(&env, &sous, &d).await;
+    let sid = s["data"]["session_id"].as_str().unwrap().to_owned();
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let status = deliver(&env, "membership.signed_out", json!({"uuid": uuid("c:alice"), "membership_id": format!("extend:{}", uuid("c:alice")), "reason": "session_revoked"})).await;
+    let status = deliver(&env, "membership.signed_out", signed_out("session_revoked")).await;
     assert_eq!(status, 204);
     let (_, v) = api(&env, "GET", &format!("/api/v2/sessions/{sid}"), &sous, None).await;
     assert_eq!(v["data"]["end_reason"], "access_removed");

@@ -5,7 +5,7 @@
 //! | `account.id_changed` | the cached public id changes; everything stays keyed on the uuid |
 //! | `account.updated` | cached name, photo and custodian, when the event's version is newer |
 //! | `silicon.custodian_changed` | the new custodian sees the Silicon; the grants the previous custodian gave it end (their sessions end as `access_removed`); other Carbons' grants stay, and their devices' logs say the custodian changed |
-//! | `membership.signed_out` (`app_revoked`) | nothing more: Extend itself revoked one sign-in (`POST /api/v2/auth/logout` already ended that side) |
+//! | `membership.signed_out` (`app_revoked`) | Extend revoked one sign-in (a logout): what that account runs ends as in `POST /api/v2/auth/logout` (only sessions started before the logout; a no-op when the logout already ended them), its other sign-ins stay valid |
 //! | `membership.signed_out` (any other reason), `membership.access_removed` | tokens issued before the event are refused; a Silicon's sessions end, a Carbon's Silicons' sessions on their pairs end; held proofs end; pairs and grants stay |
 //! | `account.deleted` | as above, and: a Carbon's pairs end (their devices are unpaired); a Silicon's grants are archived and its wake requests withdrawn; the account shows as "deleted account" in others' history |
 //!
@@ -103,9 +103,13 @@ async fn apply(state: &AppState, world: &World, event: &WebhookEvent) -> AppResu
         }
         WebhookPayload::MembershipSignedOut(d) => {
             if d.reason.as_deref() == Some("app_revoked") {
-                // Extend revoked one sign-in itself (a logout); that side already ended.
-                tracing::info!(uuid = %d.uuid, "Extend revoked one sign-in of the account; its other sign-ins stay");
-                state.accounts.forget(&d.uuid).await;
+                // Extend revoked one sign-in of the account: a logout (one machine's CLI, or the
+                // website). `POST /api/v2/auth/logout` already ended what it runs; when the CLI or
+                // website could only revoke at Silicon Accounts directly, it ends now. Sessions
+                // started after the logout stay, and the account's other sign-ins stay valid.
+                let kind = directory.get(&d.uuid).await?.map(|r| r.kind());
+                let ended = logged_out(state, world, &d.uuid, kind, Some(at), &domain::system_member()).await?;
+                tracing::info!(uuid = %d.uuid, sessions = ?ended, "one sign-in of the account at Extend ended; its other sign-ins stay");
             } else {
                 tracing::info!(uuid = %d.uuid, reason = ?d.reason, "the account signed out of Extend everywhere");
                 access_ended(state, world, &d.uuid, at).await?;
@@ -126,6 +130,32 @@ async fn apply(state: &AppState, world: &World, event: &WebhookEvent) -> AppResu
     Ok(())
 }
 
+/// One sign-in of an account at Extend ended (a logout): the proofs Extend holds for it end, and
+/// what it runs ends: a Silicon's sessions (`silicon_logged_out`), or the sessions of the Silicons
+/// a Carbon gave access to through their own pairs (`access_removed`, never another Carbon's
+/// side). With `started_before`, sessions started later are left alone. Tokens stay valid: the
+/// account may be signed in elsewhere. Returns the sessions it ended.
+pub async fn logged_out(
+    state: &AppState,
+    world: &World,
+    uuid: &str,
+    kind: Option<MemberKind>,
+    started_before: Option<OffsetDateTime>,
+    actor: &extend_protocol::model::Member,
+) -> AppResult<Vec<String>> {
+    state.accounts.forget(uuid).await;
+    state.proofs.drop_account(uuid).await;
+    match kind {
+        Some(MemberKind::Silicon) => {
+            domain::end_silicon_sessions(state, world, uuid, started_before, EndReason::SiliconLoggedOut, actor).await
+        }
+        Some(MemberKind::Carbon) => {
+            domain::end_carbon_side(state, world, uuid, started_before, EndReason::AccessRemoved, actor).await
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
 /// The account's sign-ins at Extend ended: tokens issued before `at` are refused, its running work
 /// ends, and the proofs Extend held for it end. Pairs and grants stay.
 pub async fn access_ended(state: &AppState, world: &World, uuid: &str, at: OffsetDateTime) -> AppResult<()> {
@@ -137,7 +167,8 @@ pub async fn access_ended(state: &AppState, world: &World, uuid: &str, at: Offse
     let system = domain::system_member();
     match kind {
         Some(MemberKind::Silicon) => {
-            let ended = domain::end_silicon_sessions(state, world, uuid, EndReason::SiliconLoggedOut, &system).await?;
+            let ended =
+                domain::end_silicon_sessions(state, world, uuid, None, EndReason::SiliconLoggedOut, &system).await?;
             crate::wake::withdraw(
                 state,
                 world,
@@ -149,7 +180,7 @@ pub async fn access_ended(state: &AppState, world: &World, uuid: &str, at: Offse
             tracing::info!(uuid, sessions = ?ended, "ended the Silicon's sessions");
         }
         Some(MemberKind::Carbon) => {
-            let ended = domain::end_carbon_side(state, world, uuid, EndReason::AccessRemoved, &system).await?;
+            let ended = domain::end_carbon_side(state, world, uuid, None, EndReason::AccessRemoved, &system).await?;
             tracing::info!(uuid, sessions = ?ended, "ended the sessions on the Carbon's pairs");
         }
         None => tracing::info!(uuid, "Extend never saw this account; recorded the sign-out only"),
@@ -207,10 +238,18 @@ pub async fn deleted(state: &AppState, world: &World, uuid: &str, at: OffsetDate
         }
         None => {}
     }
-    // The account's own details go; telemetry no longer names it.
+    // The account's own details go: telemetry no longer names it, and its Ting enrolment record
+    // (when and why it was enrolled) is dropped.
     sqlx::query(sql!(
         "UPDATE {} SET member_id = NULL WHERE member_id = $1",
         world.t("telemetry")
+    ))
+    .bind(uuid)
+    .execute(&state.pool)
+    .await?;
+    sqlx::query(sql!(
+        "DELETE FROM {} WHERE account_uuid = $1",
+        world.t("ting_enrolments")
     ))
     .bind(uuid)
     .execute(&state.pool)

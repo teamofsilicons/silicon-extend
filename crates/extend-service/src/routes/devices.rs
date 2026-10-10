@@ -829,6 +829,21 @@ pub async fn attach(
             }
             let mut tx = st.pool.begin().await?;
             domain::lock_instances(&mut tx, &world, &[host.instance_id]).await?;
+            // Removing the host takes the same lock: once it has, nothing more attaches through it.
+            let host_live: bool = sqlx::query_scalar(sql!(
+                "SELECT EXISTS (SELECT 1 FROM {} WHERE device_id = $1 AND removed_at IS NULL)",
+                world.t("devices")
+            ))
+            .bind(&host.device_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !host_live {
+                return Err(AppError::new(
+                    ErrorCode::DeviceNotFound,
+                    format!("{} was removed, so nothing can be set up through it.", host.name),
+                )
+                .hint("Pair the computer again, then attach the device through it."));
+            }
             let device_id = insert_device(
                 &mut tx,
                 &world,

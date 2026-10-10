@@ -224,7 +224,18 @@ pub async fn deliver(env: &Env, event_type: &str, data: Value) -> u16 {
 
 /// [`deliver`] with a given event id (retries reuse it).
 pub async fn deliver_raw(env: &Env, event_id: &str, event_type: &str, data: Value) -> u16 {
-    let body = json!({"event_id": event_id, "type": event_type, "occurred_at": time::OffsetDateTime::now_utc()
+    deliver_at(env, event_id, event_type, data, time::OffsetDateTime::now_utc()).await
+}
+
+/// [`deliver_raw`] of an event that happened at `occurred_at` (deliveries arrive late).
+pub async fn deliver_at(
+    env: &Env,
+    event_id: &str,
+    event_type: &str,
+    data: Value,
+    occurred_at: time::OffsetDateTime,
+) -> u16 {
+    let body = json!({"event_id": event_id, "type": event_type, "occurred_at": occurred_at
         .format(&time::format_description::well_known::Rfc3339).unwrap(), "app_id": "extend", "data": data})
     .to_string();
     let ts = time::OffsetDateTime::now_utc().unix_timestamp();
