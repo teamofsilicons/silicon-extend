@@ -3,8 +3,6 @@ FROM rust:1.98.0-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
-COPY vendor/silicon-iam-client ./vendor/silicon-iam-client
-COPY vendor/briefcase-client ./vendor/briefcase-client
 RUN cargo build --locked --release -p extend-service --bin extend-service
 
 FROM debian:bookworm-slim AS runtime
@@ -14,8 +12,9 @@ RUN apt-get update \
     && useradd --system --uid 10001 --create-home --home-dir /var/lib/extend --shell /usr/sbin/nologin extend
 COPY --from=builder /build/target/release/extend-service /usr/local/bin/extend-service
 COPY LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt /usr/share/doc/silicon-extend/
-# Production unless someone explicitly asks otherwise: production refuses the local IAM, Briefcase
-# and Ting stand-ins and member-id logins, and requires the IAM webhook secret.
+# Production unless someone explicitly asks otherwise: production refuses the local Silicon Accounts,
+# Briefcase and Ting stand-ins, and requires ACCOUNTS_URL, EXTEND_APP_SECRET and the Silicon
+# Accounts webhook secret.
 ENV EXTEND_ENVIRONMENT=production \
     EXTEND_BIND=0.0.0.0:8080 \
     EXTEND_DATA_DIR=/var/lib/extend/data \

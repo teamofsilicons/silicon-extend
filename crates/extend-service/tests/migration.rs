@@ -1,9 +1,28 @@
 //! 1.1 schema (world version 5) on a live 1.0 database, rows 1.0.0 writes after a rollback, and
 //! the down step deploy/rollback/1.1-to-1.0.sql with the roll-forward that follows (test_plan 18).
+//!
+//! These rehearse the 1.x and 3.x schemas, so they stop at schema version 8 (3.1), the last one a
+//! rollback to 1.0 applies to; tests/accounts_migration.rs covers version 9 (4.0) on top of it.
 
 mod common;
 
 use extend_service::db::{self, World};
+
+/// The last schema version before 4.0 (3.1): what these rehearsals migrate to.
+const SCHEMA_3_1: usize = 8;
+
+/// Another world schema in the same database (as test environments had before 4.0).
+fn scratch_world() -> World {
+    World {
+        schema: format!("extend_test_{}", Uuid::new_v4().simple()),
+    }
+}
+
+/// What a 3.1 service did at start: the schema up to 3.1, then the grants a rollback set aside.
+async fn forward_to_3_1(pool: &PgPool, world: &World) -> anyhow::Result<()> {
+    db::ensure_world_to(pool, world, SCHEMA_3_1).await?;
+    db::restore_rollback_grants(pool, world).await
+}
 use futures::FutureExt as _;
 use serde_json::{Value, json};
 use sqlx::{Connection as _, PgPool};
@@ -19,7 +38,10 @@ where
     let (url, _) = common::database("mig").await;
     let pool = db::connect(&url).await.unwrap();
     let result = std::panic::AssertUnwindSafe(async {
-        db::migrate_global(&pool).await.unwrap();
+        db::migrate_global_schema(&pool).await.unwrap();
+        db::ensure_world_to(&pool, &World::production(), SCHEMA_3_1)
+            .await
+            .unwrap();
         run(pool.clone()).await;
     })
     .catch_unwind()
@@ -58,7 +80,7 @@ async fn one<T: for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Post
 #[tokio::test]
 async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
     with_database(|pool| async move {
-    let world = World::test(Uuid::new_v4());
+    let world = scratch_world();
     let s = world.schema.clone();
     db::ensure_world_to(&pool, &world, 3).await.unwrap();
     assert_eq!(
@@ -86,14 +108,14 @@ async fn a_1_0_world_upgrades_and_keeps_rows_1_0_writes_consistent() {
         INSERT INTO {s}.requests (request_id, device_id, team, from_id, to_id, session_id, reason) VALUES
             ('{r1}', 'aaaa0001', 'acme', 'si:sous', 'si:chef', 'a3f', 'please');",
         a1 = Uuid::now_v7(), a2 = Uuid::now_v7(), a3 = Uuid::now_v7(), r1 = Uuid::now_v7())).await;
-    db::ensure_world(&pool, &world).await.unwrap();
+    forward_to_3_1(&pool, &world).await.unwrap();
     assert_eq!(
         one::<i32>(
             &pool,
             &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")
         )
         .await,
-        extend_service::db::WORLD_VERSION
+        SCHEMA_3_1 as i32
     );
     assert!(
         one::<bool>(
@@ -385,7 +407,7 @@ async fn the_down_step_keeps_1_0_safe_and_the_roll_forward_restores_only_untouch
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     v1_0::revoke(&pool, s, "bbbb0001", "si:chef").await;
     // 1.1.0 starts again: scout's grant comes back, logged; chef's doesn't.
-    db::ensure_world(&pool, &World::production()).await.unwrap();
+    forward_to_3_1(&pool, &World::production()).await.unwrap();
     let grants: Vec<(String, String)> =
         sqlx::query_as("SELECT silicon_id, team FROM extend.device_access ORDER BY silicon_id")
             .fetch_all(&pool)
@@ -409,9 +431,9 @@ async fn the_down_step_keeps_1_0_safe_and_the_roll_forward_restores_only_untouch
 #[tokio::test]
 async fn repeated_rollback_and_forward_preserve_schema5_indicators_and_world_isolation() {
     with_database(|pool| async move {
-        let worlds = [World::production(), World::test(Uuid::new_v4()), World::test(Uuid::new_v4())];
+        let worlds = [World::production(), scratch_world(), scratch_world()];
         db::ensure_world_to(&pool, &worlds[1], 4).await.unwrap();
-        db::ensure_world(&pool, &worlds[2]).await.unwrap();
+        forward_to_3_1(&pool, &worlds[2]).await.unwrap();
         let mut identities = Vec::new();
         for (index, world) in worlds.iter().enumerate() {
             let s = &world.schema;
@@ -484,9 +506,9 @@ async fn repeated_rollback_and_forward_preserve_schema5_indicators_and_world_iso
                 assert_eq!(one::<String>(&pool, &format!("SELECT visibility FROM {s}.devices WHERE device_id = 'cccc0001'")).await, "personal");
                 // 1.0's migration starter sees version 4/5 and leaves it intact.
                 db::ensure_world_to(&pool, world, 3).await.unwrap();
-                db::ensure_world(&pool, world).await.unwrap();
-                db::ensure_world(&pool, world).await.unwrap();
-                assert_eq!(one::<i32>(&pool, &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")).await, extend_service::db::WORLD_VERSION);
+                forward_to_3_1(&pool, world).await.unwrap();
+                forward_to_3_1(&pool, world).await.unwrap();
+                assert_eq!(one::<i32>(&pool, &format!("SELECT version FROM extend_global.schema_versions WHERE schema_name = '{s}'")).await, SCHEMA_3_1 as i32);
                 let current: Value = one(&pool, &format!("SELECT jsonb_agg(jsonb_build_array(d.device_id, d.instance_id, d.first_pair, i.side_salt) ORDER BY d.device_id) FROM {s}.devices d JOIN {s}.device_instances i USING (instance_id) WHERE d.device_id LIKE 'cccc%'")).await;
                 assert_eq!(current, identities[index].0);
                 assert_eq!(one::<String>(&pool, &format!("SELECT value FROM {s}.world_settings WHERE name = 'hardware_salt'")).await, identities[index].1);
@@ -518,7 +540,7 @@ async fn concurrent_roll_forward_serializes_the_grant_stash_restore() {
         let mut gate = pool.begin().await.unwrap();
         sqlx::query("LOCK TABLE extend.rollback_1_1_grants IN ACCESS SHARE MODE").execute(&mut *gate).await.unwrap();
         let first_pool = pool.clone();
-        let first = tokio::spawn(async move { db::ensure_world(&first_pool, &World::production()).await });
+        let first = tokio::spawn(async move { forward_to_3_1(&first_pool, &World::production()).await });
         let first_waiting = wait_for_restore_waiters(&pool, 1).await;
         let second_pool = pool.clone();
         // This startup already checked schema versions before the first acquired the restore
@@ -566,8 +588,9 @@ async fn copied_production_schema_rolls_backward_and_forward() {
             INSERT INTO extend.sessions (session_id, device_id, silicon_id, team, state) VALUES ('f01', 'cafe0001', 'si:chef', 'acme', 'active');
             INSERT INTO extend.device_locks (device_id, session_id) VALUES ('cafe0001', 'f01');
         "#).await;
-        db::migrate_global(&pool).await.unwrap();
-        assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, extend_service::db::WORLD_VERSION);
+        db::migrate_global_schema(&pool).await.unwrap();
+        forward_to_3_1(&pool, &World::production()).await.unwrap();
+        assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, SCHEMA_3_1 as i32);
         assert_eq!(one::<i64>(&pool, "SELECT count(DISTINCT instance_id) FROM extend.devices").await, 2);
         assert!(one::<bool>(&pool, "SELECT bool_and(visibility = 'personal' AND first_pair) FROM extend.devices").await);
         assert!(one::<bool>(&pool, "SELECT bool_and(in_use_indicator = 'shown' AND length(side_salt) = 64) FROM extend.device_instances").await);
@@ -619,8 +642,8 @@ async fn copied_production_schema_rolls_backward_and_forward() {
             assert!(one::<bool>(&pool, &format!("SELECT d.visibility = 'personal' AND d.first_pair AND i.in_use_indicator = 'shown' FROM extend.devices d JOIN extend.device_instances i USING (instance_id) WHERE d.device_id = '{new}'")).await);
             assert!(v1_0::access_of(&pool, "extend", &new, "si:chef").await);
 
-            db::migrate_global(&pool).await.unwrap();
-            db::migrate_global(&pool).await.unwrap();
+            forward_to_3_1(&pool, &World::production()).await.unwrap();
+            forward_to_3_1(&pool, &World::production()).await.unwrap();
             assert_eq!(one::<Value>(&pool, identity_sql).await, identities);
             assert_eq!(one::<String>(&pool, "SELECT value FROM extend.world_settings WHERE name = 'hardware_salt'").await, hardware_salt);
             assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.device_access WHERE team = 'globex'").await, 1);
@@ -628,7 +651,7 @@ async fn copied_production_schema_rolls_backward_and_forward() {
             assert!(one::<bool>(&pool, "SELECT wake_muted AND granted_at = '2026-09-01T00:00:00Z' AND last_used_at = '2026-09-02T00:00:00Z' FROM extend.device_access WHERE device_id = 'cafe0002' AND silicon_id = 'si:scout'").await);
             assert_eq!(one::<i64>(&pool, "SELECT count(*) FROM extend.activity WHERE details->>'restored_after_rollback' = 'true'").await, cycle + 1);
             assert!(one::<Option<String>>(&pool, "SELECT to_regclass('extend.rollback_1_1_grants')::text").await.is_none());
-            assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, extend_service::db::WORLD_VERSION);
+            assert_eq!(one::<i32>(&pool, "SELECT version FROM extend_global.schema_versions WHERE schema_name = 'extend'").await, SCHEMA_3_1 as i32);
             eprintln!("Copied production schema: cycle {} passed (down twice, forward twice, exact grants/credentials/instances/salts/indicator retained)", cycle + 1);
         }
     }).catch_unwind().await;

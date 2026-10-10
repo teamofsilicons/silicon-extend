@@ -1562,15 +1562,18 @@ mod tests {
     #[test]
     fn page_has_no_forbidden_words() {
         let lower = PAGE.to_ascii_lowercase();
-        for w in ["human", "ai agent", "frontend", "backend", " org "] {
+        for w in ["human", "ai agent", "frontend", "backend", "organization", " org "] {
             assert!(!lower.contains(w), "page.html says {w:?}");
         }
     }
 
     #[test]
-    fn pairing_guidance_distinguishes_organization_visibility_from_physical_revoke() {
-        assert!(PAGE.contains("import it into your organizations"));
-        assert!(PAGE.contains("Hidden devices are visible only to their owner and Silicons explicitly granted access in that organization."));
-        assert!(PAGE.contains("from every organization in"));
+    fn pairing_guidance_is_each_carbons_own_pair() {
+        // Extend 4: a pair belongs to the Carbon who made it; there is no grouping to import into.
+        assert!(
+            PAGE.contains("has their own pair: their own name for it, their own Silicons, and their own Revoke pair.")
+        );
+        assert!(PAGE.contains("This removes this <span class=\"word\"></span> from <span id=\"confirm-owner\">"));
+        assert!(!PAGE.contains("'Team '"), "the page shows a pair's stored Team");
     }
 }

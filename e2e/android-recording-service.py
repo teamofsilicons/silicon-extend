@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Record beyond 180 seconds through a paired emulator and the local development service.
 
-Requires debug and test APKs, a connected on-device ADB client, local IAM users c:alice and
-si:chef, a paired device granting si:chef access, the built Extend CLI, ffmpeg and ffprobe.
+Requires debug and test APKs, a connected on-device ADB client, the local service's Silicon
+Accounts stand-in (e2e/dev.env) with c:alice and her Silicon si:chef, a paired device granting
+si:chef access, the built Extend CLI, ffmpeg and ffprobe.
 The Pixel/physical-device path is deliberately excluded from this manual emulator lane.
 """
 import argparse
@@ -13,6 +14,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -30,17 +32,28 @@ print('Evidence:', work, flush=True)
 session = None
 
 
-def cli(who, *command, json_output=True):
+def cli(who, *command, json_output=True, stdin=None):
     home = work / who
     home.mkdir(exist_ok=True)
-    env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url, EXTEND_TELEMETRY='off')
+    env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url,
+               ACCOUNTS_URL=args.service_url + '/dev/accounts', EXTEND_TELEMETRY='off')
     cmd = [str(ROOT / 'target/debug/extend'), '--timeout', '90000', *command]
     if json_output:
         cmd.append('--json')
-    result = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=100)
+    result = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=100, input=stdin)
     assert result.returncode == 0, (command, result.stderr)
     # `extend --json` prints the data itself on stdout, with no wrapper.
     return json.loads(result.stdout) if json_output else result.stdout.strip()
+
+
+def signin(who, account, custodian=None):
+    """Sign in through the service's Silicon Accounts stand-in, with a short-lived token from it."""
+    body = json.dumps({'type': 'slt', 'data': {'id': account, 'custodian': custodian}}).encode()
+    request = urllib.request.Request(args.service_url + '/dev/accounts/slt', data=body,
+                                     headers={'content-type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        slt = json.load(response)['data']['slt']
+    cli(who, 'login', '--slt-stdin', stdin=slt)
 
 
 def remote(*command):
@@ -50,8 +63,8 @@ def remote(*command):
 
 
 try:
-    cli('chef', 'login', 'si:chef')
-    cli('alice', 'login', 'c:alice')
+    signin('chef', 'si:chef', 'c:alice')
+    signin('alice', 'c:alice')
     session = cli('chef', 'session', 'new', args.device, '--connect', json_output=False)
     assert '2000' in remote('adb', 'shell', 'id -u')['text']
     subprocess.run([*adb, 'shell', 'am', 'start', '-n', 'com.teamofsilicons.extend.test/com.teamofsilicons.extend.RecordingFixtureActivity'], check=True, stdout=subprocess.DEVNULL)

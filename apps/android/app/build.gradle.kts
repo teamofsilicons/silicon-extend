@@ -10,7 +10,7 @@ plugins {
 
 // The service URL a fresh install talks to. Override for local work with
 // `./gradlew assembleDebug -PextendServiceUrl=http://10.0.2.2:8480`.
-val productionServiceUrl = "https://backend.extend.teamofsilicons.com"
+val productionServiceUrl = "https://api.extend.teamofsilicons.com"
 val debugServiceUrl = (project.findProperty("extendServiceUrl") as String?) ?: productionServiceUrl
 
 // The release key lives outside the repository. EXTEND_ANDROID_SIGNING_PROPERTIES names a
@@ -29,8 +29,8 @@ android {
         applicationId = "com.teamofsilicons.extend"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.1.2"
+        versionCode = 7
+        versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

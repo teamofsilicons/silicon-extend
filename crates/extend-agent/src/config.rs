@@ -22,7 +22,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const DEFAULT_SERVICE_URL: &str = "https://backend.extend.teamofsilicons.com";
+pub const DEFAULT_SERVICE_URL: &str = "https://api.extend.teamofsilicons.com";
+const LEGACY_SERVICE_URL: &str = "https://backend.extend.teamofsilicons.com";
 /// Directory name under home.
 pub const STATE_DIR_NAME: &str = ".extend-agent";
 /// The Extend website, whose `/download/<platform>` pages have the apps (`web/src/config.ts`).
@@ -118,7 +119,24 @@ impl Config {
             .or_else(home_dir)
             .context("couldn't find a home directory; set SILICON_HOME")?;
         let state_dir = home.join(STATE_DIR_NAME);
+        // Even a keyring-backed pair has state here. Preserve an older installation's
+        // origin before changing defaults; no credential is read or sent during this step.
+        let had_state = state_dir.try_exists()?;
         ensure_private_dir(&state_dir)?;
+        let origin_path = state_dir.join("service-origin.json");
+        let pinned_origin: String = match std::fs::read(&origin_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("invalid saved service origin")?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let origin = if had_state {
+                    LEGACY_SERVICE_URL
+                } else {
+                    DEFAULT_SERVICE_URL
+                };
+                write_private_file(&origin_path, &serde_json::to_vec(origin)?)?;
+                origin.to_owned()
+            }
+            Err(error) => return Err(error.into()),
+        };
         adopt_old_engine_state(&state_dir);
         let file = read_file_config(&state_dir.join("config.json"))?;
 
@@ -127,7 +145,7 @@ impl Config {
             .clone()
             .or_else(|| std::env::var("EXTEND_API_URL").ok().filter(|v| !v.trim().is_empty()))
             .or(file.service_url.clone())
-            .unwrap_or_else(|| DEFAULT_SERVICE_URL.to_owned());
+            .unwrap_or(pinned_origin);
         let service_url = parse_service_url(&service_raw)?;
 
         let credential_store = match overrides.credential_store {
@@ -423,6 +441,38 @@ pub fn which(program: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_origin_is_pinned_for_existing_and_fresh_devices() {
+        let legacy = tempfile::tempdir().unwrap();
+        let state = legacy.path().join(STATE_DIR_NAME);
+        std::fs::create_dir(&state).unwrap();
+        let credential = b"opaque legacy credential fixture";
+        std::fs::write(state.join("credential.json"), credential).unwrap();
+        let overrides = Overrides {
+            home: Some(legacy.path().to_owned()),
+            ..Default::default()
+        };
+        let config = Config::load(&overrides).unwrap();
+        assert_eq!(config.service_url.as_str(), format!("{LEGACY_SERVICE_URL}/"));
+        assert_eq!(std::fs::read(state.join("credential.json")).unwrap(), credential);
+        assert_eq!(Config::load(&overrides).unwrap().service_url, config.service_url);
+
+        let fresh = tempfile::tempdir().unwrap();
+        let overrides = Overrides {
+            home: Some(fresh.path().to_owned()),
+            ..Default::default()
+        };
+        let config = Config::load(&overrides).unwrap();
+        assert_eq!(config.service_url.as_str(), format!("{DEFAULT_SERVICE_URL}/"));
+        assert_eq!(Config::load(&overrides).unwrap().service_url, config.service_url);
+        let explicit = Config::load(&Overrides {
+            service_url: Some("https://chosen.example".into()),
+            ..overrides
+        })
+        .unwrap();
+        assert_eq!(explicit.service_url.as_str(), "https://chosen.example/");
+    }
 
     #[test]
     fn service_urls_get_a_trailing_slash() {

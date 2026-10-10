@@ -11,9 +11,8 @@ async fn attach(env: &Env, token: &str, host: &str, name: &str) -> String {
     let (status, body) = api(
         env,
         "POST",
-        &format!("/api/v1/devices/{host}/attachments"),
+        &format!("/api/v2/devices/{host}/attachments"),
         token,
-        None,
         Some(json!({"type": "attachment", "data": {"os": "tvos", "name": name}})),
     )
     .await;
@@ -32,9 +31,9 @@ async fn removal_is_reconciled(app_version: &str) {
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
     let sous = login(&env, "si:sous").await;
-    let (host, credential) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Mac", &[]).await;
+    let (host, credential) = pair(&env, &alice, DeviceOs::Macos, "Mac", &[]).await;
     let app = App::connect(&env, &credential, hello(DeviceOs::Macos, "1.1.0")).await;
-    let (other_host, other_credential) = pair_another(&env, &credential, &bob, Some("acme"), &[]).await;
+    let (other_host, other_credential) = pair_another(&env, &credential, &bob, &[]).await;
     let other_app = App::connect(&env, &other_credential, hello(DeviceOs::Macos, "1.1.0")).await;
 
     let removed = attach(&env, &alice, &host, "Alice's removed TV").await;
@@ -57,8 +56,8 @@ async fn removal_is_reconciled(app_version: &str) {
         instance_of(&env, &removed).await == instance_of(&env, &alias).await
     })
     .await;
-    grant(&env, &bob, &alias, "si:sous", "acme").await;
-    let (status, started) = session(&env, &sous, "acme", &alias).await;
+    grant(&env, &bob, &alias, "si:sous").await;
+    let (status, started) = session(&env, &sous, &alias).await;
     assert_eq!(status, 201, "{started}");
     let sid = started["data"]["session_id"].as_str().unwrap();
     other_app.wait("session_started", |f| f["session_id"] == sid).await;
@@ -70,8 +69,7 @@ async fn removal_is_reconciled(app_version: &str) {
     .await;
     for (id, token) in [(&removed, &alice), (&private_removed, &bob)] {
         // Physical revocation (native/scheduler path) still reconciles carried tombstones.
-        // Removing an organization binding deliberately leaves hardware configuration intact.
-        let actor = env.state.iam.authorize(token, Some("acme"), None).await.unwrap().member;
+        let actor = env.state.accounts.authenticate(token).await.unwrap().actor();
         extend_service::domain::unpair(
             &env.state,
             &extend_service::db::World::production(),
@@ -115,9 +113,8 @@ async fn removal_is_reconciled(app_version: &str) {
     let (status, body) = api(
         &env,
         "POST",
-        &format!("/api/v1/sessions/{sid}/commands"),
+        &format!("/api/v2/sessions/{sid}/commands"),
         &sous,
-        Some("acme"),
         Some(json!({"type": "command", "data": {"command": "home", "args": []}})),
     )
     .await;
@@ -129,15 +126,7 @@ async fn removal_is_reconciled(app_version: &str) {
     );
     assert!(other_app.of("session_ended").is_empty());
     assert!(!other_app.is_closed());
-    let (status, body) = api(
-        &env,
-        "GET",
-        &format!("/api/v1/sessions/{sid}"),
-        &sous,
-        Some("acme"),
-        None,
-    )
-    .await;
+    let (status, body) = api(&env, "GET", &format!("/api/v2/sessions/{sid}"), &sous, None).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["data"]["state"], "active", "{body}");
 }
@@ -150,4 +139,61 @@ async fn removed_carried_pair_is_withdrawn_from_reconnecting_1_0_host() {
 #[tokio::test]
 async fn removed_carried_pair_is_withdrawn_from_reconnecting_1_1_host() {
     removal_is_reconciled("1.1.0").await;
+}
+
+/// Removing a computer takes its instance lock; a device attached through it that committed while
+/// the removal waited for that lock (so after the removal listed the computer's carried devices)
+/// still leaves with it, instead of staying paired through a removed computer.
+#[tokio::test]
+async fn removing_a_host_includes_an_attachment_committing_while_it_waits_for_the_lock() {
+    let env = start().await;
+    let alice = login(&env, "c:alice").await;
+    let (host, _) = pair(&env, &alice, DeviceOs::Macos, "Mac", &[]).await;
+    let instance = instance_of(&env, &host).await;
+    let mut attaching = env.pool.begin().await.unwrap();
+    extend_service::domain::lock_instances(&mut attaching, &extend_service::db::World::production(), &[instance])
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO extend.devices (device_id, owner_id, name, os, host_device_id) VALUES ('1a2b3c4d', $2, 'TV', 'tvos', $1)")
+        .bind(&host)
+        .bind(uuid("c:alice"))
+        .execute(&mut *attaching)
+        .await
+        .unwrap();
+    let base = env.base.clone();
+    let removing = tokio::spawn(async move {
+        reqwest::Client::new()
+            .delete(format!("{base}/api/v2/devices/{host}"))
+            .bearer_auth(alice)
+            .send()
+            .await
+            .unwrap()
+    });
+    eventually("the removal waiting for the attachment's host lock", || async {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+               AND query LIKE '%device_instances%' AND query LIKE '%FOR NO KEY UPDATE%')",
+        )
+        .fetch_one(&env.pool)
+        .await
+        .unwrap()
+    })
+    .await;
+    attaching.commit().await.unwrap();
+    assert_eq!(removing.await.unwrap().status().as_u16(), 204);
+    let live: Vec<String> =
+        sqlx::query_scalar("SELECT device_id FROM extend.devices WHERE removed_at IS NULL ORDER BY device_id")
+            .fetch_all(&env.pool)
+            .await
+            .unwrap();
+    assert!(
+        live.is_empty(),
+        "the newly committed attachment leaves with its host: {live:?}"
+    );
+    let reason: Option<String> =
+        sqlx::query_scalar("SELECT removed_reason FROM extend.devices WHERE device_id = '1a2b3c4d'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(reason.as_deref(), Some("device_removed"));
 }

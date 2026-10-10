@@ -92,7 +92,7 @@ impl From<silicon_extend_client::Error> for CliError {
                     ErrorCode::Internal,
                     format!("Extend answered {status} with something this CLI can't read: {detail}"),
                 )
-                .hint("Update the CLI with `honeycomb install 'extend'`; if it persists, `extend report` it.");
+                .hint("Silicon Apps keeps extend up to date; check for an update now with `silicon-apps update extend`. If it persists, `extend report` it.");
                 e.status = Some(status);
                 e
             }
@@ -101,6 +101,33 @@ impl From<silicon_extend_client::Error> for CliError {
                 "Check the value named above; `extend config ls` shows the settings and EXTEND_API_URL overrides api_url.",
             ),
         }
+    }
+}
+
+impl From<silicon_extend_client::auth::AuthError> for CliError {
+    /// A Silicon Accounts sign-in failure: `details.reason` is its stable code (`slt_already_used`,
+    /// `device_expired`, `sign_in_ended`, `accounts_unreachable`, …), the message and hint its own.
+    fn from(e: silicon_extend_client::auth::AuthError) -> Self {
+        let code = match e.code.as_str() {
+            c if c.starts_with("slt_") || c == "not_an_slt" => ErrorCode::SltInvalid,
+            "sign_in_ended" => ErrorCode::TokenExpired,
+            "device_denied" | "device_expired" => ErrorCode::NotSignedIn,
+            "public_client_off" | "device_flow_off" | "unknown_app" => ErrorCode::Unauthorized,
+            "rate_limited" => ErrorCode::RateLimited,
+            "invalid_accounts_url" | "invalid_input" => ErrorCode::InvalidInput,
+            "accounts_unreachable" | "accounts_error" | "temporarily_unavailable" | "server_error" => {
+                ErrorCode::ServiceUnavailable
+            }
+            "unexpected_response" => ErrorCode::Internal,
+            _ if e.status.is_some_and(|s| s >= 500) => ErrorCode::ServiceUnavailable,
+            _ => ErrorCode::Unauthorized,
+        };
+        let mut out = Self::new(code, e.message.clone())
+            .hint(e.hint.clone())
+            .details(json!({"reason": e.code, "service": "silicon-accounts"}));
+        out.request_id = e.request_id.clone();
+        out.status = e.status;
+        out
     }
 }
 

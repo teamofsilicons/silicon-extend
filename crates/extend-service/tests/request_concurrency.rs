@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use common::*;
 use extend_protocol::DeviceOs;
+use extend_service::accounts::Principal;
 use extend_service::config::Tuning;
 use extend_service::error::AppResult;
-use extend_service::iam::{Principal, TestingSelection};
 use extend_service::ting::{LocalNotifier, Notifier};
 use futures::FutureExt as _;
 use serde_json::{Value, json};
@@ -31,16 +31,20 @@ struct PausedNotifier {
 
 #[async_trait]
 impl Notifier for PausedNotifier {
-    async fn send_frozen(&self, actor: &Principal, body: &Value, sel: Option<&TestingSelection>) -> AppResult<()> {
+    async fn send_frozen(&self, body: &Value) -> AppResult<()> {
         if body["type"] == "extend.device.requested" && self.pause.swap(false, Ordering::SeqCst) {
             self.entered.add_permits(1);
             self.release.acquire().await.unwrap().forget();
         }
-        self.inner.send_frozen(actor, body, sel).await
+        self.inner.send_frozen(body).await
     }
 
-    async fn register_recipient(&self, p: &Principal, force: bool, sel: Option<&TestingSelection>) -> AppResult<()> {
-        self.inner.register_recipient(p, force, sel).await
+    async fn register_recipient(&self, p: &Principal, force: bool) -> AppResult<()> {
+        self.inner.register_recipient(p, force).await
+    }
+
+    fn app_id(&self) -> &str {
+        "extend"
     }
 }
 
@@ -233,9 +237,8 @@ impl Fixture {
 
 fn send(env: &Env, token: &str, device: &str, reason: &str, key: Option<&str>) -> JoinHandle<(u16, Value)> {
     let mut request = reqwest::Client::new()
-        .post(format!("{}/api/v1/devices/{device}/requests", env.base))
+        .post(format!("{}/api/v2/devices/{device}/requests", env.base))
         .bearer_auth(token)
-        .header("x-org-id", "acme")
         .json(&json!({"type": "request", "data": {"reason": reason}}));
     if let Some(key) = key {
         request = request.header("idempotency-key", key);
@@ -259,17 +262,9 @@ async fn occupied(f: &Fixture) -> (String, String, String, App) {
     let chef = login(a, "si:chef").await;
     let sous_a = login(a, "si:sous").await;
     let sous_b = login(&f.envs[1], "si:sous").await;
-    let (device, credential) = pair(
-        a,
-        &alice,
-        Some("acme"),
-        DeviceOs::Android,
-        "Phone",
-        &["si:chef", "si:sous"],
-    )
-    .await;
+    let (device, credential) = pair(a, &alice, DeviceOs::Android, "Phone", &["si:chef", "si:sous"]).await;
     let app = App::connect(a, &credential, hello(DeviceOs::Android, "1.1.0")).await;
-    let (status, body) = session(a, &chef, "acme", &device).await;
+    let (status, body) = session(a, &chef, &device).await;
     assert_eq!(status, 201, "{body}");
     (device, sous_a, sous_b, app)
 }
@@ -393,18 +388,10 @@ async fn cross_pair_routing_uses_the_same_transaction_connection() {
         let bob = login(env, "c:bob").await;
         let chef = login(env, "si:chef").await;
         let sous = login(env, "si:sous").await;
-        let (holder_pair, credential) = pair(
-            env,
-            &alice,
-            Some("acme"),
-            DeviceOs::Android,
-            "Alice phone",
-            &["si:sous"],
-        )
-        .await;
+        let (holder_pair, credential) = pair(env, &alice, DeviceOs::Android, "Alice phone", &["si:sous"]).await;
         let _app = App::connect(env, &credential, hello(DeviceOs::Android, "1.1.0")).await;
-        let (requester_pair, _) = pair_another(env, &credential, &bob, Some("acme"), &["si:chef"]).await;
-        let (status, held) = session(env, &sous, "acme", &holder_pair).await;
+        let (requester_pair, _) = pair_another(env, &credential, &bob, &["si:chef"]).await;
+        let (status, held) = session(env, &sous, &holder_pair).await;
         assert_eq!(status, 201, "{held}");
         let (status, request) = finish(send(env, &chef, &requester_pair, "Need the shared phone", None)).await;
         assert_eq!(status, 201, "{request}");
@@ -412,7 +399,8 @@ async fn cross_pair_routing_uses_the_same_transaction_connection() {
         assert!(request["data"].get("session_id").is_none());
         let tings = env.state.local_ting.as_ref().unwrap().sent_of("device.requested").await;
         assert_eq!(tings.len(), 1);
-        assert_eq!(tings[0]["for"], "c:alice");
+        assert_eq!(tings[0]["for"], uuid("c:alice"));
+        assert_eq!(tings[0]["for_id"], "c:alice");
         assert_eq!(tings[0]["data"]["device_id"], holder_pair);
     })
     .catch_unwind()

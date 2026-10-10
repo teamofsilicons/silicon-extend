@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -65,12 +66,20 @@ with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as
     peer = None
     peer_app = None
     remote_session = None
-    remote_env = {**os.environ, "EXTEND_API_URL": args.service_url, "SILICON_HOME": str(work / "cli-home"), "EXTEND_TELEMETRY": "off"}
+    remote_env = {**os.environ, "EXTEND_API_URL": args.service_url, "ACCOUNTS_URL": args.service_url + "/dev/accounts",
+                  "SILICON_HOME": str(work / "cli-home"), "EXTEND_TELEMETRY": "off"}
 
-    def remote_cli(*command):
-        result = subprocess.run([str(ROOT / "target/debug/extend"), *command], env=remote_env, capture_output=True, text=True, timeout=120)
+    def remote_cli(*command, stdin=None):
+        result = subprocess.run([str(ROOT / "target/debug/extend"), *command], env=remote_env, capture_output=True, text=True, timeout=120, input=stdin)
         assert result.returncode == 0, (command, result.stdout, result.stderr)
         return result.stdout
+
+    def remote_signin(account, custodian=None):
+        # A short-lived token from the local service's Silicon Accounts stand-in (e2e/dev.env).
+        body = json.dumps({"type": "slt", "data": {"id": account, "custodian": custodian}}).encode()
+        request = urllib.request.Request(args.service_url + "/dev/accounts/slt", data=body, headers={"content-type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            remote_cli("login", "--slt-stdin", stdin=json.load(response)["data"]["slt"])
 
     def remote(*command):
         # `extend --json <device command>` prints the CommandResult itself.
@@ -208,7 +217,7 @@ with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as
 
         if args.record:
             if args.device:
-                remote_cli("login", "si:chef")
+                remote_signin("si:chef", "c:alice")
                 remote_session = remote_cli("session", "new", args.device, "--connect").strip()
             for mode in ["manual", "duration-limit", *( ["size-limit", "owner-exited"] if args.record_stress else [])]:
                 assert fixture.poll() is None, "fixture exited before recording"

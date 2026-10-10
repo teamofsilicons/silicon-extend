@@ -1,94 +1,27 @@
 //! End-to-end tests of the service: a real PostgreSQL, the real HTTP and WebSocket stack, the
-//! official client crate, and a scripted fake device speaking docs/device-protocol.md.
+//! local Silicon Accounts stand-in, and a scripted fake device speaking docs/device-protocol.md.
 //!
 //! Needs a PostgreSQL the tests can create databases on:
 //! `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
+mod common;
 #[path = "common/readiness.rs"]
 mod readiness;
 
-use std::net::SocketAddr;
 use std::time::Duration;
 
+use common::{Env, deliver, login, start, uuid};
 use extend_protocol::frames::{CommandOutcome, DeviceFrame, EnrollmentFrame, Hello, ProducedFile, ServiceFrame};
 use extend_protocol::model::*;
 use extend_protocol::{Capability, DeviceOs, ErrorCode};
-use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode};
 use futures::{SinkExt as _, StreamExt as _};
 use silicon_extend_client::{Client, DeviceQuery, ListQuery};
-use sqlx::Connection as _;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use uuid::Uuid;
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-struct Env {
-    base: String,
-    pool: sqlx::PgPool,
-    client: Client,
-}
-
-async fn start() -> Env {
-    let admin = std::env::var("EXTEND_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://extend:extend@127.0.0.1:5440/postgres".into());
-    let db = format!("extend_e2e_{}", Uuid::new_v4().simple());
-    let mut conn = sqlx::PgConnection::connect(&admin)
-        .await
-        .expect("PostgreSQL for tests (set EXTEND_TEST_ADMIN_URL)");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    let url = format!("{}/{db}", admin.rsplit_once('/').unwrap().0);
-    let data = std::env::temp_dir().join(&db);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-    let base = format!("http://{addr}");
-    let cfg = Config {
-        environment: Environment::Test,
-        bind: addr,
-        database_url: url,
-        public_url: base.clone(),
-        website_url: "http://localhost:5173".into(),
-        docs_url: "http://localhost:5173/docs".into(),
-        repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
-        data_dir: data,
-        iam: IamMode::Local,
-        delegation_key: None,
-        iam_public_url: format!("{base}/dev/iam"),
-        iam_login_url: format!("{base}/dev/iam/login"),
-        webhook_secret: None,
-        webhook_previous_secret: None,
-        files: FilesMode::Local,
-        ting: TingMode::Local,
-        honeycomb_service_token: Some("hck_test".into()),
-        postmark_token: None,
-        report_recipients: vec!["bugs@example.test".into()],
-        device_app_min_version: "1.0.0".into(),
-        local_members: vec![
-            ("c:alice".into(), vec!["acme".into()]),
-            ("c:bob".into(), vec!["acme".into()]),
-            ("si:chef".into(), vec!["acme".into()]),
-            ("si:sous".into(), vec!["acme".into()]),
-            ("si:stranger".into(), vec!["labs".into()]),
-        ],
-        web_dir: None,
-        trusted_proxies: vec![],
-        tuning: Default::default(),
-    };
-    let state = extend_service::build(cfg).await.unwrap();
-    let pool = state.pool.clone();
-    tokio::spawn(extend_service::serve_on(listener, state));
-    let client = Client::connect(&base).await.unwrap();
-    Env { base, pool, client }
-}
-
-async fn login(c: &Client, who: &str) -> String {
-    c.login(who).await.unwrap().access_token
-}
 
 /// A scripted Extend app.
 struct Device {
@@ -117,12 +50,10 @@ async fn next_text(ws: &mut Ws) -> String {
 }
 
 impl Device {
-    /// Enrolls, lets `carbon` pair it (with access for `silicons`), connects and says hello.
-    async fn pair(env: &Env, carbon: &str, os: DeviceOs, silicons: &[&str], secret: Option<&str>) -> Device {
-        let client = match secret {
-            Some(s) => Client::builder(&env.base).testing_secret(s).connect().await.unwrap(),
-            None => env.client.clone(),
-        };
+    /// Enrolls, lets the Carbon signed in as `carbon` pair it (with access for `silicons`),
+    /// connects and says hello.
+    async fn pair(env: &Env, carbon: &str, os: DeviceOs, silicons: &[&str]) -> Device {
+        let client = env.client.clone();
         let e = client
             .enroll(&EnrollmentCreate {
                 os,
@@ -143,19 +74,14 @@ impl Device {
         let EnrollmentFrame::Code { pairing_code, .. } = first else {
             panic!("expected code")
         };
-        let token = client.login(carbon).await.unwrap().access_token;
         let claim = PairingClaim {
             pairing_code: pairing_code.to_lowercase(),
             name: format!("{} device", os.as_str()),
-            visibility: Some(if silicons.is_empty() {
-                Visibility::Personal
-            } else {
-                Visibility::Team
-            }),
+            visibility: None,
             pair_ttl_days: None,
             silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
         };
-        client.authed(&token, Some("acme")).pair(&claim).await.unwrap();
+        env.v2(carbon).pair(&claim).await.unwrap();
         let (id, credential) = loop {
             let f: EnrollmentFrame = serde_json::from_str(&next_text(&mut ews).await).unwrap();
             if let EnrollmentFrame::Paired {
@@ -176,11 +102,11 @@ impl Device {
             id,
             credential,
         };
-        d.hello(os, &client.authed(&token, Some("acme"))).await;
+        d.hello(os, env, carbon).await;
         d
     }
 
-    async fn hello(&mut self, os: DeviceOs, owner: &silicon_extend_client::Authed<'_>) {
+    async fn hello(&mut self, os: DeviceOs, env: &Env, owner: &str) {
         let caps: Vec<Capability> = os.full_capabilities().to_vec();
         let hello = DeviceFrame::Hello(Hello {
             app_version: "1.0.0".into(),
@@ -194,7 +120,7 @@ impl Device {
             features: vec![],
         });
         self.send(&hello).await;
-        readiness::ready(owner, &self.id).await;
+        readiness::ready(&env.base, owner, &self.id).await;
     }
 
     async fn send(&mut self, f: &DeviceFrame) {
@@ -284,14 +210,14 @@ fn code_of<T: std::fmt::Debug>(r: Result<T, silicon_extend_client::Error>) -> Er
 #[tokio::test]
 async fn pairing_sessions_commands_and_files() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let chef = login(&env.client, "si:chef").await;
-    let sous = login(&env.client, "si:sous").await;
-    let a = env.client.authed(&alice, Some("acme"));
-    let c = env.client.authed(&chef, Some("acme"));
-    let s = env.client.authed(&sous, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let chef = login(&env, "si:chef").await;
+    let sous = login(&env, "si:sous").await;
+    let a = env.v2(&alice);
+    let c = env.v2(&chef);
+    let s = env.v2(&sous);
 
-    let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef", "si:sous"], None).await;
+    let device = Device::pair(&env, &alice, DeviceOs::Android, &["si:chef", "si:sous"]).await;
     let id = device.id.clone();
     let credential = device.credential.clone();
     let seen = device.serve(env.base.clone());
@@ -303,12 +229,9 @@ async fn pairing_sessions_commands_and_files() {
     let d = c.device(&id).await.unwrap();
     assert!(d.commands.as_ref().unwrap().contains(&"snapshot".to_owned()));
     assert!(!d.commands.as_ref().unwrap().contains(&"terminal".to_owned()));
-    // A Silicon outside the team can't see it.
-    let stranger = login(&env.client, "si:stranger").await;
-    assert_eq!(
-        code_of(env.client.authed(&stranger, Some("acme")).device(&id).await),
-        ErrorCode::NotATeamMember
-    );
+    // A Silicon without access can't see it.
+    let rover = login(&env, "si:rover").await;
+    assert_eq!(code_of(env.v2(&rover).device(&id).await), ErrorCode::DeviceNotFound);
 
     // Session: 3 hexadecimal characters.
     let sess = c.start_session(&id.parse().unwrap()).await.unwrap();
@@ -325,7 +248,7 @@ async fn pairing_sessions_commands_and_files() {
             .hint
             .as_ref()
             .unwrap()
-            .contains(&format!("extend --team acme request send {id}"))
+            .contains(&format!("extend request send {id}"))
     );
     let r = s.send_request(&id, "Need it for an OTP, 2 minutes").await.unwrap();
     assert_eq!(r.to, "si:chef");
@@ -437,31 +360,31 @@ async fn pairing_sessions_commands_and_files() {
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(c.session(&s3).await.unwrap().end_reason, Some(EndReason::IdleTimeout));
 
-    // Silicon logs out (IAM revocation) → its session ends.
+    // The Silicon signs out everywhere (Silicon Accounts tells Extend) → its session ends.
     let s4 = c
         .start_session(&id.parse().unwrap())
         .await
         .unwrap()
         .session_id
         .to_string();
-    reqwest::Client::new()
-        .post(format!("{}/dev/iam/members", env.base))
-        .json(&serde_json::json!({"type":"member","data":{"id":"si:chef","teams":["acme"],"revoke":true}}))
-        .send()
-        .await
-        .unwrap();
-    let chef2 = login(&env.client, "si:chef").await;
-    let ended = env.client.authed(&chef2, Some("acme")).session(&s4).await.unwrap();
+    let status = deliver(
+        &env,
+        "membership.signed_out",
+        serde_json::json!({"uuid": uuid("si:chef"), "membership_id": "m1", "reason": "session_revoked"}),
+    )
+    .await;
+    assert_eq!(status, 204);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let chef2 = login(&env, "si:chef").await;
+    let ended = env.v2(&chef2).session(&s4).await.unwrap();
     assert_eq!(ended.state, SessionState::Ended);
     assert!(matches!(
         ended.end_reason,
         Some(EndReason::SiliconLoggedOut | EndReason::AccessRemoved)
     ));
 
-    // Organization removal keeps native credentials; native revoke finishes the physical pair.
+    // Removing the device unpairs it: the app is told, and its credential stops working.
     a.remove_device(&id, None).await.unwrap();
-    assert!(env.client.device_self(&credential).await.is_ok());
-    env.client.revoke_pair(&credential).await.unwrap();
     let frames = seen.await.unwrap();
     assert!(frames.iter().any(|f| matches!(f, ServiceFrame::SessionStarted { .. })));
     assert!(frames.iter().any(|f| matches!(
@@ -472,12 +395,16 @@ async fn pairing_sessions_commands_and_files() {
         }
     )));
     assert!(frames.iter().any(|f| matches!(f, ServiceFrame::Takeover { .. })));
-    assert!(matches!(
-        frames.last(),
-        Some(ServiceFrame::Unpaired {
-            reason: EndReason::PairRevoked
-        })
-    ));
+    assert!(
+        matches!(
+            frames.last(),
+            Some(ServiceFrame::Unpaired {
+                reason: EndReason::DeviceRemoved
+            })
+        ),
+        "{:?}",
+        frames.last()
+    );
     // The credential no longer works.
     assert!(env.client.device_self(&credential).await.is_err());
 }
@@ -485,18 +412,18 @@ async fn pairing_sessions_commands_and_files() {
 #[tokio::test]
 async fn pairing_rules_and_device_management() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let bob = login(&env.client, "c:bob").await;
-    let chef = login(&env.client, "si:chef").await;
-    let a = env.client.authed(&alice, Some("acme"));
-    let b = env.client.authed(&bob, Some("acme"));
-    let c = env.client.authed(&chef, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let bob = login(&env, "c:bob").await;
+    let chef = login(&env, "si:chef").await;
+    let a = env.v2(&alice);
+    let b = env.v2(&bob);
+    let c = env.v2(&chef);
 
     // Silicons can't pair; wrong codes are rate limited after 5.
     let claim = |code: &str| PairingClaim {
         pairing_code: code.into(),
         name: "x".into(),
-        visibility: Some(extend_protocol::model::Visibility::Team),
+        visibility: None,
         pair_ttl_days: None,
         silicon_ids: vec![],
     };
@@ -507,45 +434,38 @@ async fn pairing_rules_and_device_management() {
     assert_eq!(code_of(a.pair(&claim("000000")).await), ErrorCode::RateLimited);
     assert_eq!(code_of(b.pair(&claim("zzz")).await), ErrorCode::InvalidInput);
 
-    let mut d = Device::pair(&env, "c:bob", DeviceOs::Macos, &[], None).await;
+    let mut d = Device::pair(&env, &bob, DeviceOs::Macos, &[]).await;
     let id = d.id.clone();
 
-    // Hidden devices belong only to their configuring Carbon. Explicit organization visibility
-    // makes discovery possible, while management remains owner-only.
-    let team = a
-        .devices(DeviceQuery {
-            scope: Some("team".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(team.items.is_empty());
+    // Devices are private to the Carbon who paired them: another Carbon sees nothing of it, and
+    // there is no shared visibility.
+    assert!(a.devices(DeviceQuery::default()).await.unwrap().items.is_empty());
     assert_eq!(code_of(a.stop_device(&id).await), ErrorCode::DeviceNotFound);
     assert_eq!(code_of(a.device(&id).await), ErrorCode::DeviceNotFound);
-    let still = b
-        .update_device(
-            &id,
-            None,
-            &DevicePatch {
-                visibility: Some(Visibility::Team),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(still.visibility, Visibility::Team);
     assert_eq!(
-        a.devices(DeviceQuery {
-            scope: Some("team".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .items
-        .len(),
-        1
+        code_of(
+            b.update_device(
+                &id,
+                None,
+                &DevicePatch {
+                    visibility: Some(Visibility::Team),
+                    ..Default::default()
+                },
+            )
+            .await
+        ),
+        ErrorCode::InvalidInput
     );
-    assert_eq!(code_of(a.stop_device(&id).await), ErrorCode::NotOwner);
+    assert_eq!(
+        code_of(
+            a.devices(DeviceQuery {
+                scope: Some("team".into()),
+                ..Default::default()
+            })
+            .await
+        ),
+        ErrorCode::InvalidInput
+    );
 
     // Rename, TTL bounds, stale version.
     let v = b.device(&id).await.unwrap().version.unwrap();
@@ -604,8 +524,8 @@ async fn pairing_rules_and_device_management() {
     // The device was told to refresh.
     assert!(matches!(d.recv().await, ServiceFrame::Refresh));
 
-    // Access: only team Silicons.
-    assert_eq!(code_of(b.grant(&id, "si:stranger").await), ErrorCode::InvalidInput);
+    // Access: any Silicon by its current id; never a Carbon, never an id nobody has.
+    assert_eq!(code_of(b.grant(&id, "si:nobody").await), ErrorCode::InvalidInput);
     assert_eq!(code_of(b.grant(&id, "c:alice").await), ErrorCode::InvalidInput);
     b.grant(&id, "si:chef").await.unwrap();
     assert_eq!(b.access(&id).await.unwrap().len(), 1);
@@ -629,7 +549,7 @@ async fn pairing_rules_and_device_management() {
             }
         }
     }
-    d2.hello(DeviceOs::Macos, &b).await;
+    d2.hello(DeviceOs::Macos, &env, &bob).await;
 
     // Pair expiry after inactivity.
     sqlx::query("UPDATE extend.devices SET last_activity_at = now() - interval '2 days' WHERE device_id = $1")
@@ -654,7 +574,7 @@ async fn pairing_rules_and_device_management() {
     assert!(env.client.device_self(&d.credential).await.is_err());
 
     // Device-side revoke pair.
-    let d3 = Device::pair(&env, "c:bob", DeviceOs::Linux, &["si:chef"], None).await;
+    let d3 = Device::pair(&env, &bob, DeviceOs::Linux, &["si:chef"]).await;
     env.client.revoke_pair(&d3.credential).await.unwrap();
     // Its owner can still read it, marked removed (tests/devices_gaps.rs covers the rest).
     assert_eq!(
@@ -663,7 +583,7 @@ async fn pairing_rules_and_device_management() {
     );
 
     // Session ids grow once all 3-character ids are used.
-    let d4 = Device::pair(&env, "c:bob", DeviceOs::Linux, &["si:chef"], None).await;
+    let d4 = Device::pair(&env, &bob, DeviceOs::Linux, &["si:chef"]).await;
     let _serve = d4.serve(env.base.clone());
     sqlx::query("INSERT INTO extend.session_ids SELECT lpad(to_hex(g), 3, '0') FROM generate_series(0, 4095) g ON CONFLICT DO NOTHING").execute(&env.pool).await.unwrap();
     let dev4: String = sqlx::query_scalar(
@@ -676,159 +596,57 @@ async fn pairing_rules_and_device_management() {
     assert_eq!(s.session_id.as_str().len(), 4);
 }
 
-async fn honeycomb(env: &Env, envid: Uuid, action: &str, revision: i64, generation: i64) -> reqwest::Response {
-    let op = Uuid::new_v4();
-    reqwest::Client::new()
-        .put(format!(
-            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{op}",
-            env.base
-        ))
-        .bearer_auth("hck_test")
-        .json(&serde_json::json!({
-            "operation_id": op, "environment_id": envid, "org_id": "acme", "app_id": "extend",
-            "environment_revision": revision, "generation": generation, "key_version": 1, "action": action,
-            "testing_key": "abcdefghijklmnopqrstuvwxyz012345", "name": "checkout-e2e"
-        }))
+#[tokio::test]
+async fn test_environments_are_gone() {
+    let env = start().await;
+    let alice = login(&env, "c:alice").await;
+    // A request that still selects a test environment is refused, never run in production.
+    let r = reqwest::Client::new()
+        .get(format!("{}/api/v2/devices", env.base))
+        .bearer_auth(&alice)
+        .header(
+            extend_protocol::TESTING_SECRET_HEADER,
+            extend_protocol::ids::new_secret("ask_"),
+        )
         .send()
         .await
-        .unwrap()
-}
-
-#[tokio::test]
-async fn test_environments_are_isolated() {
-    let env = start().await;
-    let envid = Uuid::new_v4();
-    let secret = extend_protocol::ids::new_secret("ask_");
-    // Wrong service credential.
-    let bad = reqwest::Client::new()
+        .unwrap();
+    assert_eq!(r.status(), 401);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["data"]["code"], "testing_secret_invalid");
+    assert!(
+        v["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no longer has test environments"),
+        "{v}"
+    );
+    // Nor does a device app, through the device wire.
+    let e = reqwest::Client::new()
+        .post(format!("{}/api/v1/enrollments", env.base))
+        .header(
+            extend_protocol::TESTING_SECRET_HEADER,
+            extend_protocol::ids::new_secret("ask_"),
+        )
+        .json(&serde_json::json!({"type": "enrollment", "data": {"os": "linux", "app_version": "1.0.0"}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(e.status(), 401);
+    // The operations Honeycomb drove are gone.
+    let gone = reqwest::Client::new()
         .put(format!(
-            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{}",
+            "{}/internal/honeycomb/organizations/acme/testing-environments/{}/operations/{}",
             env.base,
-            Uuid::new_v4()
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4()
         ))
-        .bearer_auth("nope")
+        .bearer_auth("hck_test")
         .json(&serde_json::json!({}))
         .send()
         .await
         .unwrap();
-    assert_eq!(bad.status(), 401);
-    let r = honeycomb(&env, envid, "prepare", 1, 1).await;
-    assert_eq!(r.status(), 200);
-    let receipt: serde_json::Value = r.json().await.unwrap();
-    assert_eq!(receipt["state"], "completed");
-    assert!(receipt.get("testing_key").is_none());
-    reqwest::Client::new()
-        .post(format!("{}/dev/iam/test-apps", env.base))
-        .json(&serde_json::json!({"type":"test_app","data":{"secret": secret, "environment_id": envid}}))
-        .send()
-        .await
-        .unwrap();
-
-    // An unknown secret never falls back to production.
-    let wrong = Client::builder(&env.base)
-        .testing_secret(extend_protocol::ids::new_secret("ask_"))
-        .connect()
-        .await
-        .unwrap();
-    assert_eq!(code_of(wrong.login("c:alice").await), ErrorCode::TestingSecretInvalid);
-
-    let t = Client::builder(&env.base)
-        .testing_secret(&secret)
-        .connect()
-        .await
-        .unwrap();
-    let te = t.testing_environment().await.unwrap();
-    assert_eq!(te.name, "checkout-e2e");
-    // Member-id login works in testing only.
-    let alice_t = t.login("c:alice").await.unwrap();
-    assert_eq!(alice_t.testing_environment.as_ref().unwrap().environment_id, envid);
-    // Production and test logins don't cross.
-    let alice_p = login(&env.client, "c:alice").await;
-    assert_eq!(
-        code_of(t.authed(&alice_p, Some("acme")).me().await),
-        ErrorCode::TokenExpired
-    );
-
-    // Pair five devices, the sixth is refused with the exact message.
-    let mut devices = Vec::new();
-    for _ in 0..5 {
-        devices.push(Device::pair(&env, "c:alice", DeviceOs::Linux, &[], Some(&secret)).await);
-    }
-    let e = t
-        .enroll(&EnrollmentCreate {
-            os: DeviceOs::Linux,
-            os_version: None,
-            model: None,
-            app_version: "1.0.0".into(),
-            engine_version: None,
-        })
-        .await
-        .unwrap();
-    let err = t
-        .authed(&alice_t.access_token, Some("acme"))
-        .pair(&PairingClaim {
-            pairing_code: e.pairing_code,
-            name: "six".into(),
-            visibility: Some(extend_protocol::model::Visibility::Team),
-            pair_ttl_days: None,
-            silicon_ids: vec![],
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::TestDeviceLimit);
-    assert_eq!(err.api().unwrap().message, extend_protocol::TEST_DEVICE_LIMIT_MESSAGE);
-
-    // Production sees none of it.
-    let prod = env
-        .client
-        .authed(&alice_p, Some("acme"))
-        .devices(DeviceQuery::default())
-        .await
-        .unwrap();
-    assert!(prod.items.is_empty());
-    assert_eq!(
-        t.authed(&alice_t.access_token, Some("acme"))
-            .devices(DeviceQuery::default())
-            .await
-            .unwrap()
-            .items
-            .len(),
-        5
-    );
-
-    // Clean: every device is unpaired and data is gone; the environment stays.
-    let r = honeycomb(&env, envid, "clean", 2, 2).await;
-    assert_eq!(r.status(), 200);
-    let mut first = devices.remove(0);
-    let f = first.recv().await;
-    assert!(
-        matches!(
-            f,
-            ServiceFrame::Unpaired {
-                reason: EndReason::EnvironmentCleaned
-            }
-        ),
-        "{f:?}"
-    );
-    let alice_t2 = t.login("c:alice").await.unwrap();
-    assert!(
-        t.authed(&alice_t2.access_token, Some("acme"))
-            .devices(DeviceQuery::default())
-            .await
-            .unwrap()
-            .items
-            .is_empty()
-    );
-    // Stale instructions are refused; replays return the stored receipt.
-    assert_eq!(honeycomb(&env, envid, "clean", 1, 1).await.status(), 409);
-
-    // Disable blocks access immediately.
-    assert_eq!(honeycomb(&env, envid, "disable", 3, 2).await.status(), 200);
-    assert_eq!(code_of(t.login("c:alice").await), ErrorCode::TestingSecretInvalid);
-    assert_eq!(honeycomb(&env, envid, "restore", 4, 2).await.status(), 200);
-    assert!(t.login("c:alice").await.is_ok());
-    assert_eq!(honeycomb(&env, envid, "purge", 5, 2).await.status(), 200);
-    assert_eq!(code_of(t.login("c:alice").await), ErrorCode::TestingSecretInvalid);
+    assert_eq!(gone.status(), 404);
 }
 
 #[tokio::test]
@@ -836,32 +654,59 @@ async fn versioning_and_errors() {
     let env = start().await;
     let r = reqwest::Client::new()
         .get(format!("{}/api/version", env.base))
-        .header("Silicon-Extend-Supported-API-Versions", "2, 3")
+        .header("Silicon-Extend-Supported-API-Versions", "3, 4")
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 400);
     let v: serde_json::Value = r.json().await.unwrap();
     assert_eq!(v["data"]["code"], "api_version_unsupported");
+    // A client that speaks 2 gets 2.
     let r = reqwest::Client::new()
-        .get(format!("{}/api/v1/iam", env.base))
-        .header("Silicon-Extend-API-Version", "2")
+        .get(format!("{}/api/version", env.base))
+        .header("Silicon-Extend-Supported-API-Versions", "1, 2")
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 400);
-    let iam = env.client.iam().await.unwrap();
-    assert_eq!(iam.app_id, "extend");
+    assert_eq!(r.status(), 200);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["data"]["api_version"], 2);
+    // The account routes of API v1 are retired, with the update command.
+    let r = reqwest::Client::new()
+        .get(format!("{}/api/v1/iam", env.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 410);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(
+        (v["data"]["code"].as_str(), v["data"]["hint"].as_str()),
+        (Some("api_version_sunset"), Some("silicon-apps update extend"))
+    );
+    // Where to sign in.
+    let r = reqwest::Client::new()
+        .get(format!("{}/api/v2/accounts", env.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["data"]["app_id"], "extend");
     // Every error carries a request id and a docs link.
-    let e = env.client.login("nobody").await.unwrap_err();
-    let api = e.api().unwrap();
-    assert!(!api.request_id.is_empty());
-    assert!(api.docs_url.as_ref().unwrap().contains("slt_invalid"));
+    let r = reqwest::Client::new()
+        .get(format!("{}/api/v2/me", env.base))
+        .bearer_auth("not-a-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert!(!v["data"]["request_id"].as_str().unwrap().is_empty());
+    assert!(v["data"]["docs_url"].as_str().unwrap().contains("unauthorized"), "{v}");
     // Reports.
-    let t = login(&env.client, "si:chef").await;
+    let t = login(&env, "si:chef").await;
     let rep = env
-        .client
-        .authed(&t, Some("acme"))
+        .v2(&t)
         .report(&ReportInput {
             message: "snapshot misses a button".into(),
             pr: Some("https://github.com/teamofsilicons/silicon-extend/pull/1".into()),

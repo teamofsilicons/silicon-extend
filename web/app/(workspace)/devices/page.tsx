@@ -1,0 +1,2 @@
+import {Devices} from "@/components/product/devices";import type {Device,Page} from "@/lib/product/types";import {tryApiFetch} from "@/lib/server/rsc";import {ErrorAlert} from "@/components/foundation/feedback/error-alert";import type {Envelope} from "@/components/product/common";
+export default async function Route(){const r=await tryApiFetch<Envelope<Page<Device>>>("/api/v2/devices?scope=mine&limit=50");return r.error?<ErrorAlert error={r.error}/>:<Devices initial={r.data.data}/>;}

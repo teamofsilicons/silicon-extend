@@ -11,26 +11,28 @@ use crate::error::{CliError, R};
 #[derive(Debug, Default, Clone)]
 pub struct Globals {
     pub json: bool,
-    pub test: Option<String>,
     pub session: Option<String>,
-    pub team: Option<String>,
     pub timeout: Option<u64>,
     pub help: bool,
     pub version: bool,
     pub verbose: bool,
+    /// A global flag Extend 4 removed (`--team`, `--test`), refused with what to do instead.
+    pub retired: Option<&'static str>,
 }
 
 /// The global flags, for messages.
 pub const GLOBAL_FLAG_NAMES: &[&str] = &[
     "--json",
-    "--test <test_id>",
     "--session <session_id>",
-    "--team <handle>",
     "--timeout <ms>",
     "-h/--help",
     "-V/--version",
     "-v/--verbose",
 ];
+
+/// Global flags Extend 3 had, each taking a value: read (with the value) so the command is refused
+/// with what to do instead, not mistaken for another argument.
+pub const RETIRED_GLOBAL_FLAGS: &[&str] = &["--team", "--test"];
 
 /// Device commands whose arguments are a command line for the device itself (`adb shell df -h`).
 /// Extend reads its own flags only between the command name and the device's first argument; from
@@ -55,17 +57,9 @@ pub fn missing_value(name: &str) -> CliError {
             "--out needs a local path",
             "Give the file or directory to save to: --out ./shot.png, or --out ./downloads/.",
         ),
-        "--test" => CliError::usage(
-            "--test needs a test id",
-            "Give the Honeycomb environment id: extend --test 9b3e0c1a-2f4d-4e6b-8a7c-1d2e3f4a5b6c <command>.",
-        ),
         "--session" => CliError::usage(
             "--session needs a session id",
             "Give the session id `extend session new` printed: --session a3f.",
-        ),
-        "--team" => CliError::usage(
-            "--team needs a team handle",
-            "Give one of your teams (see `extend team ls`): --team acme.",
         ),
         "--timeout" => CliError::usage(
             "--timeout needs a number of milliseconds",
@@ -88,22 +82,23 @@ pub struct Spec {
 pub const SPECS: &[Spec] = &[
     Spec {
         path: "login",
-        flags: &[],
+        flags: &[
+            ("--slt", true),
+            ("--slt-stdin", false),
+            ("--open", false),
+            ("--label", true),
+        ],
     },
     Spec {
         path: "login status",
-        flags: &[],
-    },
-    Spec {
-        path: "login contexts",
-        flags: &[],
-    },
-    Spec {
-        path: "login use",
-        flags: &[],
+        flags: &[("--offline", false)],
     },
     Spec {
         path: "logout",
+        flags: &[],
+    },
+    Spec {
+        path: "accounts",
         flags: &[],
     },
     Spec {
@@ -111,27 +106,15 @@ pub const SPECS: &[Spec] = &[
         flags: &[],
     },
     Spec {
-        path: "permission ls",
+        path: "silicon ls",
         flags: &[],
     },
     Spec {
-        path: "permission request",
-        flags: &[("--idempotency", true)],
-    },
-    Spec {
-        path: "permission complete",
-        flags: &[("--code-file", true), ("--idempotency", true)],
-    },
-    Spec {
-        path: "team ls",
+        path: "silicon show",
         flags: &[],
     },
     Spec {
-        path: "team silicons",
-        flags: &[("--all-teams", false)],
-    },
-    Spec {
-        path: "team use",
+        path: "silicon renounce",
         flags: &[],
     },
     Spec {
@@ -155,55 +138,20 @@ pub const SPECS: &[Spec] = &[
         flags: &[("--use-existing", false)],
     },
     Spec {
-        path: "config test add",
-        flags: &[],
-    },
-    Spec {
-        path: "config test ls",
-        flags: &[],
-    },
-    Spec {
-        path: "config test rm",
-        flags: &[],
-    },
-    Spec {
         path: "device ls",
-        flags: &[
-            ("--online", false),
-            ("--os", true),
-            ("--team-visible", false),
-            ("--removed", false),
-        ],
+        flags: &[("--online", false), ("--os", true), ("--removed", false)],
     },
     Spec {
         path: "device show",
         flags: &[],
     },
     Spec {
-        path: "device importable",
-        flags: &[],
-    },
-    Spec {
-        path: "device import",
-        flags: &[("--visibility", true), ("--key", true)],
-    },
-    Spec {
         path: "device pair",
-        flags: &[
-            ("--name", true),
-            ("--visibility", true),
-            ("--ttl-days", true),
-            ("--access", true),
-        ],
+        flags: &[("--name", true), ("--ttl-days", true), ("--access", true)],
     },
     Spec {
         path: "device attach",
-        flags: &[
-            ("--os", true),
-            ("--name", true),
-            ("--address", true),
-            ("--visibility", true),
-        ],
+        flags: &[("--os", true), ("--name", true), ("--address", true)],
     },
     Spec {
         path: "device setup",
@@ -219,10 +167,6 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "device banner",
-        flags: &[],
-    },
-    Spec {
-        path: "device visibility",
         flags: &[],
     },
     Spec {
@@ -260,12 +204,7 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "device wake-requests",
-        flags: &[
-            ("--open", false),
-            ("--wake-id", true),
-            ("--silicon", true),
-            ("--only-team", true),
-        ],
+        flags: &[("--open", false), ("--wake-id", true), ("--silicon", true)],
     },
     Spec {
         path: "session new",
@@ -285,7 +224,7 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "session ls",
-        flags: &[("--device", true), ("--state", true)],
+        flags: &[("--device", true), ("--state", true), ("--silicon", true)],
     },
     Spec {
         path: "session end",
@@ -301,19 +240,24 @@ pub const SPECS: &[Spec] = &[
     },
     Spec {
         path: "request ls",
-        flags: &[("--sent", false), ("--received", false), ("--device", true)],
+        flags: &[
+            ("--sent", false),
+            ("--received", false),
+            ("--device", true),
+            ("--silicon", true),
+        ],
     },
     Spec {
         path: "ting status",
-        flags: &[("--all-teams", false)],
+        flags: &[],
     },
     Spec {
         path: "ting on",
-        flags: &[("--all-teams", false)],
+        flags: &[],
     },
     Spec {
         path: "file ls",
-        flags: &[("--device", true), ("--kind", true)],
+        flags: &[("--device", true), ("--kind", true), ("--silicon", true)],
     },
     Spec {
         path: "file show",
@@ -330,10 +274,6 @@ pub const SPECS: &[Spec] = &[
     Spec {
         path: "report",
         flags: &[("--pr", true)],
-    },
-    Spec {
-        path: "env",
-        flags: &[],
     },
     Spec {
         path: "version",
@@ -393,7 +333,7 @@ pub type GlobalsError = Box<(Globals, CliError)>;
 /// verbatim command's own arguments (see [`VERBATIM_COMMANDS`]) and in the value of an Extend
 /// command's flag (`extend request send 7c1e09ab --reason -h` sends the reason `-h`).
 ///
-/// On an error, the globals read so far come back too, so `--test` can still be reported.
+/// On an error, the globals read so far come back too, so `--json` still shapes the error.
 pub fn parse_globals(argv: Vec<String>) -> Result<(Globals, Vec<String>), GlobalsError> {
     let mut g = Globals::default();
     let mut rest: Vec<String> = Vec::new();
@@ -432,9 +372,13 @@ pub fn parse_globals(argv: Vec<String>) -> Result<(Globals, Vec<String>), Global
             "-h" | "--help" => g.help = true,
             "-V" | "--version" => g.version = true,
             "-v" | "--verbose" => g.verbose = true,
-            "--test" => g.test = Some(value!("--test")),
             "--session" => g.session = Some(value!("--session")),
-            "--team" => g.team = Some(value!("--team")),
+            _ if RETIRED_GLOBAL_FLAGS.contains(&flag_name) => {
+                if !a.contains('=') {
+                    let _ = it.next();
+                }
+                g.retired = RETIRED_GLOBAL_FLAGS.iter().copied().find(|f| *f == flag_name);
+            }
             "--timeout" => {
                 let v = value!("--timeout");
                 match parse_timeout(&v) {
@@ -442,9 +386,7 @@ pub fn parse_globals(argv: Vec<String>) -> Result<(Globals, Vec<String>), Global
                     Err(e) => return Err(Box::new((g, e))),
                 }
             }
-            _ if a.starts_with("--test=") => g.test = Some(a["--test=".len()..].to_owned()),
             _ if a.starts_with("--session=") => g.session = Some(a["--session=".len()..].to_owned()),
-            _ if a.starts_with("--team=") => g.team = Some(a["--team=".len()..].to_owned()),
             _ if a.starts_with("--timeout=") => match parse_timeout(&a["--timeout=".len()..]) {
                 Ok(ms) => g.timeout = Some(ms),
                 Err(e) => return Err(Box::new((g, e))),
@@ -474,24 +416,6 @@ pub fn parse_globals(argv: Vec<String>) -> Result<(Globals, Vec<String>), Global
         }
     }
     Ok((g, rest))
-}
-
-/// The `--test` value in a command line the parser refused, so the test environment can still be
-/// named on stderr.
-pub fn find_test_id(argv: &[String]) -> Option<String> {
-    let mut it = argv.iter();
-    while let Some(a) = it.next() {
-        if a == "--" {
-            return None;
-        }
-        if a == "--test" {
-            return it.next().cloned();
-        }
-        if let Some(v) = a.strip_prefix("--test=") {
-            return Some(v.to_owned());
-        }
-    }
-    None
 }
 
 /// An Extend command's arguments: positionals, and the flags its [`Spec`] allows.
@@ -531,6 +455,9 @@ impl Args {
                 None => (a.clone(), None),
             };
             let Some((_, takes)) = spec.flags.iter().find(|(f, _)| *f == name) else {
+                if let Some(e) = crate::retired::flag(spec.path, &name) {
+                    return Err(e);
+                }
                 return Err(unknown_flag(spec, &name));
             };
             match (takes, inline) {
@@ -676,15 +603,10 @@ mod tests {
         assert_eq!(e.message, "`extend device ls` has no flag --onlinee");
         let hint = e.hint.unwrap();
         assert!(hint.starts_with("Did you mean --online? "), "{hint}");
+        assert!(hint.contains("--os <value>") && hint.contains("--removed"), "{hint}");
+        let e = Args::parse(&strings(&["--bogus"]), "logout").unwrap_err();
         assert!(
-            hint.contains("--os <value>") && hint.contains("--team-visible"),
-            "{hint}"
-        );
-        let e = Args::parse(&strings(&["--bogus"]), "login status").unwrap_err();
-        assert!(
-            e.hint
-                .unwrap()
-                .contains("`extend login status` takes no flags of its own"),
+            e.hint.unwrap().contains("`extend logout` takes no flags of its own"),
             "{}",
             e.message
         );
@@ -699,6 +621,47 @@ mod tests {
         assert!(e.message.contains("--online takes no value"), "{}", e.message);
         let e = Args::parse(&strings(&["x", "--name"]), "device pair").unwrap_err();
         assert!(e.message.contains("--name needs a value"), "{}", e.message);
+    }
+
+    #[test]
+    fn login_takes_a_token_three_ways_and_the_device_flow_flags() {
+        let a = Args::parse(&strings(&["slt_abc"]), "login").unwrap();
+        assert_eq!(a.pos, strings(&["slt_abc"]));
+        let a = Args::parse(&strings(&["--slt", "slt_abc"]), "login").unwrap();
+        assert_eq!(a.value("--slt").as_deref(), Some("slt_abc"));
+        let a = Args::parse(&strings(&["--slt=slt_abc"]), "login").unwrap();
+        assert_eq!(a.value("--slt").as_deref(), Some("slt_abc"));
+        assert!(
+            Args::parse(&strings(&["--slt-stdin"]), "login")
+                .unwrap()
+                .flag("--slt-stdin")
+        );
+        let a = Args::parse(&strings(&["--open", "--label", "build box"]), "login").unwrap();
+        assert!(a.flag("--open"));
+        assert_eq!(a.value("--label").as_deref(), Some("build box"));
+        assert!(
+            Args::parse(&strings(&["--offline"]), "login status")
+                .unwrap()
+                .flag("--offline")
+        );
+        // A token that looks like a global flag is still the token.
+        let (g, rest) = parse_globals(strings(&["login", "--slt", "--json"])).unwrap();
+        assert!(!g.json);
+        assert_eq!(rest, strings(&["login", "--slt", "--json"]));
+    }
+
+    #[test]
+    fn retired_global_flags_are_read_with_their_value() {
+        let (g, rest) = parse_globals(strings(&["--team", "acme", "device", "ls"])).unwrap();
+        assert_eq!(g.retired, Some("--team"));
+        assert_eq!(rest, strings(&["device", "ls"]));
+        let (g, rest) = parse_globals(strings(&["device", "ls", "--test=9b3e"])).unwrap();
+        assert_eq!(g.retired, Some("--test"));
+        assert_eq!(rest, strings(&["device", "ls"]));
+        // Inside adb's own arguments they are the device's.
+        let (g, rest) = parse_globals(strings(&["adb", "shell", "tool", "--team", "x"])).unwrap();
+        assert_eq!(g.retired, None);
+        assert_eq!(rest, strings(&["adb", "shell", "tool", "--team", "x"]));
     }
 
     #[test]
@@ -728,19 +691,16 @@ mod tests {
     }
 
     #[test]
-    fn a_parse_error_keeps_the_test_id() {
-        let (g, e) = *parse_globals(strings(&["--test", "abc", "device", "ls", "--timeout", "5"])).unwrap_err();
-        assert_eq!(g.test.as_deref(), Some("abc"));
+    fn a_parse_error_keeps_the_globals_read_so_far() {
+        let (g, e) = *parse_globals(strings(&["--json", "device", "ls", "--timeout", "5"])).unwrap_err();
+        assert!(g.json);
         assert!(e.message.contains("outside 1000–300000"), "{}", e.message);
-        assert_eq!(
-            find_test_id(&strings(&["device", "ls", "--test=xyz"])).as_deref(),
-            Some("xyz")
-        );
     }
 
     #[test]
     fn every_spec_names_a_documented_command() {
-        for s in SPECS {
+        // `iam` is the hidden alias of `accounts`, kept for the Silicon runtime for one release.
+        for s in SPECS.iter().filter(|s| s.path != "iam") {
             assert!(
                 crate::help::find(s.path).is_some() || crate::help::find(s.path.split(' ').next().unwrap()).is_some(),
                 "`extend {}` has no help node",

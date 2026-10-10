@@ -1,55 +1,31 @@
-//! PostgreSQL: the global schema, and one schema per world (production, and each test environment).
+//! PostgreSQL: the global schema, and the `extend` schema that holds Extend's data.
 //!
-//! Worlds live in separate schemas so a query that forgets a filter still can't read another
-//! world's data (TECHNICAL.md section 3). Schema names are generated here from UUIDs only, never
-//! from caller input, which is what makes it safe to format them into SQL.
+//! Until 4.0 every Honeycomb test environment had a schema of its own (`extend_test_<uuid>`);
+//! 4.0 has no test environments, so Extend only ever reads and writes `extend`. Schemas that
+//! already exist stay untouched (a later, manual cleanup drops them). Schema names are formatted
+//! into SQL only from [`World::t`], never from caller input.
 
 use anyhow::Context as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Executor as _, Row as _};
 use uuid::Uuid;
 
-/// One isolated data plane.
+/// Extend's data plane: the `extend` schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct World {
     pub schema: String,
-    pub environment_id: Option<Uuid>,
 }
 
 impl World {
     pub fn production() -> Self {
         Self {
             schema: "extend".into(),
-            environment_id: None,
         }
-    }
-    pub fn test(environment_id: Uuid) -> Self {
-        Self {
-            schema: format!("extend_test_{}", environment_id.simple()),
-            environment_id: Some(environment_id),
-        }
-    }
-    pub fn is_test(&self) -> bool {
-        self.environment_id.is_some()
     }
     /// A qualified table name.
     pub fn t(&self, table: &str) -> String {
         format!("{}.{}", self.schema, table)
     }
-}
-
-/// Advisory lock that serialises every change to how many test environments are active, so the
-/// limit of 10 holds under concurrent `prepare` and `restore` instructions.
-pub const TEST_SLOT_LOCK: i64 = 7342003;
-
-/// Takes the transaction-scoped advisory lock that serialises Honeycomb operations on one test
-/// environment (held until `tx` ends, including when it's dropped).
-pub async fn lock_environment(tx: &mut sqlx::PgConnection, environment_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 7342004))")
-        .bind(format!("extend-test-environment:{environment_id}"))
-        .execute(tx)
-        .await?;
-    Ok(())
 }
 
 pub async fn connect(url: &str) -> anyhow::Result<PgPool> {
@@ -321,10 +297,65 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
 "#,
     WORLD_1_1,
     WORLD_1_1_BANNER,
-    crate::obo::MIGRATION,
-    crate::organizations::MIGRATION,
-    crate::organizations::VISIBLE_DEFAULT_MIGRATION,
+    WORLD_3_0_OBO,
+    WORLD_3_0_ORGANIZATIONS,
+    WORLD_3_1_VISIBLE_DEFAULT,
+    crate::identity::WORLD_4_0_ACCOUNTS,
+    WORLD_UUID128,
+    WORLD_UUID128_DELIVERY_FENCE,
 ];
+
+/// Schema version 6 (3.0): IAM feature approvals and OBO grants. Inert since 4.0 (Silicon
+/// Accounts proofs replace them); the rows stay.
+const WORLD_3_0_OBO: &str = r"
+CREATE TABLE IF NOT EXISTS {s}.obo_requests (
+ id uuid PRIMARY KEY, member_id text NOT NULL, org_id text NOT NULL, request_key uuid NOT NULL,
+ request_hash text NOT NULL, payload bytea, authorization_id uuid, consent jsonb,
+ code_hash text, completed boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(member_id,org_id,request_key)
+);
+CREATE TABLE IF NOT EXISTS {s}.obo_grants (
+ member_id text NOT NULL, org_id text NOT NULL, audience text NOT NULL, endpoint_id text NOT NULL,
+ request_id uuid NOT NULL REFERENCES {s}.obo_requests(id), credentials bytea NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(member_id,org_id,audience,endpoint_id)
+);
+";
+
+/// Schema version 7 (3.0): organization bindings of devices. Inert since 4.0 (no Teams); the rows
+/// stay, and version 9 drops the trigger that wrote them.
+const WORLD_3_0_ORGANIZATIONS: &str = r#"
+CREATE TABLE IF NOT EXISTS {s}.device_organizations (
+    device_id text NOT NULL REFERENCES {s}.devices(device_id),
+    org_id text NOT NULL,
+    visibility text NOT NULL DEFAULT 'personal' CHECK (visibility IN ('personal', 'team')),
+    wake_muted boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    removed_at timestamptz,
+    PRIMARY KEY (device_id, org_id)
+);
+CREATE INDEX IF NOT EXISTS device_organizations_org ON {s}.device_organizations (org_id, device_id) WHERE removed_at IS NULL;
+-- Existing configurations remain private. Preserve the places with explicit grants, but a
+-- private binding takes precedence over a grant until its owner explicitly shares it.
+INSERT INTO {s}.device_organizations (device_id, org_id)
+SELECT device_id, team FROM {s}.devices WHERE team <> ''
+UNION SELECT device_id, team FROM {s}.device_access WHERE team <> ''
+ON CONFLICT DO NOTHING;
+UPDATE {s}.activity a SET team = COALESCE(
+    (SELECT ss.team FROM {s}.sessions ss WHERE ss.session_id = a.session_id),
+    (SELECT d.team FROM {s}.devices d WHERE d.device_id = a.device_id)) WHERE a.team IS NULL;
+-- Older native agents still enroll physical pairs; create the initial private binding atomically.
+CREATE OR REPLACE FUNCTION {s}.device_initial_organization() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN
+    INSERT INTO {s}.device_organizations (device_id, org_id) VALUES (NEW.device_id, NEW.team) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END $f$;
+CREATE OR REPLACE TRIGGER device_initial_organization AFTER INSERT ON {s}.devices
+    FOR EACH ROW EXECUTE FUNCTION {s}.device_initial_organization();
+"#;
+
+/// Schema version 8 (3.1): new organization bindings default to visible. Inert since 4.0.
+const WORLD_3_1_VISIBLE_DEFAULT: &str = r#"
+ALTER TABLE {s}.device_organizations ALTER COLUMN visibility SET DEFAULT 'team';
+"#;
 
 /// Schema version 4 (1.1.0): devices belong to the Carbons who paired them; several Carbons can
 /// pair one device; waking. A `devices` row is one Carbon's pair; `device_instances` is the physical
@@ -493,10 +524,17 @@ ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text 
     CHECK (in_use_indicator IN ('shown','hidden'));
 "#;
 
-/// The schema version a 1.1.0 service brings every world to.
-pub const WORLD_VERSION: i32 = 8;
+/// The schema version this service brings the world to (4.0: Silicon Accounts, no Teams).
+pub const WORLD_VERSION: i32 = 11;
 
+/// Brings the global schema up to date, then the `extend` schema ([`ensure_world`]).
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
+    migrate_global_schema(pool).await?;
+    ensure_world(pool, &World::production()).await
+}
+
+/// The global schema alone (`extend_global`): tests that build an older `extend` schema start here.
+pub async fn migrate_global_schema(pool: &PgPool) -> anyhow::Result<()> {
     // Serialise migrations across service instances.
     let mut conn = pool.acquire().await?;
     conn.execute("SELECT pg_advisory_lock(7342001)").await?;
@@ -508,8 +546,7 @@ pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
     }
     .await;
     conn.execute("SELECT pg_advisory_unlock(7342001)").await?;
-    result?;
-    ensure_world(pool, &World::production()).await
+    result
 }
 
 /// Creates or upgrades a world's schema, then puts back the grants a rollback to 1.0.0 set aside
@@ -552,52 +589,6 @@ pub async fn ensure_world_to(pool: &PgPool, world: &World, version: usize) -> an
     .await;
     conn.execute("SELECT pg_advisory_unlock(7342002)").await?;
     result
-}
-
-/// Empties every table in a world (a test environment clean). The IAM event and aggregate
-/// records stay: they hold no test data, only which IAM events were already applied, so an event
-/// IAM delivers again after the clean can't be applied a second time. `world_settings` stays too:
-/// it belongs to the world (the hardware salt its computers hold), not to its test data.
-pub async fn truncate_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
-    anyhow::ensure!(world.is_test(), "refusing to truncate production");
-    let sql = format!(
-        "TRUNCATE {s}.device_locks, {s}.sessions, {s}.session_ids, {s}.device_access, {s}.activity, {s}.requests,
-                  {s}.files, {s}.uploads, {s}.idempotency, {s}.reports, {s}.telemetry, {s}.devices,
-                  {s}.device_instances, {s}.wake_requests, {s}.ting_recipients, {s}.ting_type_status,
-                  {s}.membership_checks, {s}.obo_grants, {s}.obo_requests, {s}.device_organizations CASCADE",
-        s = world.schema
-    );
-    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone())).execute(pool).await?;
-    Ok(())
-}
-
-pub async fn drop_world(pool: &PgPool, world: &World) -> anyhow::Result<()> {
-    anyhow::ensure!(world.is_test(), "refusing to drop production");
-    sqlx::raw_sql(sql!("DROP SCHEMA IF EXISTS {} CASCADE", world.schema))
-        .execute(pool)
-        .await?;
-    sqlx::query("DELETE FROM extend_global.schema_versions WHERE schema_name = $1")
-        .bind(&world.schema)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-/// Brings every test world that still exists (not permanently removed) to the current schema, at
-/// start and before the scheduler runs: the scheduler walks every open test world, and device
-/// sockets reach test worlds nobody has selected since the service started. Returns their schemas.
-pub async fn ensure_test_worlds(pool: &PgPool) -> anyhow::Result<Vec<String>> {
-    let envs: Vec<(Uuid,)> =
-        sqlx::query_as("SELECT environment_id FROM extend_global.test_environments WHERE state <> 'removed'")
-            .fetch_all(pool)
-            .await?;
-    let mut done = Vec::new();
-    for (id,) in envs {
-        let world = World::test(id);
-        ensure_world(pool, &world).await?;
-        done.push(world.schema);
-    }
-    Ok(done)
 }
 
 /// A rollback to 1.0.0 (deploy/rollback/1.1-to-1.0.sql) moves grants from Teams other than the
@@ -678,3 +669,21 @@ pub async fn restore_rollback_grants(pool: &PgPool, world: &World) -> anyhow::Re
     tracing::info!(world = %world.schema, restored, "put back the grants a rollback to 1.0.0 had set aside");
     Ok(())
 }
+
+const WORLD_UUID128: &str = r#"
+-- Cutover ledger also fences tokens bearing an identity retired by the backfill.
+CREATE TABLE IF NOT EXISTS {s}.accounts_uuid128_map (
+ old_uuid text PRIMARY KEY, new_uuid text UNIQUE NOT NULL,
+ kind text NOT NULL CHECK (kind IN ('carbon','silicon')),
+ mapping_sha256 text NOT NULL,
+ applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+"#;
+
+// A retried or reactivated wake operation must never send a frozen pre-cutover identity body.
+const WORLD_UUID128_DELIVERY_FENCE: &str = r#"
+CREATE TABLE {s}.accounts_uuid128_retired_bodies (
+ body_sha256 bytea PRIMARY KEY CHECK(octet_length(body_sha256)=32),
+ retired_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+"#;

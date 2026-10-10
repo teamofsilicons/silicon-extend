@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(store.load_all().unwrap(), vec![a.clone(), b.clone()]);
         let url = Url::parse("http://127.0.0.1:8480/").unwrap();
         assert_eq!(load_for(&store, &url).unwrap().len(), 2);
-        let other = Url::parse("https://backend.extend.teamofsilicons.com/").unwrap();
+        let other = Url::parse("https://api.extend.teamofsilicons.com/").unwrap();
         assert!(load_for(&store, &other).unwrap().is_empty());
 
         // Rotation keeps the old secret as the fallback, in place.
@@ -444,13 +444,13 @@ mod tests {
     #[test]
     fn keyring_accounts_are_per_service_and_pair() {
         let a = KeyringStore::new(&Url::parse("http://127.0.0.1:8480/").unwrap());
-        let b = KeyringStore::new(&Url::parse("https://backend.extend.teamofsilicons.com/").unwrap());
+        let b = KeyringStore::new(&Url::parse("https://api.extend.teamofsilicons.com/").unwrap());
         assert_eq!(a.legacy_account, "device-credential@127.0.0.1:8480");
-        assert_eq!(b.legacy_account, "device-credential@backend.extend.teamofsilicons.com");
+        assert_eq!(b.legacy_account, "device-credential@api.extend.teamofsilicons.com");
         assert_eq!(a.index_account(), "http://127.0.0.1:8480/#pairs");
         assert_eq!(
             b.pair_account(&"7c1e09ab".parse().unwrap()),
-            "https://backend.extend.teamofsilicons.com/#7c1e09ab"
+            "https://api.extend.teamofsilicons.com/#7c1e09ab"
         );
     }
 }

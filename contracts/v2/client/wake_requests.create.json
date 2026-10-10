@@ -1,0 +1,65 @@
+{
+  "api_version": 2,
+  "call": "Authed::wake",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "wake_requests.create",
+  "request": {
+    "body": {
+      "data": {
+        "reason": "Need the TV awake to check the menu"
+      },
+      "type": "wake_request"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "POST",
+    "path": "/api/v2/devices/{device_id}/wake-requests"
+  },
+  "response": {
+    "non_null": [
+      "/asks",
+      "/created_at",
+      "/device_id",
+      "/device_notice",
+      "/expires_at",
+      "/from",
+      "/host/device_id",
+      "/host/name",
+      "/host/online",
+      "/last_asked_at",
+      "/reason",
+      "/state",
+      "/to",
+      "/wake_detectable",
+      "/wake_id"
+    ],
+    "required": [
+      "/asks",
+      "/created_at",
+      "/device_id",
+      "/device_notice",
+      "/expires_at",
+      "/from",
+      "/host/device_id",
+      "/host/name",
+      "/host/online",
+      "/last_asked_at",
+      "/reason",
+      "/state",
+      "/to",
+      "/wake_detectable",
+      "/wake_id"
+    ],
+    "status": "2xx",
+    "type": "wake_request"
+  }
+}

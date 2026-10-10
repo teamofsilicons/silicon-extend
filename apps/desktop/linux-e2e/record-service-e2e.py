@@ -2,8 +2,9 @@
 """Install a Linux package and verify real local-service recording upload/download.
 
 Run on the host with Docker, the built extend CLI, ffmpeg and a development Extend
-service using local IAM (c:alice/si:chef). Only the disposable container is recorded.
-No source runtime is mounted into it. This is a manual lane, not production IAM proof.
+service with its local Silicon Accounts stand-in (e2e/dev.env; c:alice and her Silicon si:chef).
+Only the disposable container is recorded. No source runtime is mounted into it. This is a manual
+lane, not proof against production Silicon Accounts.
 
 First it installs the package into a pristine debian:trixie with apt, once with Depends only and
 once with Recommends (package-install-check.sh; needs network access), because an install into
@@ -21,6 +22,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -77,17 +79,28 @@ started_container = False
 report('Artifacts:', work)
 
 
-def cli(who, *command, expect_json=True):
+def cli(who, *command, expect_json=True, stdin=None):
     home = work / ('cli-' + who)
     home.mkdir(exist_ok=True)
-    env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url, EXTEND_TELEMETRY='off')
+    env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url,
+               ACCOUNTS_URL=args.service_url + '/dev/accounts', EXTEND_TELEMETRY='off')
     cmd = [str(ROOT / 'target/debug/extend'), '--timeout', '90000', *command]
     if expect_json:
         cmd.append('--json')
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=100)
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=100, input=stdin)
     assert result.returncode == 0, (command, result.stderr)
     # `extend --json` prints the data itself on stdout, with no wrapper.
     return json.loads(result.stdout) if expect_json else result.stdout
+
+
+def signin(who, account, custodian=None):
+    """Sign in through the service's Silicon Accounts stand-in, with a short-lived token from it."""
+    body = json.dumps({'type': 'slt', 'data': {'id': account, 'custodian': custodian}}).encode()
+    request = urllib.request.Request(args.service_url + '/dev/accounts/slt', data=body,
+                                     headers={'content-type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        slt = json.load(response)['data']['slt']
+    cli(who, 'login', '--slt-stdin', stdin=slt)
 
 
 def remote(*command):
@@ -112,8 +125,8 @@ def wait_status(predicate):
 
 
 try:
-    cli('alice', 'login', 'c:alice')
-    cli('chef', 'login', 'si:chef')
+    signin('alice', 'c:alice')
+    signin('chef', 'si:chef', 'c:alice')
     subprocess.run([
         'docker', 'run', '-d', '--rm', '--init', '--name', container,
         '-e', 'EXTEND_API_URL=' + args.container_service_url,

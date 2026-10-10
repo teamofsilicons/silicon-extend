@@ -1,9 +1,10 @@
 //! Extend's Ting notification types (1.1.0).
 //!
-//! Ting resolves notification types per environment and app, across delivery Teams. A Ting manager
-//! registers them in the app's owning Team with Honeycomb permission. The API's `missing_types`
-//! records failures observed in each delivery Team; it does not identify the app's owner.
-//! CLI and website show [`register_command`] with an explicit owner placeholder when unknown.
+//! Ting knows each app's notification types by their full name (`extend.device.woken`). The API's
+//! `missing_types` lists the ones Ting reported unknown when Extend sent a Ting; the CLI and the
+//! website list them with [`TingType::description`], so whoever runs Extend can register them in
+//! Ting. (2.0: the 1.x `register_command`, which built Extend 3's Ting registration command, is
+//! gone.)
 
 use uuid::Uuid;
 
@@ -22,8 +23,9 @@ impl TingType {
     }
 }
 
-/// A Silicon asks to use a device another Silicon is using. It goes to the Silicon using it
-/// (same Carbon and Team as the asker) or to the Carbon who gave that Silicon access.
+/// A Silicon asks to use a device another Silicon is using. It goes to the Silicon using it (given
+/// access through the same pair, and in the asker's circle: the same custodian) or to the Carbon
+/// who gave that Silicon access.
 pub const DEVICE_REQUESTED: TingType = TingType {
     event: "device.requested",
     description: "A Silicon asks to use a device another Silicon is using",
@@ -54,20 +56,6 @@ pub fn find(name: &str) -> Option<TingType> {
         .filter(|(app, _)| *app != "device")
         .map_or(name, |(_, e)| e);
     ALL_TYPES.into_iter().find(|t| t.event == event)
-}
-
-/// A shell-safe placeholder when the app's owning Team has not been verified. Callers must explain
-/// that the manager replaces this value; a delivery Team must never be substituted for the owner.
-pub const OWNER_TEAM_PLACEHOLDER: &str = "'<owning-team>'";
-
-/// The command a Ting manager runs in the app's owning Team. `team` must be a verified owner or
-/// [`OWNER_TEAM_PLACEHOLDER`], never inferred from the notification's delivery Team.
-pub fn register_command(team: &str, app_id: &str, ty: TingType) -> String {
-    format!(
-        "ting --org {team} types register --type {} --description '{}'",
-        ty.full_name(app_id),
-        ty.description
-    )
 }
 
 /// Ting idempotency key of the Carbon's Ting for one ask of a wake request.
@@ -114,10 +102,6 @@ mod tests {
     #[test]
     fn names_and_commands() {
         assert_eq!(WAKE_REQUESTED.full_name("extend"), "extend.device.wake_requested");
-        assert_eq!(
-            register_command("labs", "extend", WAKE_REQUESTED),
-            "ting --org labs types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'"
-        );
         assert_eq!(find("extend.device.woken"), Some(WOKEN));
         assert_eq!(find("device.woken"), Some(WOKEN));
         assert_eq!(find("extend.device.requested"), Some(DEVICE_REQUESTED));

@@ -1,0 +1,88 @@
+{
+  "app_id": "extend",
+  "date": "2026-10-10",
+  "scope": "Parallel Accounts app rollout; existing IAM Silicons, custody, stores, services and clients preserved",
+  "public_api": "https://api.extend.teamofsilicons.com",
+  "public_website": "https://extend.teamofsilicons.com",
+  "legacy_api": "https://backend.extend.teamofsilicons.com",
+  "runtime_source": "8966946335617b4360611ea0f350b76abb4f523d",
+  "ui_source": "aada62fefdf7fbdcafeb6b59396eebe87e576363",
+  "cli_source": "8966946335617b4360611ea0f350b76abb4f523d",
+  "cli_version": "4.0.0",
+  "cli_native_manifest": {
+    "app_id": "extend",
+    "version": "4.0.0",
+    "source_commit": "8966946335617b4360611ea0f350b76abb4f523d",
+    "verifier_commit": "63dddd72ed8339509bce706f565aa69428b7804a",
+    "workflow": "https://github.com/teamofsilicons/silicon-extend/actions/runs/38058634594",
+    "reports": [
+      "extend-linux-aarch64.json",
+      "extend-linux-x86_64.json",
+      "extend-macos-aarch64.json",
+      "extend-macos-x86_64.json",
+      "extend-windows-aarch64.json",
+      "extend-windows-x86_64.json"
+    ]
+  },
+  "public_github_releases": [
+    "https://github.com/teamofsilicons/silicon-extend/releases/tag/android-v1.2.0",
+    "https://github.com/teamofsilicons/silicon-extend/releases/tag/v1.2.0",
+    "https://github.com/teamofsilicons/silicon-extend/releases/tag/cli-v4.0.0"
+  ],
+  "crates_published": {
+    "silicon-extend-protocol": "2.0.0",
+    "silicon-extend-client": "4.0.0",
+    "silicon-extend-cli": "4.0.0"
+  },
+  "authenticated_browser": {
+    "authenticated": true,
+    "authMethod": "genuine CLI session in existing BFF sealed-cookie format",
+    "pageErrors": [],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "viewports": [
+      "desktop",
+      "mobile"
+    ],
+    "spacing": "1.5rem"
+  },
+  "webhook_signed_ping": "delivered",
+  "temporary_fixture": {
+    "uuid": "6af7bf6a-2fec-4f09-a502-c11447b8f4ac",
+    "account_deletion": "Permanently deleted after DM/Extend/Commit/Hook and Remind verification; existing IAM accounts untouched",
+    "android_device": "removed; access revoked; session ended; owned emulator stopped",
+    "cleanup_receipt": ".migration/live/parallel/release-validation-cleanup.private.json",
+    "receiver": "Deleted after verified Remind timer delivery; subscription removed and reminder archived",
+    "revocation_proof": "Unexpired fixture Hook access token returns HTTP 401 after account deletion",
+    "dm_messages": "Both fixture messages replaced with tombstones; private local relay stopped"
+  },
+  "evidence_directory": ".migration/live/parallel/extend/",
+  "pr": "https://github.com/teamofsilicons/silicon-extend/pull/13",
+  "native_devices": {
+    "source": "794ec94a321d3b65572cf77d5db428410b1646a6",
+    "version": "1.2.0",
+    "windows_arm_gui": "Not verified: hosted privacy overlay; unit/state/terminal pass; x64 GUI passes",
+    "file_sha256": "1c8e12308687dcdbc4f7727daa331c253f30a1420b26c9355de7292322191aac",
+    "bytes": 818756,
+    "dimensions": "1080x2400",
+    "recipient_downloads": [
+      "Extend CLI",
+      "Briefcase CLI",
+      "Extend browser"
+    ],
+    "permanent_link_preview": "Briefcase public website passed"
+  },
+  "ui_deployment": "dpl_8SfBEB8Ry1hDbinX82GcReHAumsM",
+  "post_release_backup": {
+    "identifier": "silicon-extend-accounts-live-20261010",
+    "status": "available",
+    "encrypted": true,
+    "restore_qualification": "RDS snapshot retained; this snapshot was not restored into a separate RDS instance during this release"
+  },
+  "optional_dependencies": {
+    "ting": "Not configured on fresh Accounts service; native product reads and retained events remain available"
+  },
+  "merge_evidence_url": "https://github.com/teamofsilicons/silicon-extend/pull/13"
+}

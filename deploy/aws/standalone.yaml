@@ -72,7 +72,7 @@ Parameters:
   DatabaseEngineVersion:
     Type: String
     Default: '17.9'
-    Description: Matches the sibling fleet (IAM, DM, Briefcase, Remind are on 17.9); Extend needs 16+
+    Description: Matches the sibling fleet (DM, Briefcase, Remind and the others are on 17.9); Extend needs 16+
   DatabaseInstanceClass:
     Type: String
     Default: db.t4g.micro
@@ -139,7 +139,7 @@ Resources:
         - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: ACME HTTP-01 and redirect to HTTPS}
         - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS API and device WebSockets}
       SecurityGroupEgress:
-        - {IpProtocol: '-1', CidrIp: 0.0.0.0/0, Description: IAM Briefcase Ting Postmark Space Station ECR RDS}
+        - {IpProtocol: '-1', CidrIp: 0.0.0.0/0, Description: Silicon Accounts Briefcase Ting Postmark Space Station ECR RDS}
       Tags:
         - {Key: Name, Value: silicon-extend-production}
         - {Key: Service, Value: silicon-extend}
@@ -334,19 +334,25 @@ Resources:
             import json, os, pathlib, re
             stack = dict(l.split('=', 1) for l in pathlib.Path('/etc/extend/stack.env').read_text().splitlines() if '=' in l)
             source = json.loads(pathlib.Path('/etc/extend/runtime.json').read_text())
-            required = ('EXTEND_DATABASE_URL', 'EXTEND_IAM_APP_ID', 'EXTEND_IAM_APP_SECRET',
-                        'EXTEND_DELEGATION_ENCRYPTION_KEY',
-                        'EXTEND_IAM_WEBHOOK_SECRET', 'EXTEND_HONEYCOMB_SERVICE_TOKEN',
-                        'EXTEND_POSTMARK_SERVER_TOKEN', 'EXTEND_REPORT_RECIPIENTS')
-            optional = ('EXTEND_IAM_WEBHOOK_SECRET_VERSION', 'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET',
-                        'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION', 'EXTEND_SPACE_STATION_KEY',
-                        'EXTEND_TEST_TELEMETRY_KEYS', 'EXTEND_IAM_BASE_URL', 'EXTEND_IAM_PUBLIC_URL',
-                        'EXTEND_IAM_LOGIN_URL', 'EXTEND_BRIEFCASE_URL', 'EXTEND_BRIEFCASE_WEB_URL',
-                        'EXTEND_TING_URL', 'EXTEND_WEBSITE_URL', 'EXTEND_DOCS_URL',
-                        'EXTEND_REPOSITORY_URL', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG',
-                        'EXTEND_MAX_PAIRS_PER_DEVICE', 'EXTEND_MEMBERSHIP_SWEEP_HOURS',
-                        'EXTEND_OWNER_CHECK_CACHE_S', 'EXTEND_OWNER_CHECK_AT_USE',
-                        'EXTEND_TEST_LINK_WINDOW_S')
+            # Extend 4 signs in with Silicon Accounts (docs/deployment.md lists every variable).
+            required = ('EXTEND_DATABASE_URL', 'EXTEND_APP_SECRET', 'EXTEND_ACCOUNTS_WEBHOOK_SECRET',
+                        'EXTEND_DELEGATION_ENCRYPTION_KEY', 'EXTEND_POSTMARK_SERVER_TOKEN',
+                        'EXTEND_REPORT_RECIPIENTS')
+            optional = ('ACCOUNTS_URL', 'ACCOUNTS_API_URL', 'EXTEND_APP_ID',
+                        'EXTEND_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET', 'EXTEND_SPACE_STATION_KEY',
+                        'EXTEND_BRIEFCASE_URL', 'EXTEND_BRIEFCASE_WEB_URL', 'EXTEND_TING_URL',
+                        'EXTEND_WEBSITE_URL', 'EXTEND_DOCS_URL', 'EXTEND_REPOSITORY_URL',
+                        'EXTEND_CORS_ORIGINS', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG',
+                        'EXTEND_MAX_PAIRS_PER_DEVICE')
+            # Extend 3's settings. They may stay in the secret until 4.0 is confirmed (a rollback to
+            # 3.x needs them), but they never reach the 4.0 service.
+            retired = ('EXTEND_IAM_APP_ID', 'EXTEND_IAM_APP_SECRET', 'EXTEND_IAM_WEBHOOK_SECRET',
+                       'EXTEND_IAM_WEBHOOK_SECRET_VERSION', 'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET',
+                       'EXTEND_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION', 'EXTEND_IAM_BASE_URL',
+                       'EXTEND_IAM_PUBLIC_URL', 'EXTEND_IAM_LOGIN_URL', 'EXTEND_HONEYCOMB_SERVICE_TOKEN',
+                       'EXTEND_TEST_TELEMETRY_KEYS', 'EXTEND_MEMBERSHIP_SWEEP_HOURS',
+                       'EXTEND_OWNER_CHECK_CACHE_S', 'EXTEND_OWNER_CHECK_AT_USE',
+                       'EXTEND_TEST_LINK_WINDOW_S')
             def clean(key, value):
                 if not isinstance(value, str) or not value or any(ord(c) in (0, 10, 13) for c in value):
                     raise SystemExit('runtime secret value missing or malformed: ' + key)
@@ -356,20 +362,24 @@ Resources:
             # API versioning settings (docs/deployment.md) are open-ended: one pair per API major.
             versioning = re.compile(r'EXTEND_(DEPRECATED_API_VERSIONS|API_V[0-9]+_(CLI|CLIENT_CRATE))')
             values.update({k: clean(k, v) for k, v in source.items() if versioning.fullmatch(k)})
-            ignored = sorted(k for k in source if k not in values)
+            kept = sorted(k for k in source if k in retired)
+            if kept:
+                print('extend-render-env: not passing Extend 3 settings to the service (remove them from the '
+                      'runtime secret once 4.0 is confirmed): ' + ', '.join(kept))
+            ignored = sorted(k for k in source if k not in values and k not in retired)
             if ignored:
                 print('extend-render-env: ignoring unknown keys in the runtime secret: ' + ', '.join(ignored))
             if 'sslmode=verify-full' not in values['EXTEND_DATABASE_URL']:
                 raise SystemExit('EXTEND_DATABASE_URL must use sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem')
+            # No default for EXTEND_TING_URL: notifications through Ting stay off unless the secret
+            # turns them on (Ting must accept Silicon Accounts proofs from extend first).
             defaults = {
-                'EXTEND_IAM_BASE_URL': 'https://backend.iam.teamofsilicons.com',
-                'EXTEND_IAM_LOGIN_URL': 'https://auth.iam.teamofsilicons.com/login',
+                'ACCOUNTS_URL': 'https://accounts.teamofsilicons.com',
+                'EXTEND_APP_ID': 'extend',
                 'EXTEND_BRIEFCASE_URL': 'https://backend.briefcase.teamofsilicons.com',
                 'EXTEND_BRIEFCASE_WEB_URL': 'https://briefcase.teamofsilicons.com',
-                'EXTEND_TING_URL': 'https://backend.ting.teamofsilicons.com',
                 'EXTEND_WEBSITE_URL': 'https://extend.teamofsilicons.com',
                 'EXTEND_DOCS_URL': 'https://extend.teamofsilicons.com/docs',
-                'EXTEND_IAM_WEBHOOK_SECRET_VERSION': '1',
                 'EXTEND_LOG': 'info',
             }
             for k, v in defaults.items():
@@ -395,7 +405,7 @@ Resources:
             # One time (stack deployed with AllowMasterSecretRead=true): role extend_app and database
             # silicon_extend owned by it. The password is read from EXTEND_DATABASE_URL in the runtime
             # secret, so it never appears in SSM command history. The service creates its own schemas
-            # (extend_global, extend, extend_test_<id>) at runtime, hence database ownership.
+            # (extend_global and extend) at runtime, hence database ownership.
             set -Eeuo pipefail
             . /etc/extend/stack.env
             umask 077

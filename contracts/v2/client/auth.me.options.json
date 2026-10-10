@@ -1,0 +1,40 @@
+{
+  "api_version": 2,
+  "call": "Authed::me",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "auth.me.options",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "silicon-extend-api-version": "2",
+      "x-extend-telemetry": "off",
+      "x-silicon-isi": "{isi}"
+    },
+    "method": "GET",
+    "path": "/api/v2/me"
+  },
+  "response": {
+    "non_null": [
+      "/custodian/id",
+      "/custodian/type",
+      "/custodian/uuid",
+      "/id",
+      "/type",
+      "/uuid"
+    ],
+    "required": [
+      "/custodian/id",
+      "/custodian/type",
+      "/custodian/uuid",
+      "/id",
+      "/type",
+      "/uuid"
+    ],
+    "status": "2xx",
+    "type": "me"
+  }
+}

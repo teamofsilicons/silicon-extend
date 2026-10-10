@@ -1,0 +1,38 @@
+{
+  "api_version": 2,
+  "call": "Client::accounts",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "accounts.get",
+  "request": {
+    "body": null,
+    "headers": {
+      "silicon-extend-api-version": "2"
+    },
+    "method": "GET",
+    "path": "/api/v2/accounts"
+  },
+  "response": {
+    "non_null": [
+      "/accounts_url",
+      "/api_base_url",
+      "/app_id",
+      "/docs_url",
+      "/repository_url",
+      "/ting_enabled",
+      "/website_url"
+    ],
+    "required": [
+      "/accounts_url",
+      "/api_base_url",
+      "/app_id",
+      "/docs_url",
+      "/repository_url",
+      "/website_url"
+    ],
+    "status": "2xx",
+    "type": "accounts"
+  }
+}

@@ -48,7 +48,7 @@ Global flags are `--service-url`, `--credential-store auto|keyring|file`, `--hom
 
 | Setting | Where | Default |
 |---|---|---|
-| Service URL | `--service-url`, `EXTEND_API_URL`, `config.json` `service_url` | `https://backend.extend.teamofsilicons.com` |
+| Service URL | `--service-url`, `EXTEND_API_URL`, `config.json` `service_url` | `https://api.extend.teamofsilicons.com` |
 | Home | `--home`, `SILICON_HOME` | the OS home |
 | Credential store | `--credential-store`, `EXTEND_AGENT_CREDENTIAL_STORE`, `config.json` | `auto` |
 | Device engine | `EXTEND_ENGINE` (1.0's `EXTEND_AGENT_DEVICE` still works; path to `bin/extend-engine.mjs` or an executable), `config.json` `engine` (argv; 1.0's key `agent_device` is still read), the copy bundled with the app (`engine/`), then `vendor/extend-engine` in a source checkout. When none is found the probe says "Silicon Extend's device engine is missing. Reinstall Silicon Extend." | — |

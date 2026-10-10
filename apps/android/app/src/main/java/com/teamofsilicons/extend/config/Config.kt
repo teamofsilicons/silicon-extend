@@ -16,6 +16,19 @@ import com.teamofsilicons.extend.protocol.TestingEnvironment
 class Config(context: Context) {
     private val prefs = context.getSharedPreferences("extend_config", Context.MODE_PRIVATE)
 
+    init {
+        // Pin the origin before any connection or credential read. An upgrade must never
+        // send an existing pair to the fresh Accounts service merely because the default changed.
+        if (!prefs.contains(KEY_SERVICE_URL)) {
+            val existingState = prefs.all.isNotEmpty() ||
+                context.getSharedPreferences("extend_secrets", Context.MODE_PRIVATE).all.isNotEmpty()
+            check(prefs.edit().putString(KEY_SERVICE_URL,
+                initialServiceOrigin(existingState, BuildConfig.DEFAULT_SERVICE_URL)).commit()) {
+                "Could not preserve this device's Extend service"
+            }
+        }
+    }
+
     /** The Extend service base URL, without a trailing slash. */
     var serviceUrl: String
         get() = (prefs.getString(KEY_SERVICE_URL, null) ?: BuildConfig.DEFAULT_SERVICE_URL).trimEnd('/')
@@ -23,7 +36,7 @@ class Config(context: Context) {
 
     val serviceUrlOverridden: Boolean get() = prefs.contains(KEY_SERVICE_URL)
 
-    fun resetServiceUrl() = prefs.edit().remove(KEY_SERVICE_URL).apply()
+    fun resetServiceUrl() { serviceUrl = BuildConfig.DEFAULT_SERVICE_URL }
 
     /** Developer setting: behave as a TV (os `android_tv`, badge, remote) on a phone or emulator. */
     var forceTv: Boolean
@@ -106,6 +119,9 @@ class Config(context: Context) {
         private const val KEY_ANNOUNCED = "announced_session"
     }
 }
+
+internal fun initialServiceOrigin(existingState: Boolean, freshOrigin: String): String =
+    if (existingState) "https://backend.extend.teamofsilicons.com" else freshOrigin
 
 /** What kind of device this is, as the protocol names it. */
 object DeviceInfo {

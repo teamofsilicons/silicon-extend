@@ -1,0 +1,18 @@
+# Extend Accounts and website verification — 2026-10-10
+
+The Next.js 16 / React 19 / Arc UI frontend replaces the Solid/Vite site. It has device listing and pairing (code or carried through a computer), lifetime/banner settings, exact Silicon grants/revocation, setup steps/code/retry, stop/end session controls, activity, recordings/files and authenticated preview/download/keep, requests/wake controls, custodian views, reports and the existing device download links. The public documentation routes remain available. Accounts login is Carbon-only for the management website; native device protocol routes remain unchanged.
+
+## Observed evidence
+
+- `scripts/e2e_accounts.py`: **31/31**, complete, `.mig/accounts-e2e/1791618149/results.json`. Real Carbon hosted/code and CLI device flow, Silicon SLT/CLI, native v1 enrollment paired via v2, ownership denial, grants, native commands, screenshot content, custodian views, signed rename webhook, forged webhook rejection, API restart and native reconnect using the same credential, revoke ending a session, CLI logout, versioned rename/removal.
+- Briefcase test recipient verifies every outbound proof at real Silicon Accounts before accepting the request. Screenshot bytes traversed native upload → proof-authorized recipient → authenticated file download. This uses a local Briefcase stand-in; production Briefcase is a release gate.
+- **45 frontend unit tests**, TypeScript, ESLint and Next production standalone build pass, `.mig/logs/web-{unit,typecheck,lint,build}.log`. Logout calls Extend’s API to end the Carbon-granted sessions, preserving the cookie on a retryable API outage; the test covers that refusal.
+- Full frontend run: **25/25** against real Accounts and Extend, `.mig/logs/web-browser-full.log`. Hosted login, sealed cookie, refresh/replay, cross-tab logout, public routes, shell keyboard and WCAG 2.2 AA in both themes and desktop/phone layouts passed.
+- Expanded populated product journey: **2/2** including setup, `.mig/logs/web-browser-product.log`. The browser creates a real Silicon under its Carbon, pairs a native protocol fixture, edits settings/banner, grants access and sees a rejected unknown Silicon. The real Silicon starts a session and captures a screenshot; the Carbon sees the session and file, downloads nonempty bytes, keeps the file, ends the session, reports a problem and removes the device. Native Android download links still point at 1.1.2; desktop releases remain 1.1.0.
+- Screenshots in ignored `web/screens/` cover public states, every main section and populated device/access/sessions/files/activity/requests at 1440×900 and 390×844, light/dark. Product captures assert no horizontal overflow. Inspected desktop/light and phone/dark images. Device tabs now have roving keyboard focus and a labelled panel; changing tabs clears an unrelated action error.
+
+## Delivery and limits
+
+Vercel remains the website destination. `web/vercel.json`, `.env.example`, README and CI now use Next and server-only Accounts secrets. Standard CI typechecks, lints, tests and builds; real Accounts/native protocol browser verification is the local coordinated release gate described above. No deployments, pushes, tags, registry uploads or production data changes were performed. Native desktop/Android/TV packages are retained. Only the fake native example gained an opt-in reconnect loop for restart verification; native API handlers were not edited.
+
+`UNDERSTANDING.md` and original checkouts remain unchanged. Browser credentials and output stay in ignored directories. Public-origin login, live provider compatibility and the production native-device reconnection check remain in the cutover runbook.

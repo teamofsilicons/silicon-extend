@@ -2,7 +2,7 @@
   "api_version": 1,
   "call": "Client::device_self",
   "consumer": "silicon-extend-client",
-  "consumer_version": "3.1.1",
+  "consumer_version": "4.0.0",
   "contract": 1,
   "given": [
     "device"
@@ -20,11 +20,6 @@
   "response": {
     "non_null": [
       "/device_id",
-      "/environment/device_limit",
-      "/environment/environment_id",
-      "/environment/name",
-      "/environment/paired_devices",
-      "/environment/state",
       "/in_use/session_id",
       "/in_use/silicon_id",
       "/in_use/since",
@@ -48,9 +43,6 @@
     ],
     "required": [
       "/device_id",
-      "/environment/environment_id",
-      "/environment/name",
-      "/environment/state",
       "/in_use/session_id",
       "/in_use/silicon_id",
       "/in_use/since",

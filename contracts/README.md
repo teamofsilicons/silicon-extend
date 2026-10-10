@@ -7,15 +7,34 @@ published consumer fails before it ships.
 
 ```
 contracts/
-  v1/client/          silicon-extend-client (and so the extend CLI, which calls Extend only through it), current version
+  v2/client/          silicon-extend-client 4.x (and so the extend CLI, which calls Extend only through it): its account calls
+  v1/client/          silicon-extend-client 4.x: its device-side calls (the device wire), the version it shares with the apps
   v1/client-1.0.0/    the released 1.0.0 client's fixtures, frozen: 1.0.0 CLIs and apps built on it are still in use
   v1/client-1.1.0/    the released 1.1.0 client's fixtures, frozen before the 1.2.0 client release
   v1/client-1.2.0/    the released 1.2.0 client's fixtures, frozen before managed selection in 1.3.0
   v1/client-1.3.0/    the released 1.3.0 ordinary API fixtures, frozen before 2.0.0
+  v1/client-3.1.1/    the released 3.1.1 client's fixtures, frozen before Extend 4 (Silicon Accounts)
   retired/client-1.3.0/  withdrawn optional selection contract, retained as history only
+  retired/honeycomb/  Honeycomb's test-environment lifecycle instructions, retired with test environments in 4.0
   v1/device/          the Android app (android.*) and the Mac, Windows and Linux app (agent.*), every supported version
-  internal/honeycomb/ Honeycomb's test-environment lifecycle instructions (not API-versioned)
 ```
+
+## Extend 4: the account routes of API v1 are retired
+
+Extend 4 signs in with Silicon Accounts and has no Teams and no test environments. API v1 stays
+for the device wire (`/api/v1/device…`, `/api/v1/enrollments…`, `/api/v1/contracts`), which every
+installed app speaks unchanged, so `v1/device/` replays exactly as before. Every other `/api/v1`
+route belonged to the Silicon IAM sign-in and moved to API v2 (`/api/v2/…`, an Accounts access
+token as `Authorization: Bearer`). The service replays every published client fixture: those on
+the device wire must still be accepted with every field the client reads; those on an account
+route must get `410 api_version_sunset` with the hint `silicon-apps update extend` (and a request
+that still selects a test environment gets `testing_secret_invalid`). Honeycomb's lifecycle
+fixtures moved to `retired/honeycomb/` and must get 404. API v2's consumer is the 4.0 client
+crate: its `contract_fixtures` test writes each call under the major its path names, so its account
+calls are in `v2/client/` and its device-side calls in `v1/client/` (the 3.x client's account
+fixtures left `v1/client/`; their frozen copies in `v1/client-3.1.1/` get the 410). The service
+replays `v2/client/` like any served major: every fixture must be accepted with every field the
+client reads.
 
 A consumer that is still in use keeps its fixtures until its version stops being supported. So a new
 release adds fixtures instead of editing the old ones:
@@ -61,9 +80,9 @@ is independent of selection and remains available.
   fixtures by hand when an app changes what it sends or reads. The 1.1.0 fixtures were written from
   the 1.1 protocol before the 1.1 apps were finished; check them against the apps' frame tests when
   those land.
-- **Honeycomb:** derived from `silicon-honeycomb`'s participant client
-  (`crates/server/src/participant_management.rs`), which sends exactly these twelve fields and
-  checks that the receipt echoes six of them.
+- **Honeycomb (retired in 4.0):** derived from `silicon-honeycomb`'s participant client
+  (`crates/server/src/participant_management.rs`), which sent exactly these twelve fields and
+  checked that the receipt echoed six of them. Kept under `retired/honeycomb/` as history.
 
 ## Format
 
@@ -72,7 +91,7 @@ is independent of selection and remains available.
   "contract": 1,                          // fixture format version
   "consumer": "silicon-extend-client",    // who depends on this
   "consumer_version": "1.0.0",
-  "api_version": 1,                       // must match the v{n} directory (v1/client-1.0.0 is 1 too); null under internal/
+  "api_version": 1,                       // must match the v{n} directory (v1/client-1.0.0 is 1 too); null under retired/honeycomb/
   "operation": "devices.update",
   "given": ["device"],                    // provider states the replay sets up first
   "kind": "http",                         // or "device_socket", "enrollment_socket"; default http
@@ -161,7 +180,8 @@ cargo test -p extend-service --test contracts        # needs PostgreSQL, EXTEND_
 ```
 
 It replays `v{n}/client`, every frozen `v{n}/client-<version>/`, and `v{n}/device` for every major
-the service still serves (not sunset), and `internal/honeycomb` in its `sequence` order.
+the service still serves (not sunset), with the 4.0 rules above for retired account routes, and
+`retired/honeycomb` (each must be gone).
 `EXTEND_CONTRACTS_DIR` points it at another copy of `contracts/` (for example fixtures taken from a
 release tag).
 
@@ -169,5 +189,5 @@ CI runs both sides in the `rust` job's "Consumer contracts" step, before the wor
 
 ```sh
 cargo test --locked -p silicon-extend-client --test contract_fixtures   # the fixtures match what the crate sends
-cargo test --locked -p extend-service --test contracts                  # a real service accepts every fixture
+cargo test --locked -p extend-service --test contracts                  # a real service answers every fixture as promised
 ```

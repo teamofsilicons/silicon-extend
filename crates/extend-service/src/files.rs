@@ -1,14 +1,16 @@
 //! Where files a command produces end up (TECHNICAL.md section 6).
 //!
-//! [`BriefcaseFiles`] stores each file in Briefcase on the Silicon's behalf through Briefcase's OBO
-//! endpoints and shares it with the device's owner. [`LocalFiles`] keeps files on disk for
-//! development and tests, refused in production.
+//! [`BriefcaseFiles`] stores each file in the Silicon's own Briefcase (its app folder for Extend)
+//! through Briefcase's delegated routes (`/api/v1/obo/…`), with a Silicon Accounts User
+//! verification proof for the Silicon (`Authorization: Proof sap_…`), and shares it with the
+//! Carbon who paired the device. [`LocalFiles`] keeps files on disk for development and tests,
+//! refused in production.
 //!
-//! What Briefcase's OBO surface allows, as verified against a real Briefcase (e2e/real-iam):
+//! What Briefcase's delegated routes allow:
 //! - Its delegated upload takes no self-destruct time and there is no delegated "make permanent"
 //!   (TECHNICAL.md open questions 1–2). Extend records the self-destruct time, deletes the file
-//!   itself when it passes (through Briefcase's delegated trash), and treats "keep" as cancelling
-//!   that deletion.
+//!   itself when it passes (through the delegated trash, with the proof it keeps for the Silicon),
+//!   and treats "keep" as cancelling that deletion.
 //! - A name that already exists in the folder publishes a new *version* of that file instead of a
 //!   new file. Every stored file therefore gets its own name ([`unique_name`]); otherwise two
 //!   screenshots would share one Briefcase entry and trashing one would trash both.
@@ -20,22 +22,33 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use extend_protocol::ErrorCode;
+use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use tokio::io::AsyncReadExt as _;
 use uuid::Uuid;
 
+use crate::accounts::Principal;
 use crate::error::{AppError, AppResult};
-use crate::iam::{DynIam, Principal, TestingSelection};
+use crate::proofs::{BRIEFCASE, BRIEFCASE_READ_SCOPES, BRIEFCASE_WRITE_SCOPES, ProofStore};
 
 #[derive(Debug, Clone)]
 pub struct Stored {
     pub file_id: Uuid,
     pub url: String,
+    /// The uuid of the Carbon it is shared with.
     pub shared_with: Option<String>,
     /// Why the file could not be shared with the device's Carbon (it is stored either way), said
     /// so the Silicon can be told: what happened, why, and what to do.
     pub share_error: Option<String>,
+}
+
+/// The Carbon who paired the device a file was made on: who it is shared with.
+#[derive(Debug, Clone)]
+pub struct Recipient<'a> {
+    pub uuid: &'a str,
+    /// Their current public id (`c:ada`): Briefcase looks invitees up by id.
+    pub id: &'a str,
 }
 
 pub struct NewFile<'a> {
@@ -44,32 +57,24 @@ pub struct NewFile<'a> {
     pub name: &'a str,
     pub content_type: &'a str,
     pub bytes: Vec<u8>,
-    pub owner_carbon: &'a str,
+    pub owner_carbon: Recipient<'a>,
 }
 
 #[async_trait]
 pub trait FileStore: Send + Sync {
-    async fn store(&self, silicon: &Principal, file: NewFile<'_>, sel: Option<&TestingSelection>) -> AppResult<Stored>;
-    /// Deletes a file whose self-destruct time has passed.
-    async fn destroy(&self, silicon: &Principal, file_id: Uuid, sel: Option<&TestingSelection>) -> AppResult<()>;
-    /// A file's bytes and media type, read as `member` (the Silicon that made it, or the device
-    /// owner it was shared with).
-    async fn read(
-        &self,
-        member: &Principal,
-        file_id: Uuid,
-        sel: Option<&TestingSelection>,
-    ) -> AppResult<(Vec<u8>, String)> {
-        self.read_bounded(member, file_id, sel, usize::MAX).await
+    /// Stores a file a Silicon's command made, as that Silicon (its sign-in is live: it just ran
+    /// the command), and shares it with the Carbon who paired the device.
+    async fn store(&self, silicon: &Principal, file: NewFile<'_>) -> AppResult<Stored>;
+    /// Deletes a file whose self-destruct time has passed, as the Silicon that made it
+    /// (`creator`, a uuid), with the proof Extend keeps for it.
+    async fn destroy(&self, creator: &str, file_id: Uuid) -> AppResult<()>;
+    /// A file's bytes and media type, read as `reader` (the Silicon that made it, the Carbon it was
+    /// shared with, or the Silicon's custodian), whose sign-in is live.
+    async fn read(&self, reader: &Principal, file_id: Uuid) -> AppResult<(Vec<u8>, String)> {
+        self.read_bounded(reader, file_id, usize::MAX).await
     }
     /// Refuses oversized responses while reading, before allocating their entire contents.
-    async fn read_bounded(
-        &self,
-        member: &Principal,
-        file_id: Uuid,
-        sel: Option<&TestingSelection>,
-        max_bytes: usize,
-    ) -> AppResult<(Vec<u8>, String)>;
+    async fn read_bounded(&self, reader: &Principal, file_id: Uuid, max_bytes: usize) -> AppResult<(Vec<u8>, String)>;
     /// Local files only: the bytes behind `/dev/files/{id}`.
     async fn read_local(&self, _file_id: Uuid) -> Option<(Vec<u8>, String)> {
         None
@@ -164,73 +169,107 @@ pub fn trash_operation_id(file_id: Uuid) -> Uuid {
 // ───────────────────────────── Briefcase ─────────────────────────────
 
 pub struct BriefcaseFiles {
+    http: reqwest::Client,
+    /// Briefcase's API origin (`EXTEND_BRIEFCASE_URL`).
     api_url: String,
+    /// Briefcase's website (`EXTEND_BRIEFCASE_WEB_URL`), for the file links Extend shows.
     web_url: String,
-    iam: DynIam,
+    app_id: String,
+    proofs: Arc<ProofStore>,
 }
+
 impl BriefcaseFiles {
-    pub fn new(api_url: String, web_url: String, iam: DynIam) -> Self {
+    pub fn new(api_url: String, web_url: String, app_id: String, proofs: Arc<ProofStore>) -> Self {
+        let api = api_url.trim().trim_end_matches('/');
+        let api = api.strip_suffix("/api/v1").unwrap_or(api).to_owned();
         Self {
-            api_url,
-            web_url: web_url.trim_end_matches('/').to_owned(),
-            iam,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .user_agent(concat!("silicon-extend/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .unwrap_or_default(),
+            api_url: api,
+            web_url: web_url.trim().trim_end_matches('/').to_owned(),
+            app_id,
+            proofs,
         }
     }
-    async fn access(
+
+    /// One delegated JSON call: `POST /api/v1/obo/{path}` with `Authorization: Proof …`.
+    async fn call(
         &self,
-        member: &Principal,
-        endpoint: &str,
-        sel: Option<&TestingSelection>,
-    ) -> AppResult<crate::iam::OboProof> {
-        self.iam
-            .obo_proof(member, "briefcase", endpoint, serde_json::json!({}), "POST", &[], sel)
+        proof: &str,
+        path: &str,
+        body: &Value,
+        doing: &str,
+        member: &str,
+    ) -> AppResult<reqwest::Response> {
+        let resp = self
+            .http
+            .post(format!("{}/api/v1/obo/{path}", self.api_url))
+            .header("authorization", format!("Proof {proof}"))
+            .json(body)
+            .send()
             .await
-    }
-    fn client(&self, access: &crate::iam::OboProof) -> AppResult<briefcase_client::Client> {
-        let org = access.org_id.as_ref().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ServiceUnavailable,
-                "Briefcase permission is missing its selected organization.",
-            )
-        })?;
-        let mut base =
-            url::Url::parse(&self.api_url).map_err(|_| AppError::invalid("Briefcase API URL is invalid."))?;
-        if base.path() == "/" {
-            base.set_path("/api/v1/");
+            .map_err(|e| AppError::unavailable("Briefcase", format!("{doing}: {e}")))?;
+        if resp.status().is_success() {
+            return Ok(resp);
         }
-        let mut cfg = briefcase_client::Config::new(base.as_str(), org).map_err(provider_error)?;
-        if let Some(secret) = &access.testing_app_secret {
-            cfg = cfg.with_environment(briefcase_client::EnvironmentKey::new(secret.clone()).map_err(provider_error)?);
+        let status = resp.status().as_u16();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        Err(briefcase_error(
+            status,
+            &body,
+            &format!("/api/v1/obo/{path}"),
+            doing,
+            member,
+        ))
+    }
+
+    async fn call_json(&self, proof: &str, path: &str, body: &Value, doing: &str, member: &str) -> AppResult<Value> {
+        let resp = self.call(proof, path, body, doing, member).await?;
+        resp.json()
+            .await
+            .map_err(|e| AppError::unavailable("Briefcase", format!("{doing}: an unexpected answer ({e})")))
+    }
+
+    async fn status(&self, proof: &str, operation_id: Uuid, member: &str) -> AppResult<Value> {
+        self.call_json(
+            proof,
+            "uploads/status",
+            &json!({"operation_id": operation_id}),
+            "check an upload",
+            member,
+        )
+        .await
+    }
+
+    /// The permanent Briefcase link of a file in Extend's folder of an account's drive:
+    /// `{web}/org/{account uuid}/apps/extend/{name}` (Briefcase names a drive by its account's
+    /// uuid, and an app acting for an account writes under `apps/{app}/`).
+    pub fn file_url(&self, owner_uuid: &str, name: &str) -> String {
+        match url::Url::parse(&self.web_url) {
+            Ok(mut url) => {
+                if let Ok(mut segments) = url.path_segments_mut() {
+                    segments
+                        .pop_if_empty()
+                        .extend(["org", owner_uuid, "apps", self.app_id.as_str(), name]);
+                }
+                url.to_string()
+            }
+            Err(_) => format!("{}/org/{owner_uuid}/apps/{}/{name}", self.web_url, self.app_id),
         }
-        briefcase_client::Client::new_unchecked(cfg).map_err(provider_error)
-    }
-    fn app(&self) -> AppResult<briefcase_client::ApplicationId> {
-        briefcase_client::ApplicationId::new(self.iam.app_id()).map_err(provider_error)
     }
 }
-fn token(access: &crate::iam::OboProof) -> AppResult<briefcase_client::OboProof> {
-    briefcase_client::OboProof::new(access.access_proof.clone()).map_err(provider_error)
+
+fn state_of(v: &Value) -> &str {
+    v.get("state").and_then(Value::as_str).unwrap_or("")
 }
-fn same_context(a: &crate::iam::OboProof, b: &crate::iam::OboProof) -> AppResult<()> {
-    if a.org_id != b.org_id || a.actor != b.actor || a.testing_app_secret != b.testing_app_secret {
-        return Err(AppError::new(ErrorCode::ConfirmationRequired,"Choose the same Briefcase account and organization for Extend's upload, commit, read, sharing and deletion permissions.").hint("Review Extend's Briefcase permissions in Settings and approve them together."));
-    }
-    Ok(())
-}
-fn provider_error(error: briefcase_client::Error) -> AppError {
-    match error {
-        briefcase_client::Error::Api(e) => briefcase_error(
-            e.status,
-            &serde_json::json!({"error":{"code":e.code,"request_id":e.request_id}}),
-            "approved endpoint",
-            "complete the file operation",
-            "the selected account",
-        ),
-        _ => AppError::new(
-            ErrorCode::ServiceUnavailable,
-            "Briefcase could not complete the file operation. Retry with the same upload identity.",
-        ),
-    }
+
+fn entry_of(v: &Value) -> Option<Uuid> {
+    v.get("published_entry_id")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse().ok())
 }
 
 /// Turns a Briefcase refusal into an error that says what happened, why, and what to do.
@@ -252,22 +291,35 @@ pub fn briefcase_error(
         .unwrap_or_default();
     let what = format!("Briefcase refused to {doing} for {member} ({endpoint_id} answered {status} {code}{request})");
     match status {
-        401 => AppError::new(ErrorCode::ServiceUnavailable, format!("{what}: it did not accept Extend's saved feature approval."))
-            .hint("Open Extend Settings → Permissions and renew the Briefcase approval, then retry."),
-        403 => AppError::new(ErrorCode::NoAccess, format!("{what}: {member} may not do this there, or Extend is not approved for {endpoint_id}."))
-            .hint("Check the selected Briefcase account and organization in Extend Settings → Permissions; approve the required endpoints in IAM."),
-        404 => AppError::new(ErrorCode::FileNotFound, format!("{what}: the file or folder does not exist or {member} cannot see it.")),
-        413 | 507 => AppError::new(ErrorCode::PayloadTooLarge, format!("{what}: the file is too large or the Team's Briefcase storage is full."))
-            .hint("Free space in Briefcase, or ask a Team admin to raise the Team's storage allowance."),
-        // Briefcase's delegated invitation only accepts members it has already seen (from their own
-        // Briefcase sign-in or an IAM webhook); it does not look the recipient up in IAM.
-        422 if code == "invalid_principal" => AppError::new(
-            ErrorCode::NoAccess,
-            format!("{what}: Briefcase does not know the recipient as a current member of the Team yet."),
+        401 => AppError::new(
+            ErrorCode::ServiceUnavailable,
+            format!("{what}: it did not accept the Silicon Accounts proof Extend sent."),
         )
-        .hint("The file is stored. Briefcase learns a Carbon once they sign in to Briefcase; files made after that are shared with them."),
-        422 | 400 => AppError::new(ErrorCode::ServiceUnavailable, format!("{what}: Briefcase considers the request invalid."))
-            .hint("This is a mismatch between Extend and Briefcase; report it with `extend report`."),
+        .hint("Extend gets a new proof on the next try; if it keeps failing, Briefcase may not accept proofs from Extend yet. Report it with `extend report`."),
+        403 => AppError::new(
+            ErrorCode::NoAccess,
+            format!("{what}: {member} may not do this there, or Briefcase doesn't accept Extend for {endpoint_id}."),
+        )
+        .hint("Briefcase decides which apps may act for an account and where; ask a Briefcase Carbon to allow Extend's scopes."),
+        404 => AppError::new(
+            ErrorCode::FileNotFound,
+            format!("{what}: the file or folder does not exist or {member} cannot see it."),
+        ),
+        413 | 507 => AppError::new(
+            ErrorCode::PayloadTooLarge,
+            format!("{what}: the file is too large or the account's Briefcase storage is full."),
+        )
+        .hint("Free space in Briefcase, then run the command again."),
+        422 if code == "invalid_principal" || code == "unknown_recipient" => AppError::new(
+            ErrorCode::NoAccess,
+            format!("{what}: Briefcase does not know the recipient."),
+        )
+        .hint("The file is stored; share it from Briefcase by hand if the Carbon needs it."),
+        422 | 400 => AppError::new(
+            ErrorCode::ServiceUnavailable,
+            format!("{what}: Briefcase considers the request invalid."),
+        )
+        .hint("This is a mismatch between Extend and Briefcase; report it with `extend report`."),
         429 => AppError::new(ErrorCode::RateLimited, format!("{what}: Briefcase is rate limiting.")).hint("Retry in a minute."),
         _ => AppError::unavailable("Briefcase", what),
     }
@@ -275,176 +327,173 @@ pub fn briefcase_error(
 
 #[async_trait]
 impl FileStore for BriefcaseFiles {
-    async fn store(&self, silicon: &Principal, file: NewFile<'_>, sel: Option<&TestingSelection>) -> AppResult<Stored> {
-        use briefcase_client::delegated::{
-            DelegatedCommitUpload, DelegatedInvite, DelegatedReserveUpload, DelegatedUploadQuery, DelegatedUploadState,
-        };
-        let reserve = self.access(silicon, "briefcase.uploads.reserve", sel).await?;
-        // Request all required write authority before staging bytes. An approval for another
-        // provider account must not strand a reservation or share somebody else's namespace.
-        let commit = self.access(silicon, "briefcase.uploads.commit", sel).await?;
-        same_context(&reserve, &commit)?;
-        let status_access = self.access(silicon, "briefcase.uploads.status", sel).await?;
-        same_context(&reserve, &status_access)?;
-        let client = self.client(&reserve)?;
-        let app = self.app()?;
+    async fn store(&self, silicon: &Principal, file: NewFile<'_>) -> AppResult<Stored> {
+        let who = silicon.public_id();
+        let proof = self.proofs.for_user(silicon, BRIEFCASE, BRIEFCASE_WRITE_SCOPES).await?;
         let name = operation_name(file.name, file.operation_id);
-        let manifest = DelegatedReserveUpload {
-            operation_id: file.operation_id,
-            parent_path: String::new(),
-            name: name.clone(),
-            content_type: file.content_type.to_owned(),
-            size: file.bytes.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&file.bytes)),
+        let size = file.bytes.len();
+        let reservation = self
+            .call_json(
+                &proof,
+                "uploads/reserve",
+                &json!({
+                    "operation_id": file.operation_id,
+                    "parent_path": "",
+                    "name": name,
+                    "content_type": file.content_type,
+                    "size": size,
+                    "sha256": format!("{:x}", Sha256::digest(&file.bytes)),
+                }),
+                &format!("reserve the upload of {}", file.name),
+                who,
+            )
+            .await?;
+        let upload_id: Uuid = reservation
+            .get("upload_id")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| AppError::unavailable("Briefcase", "the upload reservation has no upload_id"))?;
+        let mut state = reservation.clone();
+        if state_of(&state) == "reserved" {
+            let capability = reservation
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::unavailable("Briefcase", "the upload reservation has no capability"))?;
+            // The transfer carries no proof: the capability authorizes the bytes, inside the drive
+            // of the account the reservation belongs to (Briefcase reads it from X-Org-ID).
+            let sent = self
+                .http
+                .put(format!("{}/api/v1/obo/uploads/{upload_id}/content", self.api_url))
+                .header("x-briefcase-upload-capability", capability)
+                .header("x-org-id", silicon.uuid())
+                .header("content-type", "application/octet-stream")
+                .header("content-length", size)
+                .body(file.bytes)
+                .send()
+                .await;
+            state = match sent {
+                Ok(r) if r.status().is_success() => r.json().await.unwrap_or(Value::Null),
+                // Reconcile an uncertain transfer; never blindly resend bytes or create a second
+                // file. The operation id stays the same throughout.
+                _ => self.status(&proof, file.operation_id, who).await?,
+            };
+            if state_of(&state).is_empty() {
+                state = self.status(&proof, file.operation_id, who).await?;
+            }
         }
-        .prepare()
-        .map_err(provider_error)?;
-        let reservation = client
-            .reserve_delegated_upload(&app, token(&reserve)?, &manifest)
-            .await
-            .map_err(provider_error)?;
-        let upload_id = reservation.status.upload_id;
-        let mut state = reservation.status;
-        if state.state == DelegatedUploadState::Reserved {
-            let cap = reservation.capability.ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::ServiceUnavailable,
-                    "Briefcase did not return an upload capability.",
+        if state_of(&state) == "staged" {
+            state = match self
+                .call_json(
+                    &proof,
+                    "uploads/commit",
+                    &json!({"operation_id": file.operation_id, "upload_id": upload_id}),
+                    &format!("publish {}", file.name),
+                    who,
                 )
-            })?;
-            match client
-                .transfer_delegated_upload(upload_id, cap, &briefcase_client::UploadSource::Bytes(file.bytes))
                 .await
             {
-                Ok(status) => state = status,
-                Err(_) => {
-                    // Reconcile an uncertain transfer; never blindly resend bytes or create a
-                    // second file. Keep the original operation UUID throughout.
-                    let query = DelegatedUploadQuery {
-                        operation_id: file.operation_id,
-                    }
-                    .prepare()
-                    .map_err(provider_error)?;
-                    state = client
-                        .delegated_upload_status(&app, token(&status_access)?, &query)
-                        .await
-                        .map_err(provider_error)?;
-                }
-            }
+                Ok(s) => s,
+                Err(_) => self.status(&proof, file.operation_id, who).await?,
+            };
         }
-        if state.state == DelegatedUploadState::Staged {
-            let manifest = DelegatedCommitUpload {
-                operation_id: file.operation_id,
-                upload_id,
-            }
-            .prepare()
-            .map_err(provider_error)?;
-            state = match client.commit_delegated_upload(&app, token(&commit)?, &manifest).await {
-                Ok(status) => status,
-                Err(_) => client
-                    .delegated_upload_status(
-                        &app,
-                        token(&status_access)?,
-                        &DelegatedUploadQuery {
-                            operation_id: file.operation_id,
+        let file_id = entry_of(&state)
+            .filter(|_| state_of(&state) == "committed")
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::ServiceUnavailable,
+                    format!(
+                        "Briefcase has not published {} yet (its upload is {}).",
+                        file.name,
+                        if state_of(&state).is_empty() {
+                            "in an unknown state"
+                        } else {
+                            state_of(&state)
                         }
-                        .prepare()
-                        .map_err(provider_error)?,
-                    )
-                    .await
-                    .map_err(provider_error)?,
-            };
-        }
-        let file_id=state.published_entry_id.filter(|_|state.state==DelegatedUploadState::Committed).ok_or_else(||AppError::new(ErrorCode::ServiceUnavailable,"Briefcase has not published this upload yet. Retry the same upload; do not create another reservation."))?;
-        let actor = reserve.actor.as_deref().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ServiceUnavailable,
-                "Briefcase approval has no selected account.",
+                    ),
+                )
+                .hint("Run the command again; Extend never makes a second copy of the same upload.")
+            })?;
+        let url = self.file_url(silicon.uuid(), &name);
+        // The Carbon is named by uuid (Briefcase takes a uuid or a current id; the uuid can't
+        // have moved to someone else since the device was paired).
+        let share = self
+            .call(
+                &proof,
+                "invitations",
+                &json!({
+                    "operation_id": trash_operation_id(file.operation_id),
+                    "entry_id": file_id,
+                    "invitation": {
+                        "principal": {"type": "carbon", "id": file.owner_carbon.uuid},
+                        "access": ["read", "update"],
+                        "inherit": true,
+                    },
+                }),
+                &format!("share {} with {}", file.name, file.owner_carbon.id),
+                who,
             )
-        })?;
-        let org = reserve.org_id.as_deref().unwrap_or_default();
-        let mut url =
-            url::Url::parse(&self.web_url).map_err(|_| AppError::invalid("Briefcase website URL is invalid."))?;
-        url.path_segments_mut()
-            .map_err(|_| AppError::invalid("Briefcase website URL is invalid."))?
-            .extend(["org", org, "apps", self.iam.app_id(), "private", actor, &name]);
-        let share = async {
-            let invite_access = self.access(silicon, "briefcase.invitations.create", sel).await?;
-            same_context(&reserve, &invite_access)?;
-            let request = DelegatedInvite {
-                operation_id: trash_operation_id(file.operation_id),
-                entry_id: file_id,
-                invitation: briefcase_client::Invite {
-                    principal: briefcase_client::Recipient::Carbon(file.owner_carbon.to_owned()),
-                    access: vec![
-                        briefcase_client::AccessRight::Read,
-                        briefcase_client::AccessRight::Update,
-                    ],
-                    inherit: true,
-                    expires_in_minutes: None,
-                },
-            };
-            let manifest = briefcase_client::DelegatedManifest::new(&request).map_err(provider_error)?;
-            client
-                .invite_on_behalf_of(&app, token(&invite_access)?, &manifest)
-                .await
-                .map_err(provider_error)?;
-            AppResult::Ok(())
-        }
-        .await;
+            .await;
         let (shared_with, share_error) = match share {
-            Ok(()) => (Some(file.owner_carbon.to_owned()), None),
+            Ok(_) => (Some(file.owner_carbon.uuid.to_owned()), None),
             Err(e) => (None, Some(format!("{} {}", e.0.message, e.0.hint.unwrap_or_default()))),
         };
         Ok(Stored {
             file_id,
-            url: url.to_string(),
+            url,
             shared_with,
             share_error,
         })
     }
-    async fn destroy(&self, silicon: &Principal, file_id: Uuid, sel: Option<&TestingSelection>) -> AppResult<()> {
-        let access = self.access(silicon, "briefcase.entries.trash", sel).await?;
-        let request = briefcase_client::DelegatedTrashEntry {
-            operation_id: trash_operation_id(file_id),
-            entry_id: file_id,
-        }
-        .prepare()
-        .map_err(provider_error)?;
+
+    async fn destroy(&self, creator: &str, file_id: Uuid) -> AppResult<()> {
+        let Some(proof) = self.proofs.held(creator, BRIEFCASE, BRIEFCASE_WRITE_SCOPES).await? else {
+            return Err(AppError::new(
+                ErrorCode::ServiceUnavailable,
+                format!(
+                    "Extend holds no Briefcase proof for the Silicon that made file {file_id}, so it can't trash it yet."
+                ),
+            )
+            .hint("It is trashed after the Silicon next uses Extend (Extend then gets a new proof)."));
+        };
         match self
-            .client(&access)?
-            .trash_entry_on_behalf_of(&self.app()?, token(&access)?, &request)
+            .call(
+                &proof,
+                "entries/trash",
+                &json!({"operation_id": trash_operation_id(file_id), "entry_id": file_id}),
+                "trash a self-destructed file",
+                creator,
+            )
             .await
-            .map_err(provider_error)
         {
-            Ok(()) => Ok(()),
+            Ok(_) => Ok(()),
             Err(e) if e.code() == ErrorCode::FileNotFound => Ok(()),
             Err(e) => Err(e),
         }
     }
-    async fn read_bounded(
-        &self,
-        member: &Principal,
-        file_id: Uuid,
-        sel: Option<&TestingSelection>,
-        max_bytes: usize,
-    ) -> AppResult<(Vec<u8>, String)> {
-        let access = self.access(member, "briefcase.files.read", sel).await?;
-        let request = briefcase_client::DelegatedReadFile {
-            entry_id: file_id,
-            range: None,
-            download: false,
-        }
-        .prepare()
-        .map_err(provider_error)?;
+
+    async fn read_bounded(&self, reader: &Principal, file_id: Uuid, max_bytes: usize) -> AppResult<(Vec<u8>, String)> {
+        let proof = self.proofs.for_user(reader, BRIEFCASE, BRIEFCASE_READ_SCOPES).await?;
         let mut response = self
-            .client(&access)?
-            .read_file_on_behalf_of(&self.app()?, token(&access)?, &request)
-            .await
-            .map_err(provider_error)?;
-        let content_type = response.content_type().unwrap_or("application/octet-stream").to_owned();
+            .call(
+                &proof,
+                "files/read",
+                &json!({"entry_id": file_id, "range": null, "download": false}),
+                "read a file",
+                reader.public_id(),
+            )
+            .await?;
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(provider_error)? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| AppError::unavailable("Briefcase", format!("reading a file: {e}")))?
+        {
             if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
                 return Err(too_large(max_bytes));
             }
@@ -473,12 +522,7 @@ impl LocalFiles {
 
 #[async_trait]
 impl FileStore for LocalFiles {
-    async fn store(
-        &self,
-        _silicon: &Principal,
-        file: NewFile<'_>,
-        _sel: Option<&TestingSelection>,
-    ) -> AppResult<Stored> {
+    async fn store(&self, _silicon: &Principal, file: NewFile<'_>) -> AppResult<Stored> {
         let file_id = Uuid::now_v7();
         tokio::fs::write(self.dir.join(file_id.to_string()), &file.bytes)
             .await
@@ -489,24 +533,18 @@ impl FileStore for LocalFiles {
         Ok(Stored {
             file_id,
             url: format!("{}/dev/files/{file_id}", self.public_url),
-            shared_with: Some(file.owner_carbon.to_owned()),
+            shared_with: Some(file.owner_carbon.uuid.to_owned()),
             share_error: None,
         })
     }
 
-    async fn destroy(&self, _silicon: &Principal, file_id: Uuid, _sel: Option<&TestingSelection>) -> AppResult<()> {
+    async fn destroy(&self, _creator: &str, file_id: Uuid) -> AppResult<()> {
         let _ = tokio::fs::remove_file(self.dir.join(file_id.to_string())).await;
         let _ = tokio::fs::remove_file(self.dir.join(format!("{file_id}.type"))).await;
         Ok(())
     }
 
-    async fn read_bounded(
-        &self,
-        _member: &Principal,
-        file_id: Uuid,
-        _sel: Option<&TestingSelection>,
-        max_bytes: usize,
-    ) -> AppResult<(Vec<u8>, String)> {
+    async fn read_bounded(&self, _reader: &Principal, file_id: Uuid, max_bytes: usize) -> AppResult<(Vec<u8>, String)> {
         let file = tokio::fs::File::open(self.dir.join(file_id.to_string()))
             .await
             .map_err(|_| not_found())?;
@@ -609,7 +647,11 @@ mod tests {
         );
         assert!(
             e.0.message.contains("does not know the recipient")
-                && e.0.hint.as_deref().unwrap_or_default().contains("sign in to Briefcase")
+                && e.0
+                    .hint
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("share it from Briefcase")
         );
         assert_eq!(
             briefcase_error(

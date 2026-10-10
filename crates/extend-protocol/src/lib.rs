@@ -9,6 +9,7 @@
 #[macro_use]
 mod macros;
 
+pub mod account;
 pub mod capability;
 pub mod envelope;
 pub mod error;
@@ -22,16 +23,21 @@ pub use envelope::Envelope;
 pub use error::{ApiError, ErrorCode};
 pub use ids::{DeviceCredential, DeviceId, PairingCode, SessionId};
 
-/// The API major this build speaks.
+/// The API major of the device wire (`/api/v1/device…`, `/api/v1/enrollments…`, the WebSocket
+/// frames). Installed device apps speak it; it doesn't change with the account API.
 pub const API_VERSION: u32 = 1;
+/// 2.0: the API major of every account-facing route (`/api/v2/…`): Silicon Accounts access
+/// tokens as `Authorization: Bearer`. `/api/v1` account routes answer 410.
+pub const ACCOUNT_API_VERSION: u32 = 2;
+/// 2.0: the app id Extend has in Silicon Accounts and Silicon Apps.
+pub const APP_ID: &str = "extend";
 /// Request header listing the majors a client supports.
 pub const SUPPORTED_VERSIONS_HEADER: &str = "Silicon-Extend-Supported-API-Versions";
 /// Response and request header carrying the agreed major.
 pub const API_VERSION_HEADER: &str = "Silicon-Extend-API-Version";
-/// Header selecting a test environment by its test application secret.
+/// 1.x only: the header that selected a test environment. A 2.0 service has no test
+/// environments and refuses a request that sends it.
 pub const TESTING_SECRET_HEADER: &str = "X-Testing-Application-Secret";
-/// IAM's wire name for the Team handle.
-pub const TEAM_HEADER: &str = "X-Org-ID";
 /// Seconds a pairing code stays valid.
 pub const PAIRING_CODE_TTL_S: i64 = 300;
 /// Seconds without a command before a session ends on its own.
@@ -70,7 +76,7 @@ pub const WAKE_REQUEST_TTL_S: i64 = 1_800;
 pub const WAKE_ASK_AGAIN_AFTER_S: i64 = 300;
 /// Seconds between wake notifications that sound on the device itself.
 pub const WAKE_ALERT_EVERY_S: i64 = 900;
-/// Seconds between wake Tings to a Carbon for one pair and Team.
+/// Seconds between wake Tings to a Carbon for one pair.
 pub const WAKE_TING_EVERY_S: i64 = 900;
 /// Wake Tings one Carbon gets per hour at most; later asks are deferred, never refused.
 pub const WAKE_TINGS_PER_CARBON_PER_HOUR: i64 = 6;
@@ -86,7 +92,7 @@ pub const REQUEST_TO_HIDDEN: &str = "the Carbon who gave access to the Silicon u
 /// Carbon decision (2026-09-27): the Carbon a request is routed to sees the requesting Silicon's
 /// id and reason, so a 1.1.0 service doesn't hide it; the value stays for services that do.
 pub const REQUEST_FROM_HIDDEN: &str = "a Silicon another Carbon gave access to";
-/// Length of a side tag: the first hex characters of an HMAC naming no Carbon or Team.
+/// Length of a side tag: the first hex characters of an HMAC, so it names no account.
 pub const SIDE_TAG_LEN: usize = 16;
 
 // ───────────── 1.1.0: setup retry ─────────────

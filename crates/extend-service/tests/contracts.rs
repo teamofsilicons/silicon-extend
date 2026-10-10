@@ -5,18 +5,20 @@
 //!   consecutive days without a request (an injected clock and usage rows stand in for the week),
 //!   and then answers `410 api_version_sunset`; negotiation steers clients around it; two majors
 //!   are served side by side, each path checking its own pin.
-//! - The compatibility matrix (`GET /api/v1/contracts`) is built from that state and configuration.
-//! - Replay: every fixture under `contracts/` that a consumer published (the client crate records
-//!   its own; the device apps' and Honeycomb's are derived from their code and
-//!   docs/device-protocol.md) is sent to a real service for every API major it still serves. Each
-//!   must still be accepted, and each answer must still carry every field that consumer reads.
+//! - The compatibility matrix (`GET /api/v1/contracts`, `GET /api/v2/contracts`) is built from that
+//!   state and configuration.
+//! - Replay: every fixture under `contracts/` that a consumer published is sent to a real service.
+//!   The device apps' fixtures (the device wire, unchanged in 4.0) must still be accepted, and each
+//!   answer must still carry every field the app reads. A 1.x–3.x client's fixtures for the
+//!   device wire still replay; its account routes (Silicon IAM sign-in) must get the exact 4.0
+//!   answer: `410 api_version_sunset` with the update command. Honeycomb's test-environment
+//!   instructions are retired with test environments (`contracts/retired/honeycomb`): 404.
 //!   `contracts/README.md` describes the fixture format and the provider states named in `given`.
 //!
 //! Needs a PostgreSQL the tests can create databases on:
 //! `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
 
-#[path = "common/permissions.rs"]
-mod permission_fixture;
+mod common;
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
@@ -25,15 +27,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
+use common::v2::V2;
 use extend_protocol::frames::{DeviceFrame, EnrollmentFrame, ServiceFrame};
 use extend_protocol::model::*;
 use extend_protocol::{DeviceOs, ErrorCode};
-use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode};
+use extend_service::config::{Config, Tuning};
+use extend_service::state::Shared;
 use extend_service::versions::{self, Clock, Lifecycle, Policy, Registry};
 use futures::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
-use silicon_extend_client::{Authed, Client};
-use sqlx::Connection as _;
+use silicon_extend_client::Client;
 use time::OffsetDateTime;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -43,62 +46,26 @@ use uuid::Uuid;
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// A placeholder value for the retired Honeycomb fixtures (nothing accepts it any more).
 const HONEYCOMB_TOKEN: &str = "hck_contracts";
 
 // ───────────── Harness ─────────────
 
 async fn database() -> String {
-    let admin = std::env::var("EXTEND_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://extend:extend@127.0.0.1:5440/postgres".into());
-    let db = format!("extend_contracts_{}", Uuid::new_v4().simple());
-    let mut conn = sqlx::PgConnection::connect(&admin)
-        .await
-        .expect("PostgreSQL for tests (set EXTEND_TEST_ADMIN_URL)");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    format!("{}/{db}", admin.rsplit_once('/').unwrap().0)
+    common::database("contracts").await.0
 }
 
 fn config(database_url: String, addr: SocketAddr, device_app_min: &str) -> Config {
-    let base = format!("http://{addr}");
-    Config {
-        environment: Environment::Test,
-        bind: addr,
-        database_url,
-        public_url: base.clone(),
-        website_url: "http://localhost:5173".into(),
-        docs_url: "http://localhost:5173/docs".into(),
-        repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
-        data_dir: std::env::temp_dir().join(format!("extend_contracts_{}", Uuid::new_v4().simple())),
-        iam: IamMode::Local,
-        delegation_key: None,
-        iam_public_url: format!("{base}/dev/iam"),
-        iam_login_url: format!("{base}/dev/iam/login"),
-        webhook_secret: None,
-        webhook_previous_secret: None,
-        files: FilesMode::Local,
-        ting: TingMode::Local,
-        honeycomb_service_token: Some(HONEYCOMB_TOKEN.into()),
-        postmark_token: None,
-        report_recipients: vec!["bugs@example.test".into()],
-        device_app_min_version: device_app_min.into(),
-        local_members: vec![
-            ("c:alice".into(), vec!["acme".into()]),
-            ("c:bob".into(), vec!["acme".into()]),
-            ("si:chef".into(), vec!["acme".into()]),
-            ("si:sous".into(), vec!["acme".into()]),
-        ],
-        web_dir: None,
-        trusted_proxies: vec![],
-        tuning: Default::default(),
-    }
+    let data = std::env::temp_dir().join(format!("extend_contracts_{}", Uuid::new_v4().simple()));
+    let mut cfg = common::config(database_url, addr, data, Tuning::default());
+    cfg.device_app_min_version = device_app_min.into();
+    cfg
 }
 
 struct Svc {
     base: String,
     pool: sqlx::PgPool,
+    state: Shared,
     versions: Arc<Registry>,
     http: reqwest::Client,
 }
@@ -108,21 +75,37 @@ impl Svc {
         let url = database().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
-        let iam = permission_fixture::decorate(state.iam.clone(), state.pool.clone()).await;
-        Arc::get_mut(&mut state).unwrap().iam = iam;
+        let state = extend_service::build(config(url, addr, device_app_min)).await.unwrap();
+        common::seed_accounts(&state);
         let pool = state.pool.clone();
         let versions = Registry::start_with_clock(pool.clone(), policy, clock).await.unwrap();
-        tokio::spawn(extend_service::serve_versioned(listener, state, versions.clone()));
+        tokio::spawn(extend_service::serve_versioned(
+            listener,
+            state.clone(),
+            versions.clone(),
+        ));
         Svc {
             base: format!("http://{addr}"),
             pool,
+            state,
             versions,
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap(),
         }
+    }
+
+    /// An access token for a test account, signed by the local Silicon Accounts.
+    fn token(&self, who: &str) -> String {
+        let local = self
+            .state
+            .accounts
+            .local
+            .as_deref()
+            .expect("the local Silicon Accounts");
+        let account = local.ensure(who, common::custodian_of(who)).expect("a test account");
+        local.mint(&account, 1800)
     }
 
     async fn get(&self, path: &str, pin: Option<&str>) -> reqwest::Response {
@@ -208,17 +191,28 @@ fn tomorrow_midnight(t: OffsetDateTime) -> OffsetDateTime {
 // ───────────── Versioning 6: the compatibility matrix ─────────────
 
 #[tokio::test]
-async fn the_default_matrix_keeps_api_one_for_client_and_cli_three() {
+async fn the_default_matrix_serves_the_device_wire_on_1_and_accounts_on_2() {
     let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
-    let client = Client::connect(&svc.base).await.unwrap();
-    assert_eq!(client.api_version(), 1);
-    let matrix = client.contracts().await.unwrap();
-    assert_eq!(matrix["supported"], json!([1]));
-    assert_eq!(matrix["current"], 1);
+    let (status, m) = envelope(svc.get("/api/v2/contracts", None).await).await;
+    assert_eq!(status, 200, "{m}");
+    let m = &m["data"];
+    assert_eq!(m["supported"], json!([1, 2]));
+    assert_eq!(m["current"], 2);
     assert_eq!(
-        matrix["versions"][0]["compatible"],
+        m["versions"][0]["compatible"],
         json!({"client_crate": ">=1.0.0, <4.0.0", "cli": ">=1.0.0, <4.0.0", "device_app_min": "1.0.0"})
     );
+    assert_eq!(
+        m["versions"][1]["compatible"],
+        json!({"client_crate": ">=4.0.0, <5.0.0", "cli": ">=4.0.0, <5.0.0", "device_app_min": "1.0.0"})
+    );
+    // The 4.0 client agrees 2 (the account API); its device-wire calls stay pinned to 1. (A 3.x
+    // client agrees 1, and its account calls are told to update: see the replay tests.)
+    let client = Client::connect(&svc.base).await.unwrap();
+    assert_eq!(client.api_version(), 2);
+    assert_eq!(client.contracts().await.unwrap()["supported"], json!([1, 2]));
+    let r = svc.negotiate("1").await;
+    assert_eq!(envelope(r).await.1["data"]["api_version"], 1);
 }
 
 #[tokio::test]
@@ -228,13 +222,13 @@ async fn the_matrix_is_built_from_state_and_configuration() {
     let client = Client::connect(&svc.base).await.unwrap();
 
     let m = client.contracts().await.unwrap();
-    assert_eq!(m["supported"], json!([1]));
-    assert_eq!(m["current"], 1);
+    assert_eq!(m["supported"], json!([1, 2]));
+    assert_eq!(m["current"], 2);
     assert_eq!(m["deprecated"], json!([]));
     assert_eq!(m["service_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(m["sunset_rule"], versions::SUNSET_RULE);
     let versions_list = m["versions"].as_array().unwrap();
-    assert_eq!(versions_list.len(), 1, "{m}");
+    assert_eq!(versions_list.len(), 2, "{m}");
     let v1 = &versions_list[0];
     assert_eq!(v1["api_version"], 1);
     assert_eq!(v1["state"], "current");
@@ -258,14 +252,16 @@ async fn the_matrix_is_built_from_state_and_configuration() {
     );
     client.enroll(&enroll("1.4.0")).await.unwrap();
 
-    // Requests are counted per major and day, and upkeep reads the count back into the matrix.
+    // Requests are counted per major and day, and upkeep reads the count back into the matrix: the
+    // two enrollments on the device wire (v1), the matrix read on v2.
     let today = OffsetDateTime::now_utc().date();
-    usage(&svc.pool, 1, today, 3).await;
+    usage(&svc.pool, 1, today, 2).await;
+    usage(&svc.pool, 2, today, 1).await;
     svc.versions.upkeep().await.unwrap();
     let m = client.contracts().await.unwrap();
     assert_eq!(m["versions"][0]["last_request_on"], today.to_string());
     // A current major carries no deprecation headers.
-    let r = svc.get("/api/v1/iam", Some("1")).await;
+    let r = svc.get("/api/v1/contracts", Some("1")).await;
     assert_eq!(r.status(), 200);
     assert!(header(&r, "deprecation").is_none() && header(&r, "sunset").is_none());
 }
@@ -289,7 +285,7 @@ async fn a_deprecated_major_warns_then_sunsets_after_a_quiet_week() {
     let deprecated_at = v1.deprecated_at.unwrap();
 
     // Every v1 answer says it is deprecated and the soonest it can go: 7 days after today ends.
-    let r = svc.get("/api/v1/iam", Some("1")).await;
+    let r = svc.get("/api/v1/contracts", Some("1")).await;
     assert_eq!(r.status(), 200);
     assert_eq!(header(&r, "silicon-extend-api-version").as_deref(), Some("1"));
     assert_eq!(
@@ -299,7 +295,7 @@ async fn a_deprecated_major_warns_then_sunsets_after_a_quiet_week() {
     let earliest = tomorrow_midnight(start) + time::Duration::days(7);
     assert_eq!(header(&r, "sunset"), Some(versions::http_date(earliest)));
     // Errors on a deprecated major carry them too.
-    let r = svc.get("/api/v1/auth/me", Some("1")).await;
+    let r = svc.get("/api/v1/device", Some("1")).await;
     assert_eq!(r.status(), 401);
     assert!(header(&r, "deprecation").is_some() && header(&r, "sunset").is_some());
 
@@ -342,7 +338,7 @@ async fn a_deprecated_major_warns_then_sunsets_after_a_quiet_week() {
     assert_eq!(v1.sunset_at, Some(earliest));
 
     // A sunset major answers 410 with what happened and what to do.
-    let (status, body) = envelope(svc.get("/api/v1/iam", Some("1")).await).await;
+    let (status, body) = envelope(svc.get("/api/v1/contracts", Some("1")).await).await;
     assert_eq!(status, 410);
     let e = &body["data"];
     assert_eq!(e["code"], "api_version_sunset");
@@ -352,7 +348,7 @@ async fn a_deprecated_major_warns_then_sunsets_after_a_quiet_week() {
         "{message}"
     );
     assert!(
-        e["hint"].as_str().unwrap().contains("honeycomb install 'extend'"),
+        e["hint"].as_str().unwrap().contains("silicon-apps update extend"),
         "{e}"
     );
     assert_eq!(e["details"]["supported"], json!([2]));
@@ -687,8 +683,13 @@ fn placeholders_in(v: &Value, out: &mut BTreeSet<String>) {
 #[test]
 fn every_fixture_is_well_formed() {
     let root = contracts_dir();
-    let mut dirs = vec![(None, root.join("internal/honeycomb"))];
+    let mut dirs = vec![(None, root.join("retired/honeycomb"))];
     for &major in versions::SERVED {
+        if major == extend_protocol::ACCOUNT_API_VERSION && !root.join(format!("v{major}/client")).exists() {
+            // API v2's consumer is the 4.0 client crate, which records its own fixtures here.
+            eprintln!("contracts/v{major}/client: no fixtures recorded yet");
+            continue;
+        }
         assert!(
             !load(&root.join(format!("v{major}/client"))).is_empty(),
             "API version {major} is served but contracts/v{major}/client has no fixtures; record them with \
@@ -832,21 +833,17 @@ fn hello_as(os: DeviceOs, app_version: &str, setup: Setup) -> Value {
     .unwrap()
 }
 
-/// A raw API call (for the 1.1 routes), answering the status and the parsed body.
+/// A raw API call, answering the status and the parsed body.
 async fn call(
     base: &str,
     method: reqwest::Method,
     path: &str,
     authorization: &str,
-    team: Option<&str>,
     body: Option<Value>,
 ) -> (u16, Value) {
     let mut r = reqwest::Client::new()
         .request(method, format!("{base}{path}"))
         .header("authorization", authorization);
-    if let Some(t) = team {
-        r = r.header("x-org-id", t);
-    }
     if let Some(b) = body {
         r = r.json(&b);
     }
@@ -870,19 +867,17 @@ async fn pair_another(
         "/api/v1/device/enrollments",
         &format!("Extend-Device {credential}"),
         None,
-        None,
     )
     .await;
     if status != 201 {
         return Err(format!("POST /api/v1/device/enrollments answered {status}: {e}"));
     }
     let data = &e["data"];
-    let claimed = client
-        .authed(bob_token, Some("acme"))
+    let claimed = V2::new(base, bob_token)
         .pair(&PairingClaim {
             pairing_code: data["pairing_code"].as_str().unwrap_or_default().into(),
             name: name.into(),
-            visibility: Some(extend_protocol::model::Visibility::Team),
+            visibility: None,
             pair_ttl_days: None,
             silicon_ids: vec!["si:chef".into()],
         })
@@ -927,7 +922,7 @@ async fn upload(base: &str, credential: &str, upload_id: &str, bytes: &[u8]) {
 }
 
 /// Pairs a device through the enrollment socket, as the apps do; returns it unconnected.
-async fn pair(client: &Client, carbon_token: &str, os: DeviceOs, silicons: &[&str]) -> Device {
+async fn pair(client: &Client, base: &str, carbon_token: &str, os: DeviceOs, silicons: &[&str]) -> Device {
     let e = client
         .enroll(&EnrollmentCreate {
             os,
@@ -946,12 +941,11 @@ async fn pair(client: &Client, carbon_token: &str, os: DeviceOs, silicons: &[&st
         )],
     )
     .await;
-    client
-        .authed(carbon_token, Some("acme"))
+    V2::new(base, carbon_token)
         .pair(&PairingClaim {
             pairing_code: e.pairing_code,
             name: format!("Contract {}", os.as_str()),
-            visibility: Some(extend_protocol::model::Visibility::Team),
+            visibility: None,
             pair_ttl_days: None,
             silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
         })
@@ -980,7 +974,7 @@ impl Device {
         &self,
         base: &str,
         client: &Client,
-        owner: Authed<'_>,
+        owner: &V2<'_>,
         hello: Value,
     ) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::UnboundedSender<Value>) {
         let mut ws = ws_connect(
@@ -1053,6 +1047,18 @@ impl Drop for Provider<'_> {
     }
 }
 
+/// States only API v1's account routes used (Silicon IAM permissions and refresh tokens, Honeycomb
+/// test environments, organization imports). Fixtures naming them are retired: they are replayed
+/// without them, for the 4.0 answer.
+const RETIRED_STATES: &[&str] = &[
+    "refresh_token",
+    "permission_request",
+    "permission_grant",
+    "importable_device",
+    "test_environment",
+    "honeycomb_environment",
+];
+
 impl<'a> Provider<'a> {
     async fn new(svc: &'a Svc) -> Provider<'a> {
         let client = Client::connect(&svc.base).await.unwrap();
@@ -1063,7 +1069,7 @@ impl<'a> Provider<'a> {
             ("silicon_token", "si:chef"),
             ("other_silicon_token", "si:sous"),
         ] {
-            vars.insert(var.into(), client.login(who).await.unwrap().access_token);
+            vars.insert(var.into(), svc.token(who));
         }
         for (k, v) in [
             ("carbon_slt", "c:alice"),
@@ -1088,16 +1094,50 @@ impl<'a> Provider<'a> {
         self.vars[k].clone()
     }
 
-    fn carbon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(&self.vars["carbon_token"], Some("acme"))
+    /// API v2 as c:alice, who pairs the devices.
+    fn carbon(&self) -> V2<'_> {
+        V2::new(&self.svc.base, &self.vars["carbon_token"])
     }
 
-    fn silicon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(&self.vars["silicon_token"], Some("acme"))
+    /// API v2 as si:chef.
+    fn silicon(&self) -> V2<'_> {
+        V2::new(&self.svc.base, &self.vars["silicon_token"])
     }
 
     async fn device_version(&self, id: &str) -> i64 {
         self.carbon().device(id).await.unwrap().version.unwrap()
+    }
+
+    /// Fills every placeholder a retired fixture uses with a value of the right shape: nothing it
+    /// names exists, and nothing needs to (the route is gone).
+    fn fill_retired(&mut self) {
+        for (k, v) in [
+            ("refresh_token", "rt_retired"),
+            ("permission_id", "00000000-0000-7000-8000-000000000000"),
+            ("permission_code", "obc_retired"),
+            ("enrollment_id", "00000000-0000-7000-8000-000000000001"),
+            ("enrollment_secret", "ens_retired"),
+            ("pairing_code", "ABC123"),
+            ("device_id", "0000aaaa"),
+            ("device_credential", "edc_retired"),
+            ("device_version", "1"),
+            ("session_id", "abc"),
+            ("file_id", "00000000-0000-7000-8000-000000000002"),
+            ("upload_id", "00000000-0000-7000-8000-000000000003"),
+            ("host_id", "0000bbbb"),
+            ("attached_id", "0000cccc"),
+            ("testing_secret", "ask_retired"),
+            ("environment_id", "00000000-0000-7000-8000-000000000004"),
+            ("org_id", "acme"),
+            ("testing_key", "abcdefghijklmnopqrstuvwxyz012345"),
+            ("operation_id", "00000000-0000-7000-8000-000000000005"),
+            ("command_id", "00000000-0000-7000-8000-000000000006"),
+            ("wake_id", "00000000-0000-7000-8000-000000000007"),
+            ("shared_device_id", "0000dddd"),
+            ("shared_host_id", "0000eeee"),
+        ] {
+            self.vars.entry(k.into()).or_insert_with(|| v.into());
+        }
     }
 
     fn given<'s>(&'s mut self, state: &'s str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 's>> {
@@ -1107,36 +1147,8 @@ impl<'a> Provider<'a> {
             }
             let base = self.svc.base.clone();
             match state {
-                "permission_request" => {
-                    let response = self
-                        .carbon()
-                        .request_permissions(
-                            &[silicon_extend_client::PermissionEndpoint {
-                                audience: "briefcase".into(),
-                                endpoint_id: "briefcase.uploads.reserve".into(),
-                            }],
-                            &Uuid::new_v4().to_string(),
-                        )
-                        .await
-                        .unwrap();
-                    self.vars.insert("permission_id".into(), response.id.to_string());
-                    self.vars
-                        .insert("permission_code".into(), "obc_sentinel-permission-code".into());
-                }
-                "permission_grant" => {
-                    self.given("permission_request").await;
-                    self.carbon()
-                        .complete_permissions(
-                            self.var("permission_id").parse().unwrap(),
-                            &self.var("permission_code"),
-                            &Uuid::new_v4().to_string(),
-                        )
-                        .await
-                        .unwrap();
-                }
-                "refresh_token" => {
-                    let s = self.client.login("c:alice").await.unwrap();
-                    self.vars.insert("refresh_token".into(), s.refresh_token);
+                s if RETIRED_STATES.contains(&s) => {
+                    panic!("provider state {s:?} belongs to a retired API v1 route; only retired fixtures name it")
                 }
                 "enrollment" => {
                     let e = self
@@ -1154,20 +1166,17 @@ impl<'a> Provider<'a> {
                     self.vars.insert("enrollment_secret".into(), e.enrollment_secret);
                     self.vars.insert("pairing_code".into(), e.pairing_code);
                 }
-                "importable_device" => {
-                    self.given("device").await;
-                    self.carbon().remove_device(&self.var("device_id"), None).await.unwrap();
-                }
                 "device" => {
                     let d = pair(
                         &self.client,
+                        &base,
                         &self.var("carbon_token"),
                         DeviceOs::Android,
                         &["si:chef", "si:sous"],
                     )
                     .await;
                     let (task, inject) = d
-                        .serve_with(&base, &self.client, self.carbon(), hello(DeviceOs::Android))
+                        .serve_with(&base, &self.client, &self.carbon(), hello(DeviceOs::Android))
                         .await;
                     self.tasks.push(task);
                     self.inject.insert(d.id.clone(), inject);
@@ -1230,9 +1239,16 @@ impl<'a> Provider<'a> {
                     self.vars.insert("upload_id".into(), id.to_string());
                 }
                 "host" => {
-                    let d = pair(&self.client, &self.var("carbon_token"), DeviceOs::Macos, &["si:chef"]).await;
+                    let d = pair(
+                        &self.client,
+                        &base,
+                        &self.var("carbon_token"),
+                        DeviceOs::Macos,
+                        &["si:chef"],
+                    )
+                    .await;
                     let (task, inject) = d
-                        .serve_with(&base, &self.client, self.carbon(), hello(DeviceOs::Macos))
+                        .serve_with(&base, &self.client, &self.carbon(), hello(DeviceOs::Macos))
                         .await;
                     self.tasks.push(task);
                     self.inject.insert(d.id.clone(), inject);
@@ -1268,11 +1284,12 @@ impl<'a> Provider<'a> {
                     )
                     .await
                     .unwrap_or_else(|e| panic!("shared_computer: {e}"));
+                    let bob_v2 = V2::new(&base, &self.vars["other_carbon_token"]);
                     let (task, inject) = bob
                         .serve_with(
                             &base,
                             &self.client,
-                            self.client.authed(&self.vars["other_carbon_token"], Some("acme")),
+                            &bob_v2,
                             hello_as(DeviceOs::Macos, "1.1.0", Setup::complete()),
                         )
                         .await;
@@ -1288,7 +1305,7 @@ impl<'a> Provider<'a> {
                         let _ = inject.send(json!({"type": "awake", "awake": false, "sleep_state": "screen_off",
                                                    "run": Uuid::new_v4(), "seq": 1}));
                     }
-                    let owner = self.carbon();
+                    let owner = &self.carbon();
                     let idr = id.as_str();
                     eventually("the phone reading not awake", move || async move {
                         owner.device(idr).await.is_ok_and(|d| d.awake == Some(false))
@@ -1298,9 +1315,8 @@ impl<'a> Provider<'a> {
                     let (status, w) = call(
                         &base,
                         reqwest::Method::POST,
-                        &format!("/api/v1/devices/{id}/wake-requests"),
+                        &format!("/api/v2/devices/{id}/wake-requests"),
                         &format!("Bearer {}", self.var("silicon_token")),
-                        Some("acme"),
                         Some(json!({"type": "wake_request", "data": {"reason": "Contract: the order screen"}})),
                     )
                     .await;
@@ -1311,7 +1327,14 @@ impl<'a> Provider<'a> {
                     );
                 }
                 "failed_setup" => {
-                    let d = pair(&self.client, &self.var("carbon_token"), DeviceOs::Android, &["si:chef"]).await;
+                    let d = pair(
+                        &self.client,
+                        &base,
+                        &self.var("carbon_token"),
+                        DeviceOs::Android,
+                        &["si:chef"],
+                    )
+                    .await;
                     let failed = Setup::from_steps(vec![SetupStep {
                         key: "wireless_debugging".into(),
                         title: "Turn on wireless debugging".into(),
@@ -1326,7 +1349,7 @@ impl<'a> Provider<'a> {
                         .serve_with(
                             &base,
                             &self.client,
-                            self.carbon(),
+                            &self.carbon(),
                             hello_as(DeviceOs::Android, "1.1.0", failed),
                         )
                         .await;
@@ -1344,7 +1367,7 @@ impl<'a> Provider<'a> {
                             &AttachmentCreate {
                                 os: DeviceOs::Tvos,
                                 name: "Living room".into(),
-                                visibility: Some(extend_protocol::model::Visibility::Team),
+                                visibility: None,
                                 pair_ttl_days: None,
                                 address: None,
                             },
@@ -1361,41 +1384,9 @@ impl<'a> Provider<'a> {
                         "capabilities":["input.remote", "nav.system"], "missing":[],
                         "setup":{"state":"complete", "steps":[]}});
                     self.inject[&self.var("host_id")].send(report.clone()).unwrap();
-                    wait_for_device_report(self.carbon(), &id, &report).await.unwrap();
+                    wait_for_device_report(&self.carbon(), &id, &report).await.unwrap();
                     let session = self.silicon().start_session(&id.parse().unwrap()).await.unwrap();
                     self.vars.insert("session_id".into(), session.session_id.to_string());
-                }
-                "test_environment" => {
-                    let env = Uuid::new_v4();
-                    let secret = extend_protocol::ids::new_secret("ask_");
-                    let op = Uuid::new_v4();
-                    let r = reqwest::Client::new()
-                        .put(format!(
-                            "{base}/internal/honeycomb/organizations/acme/testing-environments/{env}/operations/{op}"
-                        ))
-                        .bearer_auth(HONEYCOMB_TOKEN)
-                        .json(&json!({
-                            "operation_id": op, "environment_id": env, "org_id": "acme", "app_id": "extend",
-                            "environment_revision": 1, "generation": 1, "key_version": 1, "action": "prepare",
-                            "testing_key": "abcdefghijklmnopqrstuvwxyz012345", "name": "contracts"
-                        }))
-                        .send()
-                        .await
-                        .unwrap();
-                    assert!(r.status().is_success(), "preparing a test environment: {}", r.status());
-                    reqwest::Client::new()
-                        .post(format!("{base}/dev/iam/test-apps"))
-                        .json(&json!({"type": "test_app", "data": {"secret": secret, "environment_id": env}}))
-                        .send()
-                        .await
-                        .unwrap();
-                    self.vars.insert("testing_secret".into(), secret);
-                }
-                "honeycomb_environment" => {
-                    self.vars.insert("environment_id".into(), Uuid::new_v4().to_string());
-                    self.vars.insert("org_id".into(), "acme".into());
-                    let key: String = Uuid::new_v4().simple().to_string();
-                    self.vars.insert("testing_key".into(), key);
                 }
                 "paired" => {}
                 other => panic!("unknown provider state {other:?}"),
@@ -1516,15 +1507,83 @@ fn check_response(spec: &Value, body: &[u8], sent: Option<&Value>) -> Result<(),
     Ok(())
 }
 
+/// Whether a fixture's path is one 4.0 serves: the device wire installed apps speak, the version and
+/// contract routes, and the account API v2 (the 4.0 client's own fixtures).
+fn still_served(path: &str) -> bool {
+    let p = path.split('?').next().unwrap_or(path);
+    p == "/api/version"
+        || p.starts_with("/api/v2/")
+        || p == "/api/v1/contracts"
+        || p == "/api/v1/device"
+        || p.starts_with("/api/v1/device/")
+        || p == "/api/v1/enrollments"
+        || p.starts_with("/api/v1/enrollments/")
+}
+
+/// A fixture of a retired route: it gets the 4.0 answer. An API v1 account route answers `410
+/// api_version_sunset` with the update command (or, while it still selects a test environment,
+/// `testing_secret_invalid`); Honeycomb's test-environment instructions are gone (404).
+async fn replay_retired(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
+    p.fill_retired();
+    let req = &f["request"];
+    let method =
+        reqwest::Method::from_bytes(req["method"].as_str().unwrap_or("GET").as_bytes()).map_err(|e| e.to_string())?;
+    let path = p.fill(req["path"].as_str().unwrap_or_default())?;
+    let mut r = p.svc.http.request(method.clone(), format!("{}{path}", p.svc.base));
+    let mut testing = false;
+    for (k, v) in req["headers"].as_object().into_iter().flatten() {
+        testing |= k.eq_ignore_ascii_case(extend_protocol::TESTING_SECRET_HEADER);
+        r = r.header(k.as_str(), p.fill(v.as_str().unwrap_or_default())?);
+    }
+    if let Some(b64) = req["body_base64"].as_str() {
+        r = r.body(
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| e.to_string())?,
+        );
+    } else if !req["body"].is_null() {
+        r = r.body(serde_json::to_vec(&p.fill_json(&req["body"])?).unwrap());
+    }
+    let resp = r.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body: Value = resp.json().await.unwrap_or(Value::Null);
+    let e = &body["data"];
+    if path.starts_with("/internal/") {
+        return if status == 404 {
+            Ok(())
+        } else {
+            Err(format!("{method} {path} should be gone (404), got {status}: {body}"))
+        };
+    }
+    if testing {
+        return if status == 401 && e["code"] == "testing_secret_invalid" {
+            Ok(())
+        } else {
+            Err(format!(
+                "{method} {path} selects a test environment and should be refused, got {status}: {body}"
+            ))
+        };
+    }
+    let retired = path.split('?').next().unwrap_or(&path);
+    if status != 410
+        || e["code"] != "api_version_sunset"
+        || e["hint"] != "silicon-apps update extend"
+        || e["details"]["retired"] != retired
+        || e["details"]["use_api_version"] != 2
+    {
+        return Err(format!(
+            "{method} {path} should answer 410 api_version_sunset with `silicon-apps update extend`, got {status}: {body}"
+        ));
+    }
+    Ok(())
+}
+
 async fn replay_http(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
+    if !still_served(f["request"]["path"].as_str().unwrap_or_default()) {
+        return replay_retired(p, f).await;
+    }
     for g in f["given"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         p.given(g).await;
-    }
-    if f["given"]
-        .as_array()
-        .is_some_and(|a| a.iter().any(|g| g == "honeycomb_environment"))
-    {
-        p.vars.insert("operation_id".into(), Uuid::new_v4().to_string());
     }
     let req = &f["request"];
     let method =
@@ -1549,27 +1608,6 @@ async fn replay_http(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     let resp = r.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-    // IAM5 deliberately closes the released cross-owner website-stop behavior. Replay the
-    // original request unchanged, assert its safe refusal, and prove the holder stays active.
-    if f["operation"] == "devices.stop.device_stopped"
-        && f["given"]
-            .as_array()
-            .is_some_and(|g| g.iter().any(|v| v == "shared_device"))
-    {
-        let body: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if status.as_u16() != 409 || body["data"]["code"] != "device_not_in_use" {
-            return Err(format!("legacy cross-owner stop must be refused: {status} {body}"));
-        }
-        let session = p
-            .silicon()
-            .session(&p.var("session_id"))
-            .await
-            .map_err(|e| e.to_string())?;
-        if session.state != SessionState::Active || body["data"]["details"].get("session_id").is_some() {
-            return Err("refused cross-owner stop changed or disclosed the active holder".into());
-        }
-        return Ok(());
-    }
     if !status.is_success() {
         return Err(format!(
             "{method} {path} was refused with {status}: {}",
@@ -1590,13 +1628,11 @@ async fn device_enrollment_effect(p: &mut Provider<'_>, bytes: &[u8]) -> Result<
     let v: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let data = &v["data"];
     let base = p.svc.base.clone();
-    let claimed = p
-        .client
-        .authed(&p.var("other_carbon_token"), Some("acme"))
+    let claimed = V2::new(&base, &p.vars["other_carbon_token"])
         .pair(&PairingClaim {
             pairing_code: data["pairing_code"].as_str().unwrap_or_default().into(),
             name: "Contract, bob's".into(),
-            visibility: Some(extend_protocol::model::Visibility::Team),
+            visibility: None,
             pair_ttl_days: None,
             silicon_ids: vec![],
         })
@@ -1624,7 +1660,6 @@ async fn device_enrollment_effect(p: &mut Provider<'_>, bytes: &[u8]) -> Result<
                 reqwest::Method::GET,
                 "/api/v1/device",
                 &format!("Extend-Device {cred}"),
-                None,
                 None,
             )
             .await;
@@ -1688,7 +1723,7 @@ async fn replay_enrollment_socket(p: &mut Provider<'_>, f: &Value) -> Result<(),
         .pair(&PairingClaim {
             pairing_code: p.var("pairing_code"),
             name: "Contract".into(),
-            visibility: Some(extend_protocol::model::Visibility::Team),
+            visibility: None,
             pair_ttl_days: None,
             silicon_ids: vec![],
         })
@@ -1742,7 +1777,7 @@ where
 
 /// The service may prepend its own carried-device recognition step; every step the app
 /// reported must nevertheless be visible, including changed errors/statuses within one state.
-async fn reported_setup_is_visible(owner: Authed<'_>, id: &str, frame: &Value) -> bool {
+async fn reported_setup_is_visible(owner: &V2<'_>, id: &str, frame: &Value) -> bool {
     let expected: Setup = serde_json::from_value(frame["setup"].clone()).expect("reported setup");
     owner.setup(id).await.is_ok_and(|actual| {
         actual.state == expected.state && expected.steps.iter().all(|step| actual.steps.contains(step))
@@ -1751,7 +1786,7 @@ async fn reported_setup_is_visible(owner: Authed<'_>, id: &str, frame: &Value) -
 
 /// Online can become true before hello is stored; an offline attachment is already offline
 /// before its first report. Neither is a barrier for the setup HTTP requests that follow.
-async fn wait_for_device_report(owner: Authed<'_>, id: &str, frame: &Value) -> Result<(), String> {
+async fn wait_for_device_report(owner: &V2<'_>, id: &str, frame: &Value) -> Result<(), String> {
     eventually("the complete device report becoming visible", move || async move {
         let Ok(device) = owner.device(id).await else {
             return false;
@@ -1794,7 +1829,14 @@ async fn wait_for_device_report(owner: Authed<'_>, id: &str, frame: &Value) -> R
 async fn a_provider_waits_for_hello_persistence_before_starting_a_session() {
     let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
     let mut p = Provider::new(&svc).await;
-    let d = pair(&p.client, &p.var("carbon_token"), DeviceOs::Android, &["si:chef"]).await;
+    let d = pair(
+        &p.client,
+        &svc.base,
+        &p.var("carbon_token"),
+        DeviceOs::Android,
+        &["si:chef"],
+    )
+    .await;
     // Force persistence to take longer than the old 150 ms sleep. WebSocket connection and
     // writes still succeed, and ordinary API reads still see the previous committed row.
     let mut lock = svc.pool.begin().await.unwrap();
@@ -1803,8 +1845,9 @@ async fn a_provider_waits_for_hello_persistence_before_starting_a_session() {
         .fetch_one(&mut *lock)
         .await
         .unwrap();
+    let owner = p.carbon();
     let (task, _inject) = {
-        let serving = d.serve_with(&svc.base, &p.client, p.carbon(), hello(DeviceOs::Android));
+        let serving = d.serve_with(&svc.base, &p.client, &owner, hello(DeviceOs::Android));
         tokio::pin!(serving);
         assert!(
             tokio::time::timeout(Duration::from_millis(350), serving.as_mut())
@@ -1816,6 +1859,7 @@ async fn a_provider_waits_for_hello_persistence_before_starting_a_session() {
         lock.rollback().await.unwrap();
         serving.await
     };
+    drop(owner);
     p.tasks.push(task);
     assert_eq!(p.carbon().device(&d.id).await.unwrap().state, DeviceState::Ready);
     let session = p.silicon().start_session(&d.id.parse().unwrap()).await.unwrap();
@@ -1844,7 +1888,8 @@ async fn an_offline_attachment_waits_for_reported_steps_within_the_same_setup_st
             .await
             .unwrap();
         p.inject[&p.var("host_id")].send(frame.clone()).unwrap();
-        let reported = wait_for_device_report(p.carbon(), &id, &frame);
+        let owner = p.carbon();
+        let reported = wait_for_device_report(&owner, &id, &frame);
         tokio::pin!(reported);
         assert!(
             tokio::time::timeout(Duration::from_millis(350), reported.as_mut())
@@ -1854,14 +1899,14 @@ async fn an_offline_attachment_waits_for_reported_steps_within_the_same_setup_st
         );
         lock.rollback().await.unwrap();
         reported.await.unwrap();
-        assert!(reported_setup_is_visible(p.carbon(), &id, &frame).await);
+        assert!(reported_setup_is_visible(&owner, &id, &frame).await);
     }
 }
 
 async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     let os: DeviceOs = serde_json::from_value(f["os"].clone()).map_err(|e| format!("os: {e}"))?;
     let base = p.svc.base.clone();
-    let d = pair(&p.client, &p.var("carbon_token"), os, &["si:chef"]).await;
+    let d = pair(&p.client, &base, &p.var("carbon_token"), os, &["si:chef"]).await;
     p.vars.insert("device_id".into(), d.id.clone());
     p.vars.insert("device_credential".into(), d.credential.clone());
     let req = &f["request"];
@@ -1897,10 +1942,9 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
         let mut pending_run = None;
         match effect {
             "result" => {
-                let (client, token, sid) = (p.client.clone(), p.var("silicon_token"), session.clone().unwrap());
+                let (run_base, token, sid) = (base.clone(), p.var("silicon_token"), session.clone().unwrap());
                 pending_run = Some(tokio::spawn(async move {
-                    client
-                        .authed(&token, Some("acme"))
+                    V2::new(&run_base, &token)
                         .run(
                             &sid,
                             &CommandRequest {
@@ -1938,7 +1982,7 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                         &AttachmentCreate {
                             os: DeviceOs::Tvos,
                             name: "Living room".into(),
-                            visibility: Some(extend_protocol::model::Visibility::Team),
+                            visibility: None,
                             pair_ttl_days: None,
                             address: None,
                         },
@@ -1953,9 +1997,8 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                 let (status, w) = call(
                     &base,
                     reqwest::Method::POST,
-                    &format!("/api/v1/devices/{}/wake-requests", d.id),
+                    &format!("/api/v2/devices/{}/wake-requests", d.id),
                     &format!("Bearer {}", p.var("silicon_token")),
-                    Some("acme"),
                     Some(json!({"type": "wake_request", "data": {"reason": "Contract: the order screen"}})),
                 )
                 .await;
@@ -1976,13 +2019,9 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                     "Contract Mac, bob's",
                 )
                 .await?;
+                let bob_v2 = V2::new(&base, &p.vars["other_carbon_token"]);
                 let (task, _) = bob
-                    .serve_with(
-                        &base,
-                        &p.client,
-                        p.client.authed(&p.vars["other_carbon_token"], Some("acme")),
-                        hello_as(os, "1.1.0", Setup::complete()),
-                    )
+                    .serve_with(&base, &p.client, &bob_v2, hello_as(os, "1.1.0", Setup::complete()))
                     .await;
                 p.tasks.push(task);
                 // A session through the fixture's pair ends, and each pair gets a new credential.
@@ -2023,9 +2062,8 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                 let (status, r) = call(
                     &base,
                     reqwest::Method::POST,
-                    &format!("/api/v1/devices/{target}/setup/retry"),
+                    &format!("/api/v2/devices/{target}/setup/retry"),
                     &format!("Bearer {}", p.var("carbon_token")),
-                    Some("acme"),
                     Some(json!({"step": key})),
                 )
                 .await;
@@ -2058,8 +2096,8 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
         serde_json::from_value::<DeviceFrame>(frame.clone())
             .map_err(|e| format!("the service can no longer read this {effect} frame ({e}): {frame}"))?;
         send_json(&mut sock.ws, &frame).await;
-        let owner = p.carbon();
-        let silicon = p.silicon();
+        let owner = &p.carbon();
+        let silicon = &p.silicon();
         let device_id = d.id.as_str();
         let frame = &frame;
         match effect {
@@ -2093,9 +2131,8 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                         let (_, list) = call(
                             base,
                             reqwest::Method::GET,
-                            &format!("/api/v1/devices/{device_id}/wake-requests?state=all"),
+                            &format!("/api/v2/devices/{device_id}/wake-requests?state=all"),
                             &format!("Bearer {token}"),
-                            None,
                             None,
                         )
                         .await;
@@ -2121,9 +2158,8 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                     let (_, list) = call(
                         base,
                         reqwest::Method::GET,
-                        &format!("/api/v1/devices/{device_id}/wake-requests?state=all"),
+                        &format!("/api/v2/devices/{device_id}/wake-requests?state=all"),
                         &format!("Bearer {token}"),
-                        None,
                         None,
                     )
                     .await;
@@ -2149,7 +2185,6 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                         "/api/v1/device",
                         &format!("Extend-Device {new}"),
                         None,
-                        None,
                     )
                     .await
                     .0 == 200
@@ -2160,7 +2195,6 @@ async fn replay_device_socket(p: &mut Provider<'_>, f: &Value) -> Result<(), Str
                     reqwest::Method::GET,
                     "/api/v1/device",
                     &format!("Extend-Device {old}"),
-                    None,
                     None,
                 )
                 .await;
@@ -2296,48 +2330,57 @@ async fn replay(kind: &str) {
     );
 }
 
+/// The current client (4.x): its device-side calls (`v1/client`) and its account calls
+/// (`v2/client`) must all be accepted. The released 1.x–3.x clients' frozen fixtures follow.
 #[tokio::test]
-async fn client_fixtures_still_replay() {
+async fn client_fixtures_replay_or_are_told_to_update() {
     replay("client").await;
 }
 
-/// The released 1.0.0 client still works against this service: its fixtures, frozen before the
-/// live ones were regenerated for 1.1 (UNDERSTANDING.md "Versioning": the API only gains).
+/// The released 1.0.0 client (fixtures frozen before the live ones were regenerated for 1.1).
 #[tokio::test]
-async fn client_1_0_0_fixtures_still_replay() {
+async fn client_1_0_0_fixtures_replay_or_are_told_to_update() {
     replay("client-1.0.0").await;
 }
 
 #[tokio::test]
-async fn client_1_1_0_fixtures_still_replay() {
+async fn client_1_1_0_fixtures_replay_or_are_told_to_update() {
     replay("client-1.1.0").await;
 }
 
 #[tokio::test]
-async fn client_1_2_0_fixtures_still_replay() {
+async fn client_1_2_0_fixtures_replay_or_are_told_to_update() {
     replay("client-1.2.0").await;
 }
 
-/// The retired selection operation is archived separately; ordinary released requests remain supported.
+/// The retired selection operation is archived separately; ordinary released requests are replayed.
 #[tokio::test]
-async fn client_1_3_0_ordinary_fixtures_still_replay() {
+async fn client_1_3_0_ordinary_fixtures_replay_or_are_told_to_update() {
     replay("client-1.3.0").await;
 }
 
+/// The released 3.1.1 client, frozen before 4.0 regenerated the live fixtures.
+#[tokio::test]
+async fn client_3_1_1_fixtures_replay_or_are_told_to_update() {
+    replay("client-3.1.1").await;
+}
+
+/// Installed device apps: the device wire is unchanged in 4.0, so every fixture still replays.
 #[tokio::test]
 async fn device_app_fixtures_still_replay() {
     replay("device").await;
 }
 
+/// Honeycomb's test-environment lifecycle instructions went with test environments.
 #[tokio::test]
-async fn honeycomb_lifecycle_fixtures_still_replay() {
+async fn honeycomb_lifecycle_instructions_are_gone() {
     let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
     let mut problems = Vec::new();
-    let n = replay_dir(&svc, &contracts_dir().join("internal/honeycomb"), &mut problems).await;
+    let n = replay_dir(&svc, &contracts_dir().join("retired/honeycomb"), &mut problems).await;
     assert!(n > 0, "no Honeycomb fixtures");
     assert!(
         problems.is_empty(),
-        "Honeycomb's lifecycle instructions are no longer accepted as it sends them:\n{}",
+        "Honeycomb's retired lifecycle instructions are still answered:\n{}",
         problems.join("\n")
     );
 }

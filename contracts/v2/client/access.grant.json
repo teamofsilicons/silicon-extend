@@ -1,0 +1,36 @@
+{
+  "api_version": 2,
+  "call": "Authed::grant",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "access.grant",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "PUT",
+    "path": "/api/v2/devices/{device_id}/access/{silicon_id}"
+  },
+  "response": {
+    "non_null": [
+      "/device_id",
+      "/granted_at",
+      "/granted_by",
+      "/silicon_id"
+    ],
+    "required": [
+      "/device_id",
+      "/granted_at",
+      "/granted_by",
+      "/silicon_id"
+    ],
+    "status": "2xx",
+    "type": "access_grant"
+  }
+}

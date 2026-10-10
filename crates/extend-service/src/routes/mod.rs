@@ -1,5 +1,14 @@
-//! HTTP and WebSocket routes (`understanding/api.yaml`).
+//! HTTP and WebSocket routes (`understanding/api.yaml`; the 4.0 review copy is
+//! `docs/migration/contracts/api.yaml`).
+//!
+//! - `/api/v1/device…` and `/api/v1/enrollments…`: the device wire installed Extend apps speak,
+//!   unchanged from 1.x (device credentials).
+//! - `/api/v2/…`: everything a Carbon or a Silicon does, signed in with Silicon Accounts
+//!   (`Authorization: Bearer <access token>`). No Teams.
+//! - Any other `/api/v1/…` route answers 410: it belonged to the Silicon IAM sign-in.
+//! - `POST /webhooks/accounts`: Silicon Accounts' signed events.
 
+mod accounts;
 mod auth;
 mod dev;
 mod device_app;
@@ -8,22 +17,21 @@ mod display_files;
 pub mod enroll;
 mod files;
 mod idempotency;
-mod permissions;
 pub use idempotency::idempotent;
 mod ops;
 pub mod sessions;
+mod silicons;
 mod system;
-mod testing;
 pub mod wake;
 mod webhook;
 
 use std::sync::Arc;
 
 use axum::extract::{FromRequest, Request};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Json, Router};
 use extend_protocol::ErrorCode;
 use serde::de::DeserializeOwned;
@@ -35,78 +43,118 @@ use crate::error::{AppError, AppResult, REQUEST_ID};
 use crate::state::Shared;
 use crate::versions::Registry;
 
+/// The exact hint every retired `/api/v1` account route gives.
+pub const UPDATE_HINT: &str = "silicon-apps update extend";
+
 /// Every route, behind the version layer. Each API major is mounted under its own `/api/v{n}`
-/// prefix; `crate::versions` explains how a v2 route table joins v1 here.
+/// prefix (see crate::versions).
 pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
     let api = Router::new()
-        .route("/api/v1/contracts", get(system::contracts))
-        .route("/api/v1/iam", get(system::iam))
-        .route("/api/v1/auth/login", post(auth::login))
-        .route("/api/v1/auth/refresh", post(auth::refresh))
-        .route("/api/v1/auth/logout", post(auth::logout))
-        .route("/api/v1/auth/me", get(auth::me))
-        .route("/api/v1/permissions", get(permissions::list).post(permissions::start))
-        .route("/api/v1/permissions/{id}/complete", post(permissions::complete))
+        // ── The device wire (API v1), unchanged for installed apps ──
         .route("/api/v1/enrollments", post(enroll::create))
-        .route("/api/v1/enrollments/{enrollment_id}", get(enroll::get).delete(enroll::discard))
+        .route(
+            "/api/v1/enrollments/{enrollment_id}",
+            get(enroll::get).delete(enroll::discard),
+        )
         .route("/api/v1/enrollments/{enrollment_id}/connect", get(enroll::socket))
-        .route("/api/v1/pairings", post(devices::claim))
-        .route("/api/v1/devices", get(devices::list))
-        .route("/api/v1/devices/importable", get(crate::organizations::importable))
-        .route("/api/v1/devices/{device_id}/import", post(crate::organizations::import))
-        .route("/api/v1/devices/{device_id}", get(devices::get).patch(devices::update).delete(devices::remove))
-        .route("/api/v1/devices/{device_id}/stop", post(devices::stop))
-        .route("/api/v1/devices/{device_id}/attachments", post(devices::attach))
-        .route("/api/v1/devices/{device_id}/setup", get(devices::setup))
-        .route("/api/v1/devices/{device_id}/setup/code", post(devices::setup_code))
-        .route("/api/v1/devices/{device_id}/setup/retry", post(devices::setup_retry))
-        .route("/api/v1/devices/{device_id}/wake-requests", post(wake::create).get(wake::list))
-        .route("/api/v1/devices/{device_id}/wake-requests/answer", post(wake::answer))
-        .route("/api/v1/devices/{device_id}/wake-requests/{wake_id}", axum::routing::delete(wake::cancel))
-        .route("/api/v1/devices/{device_id}/wake-settings", put(wake::settings))
-        .route("/api/v1/ting-registration", get(wake::ting_get).put(wake::ting_turn_on))
-        .route("/api/v1/devices/{device_id}/access", get(devices::access_list))
-        .route("/api/v1/devices/{device_id}/access/{silicon_id}", put(devices::access_grant).delete(devices::access_revoke))
-        .route("/api/v1/devices/{device_id}/activity", get(devices::activity))
-        .route("/api/v1/devices/{device_id}/requests", get(devices::requests_for_device).post(devices::request_send))
-        .route("/api/v1/requests", get(devices::my_requests))
-        .route("/api/v1/team/silicons", get(devices::team_silicons))
-        .route("/api/v1/sessions", post(sessions::start).get(sessions::list))
-        .route("/api/v1/sessions/{session_id}", get(sessions::get))
-        .route("/api/v1/sessions/{session_id}/end", post(sessions::end))
-        .route("/api/v1/sessions/{session_id}/takeover", post(sessions::takeover_start).get(sessions::takeover_get).delete(sessions::takeover_release))
-        .route("/api/v1/sessions/{session_id}/commands", post(sessions::command))
-        .route("/api/v1/files", get(files::list))
-        .route("/api/v1/files/{file_id}", get(files::get))
-        .route("/api/v1/files/{file_id}/keep", post(files::keep))
-        .route("/api/v1/files/{file_id}/content", get(files::content))
-        .route("/api/v1/device", get(device_app::me).patch(device_app::update).delete(device_app::revoke))
-        .route("/api/v1/device/attachments/{device_id}", axum::routing::patch(device_app::update_attached))
+        .route(
+            "/api/v1/device",
+            get(device_app::me).patch(device_app::update).delete(device_app::revoke),
+        )
+        .route(
+            "/api/v1/device/attachments/{device_id}",
+            patch(device_app::update_attached),
+        )
         .route("/api/v1/device/stop", post(device_app::stop))
         .route("/api/v1/device/enrollments", post(device_app::enrollments_create))
         .route("/api/v1/device/connect", get(device_app::socket))
         .route("/api/v1/device/artifacts/{upload_id}", put(device_app::upload))
-        .route("/api/v1/testing-environment", get(testing::current))
+        .route("/api/v1/contracts", get(system::contracts))
+        .route("/api/v1/{*rest}", any(retired_v1))
+        // ── The account API (v2): Silicon Accounts sign-in, no Teams ──
+        .route("/api/v2/contracts", get(system::contracts))
+        .route("/api/v2/accounts", get(system::accounts))
+        .route("/api/v2/accounts/lookup", get(accounts::lookup))
+        .route("/api/v2/me", get(auth::me))
+        .route("/api/v2/auth/logout", post(auth::logout))
+        .route("/api/v2/pairings", post(devices::claim))
+        .route("/api/v2/devices", get(devices::list))
         .route(
-            "/internal/honeycomb/organizations/{org_id}/testing-environments/{environment_id}/operations/{operation_id}",
-            put(testing::apply).get(testing::receipt),
+            "/api/v2/devices/{device_id}",
+            get(devices::get).patch(devices::update).delete(devices::remove),
         )
-        .route("/webhook/", post(webhook::receive))
-        .route("/webhook", post(webhook::receive))
-        .route("/api/v1/reports", post(ops::report))
-        .route("/api/v1/telemetry", post(ops::telemetry))
+        .route("/api/v2/devices/{device_id}/stop", post(devices::stop))
+        .route("/api/v2/devices/{device_id}/attachments", post(devices::attach))
+        .route("/api/v2/devices/{device_id}/setup", get(devices::setup))
+        .route("/api/v2/devices/{device_id}/setup/code", post(devices::setup_code))
+        .route("/api/v2/devices/{device_id}/setup/retry", post(devices::setup_retry))
+        .route(
+            "/api/v2/devices/{device_id}/wake-requests",
+            post(wake::create).get(wake::list),
+        )
+        .route("/api/v2/devices/{device_id}/wake-requests/answer", post(wake::answer))
+        .route(
+            "/api/v2/devices/{device_id}/wake-requests/{wake_id}",
+            delete(wake::cancel),
+        )
+        .route("/api/v2/devices/{device_id}/wake-settings", put(wake::settings))
+        .route("/api/v2/devices/{device_id}/access", get(devices::access_list))
+        .route(
+            "/api/v2/devices/{device_id}/access/{silicon}",
+            put(devices::access_grant).delete(devices::access_revoke),
+        )
+        .route("/api/v2/devices/{device_id}/activity", get(devices::activity))
+        .route(
+            "/api/v2/devices/{device_id}/requests",
+            get(devices::requests_for_device).post(devices::request_send),
+        )
+        .route("/api/v2/requests", get(devices::my_requests))
+        .route("/api/v2/silicons", get(silicons::list))
+        .route("/api/v2/silicons/{silicon}", get(silicons::show))
+        .route("/api/v2/silicons/{silicon}/grants", get(silicons::grants))
+        .route(
+            "/api/v2/silicons/{silicon}/grants/{device_id}",
+            delete(silicons::renounce),
+        )
+        .route("/api/v2/ting-registration", get(wake::ting_get).put(wake::ting_turn_on))
+        .route("/api/v2/sessions", post(sessions::start).get(sessions::list))
+        .route("/api/v2/sessions/{session_id}", get(sessions::get))
+        .route("/api/v2/sessions/{session_id}/end", post(sessions::end))
+        .route(
+            "/api/v2/sessions/{session_id}/takeover",
+            post(sessions::takeover_start)
+                .get(sessions::takeover_get)
+                .delete(sessions::takeover_release),
+        )
+        .route("/api/v2/sessions/{session_id}/commands", post(sessions::command))
+        .route("/api/v2/files", get(files::list))
+        .route("/api/v2/files/{file_id}", get(files::get))
+        .route("/api/v2/files/{file_id}/keep", post(files::keep))
+        .route("/api/v2/files/{file_id}/content", get(files::content))
+        .route("/api/v2/reports", post(ops::report))
+        .route("/api/v2/telemetry", post(ops::telemetry))
+        // ── Silicon Accounts' events ──
+        .route("/webhooks/accounts", post(webhook::receive))
+        .route("/webhook/", post(webhook::retired))
+        .route("/webhook", post(webhook::retired))
+        // ── Development stand-ins (refused in production) ──
         .route("/dev/files/{file_id}", get(files::local_file))
-        .route("/dev/iam/members", post(dev::member))
-        .route("/dev/iam/test-apps", post(dev::test_app))
-        .route("/dev/iam/authorize", get(dev::authorize_page).post(dev::authorize_submit))
-        .route("/dev/iam/login", get(dev::authorize_page).post(dev::authorize_submit))
+        .route("/dev/accounts/token", post(dev::token))
+        .route("/dev/accounts/slt", post(dev::slt))
+        .route("/dev/accounts/v1/oauth/token", post(dev::oauth_token))
+        .route("/dev/accounts/v1/oauth/revoke", post(dev::oauth_revoke))
+        .route("/dev/accounts/.well-known/jwks.json", get(dev::jwks))
         .route("/dev/ting", get(dev::tings))
         .route("/dev/ting/missing", post(dev::ting_missing))
         .fallback(any(fallback))
-        // Test-environment selection for every /api/v{n}/ route (see crate::state).
-        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::state::selection_layer))
-        .layer(axum::middleware::from_fn_with_state(versions.clone(), crate::versions::layer))
-        .layer(axum::extract::DefaultBodyLimit::max(extend_protocol::MAX_ARTIFACT_BYTES as usize + 1024));
+        .layer(axum::middleware::from_fn(crate::state::no_test_environments))
+        .layer(axum::middleware::from_fn_with_state(
+            versions.clone(),
+            crate::versions::layer,
+        ))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            extend_protocol::MAX_ARTIFACT_BYTES as usize + 1024,
+        ));
 
     let mut app = Router::new()
         .route("/live", get(system::live))
@@ -119,11 +167,19 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
             tower_http::services::ServeDir::new(dir).fallback(tower_http::services::ServeFile::new(index)),
         );
     }
+    // Browsers reach the API through the website's server, which adds the access token; only the
+    // origins in EXTEND_CORS_ORIGINS may call it from a page directly.
+    let origins: Vec<HeaderValue> = state
+        .cfg
+        .cors_origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
     app.layer(axum::Extension(versions))
         .layer(axum::middleware::from_fn(request_id_layer))
         .layer(
             CorsLayer::new()
-                .allow_origin(AllowOrigin::mirror_request())
+                .allow_origin(AllowOrigin::list(origins))
                 .allow_methods(AllowMethods::mirror_request())
                 .allow_headers(AllowHeaders::mirror_request())
                 .expose_headers([
@@ -140,9 +196,27 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .with_state(state)
 }
 
+/// Every `/api/v1` route that isn't the device wire: it belonged to the Silicon IAM sign-in, which
+/// 4.0 replaced with Silicon Accounts (`/api/v2`).
+async fn retired_v1(method: Method, uri: Uri) -> Response {
+    let mut resp = AppError::new(
+        ErrorCode::ApiVersionSunset,
+        format!(
+            "{method} {} is retired: Silicon Extend 4 signs in with Silicon Accounts, and every account route moved to \
+             /api/v2. This client is older than that. (Device apps keep using /api/v1/device and /api/v1/enrollments.)",
+            uri.path()
+        ),
+    )
+    .hint(UPDATE_HINT)
+    .details(serde_json::json!({"retired": uri.path(), "use_api_version": extend_protocol::ACCOUNT_API_VERSION}))
+    .into_response();
+    *resp.status_mut() = StatusCode::GONE;
+    resp
+}
+
 async fn fallback() -> AppError {
     AppError::new(ErrorCode::UnknownCommand, "No such endpoint in the Extend API.")
-        .hint("The API is described at understanding/api.yaml in the repository.")
+        .hint("The API is described at docs/migration/contracts/api.yaml (Extend 4) in the repository.")
 }
 
 /// Stamps a request id on every response and every error.

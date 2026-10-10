@@ -1,4 +1,4 @@
-//! 1.1: whether a device is awake, wake requests, and Extend's Tings per Team (test_plan 11–15).
+//! 1.1: whether a device is awake, wake requests, and Extend's Tings (test_plan 11–15).
 //! Awake is information plus the wake flow, never a gate.
 
 mod common;
@@ -9,10 +9,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 async fn owner_view(env: &Env, token: &str, id: &str) -> Value {
-    api(env, "GET", &format!("/api/v1/devices/{id}"), token, None, None)
-        .await
-        .1["data"]
-        .clone()
+    api(env, "GET", &format!("/api/v2/devices/{id}"), token, None).await.1["data"].clone()
 }
 
 async fn wake_row(env: &Env, wake_id: &str) -> (String, Option<String>, Option<String>, Option<String>) {
@@ -32,9 +29,9 @@ async fn awake_reports_update_the_physical_device_in_order() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
-    let (d, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &[]).await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &[]).await;
     let a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
-    let (d2, cred2) = pair_another(&env, &cred, &bob, Some("acme"), &[]).await;
+    let (d2, cred2) = pair_another(&env, &cred, &bob, &[]).await;
     let b = App::connect(&env, &cred2, hello(DeviceOs::Android, "1.1.0")).await;
     let run = Uuid::new_v4();
     a.send(awake_frame(false, Some("screen_off"), None, run, 5));
@@ -91,30 +88,36 @@ async fn asking_to_wake_a_device() {
     let chef = login(&env, "si:chef").await;
     let sous = login(&env, "si:sous").await;
     let scout = login(&env, "si:scout").await;
-    let (d, cred) = pair(
-        &env,
-        &alice,
-        Some("acme"),
-        DeviceOs::Android,
-        "Pixel",
-        &["si:chef", "si:sous"],
-    )
-    .await;
-    grant(&env, &alice, &d, "si:scout", "globex").await;
+    let rover = login(&env, "si:rover").await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &["si:chef", "si:sous"]).await;
+    grant(&env, &alice, &d, "si:scout").await;
     // Offline: accepted, device_notice offline.
-    let (s, w) = wake(&env, &chef, "acme", &d, "Need the OTP screen").await;
+    let (s, w) = wake(&env, &chef, &d, "Need the OTP screen").await;
     assert_eq!(s, 201, "{w}");
     assert_eq!(
         (w["data"]["device_notice"].as_str(), w["data"]["state"].as_str()),
         (Some("offline"), Some("open"))
     );
+    assert_eq!(
+        (
+            w["data"]["from"].as_str(),
+            w["data"]["from_uuid"].as_str(),
+            w["data"]["to"].as_str()
+        ),
+        (Some("si:chef"), Some(uuid("si:chef").as_str()), Some("c:alice"))
+    );
+    assert!(w["data"].get("team").is_none(), "{w}");
     let wid = w["data"]["wake_id"].as_str().unwrap().to_owned();
-    // The Carbon Ting: to alice, in acme, as chef, key wake:{id}:1.
+    // The Carbon Ting: to alice (by uuid), naming chef, key wake:{id}:1.
     let t = ting.sent_of("device.wake_requested").await;
     assert_eq!(t.len(), 1);
     assert_eq!(
-        (t[0]["actor"].as_str(), t[0]["for"].as_str(), t[0]["org_id"].as_str()),
-        (Some("si:chef"), Some("c:alice"), Some("acme"))
+        (
+            t[0]["for"].as_str(),
+            t[0]["for_id"].as_str(),
+            t[0]["data"]["from"].as_str()
+        ),
+        (Some(uuid("c:alice").as_str()), Some("c:alice"), Some("si:chef"))
     );
     assert_eq!(t[0]["key"], format!("wake:{wid}:1"));
     assert!(
@@ -124,14 +127,18 @@ async fn asking_to_wake_a_device() {
             .contains("si:chef asks you to wake Pixel")
     );
     // Checks: silicon_only, no access, reason bounds.
-    let (s, _) = wake(&env, &alice, "acme", &d, "x").await;
+    let (s, _) = wake(&env, &alice, &d, "x").await;
     assert_eq!(s, 403);
-    let (s, _) = wake(&env, &chef, "globex", &d, "x").await;
-    assert_eq!(s, 403, "organization discovery does not grant wake access");
-    let (s, _) = wake(&env, &sous, "acme", &d, "   ").await;
+    let (s, e) = wake(&env, &rover, &d, "x").await;
+    assert_eq!(
+        (s, e["data"]["code"].as_str()),
+        (404, Some("device_not_found")),
+        "a Silicon without a grant doesn't see the device: {e}"
+    );
+    let (s, _) = wake(&env, &sous, &d, "   ").await;
     assert_eq!(s, 422);
     // Asking again within 5 minutes: 429 with its own request only.
-    let (s, e) = wake(&env, &chef, "acme", &d, "again").await;
+    let (s, e) = wake(&env, &chef, &d, "again").await;
     assert_eq!((s, e["data"]["code"].as_str()), (429, Some("rate_limited")));
     assert_eq!(e["data"]["details"]["wake_request"]["wake_id"], wid.as_str());
     // After 5 minutes: refreshed (200), asks 2.
@@ -142,46 +149,36 @@ async fn asking_to_wake_a_device() {
     .execute(&env.pool)
     .await
     .unwrap();
-    let (s, r) = wake(&env, &chef, "acme", &d, "still need it").await;
+    let (s, r) = wake(&env, &chef, &d, "still need it").await;
     assert_eq!(
         (s, r["data"]["asks"].as_i64(), r["data"]["reason"].as_str()),
         (200, Some(2), Some("still need it"))
     );
-    // Collapse: another asker on the same pair and Team within 15 minutes is covered.
-    let (s, r) = wake(&env, &sous, "acme", &d, "me too").await;
-    assert_eq!(s, 201);
+    // Collapse: another asker on the same pair within 15 minutes is covered, whoever looks after it.
+    for (who, reason) in [(&sous, "me too"), (&scout, "scout needs it")] {
+        let (s, r) = wake(&env, who, &d, reason).await;
+        assert_eq!(s, 201, "{r}");
+        assert_eq!(
+            (r["data"]["ting"].as_str(), r["data"]["ting_covered_by"].as_str()),
+            (Some("covered"), Some(wid.as_str()))
+        );
+    }
     assert_eq!(
-        (r["data"]["ting"].as_str(), r["data"]["ting_covered_by"].as_str()),
-        (Some("covered"), Some(wid.as_str()))
+        ting.sent_of("device.wake_requested").await.len(),
+        1,
+        "one Carbon Ting per pair every 15 minutes"
     );
-    // scout asks through the same pair in globex: a Ting of its own, in globex, as scout.
-    let (s, _) = wake(&env, &scout, "globex", &d, "globex needs it").await;
-    assert_eq!(s, 201);
-    let last = ting.sent_of("device.wake_requested").await.last().unwrap().clone();
-    assert_eq!(
-        (last["actor"].as_str(), last["org_id"].as_str()),
-        (Some("si:scout"), Some("globex"))
-    );
-    // The owner sees the selected organization; a Silicon only its own requests there.
+    // The owner sees every request on her pair; a Silicon only its own.
     let (_, all) = api(
         &env,
         "GET",
-        &format!("/api/v1/devices/{d}/wake-requests?state=open"),
+        &format!("/api/v2/devices/{d}/wake-requests?state=open"),
         &alice,
-        Some("globex"),
         None,
     )
     .await;
-    assert_eq!(all["data"]["items"].as_array().unwrap().len(), 1);
-    let (_, own) = api(
-        &env,
-        "GET",
-        &format!("/api/v1/devices/{d}/wake-requests"),
-        &scout,
-        Some("globex"),
-        None,
-    )
-    .await;
+    assert_eq!(all["data"]["items"].as_array().unwrap().len(), 3);
+    let (_, own) = api(&env, "GET", &format!("/api/v2/devices/{d}/wake-requests"), &scout, None).await;
     assert_eq!(own["data"]["items"].as_array().unwrap().len(), 1);
     // The app connects: it gets the open requests; a 1.1 app on an awake device refuses asks.
     let app = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
@@ -199,18 +196,18 @@ async fn asking_to_wake_a_device() {
     })
     .await;
     let woken = ting.sent_of("device.woken").await;
-    let scout_t = woken.iter().find(|t| t["for"] == "si:scout").unwrap();
-    assert_eq!(scout_t["org_id"], "globex");
+    let scout_t = woken.iter().find(|t| t["for"] == uuid("si:scout").as_str()).unwrap();
+    assert_eq!(scout_t["for_id"], "si:scout");
     assert_eq!(scout_t["data"]["now"], "free");
     assert!(
         scout_t["data"]["next"]
             .as_str()
             .unwrap()
-            .starts_with("extend --team globex session new")
+            .starts_with(&format!("extend session new {d}"))
     );
-    // Sent by scout's own Carbon (the owner of its pair); the body names no one.
+    // The body names no one.
     assert!(!scout_t["data"].to_string().contains("si:chef") && !scout_t["data"].to_string().contains("c:alice"));
-    let (s, e) = wake(&env, &chef, "acme", &d, "one more").await;
+    let (s, e) = wake(&env, &chef, &d, "one more").await;
     assert_eq!(
         (s, e["data"]["code"].as_str()),
         (409, Some("conflict")),
@@ -227,9 +224,8 @@ async fn asking_to_wake_a_device() {
         let (env, chef, d) = (&env, chef.clone(), d.clone());
         async move {
             let r = reqwest::Client::new()
-                .post(format!("{}/api/v1/devices/{d}/wake-requests", env.base))
+                .post(format!("{}/api/v2/devices/{d}/wake-requests", env.base))
                 .bearer_auth(&chef)
-                .header("x-org-id", "acme")
                 .header("idempotency-key", key)
                 .json(&json!({"type": "wake_request", "data": {"reason": "after woken"}}))
                 .send()
@@ -262,36 +258,27 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
     let chef = login(&env, "si:chef").await;
     let sous = login(&env, "si:sous").await;
     let scout = login(&env, "si:scout").await;
-    let (d, cred) = pair(
-        &env,
-        &alice,
-        Some("acme"),
-        DeviceOs::Android,
-        "Pixel",
-        &["si:chef", "si:sous"],
-    )
-    .await;
-    grant(&env, &alice, &d, "si:scout", "globex").await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &["si:chef", "si:sous"]).await;
+    grant(&env, &alice, &d, "si:scout").await;
     let a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
-    let (d2, cred2) = pair_another(&env, &cred, &bob, Some("acme"), &["si:chef"]).await;
+    let (d2, cred2) = pair_another(&env, &cred, &bob, &["si:chef"]).await;
     let b = App::connect(&env, &cred2, hello(DeviceOs::Android, "1.1.0")).await;
     a.send(awake_frame(false, Some("screen_off"), None, Uuid::new_v4(), 1));
     eventually("asleep", || async {
         owner_view(&env, &alice, &d).await["awake"] == false
     })
     .await;
-    // Muted for the pair, then for one Silicon across Teams.
+    // Muted for the pair, then for one Silicon on it.
     let (s, _) = api(
         &env,
         "PUT",
-        &format!("/api/v1/devices/{d}/wake-settings"),
+        &format!("/api/v2/devices/{d}/wake-settings"),
         &alice,
-        None,
         Some(json!({"type": "wake_settings", "data": {"muted": true}})),
     )
     .await;
     assert_eq!(s, 200);
-    let (s, e) = wake(&env, &chef, "acme", &d, "x").await;
+    let (s, e) = wake(&env, &chef, &d, "x").await;
     assert_eq!(s, 409);
     assert!(
         e["data"]["message"]
@@ -303,45 +290,43 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
     let _ = api(
         &env,
         "PUT",
-        &format!("/api/v1/devices/{d}/wake-settings"),
+        &format!("/api/v2/devices/{d}/wake-settings"),
         &alice,
-        None,
         Some(json!({"type": "wake_settings", "data": {"muted": false}})),
     )
     .await;
     let (s, view) = api(
         &env,
         "PUT",
-        &format!("/api/v1/devices/{d}/wake-settings"),
+        &format!("/api/v2/devices/{d}/wake-settings"),
         &alice,
-        Some("globex"),
         Some(json!({"type": "wake_settings", "data": {"muted": true, "silicon_id": "si:scout"}})),
     )
     .await;
     assert_eq!(
-        (s, view["data"]["silicons_muted"][0]["team"].as_str()),
-        (200, Some("globex"))
+        (s, view["data"]["silicons_muted"][0]["silicon_id"].as_str()),
+        (200, Some("si:scout"))
     );
-    assert_eq!(wake(&env, &scout, "globex", &d, "x").await.0, 409);
+    assert!(view["data"]["silicons_muted"][0].get("team").is_none(), "{view}");
+    assert_eq!(wake(&env, &scout, &d, "x").await.0, 409);
     let (s, _) = api(
         &env,
         "PUT",
-        &format!("/api/v1/devices/{d}/wake-settings"),
+        &format!("/api/v2/devices/{d}/wake-settings"),
         &alice,
-        None,
         Some(json!({"type": "wake_settings", "data": {"muted": true, "silicon_id": "si:nobody"}})),
     )
     .await;
     assert_eq!(s, 422);
     // The device sounds once per 15 minutes across pairs.
-    let (_, w1) = wake(&env, &chef, "acme", &d, "first").await;
+    let (_, w1) = wake(&env, &chef, &d, "first").await;
     let f1 = a.wait("wake_request", |f| f["wake_id"] == w1["data"]["wake_id"]).await;
     assert_eq!(
         (f1["alert"].as_bool(), f1["silicon_id"].as_str()),
         (Some(true), Some("si:chef"))
     );
     // Through the second pair while open through the first: 409 naming its own.
-    let (s, e) = wake(&env, &chef, "acme", &d2, "second pair").await;
+    let (s, e) = wake(&env, &chef, &d2, "second pair").await;
     assert_eq!(s, 409);
     assert!(
         e["data"]["message"]
@@ -349,25 +334,23 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
             .unwrap()
             .contains(w1["data"]["wake_id"].as_str().unwrap())
     );
-    let (_, w2) = wake(&env, &sous, "acme", &d, "second asker").await;
+    let (_, w2) = wake(&env, &sous, &d, "second asker").await;
     let f2 = a.wait("wake_request", |f| f["wake_id"] == w2["data"]["wake_id"]).await;
     assert_eq!(f2["alert"], false);
     // Another side's session: the device's frames lose the Silicon and reason; the side differs.
-    grant(&env, &bob, &d2, "si:chef", "acme").await;
     let _ = api(
         &env,
         "DELETE",
         &format!(
-            "/api/v1/devices/{d}/wake-requests/{}",
+            "/api/v2/devices/{d}/wake-requests/{}",
             w1["data"]["wake_id"].as_str().unwrap()
         ),
         &chef,
-        Some("acme"),
         None,
     )
     .await;
     a.clear();
-    let (s, sess) = session(&env, &chef, "acme", &d2).await;
+    let (s, sess) = session(&env, &chef, &d2).await;
     assert_eq!(s, 201, "{sess}");
     let started = b.wait("session_started", |_| true).await;
     let redacted = a.wait("wake_request", |f| f["wake_id"] == w2["data"]["wake_id"]).await;
@@ -378,28 +361,26 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
     assert_ne!(redacted["side"], started["side"]);
     assert_eq!(f2["side"], redacted["side"], "the request's side stays");
     // A same-side ask carries the session's side tag (its cancelled request was 5+ minutes ago).
-    sqlx::query(
-        "UPDATE extend.wake_requests SET last_asked_at = now() - interval '6 minutes' WHERE from_id = 'si:chef'",
-    )
-    .execute(&env.pool)
-    .await
-    .unwrap();
-    let (s, own) = wake(&env, &chef, "acme", &d2, "the holder may ask").await;
+    sqlx::query("UPDATE extend.wake_requests SET last_asked_at = now() - interval '6 minutes' WHERE from_id = $1")
+        .bind(uuid("si:chef"))
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let (s, own) = wake(&env, &chef, &d2, "the holder may ask").await;
     assert_eq!(s, 201, "{own}");
     let f = b.wait("wake_request", |f| f["wake_id"] == own["data"]["wake_id"]).await;
     assert_eq!(f["side"], started["side"]);
     // Another side can't ask while it's held.
-    let (s, e) = wake(&env, &scout, "globex", &d, "x").await;
+    let (s, e) = wake(&env, &scout, &d, "x").await;
     let _ = api(
         &env,
         "PUT",
-        &format!("/api/v1/devices/{d}/wake-settings"),
+        &format!("/api/v2/devices/{d}/wake-settings"),
         &alice,
-        Some("globex"),
         Some(json!({"type": "wake_settings", "data": {"muted": false, "silicon_id": "si:scout"}})),
     )
     .await;
-    let (s2, e2) = wake(&env, &scout, "globex", &d, "x").await;
+    let (s2, e2) = wake(&env, &scout, &d, "x").await;
     assert_eq!(
         (s, s2, e2["data"]["code"].as_str()),
         (409, 409, Some("device_in_use")),
@@ -411,28 +392,29 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
     let _ = api(
         &env,
         "POST",
-        &format!("/api/v1/sessions/{}/end", sess["data"]["session_id"].as_str().unwrap()),
+        &format!("/api/v2/sessions/{}/end", sess["data"]["session_id"].as_str().unwrap()),
         &chef,
-        Some("acme"),
         None,
     )
     .await;
     let back = a.wait("wake_request", |f| f["wake_id"] == w2["data"]["wake_id"]).await;
     assert_eq!(back["silicon_id"], "si:sous");
     // The 7th Carbon Ting in an hour is deferred: the owner sees deferred, the Silicon pending.
-    sqlx::query("UPDATE extend.wake_requests SET ting_sent_at = now() - interval '5 minutes', ting_delivery = 'delivered' WHERE to_id = 'c:alice'")
+    sqlx::query("UPDATE extend.wake_requests SET ting_sent_at = now() - interval '5 minutes', ting_delivery = 'delivered' WHERE to_id = $1")
+        .bind(uuid("c:alice"))
         .execute(&env.pool)
         .await
         .unwrap();
     for i in 0..5 {
         sqlx::query(
-            "INSERT INTO extend.wake_requests (wake_id, device_id, instance_id, team, from_id, to_id, reason, expires_at, state,
+            "INSERT INTO extend.wake_requests (wake_id, device_id, instance_id, from_id, to_id, reason, expires_at, state,
                  wake_detectable, device_notice, ting_delivery, ting_sent_at)
-             SELECT gen_random_uuid(), device_id, instance_id, 'acme', $2, 'c:alice', 'old', now(), 'expired', true, 'sent', 'delivered', now() - interval '10 minutes'
+             SELECT gen_random_uuid(), device_id, instance_id, $2, $3, 'old', now(), 'expired', true, 'sent', 'delivered', now() - interval '10 minutes'
              FROM extend.devices WHERE device_id = $1",
         )
         .bind(&d)
-        .bind(format!("si:old{i}"))
+        .bind(format!("Old{i}"))
+        .bind(uuid("c:alice"))
         .execute(&env.pool)
         .await
         .unwrap();
@@ -442,8 +424,8 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
         .execute(&env.pool)
         .await
         .unwrap();
-    let (s, deferred) = wake(&env, &scout, "globex", &d, "seventh").await;
-    assert_eq!(s, 201, "never refused because of other Teams: {deferred}");
+    let (s, deferred) = wake(&env, &scout, &d, "seventh").await;
+    assert_eq!(s, 201, "never refused because of the hourly limit: {deferred}");
     assert_eq!(
         deferred["data"]["ting"], "pending",
         "a Silicon sees deferred as pending"
@@ -452,9 +434,8 @@ async fn wake_rules_mute_holders_limits_and_redaction() {
     let (_, owner) = api(
         &env,
         "GET",
-        &format!("/api/v1/devices/{d}/wake-requests?state=open"),
+        &format!("/api/v2/devices/{d}/wake-requests?state=open"),
         &alice,
-        Some("globex"),
         None,
     )
     .await;
@@ -488,18 +469,18 @@ async fn answering_ending_and_no_gate() {
     let chef = login(&env, "si:chef").await;
     let sous = login(&env, "si:sous").await;
     let scout = login(&env, "si:scout").await;
-    let (d, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &["si:sous"]).await;
-    grant(&env, &alice, &d, "si:scout", "globex").await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &["si:sous"]).await;
+    grant(&env, &alice, &d, "si:scout").await;
     let a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
-    let (d2, cred2) = pair_another(&env, &cred, &bob, Some("acme"), &["si:chef"]).await;
+    let (d2, cred2) = pair_another(&env, &cred, &bob, &["si:chef"]).await;
     a.send(awake_frame(false, Some("locked"), None, Uuid::new_v4(), 1));
     eventually("locked", || async {
         owner_view(&env, &alice, &d).await["awake"] == false
     })
     .await;
-    let (_, ws) = wake(&env, &sous, "acme", &d, "a").await;
-    let (_, wg) = wake(&env, &scout, "globex", &d, "b").await;
-    let (_, wc) = wake(&env, &chef, "acme", &d2, "c").await;
+    let (_, ws) = wake(&env, &sous, &d, "a").await;
+    let (_, wg) = wake(&env, &scout, &d, "b").await;
+    let (_, wc) = wake(&env, &chef, &d2, "c").await;
     // input_seen false resolves nothing; it is logged on the pairs with open requests.
     a.send(awake_frame(true, None, Some(false), Uuid::new_v4(), 1));
     eventually("woke_without_input logged", || async {
@@ -512,9 +493,8 @@ async fn answering_ending_and_no_gate() {
     let (s, dec) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{d}/wake-requests/answer"),
+        &format!("/api/v2/devices/{d}/wake-requests/answer"),
         &alice,
-        None,
         Some(json!({"type": "wake_answer", "data": {"answer": "declined", "wake_ids": [ws["data"]["wake_id"]]}})),
     )
     .await;
@@ -526,8 +506,8 @@ async fn answering_ending_and_no_gate() {
     );
     let declined = ting.sent_of("device.wake_declined").await;
     assert_eq!(
-        (declined[0]["for"].as_str(), declined[0]["actor"].as_str()),
-        (Some("si:sous"), Some("c:alice"))
+        (declined[0]["for"].as_str(), declined[0]["for_id"].as_str()),
+        (Some(uuid("si:sous").as_str()), Some("si:sous"))
     );
     assert!(
         declined[0]["data"]["summary"]
@@ -539,63 +519,62 @@ async fn answering_ending_and_no_gate() {
     let (s, _) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{d}/wake-requests/answer"),
+        &format!("/api/v2/devices/{d}/wake-requests/answer"),
         &alice,
-        None,
         Some(json!({"type": "wake_answer", "data": {"answer": "declined", "wake_ids": [wc["data"]["wake_id"]]}})),
     )
     .await;
     assert_eq!(s, 422);
-    // Website answers affect only the selected organization and owner. Other bindings stay open.
-    let (s, _) = api(
-        &env,
-        "POST",
-        &format!("/api/v1/devices/{d}/wake-requests/answer"),
-        &alice,
-        Some("acme"),
-        Some(json!({"type":"wake_answer","data":{"answer":"woken"}})),
-    )
-    .await;
-    assert_eq!(s, 409, "the selected organization's only request was declined");
+    // "It's awake" is a fact about the whole device: every open request on it ends, in every
+    // pair; the answer lists only the Carbon's own pair's.
     let (s, woke) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{d}/wake-requests/answer"),
+        &format!("/api/v2/devices/{d}/wake-requests/answer"),
         &alice,
-        Some("globex"),
         Some(json!({"type":"wake_answer","data":{"answer":"woken"}})),
     )
     .await;
     assert_eq!(s, 200, "{woke}");
     assert_eq!(woke["data"]["ended"].as_array().unwrap().len(), 1);
     assert_eq!(wake_row(&env, wg["data"]["wake_id"].as_str().unwrap()).await.0, "woken");
-    assert_eq!(wake_row(&env, wc["data"]["wake_id"].as_str().unwrap()).await.0, "open");
+    assert_eq!(wake_row(&env, wc["data"]["wake_id"].as_str().unwrap()).await.0, "woken");
     let (s, _) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{d2}/wake-requests/answer"),
+        &format!("/api/v2/devices/{d2}/wake-requests/answer"),
         &bob,
-        Some("acme"),
         Some(json!({"type":"wake_answer","data":{"answer":"woken"}})),
     )
     .await;
-    assert_eq!(s, 200);
+    assert_eq!(s, 409, "nothing is open on bob's pair any more");
     let woken = ting.sent_of("device.woken").await;
-    let chef_t = woken.iter().find(|t| t["for"] == "si:chef").unwrap();
-    assert_eq!(chef_t["actor"], "c:bob");
-    let scout_t = woken.iter().find(|t| t["for"] == "si:scout").unwrap();
+    let chef_t = woken.iter().find(|t| t["for"] == uuid("si:chef").as_str()).unwrap();
+    let scout_t = woken.iter().find(|t| t["for"] == uuid("si:scout").as_str()).unwrap();
     assert_eq!(
-        (scout_t["actor"].as_str(), scout_t["org_id"].as_str()),
-        (Some("c:alice"), Some("globex"))
+        (
+            chef_t["data"]["woken_by"].as_str(),
+            scout_t["data"]["woken_by"].as_str()
+        ),
+        (Some("carbon"), Some("carbon"))
     );
-    assert!(!chef_t.to_string().contains("c:alice"));
+    assert!(
+        !chef_t.to_string().contains("c:alice") && !chef_t.to_string().contains("c:bob"),
+        "a woken Ting never names who confirmed: {chef_t}"
+    );
+    // On bob's pair the log says Extend, never alice.
+    let bob_log = activity(&env, &d2).await;
+    let confirmed = bob_log
+        .iter()
+        .find(|x| x.0 == "wake_confirmed")
+        .expect("logged on bob's pair");
+    assert_eq!(confirmed.1, "extend");
     // Nothing open: 409.
     let (s, _) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{d}/wake-requests/answer"),
+        &format!("/api/v2/devices/{d}/wake-requests/answer"),
         &alice,
-        None,
         Some(json!({"type": "wake_answer", "data": {"answer": "woken"}})),
     )
     .await;
@@ -607,56 +586,45 @@ async fn answering_ending_and_no_gate() {
         .execute(&env.pool)
         .await
         .unwrap();
-    let (_, w) = wake(&env, &sous, "acme", &d, "again").await;
+    let (_, w) = wake(&env, &sous, &d, "again").await;
     let wid = w["data"]["wake_id"].as_str().unwrap().to_owned();
-    let (s, sess) = session(&env, &sous, "acme", &d).await;
+    let (s, sess) = session(&env, &sous, &d).await;
     assert_eq!(s, 201, "no gate: a session starts on a device that isn't awake");
     assert_eq!(wake_row(&env, &wid).await.0, "open");
-    // No gate: commands run; a failing one carries the wake hint with --team.
+    // No gate: commands run; a failing one carries the wake hint.
     let sid = sess["data"]["session_id"].as_str().unwrap().to_owned();
     a.fail_commands.store(true, std::sync::atomic::Ordering::Relaxed);
     let (s, r) = api(
         &env,
         "POST",
-        &format!("/api/v1/sessions/{sid}/commands"),
+        &format!("/api/v2/sessions/{sid}/commands"),
         &sous,
-        Some("acme"),
         Some(json!({"type": "command", "data": {"command": "screenshot", "args": []}})),
     )
     .await;
     assert_eq!(s, 200, "{r}");
     let warnings = r["data"]["warnings"].to_string();
     assert!(
-        warnings.contains("isn't awake (locked") && warnings.contains("extend --team acme device wake"),
+        warnings.contains("isn't awake (locked") && warnings.contains(&format!("extend device wake {d}")),
         "{warnings}"
     );
     let (s, r) = api(
         &env,
         "POST",
-        &format!("/api/v1/sessions/{sid}/commands"),
+        &format!("/api/v2/sessions/{sid}/commands"),
         &sous,
-        Some("acme"),
         Some(json!({"type": "command", "data": {"command": "terminal", "args": ["run", "ls"]}})),
     )
     .await;
     assert_eq!(s, 422);
     assert!(r["data"]["hint"].as_str().unwrap().contains("isn't awake"), "{r}");
-    let _ = api(
-        &env,
-        "POST",
-        &format!("/api/v1/sessions/{sid}/end"),
-        &sous,
-        Some("acme"),
-        None,
-    )
-    .await;
+    let _ = api(&env, "POST", &format!("/api/v2/sessions/{sid}/end"), &sous, None).await;
     // Cancel, revoke, unpair: each withdraws with its reason.
     let (s, _) = api(
         &env,
         "DELETE",
-        &format!("/api/v1/devices/{d}/wake-requests/{wid}"),
+        &format!("/api/v2/devices/{d}/wake-requests/{wid}"),
         &sous,
-        Some("acme"),
         None,
     )
     .await;
@@ -665,20 +633,18 @@ async fn answering_ending_and_no_gate() {
     let (s, _) = api(
         &env,
         "DELETE",
-        &format!("/api/v1/devices/{d}/wake-requests/{wid}"),
+        &format!("/api/v2/devices/{d}/wake-requests/{wid}"),
         &sous,
-        Some("acme"),
         None,
     )
     .await;
     assert_eq!(s, 409);
-    let (_, w) = wake(&env, &scout, "globex", &d, "revoke me").await;
+    let (_, w) = wake(&env, &scout, &d, "revoke me").await;
     let _ = api(
         &env,
         "DELETE",
-        &format!("/api/v1/devices/{d}/access/si:scout"),
+        &format!("/api/v2/devices/{d}/access/si:scout"),
         &alice,
-        Some("globex"),
         None,
     )
     .await;
@@ -689,7 +655,7 @@ async fn answering_ending_and_no_gate() {
             .as_deref(),
         Some("access_removed")
     );
-    let (_, w) = wake(&env, &chef, "acme", &d2, "unpair me").await;
+    let (_, w) = wake(&env, &chef, &d2, "unpair me").await;
     assert_eq!(device_api(&env, "DELETE", "/api/v1/device", &cred2).await.0, 204);
     assert_eq!(
         wake_row(&env, w["data"]["wake_id"].as_str().unwrap())
@@ -703,7 +669,7 @@ async fn answering_ending_and_no_gate() {
         .execute(&env.pool)
         .await
         .unwrap();
-    let (_, w) = wake(&env, &sous, "acme", &d, "expire me").await;
+    let (_, w) = wake(&env, &sous, &d, "expire me").await;
     sqlx::query("UPDATE extend.wake_requests SET expires_at = now() - interval '1 second' WHERE wake_id = $1::uuid")
         .bind(w["data"]["wake_id"].as_str().unwrap())
         .execute(&env.pool)
@@ -723,7 +689,7 @@ async fn a_concurrent_ask_never_stays_open_on_an_awake_device() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let sous = login(&env, "si:sous").await;
-    let (d, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &["si:sous"]).await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &["si:sous"]).await;
     let a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
     let run = Uuid::new_v4();
     for i in 0..8u64 {
@@ -737,7 +703,7 @@ async fn a_concurrent_ask_never_stays_open_on_an_awake_device() {
             .await
             .unwrap();
         let (env_ref, sous_ref, d_ref) = (&env, sous.clone(), d.clone());
-        let ask = async move { wake(env_ref, &sous_ref, "acme", &d_ref, "race").await };
+        let ask = async move { wake(env_ref, &sous_ref, &d_ref, "race").await };
         a.send(awake_frame(true, None, Some(true), run, 2 * i + 2));
         let _ = ask.await;
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -752,54 +718,50 @@ async fn a_concurrent_ask_never_stays_open_on_an_awake_device() {
 // ───────────── 15: Ting consent, types and retries ─────────────
 
 #[tokio::test]
-async fn ting_types_and_registrations_per_team() {
+async fn ting_types_and_enrolments() {
     let env = start().await;
     let ting = env.state.local_ting.clone().unwrap();
     let alice = login(&env, "c:alice").await;
     let scout = login(&env, "si:scout").await;
-    let (d, _) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &[]).await;
-    // Pairing registered alice in acme; granting in globex registers her there.
-    grant(&env, &alice, &d, "si:scout", "globex").await;
-    eventually("alice registered in globex", || async {
-        ting.registered
-            .lock()
-            .await
-            .iter()
-            .any(|(_, t, m)| t == "globex" && m == "c:alice")
+    let (d, _) = pair(&env, &alice, DeviceOs::Android, "Pixel", &[]).await;
+    // Pairing enrolled alice, by her Silicon Accounts uuid, to receive Extend's notifications.
+    let alice_uuid = uuid("c:alice");
+    eventually("alice enrolled", || async {
+        ting.registered.lock().await.contains(&alice_uuid)
     })
     .await;
-    // Ting doesn't know wake_requested in globex: recorded, shown with the command.
-    ting.set_missing("globex", "device.wake_requested", true);
-    let (s, w) = wake(&env, &scout, "globex", &d, "need it").await;
+    grant(&env, &alice, &d, "si:scout").await;
+    // Ting doesn't know wake_requested: recorded, and shown with what to do.
+    ting.set_missing("device.wake_requested", true);
+    let (s, w) = wake(&env, &scout, &d, "need it").await;
     assert_eq!(s, 201, "{w}");
-    let (_, owner) = api(
-        &env,
-        "GET",
-        &format!("/api/v1/devices/{d}/wake-requests"),
-        &alice,
-        Some("globex"),
-        None,
-    )
-    .await;
+    let (_, owner) = api(&env, "GET", &format!("/api/v2/devices/{d}/wake-requests"), &alice, None).await;
     let err = owner["data"]["items"][0]["ting_last_error"]
         .as_str()
         .unwrap()
         .to_owned();
     assert!(
-        err.contains("ting --org '<owning-team>' types register --type extend.device.wake_requested"),
+        err.contains("Ting doesn't know the app type extend.device.wake_requested")
+            && err.contains("ask a Ting Carbon"),
         "{err}"
     );
-    let (_, reg) = api(&env, "GET", "/api/v1/ting-registration?team=globex", &alice, None, None).await;
+    let (_, reg) = api(&env, "GET", "/api/v2/ting-registration", &alice, None).await;
     assert_eq!(reg["data"]["missing_types"], json!(["extend.device.wake_requested"]));
-    assert_eq!(reg["data"]["status"], "on");
-    // Opening settings or turning recipient notifications on cannot register app types:
-    // Ting exposes no delegated type-registration operation.
-    let (_, reg) = api(&env, "GET", "/api/v1/ting-registration?team=globex", &alice, None, None).await;
+    assert_eq!(
+        (
+            reg["data"]["status"].as_str(),
+            reg["data"]["member"].as_str(),
+            reg["data"]["member_uuid"].as_str()
+        ),
+        (Some("on"), Some("c:alice"), Some(alice_uuid.as_str()))
+    );
+    assert_eq!(reg["data"]["delivery_enabled"], true);
+    assert!(reg["data"].get("team").is_none(), "one enrolment per account: {reg}");
+    // Turning notifications on can't register app types: Ting registers them.
+    let (_, reg) = api(&env, "PUT", "/api/v2/ting-registration", &alice, None).await;
     assert_eq!(reg["data"]["missing_types"], json!(["extend.device.wake_requested"]));
-    let (_, reg) = api(&env, "PUT", "/api/v1/ting-registration?team=globex", &alice, None, None).await;
-    assert_eq!(reg["data"]["missing_types"], json!(["extend.device.wake_requested"]));
-    // The manager registers the app type outside Extend; a later delivery clears the observation.
-    ting.set_missing("globex", "device.wake_requested", false);
+    // Once Ting knows the type, a later delivery clears the observation.
+    ting.set_missing("device.wake_requested", false);
     sqlx::query("UPDATE extend.wake_requests SET ting_next_at = now() - interval '1 second'")
         .execute(&env.pool)
         .await
@@ -807,23 +769,11 @@ async fn ting_types_and_registrations_per_team() {
     extend_service::scheduler::wake_upkeep(&env.state, &extend_service::db::World::production())
         .await
         .unwrap();
-    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.ting_type_status")
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.ting_types")
         .fetch_one(&env.pool)
         .await
         .unwrap();
     assert_eq!(left, 0);
-    // team=any retains the selected organization; it cannot enumerate another login context.
-    let (_, all) = api(&env, "GET", "/api/v1/ting-registration?team=any", &alice, None, None).await;
-    let teams: Vec<&str> = all["data"]["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["team"].as_str().unwrap())
-        .collect();
-    assert_eq!(teams, vec!["acme"]);
-    // A Team the login doesn't reach: 403.
-    let (s, _) = api(&env, "GET", "/api/v1/ting-registration?team=labs", &alice, None, None).await;
-    assert_eq!(s, 403);
 }
 
 #[tokio::test]
@@ -836,35 +786,40 @@ async fn ting_consent_is_respected() {
     let bob = login(&env, "c:bob").await;
     let sous = login(&env, "si:sous").await;
     let chef = login(&env, "si:chef").await;
-    let (d, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &["si:sous"]).await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &["si:sous"]).await;
     let _a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
-    let (d2, _) = pair_another(&env, &cred, &bob, Some("acme"), &["si:chef"]).await;
-    let _ = session(&env, &sous, "acme", &d).await;
-    // alice turned Extend off in Ting: a refusal after she was registered reads "off".
-    eventually("alice registered", || async {
-        ting.registered.lock().await.iter().any(|(_, _, m)| m == "c:alice")
+    let (d2, _) = pair_another(&env, &cred, &bob, &["si:chef"]).await;
+    let _ = session(&env, &sous, &d).await;
+    // alice turned Extend off in Ting: a refusal after she was enrolled reads "off".
+    let alice_uuid = uuid("c:alice");
+    eventually("alice enrolled", || async {
+        ting.registered.lock().await.contains(&alice_uuid)
     })
     .await;
-    ting.registered.lock().await.retain(|(_, _, m)| m != "c:alice");
+    ting.registered.lock().await.retain(|m| m != &alice_uuid);
+    // chef asks on bob's pair: the request goes to alice, who gave sous access.
     let (_, r) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{d2}/requests"),
+        &format!("/api/v2/devices/{d2}/requests"),
         &chef,
-        Some("acme"),
         Some(json!({"type": "request", "data": {"reason": "please"}})),
     )
     .await;
-    assert_eq!(r["data"]["delivery"], "pending");
-    let (_, reg) = api(&env, "GET", "/api/v1/ting-registration?team=acme", &alice, None, None).await;
+    assert_eq!(
+        (r["data"]["delivery"].as_str(), r["data"]["routed_to"].as_str()),
+        (Some("pending"), Some("carbon")),
+        "{r}"
+    );
+    let (_, reg) = api(&env, "GET", "/api/v2/ting-registration", &alice, None).await;
     assert_eq!(reg["data"]["status"], "off", "{reg}");
-    // A second grant in the same Team doesn't re-register her.
-    grant(&env, &alice, &d, "si:chef", "acme").await;
+    // A second grant doesn't enrol her again.
+    grant(&env, &alice, &d, "si:chef").await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(!ting.registered.lock().await.iter().any(|(_, _, m)| m == "c:alice"));
+    assert!(!ting.registered.lock().await.contains(&alice_uuid));
     // "Turn on" does, twice in one process, and the waiting request goes.
     for _ in 0..2 {
-        let (s, reg) = api(&env, "PUT", "/api/v1/ting-registration?team=acme", &alice, None, None).await;
+        let (s, reg) = api(&env, "PUT", "/api/v2/ting-registration", &alice, None).await;
         assert_eq!((s, reg["data"]["status"].as_str()), (200, Some("on")), "{reg}");
     }
     let rid = r["data"]["request_id"].as_str().unwrap().to_owned();
@@ -872,27 +827,30 @@ async fn ting_consent_is_respected() {
         ting.sent_of("device.requested")
             .await
             .iter()
-            .any(|t| t["key"] == rid.as_str())
+            .any(|t| t["key"] == rid.as_str() && t["for"] == alice_uuid.as_str())
     })
     .await;
-    // A Carbon never registered in a Team: pending with the sign-in text, never "off".
+    // A Carbon never enrolled: pending, with why, never "off".
     let carol = login(&env, "c:carol").await;
-    let (_, reg) = api(&env, "GET", "/api/v1/ting-registration?team=globex", &carol, None, None).await;
+    let (_, reg) = api(&env, "GET", "/api/v2/ting-registration", &carol, None).await;
     assert_eq!(
         (reg["data"]["status"].as_str(), reg["data"]["last_error"].as_str()),
-        (Some("pending"), Some("Sign in to Extend for globex"))
+        (
+            Some("pending"),
+            Some("Not enrolled yet: Extend enrols you at your next use of Extend.")
+        )
     );
 }
 
 #[tokio::test]
-async fn a_restart_rebuilds_who_is_waited_for_and_1_0_rows_retry_in_their_shape() {
+async fn requests_waiting_from_before_the_move_fail_with_why() {
     let state = state_only().await;
     let world = extend_service::db::World::production();
     sqlx::query("INSERT INTO extend.devices (device_id, team, owner_id, name, os, state) VALUES ('0a1b2c3d', 'acme', 'c:alice', 'Pixel', 'android', 'ready')")
         .execute(&state.pool)
         .await
         .unwrap();
-    // A row as 1.0.0 inserts it (no 1.1 columns set; the trigger fills the holder columns).
+    // A row as 1.0.0 inserts it: no Ting body, addressed through a Team.
     sqlx::query(
         "INSERT INTO extend.requests (request_id, device_id, team, from_id, to_id, session_id, reason) VALUES ($1, '0a1b2c3d', 'acme', 'si:sous', 'si:chef', 'a3f', 'from 1.0')",
     )
@@ -900,23 +858,33 @@ async fn a_restart_rebuilds_who_is_waited_for_and_1_0_rows_retry_in_their_shape(
     .execute(&state.pool)
     .await
     .unwrap();
-    extend_service::scheduler::rebuild_waiting(&state, &world).await;
+    extend_service::scheduler::retry_requests(&state, &world).await.unwrap();
+    let (delivery, error): (String, Option<String>) =
+        sqlx::query_as("SELECT delivery, last_error FROM extend.requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (delivery.as_str(), error.as_deref()),
+        (
+            "failed",
+            Some("Not delivered: Extend moved to Silicon Accounts before it was delivered.")
+        )
+    );
     assert!(
         state
-            .waiting_logins
-            .read()
+            .local_ting
+            .clone()
+            .unwrap()
+            .sent_of("device.requested")
             .await
-            .contains(&("extend".into(), "si:sous".into()))
+            .is_empty()
     );
-    let s = state.iam.login("si:sous", "k", None).await.unwrap();
-    state.authorize(&s.access_token, Some("acme"), None).await.unwrap();
-    extend_service::scheduler::retry_requests(&state, &world).await.unwrap();
-    let ting = state.local_ting.clone().unwrap();
-    let sent = ting.sent_of("device.requested").await;
-    assert_eq!(sent.len(), 1);
-    assert_eq!(
-        sent[0]["data"]["end_session"], "extend session end a3f",
-        "the exact 1.0 shape"
-    );
-    assert!(sent[0]["data"].get("routed_to").is_none());
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM extend.activity WHERE device_id = '0a1b2c3d' AND action = 'request_failed'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(logged, 1);
 }

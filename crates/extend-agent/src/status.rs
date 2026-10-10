@@ -62,7 +62,8 @@ pub struct PairInfo {
     /// The Carbon it's paired to, e.g. `c:alice`.
     #[serde(default)]
     pub owner: Option<String>,
-    /// The Team selected when the pair was made.
+    /// The grouping the pair was made in before Extend 4 (`DeviceSelf.team`; empty for newer
+    /// pairs). Kept because the device wire carries it; never shown.
     #[serde(default)]
     pub team: Option<String>,
     #[serde(default)]
@@ -387,9 +388,8 @@ pub fn render_text(s: &AgentStatus) -> String {
             PairPhase::UpgradeRequired => ", needs an update".into(),
         };
         out.push(format!(
-            "Paired to {}{}: {name} ({}){state}",
+            "Paired to {}: {name} ({}){state}",
             p.owner.as_deref().unwrap_or("a Carbon"),
-            p.team.as_deref().map(|t| format!(" in {t}")).unwrap_or_default(),
             p.device_id
         ));
         if p.terminal_withheld {

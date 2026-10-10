@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Rehearse the released macOS 1.0 agent's private state upgrade against current Extend.
 
+Extend 3 rehearsal (the 1.0 -> 1.1 release gate): it starts the service with Extend 3's local sign-in
+stand-in and calls the 3.x account routes, so it runs only against a 1.1-3.1 service. Its results
+are in docs/history/verification.md.
+
 Run on macOS with the development PostgreSQL container already running on 5440:
   python3 e2e/released-agent-compat.py --archive /path/to/Silicon-Extend-macos-arm64.zip --out /new/output
 

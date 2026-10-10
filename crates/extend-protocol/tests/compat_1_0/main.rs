@@ -119,21 +119,6 @@ fn a_1_0_reader_decodes_1_1_resources() {
     .unwrap();
     let _: model::ActivityEntry = v1_0(&entry);
 
-    // GET /team/silicons?team=any is a superset of the 1.0 answer ({"items": [...]}).
-    let all = v11::model::TeamSilicons::new(
-        vec![v11::model::TeamSilicon {
-            id: "si:chef".into(),
-            display_name: None,
-            team: Some("labs".into()),
-        }],
-        vec![v11::model::TeamReach::reached("labs")],
-    );
-    #[derive(serde::Deserialize)]
-    struct Items {
-        items: Vec<model::TeamSilicon>,
-    }
-    assert_eq!(v1_0::<Items>(&all).items[0].id, "si:chef");
-
     // A 1.0 agent reads GET /api/v1/device from a 1.1 service.
     let me: v11::model::DeviceSelf = serde_json::from_value(json!({"device_id":"7c1e09ab","name":"Studio Mac",
         "owner":{"type":"carbon","id":"c:alice"},"team":"labs","os":"macos","in_use":null,"takeover":null,

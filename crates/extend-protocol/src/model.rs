@@ -5,7 +5,6 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::capability::{Capability, DeviceKind, DeviceOs};
-use crate::error::ApiError;
 use crate::ids::{DeviceId, SessionId};
 
 pub type Timestamp = OffsetDateTime;
@@ -17,6 +16,9 @@ pub enum MemberKind {
     Silicon,
 }
 
+/// A Carbon or Silicon as the wire shows it: `id` is the account's current public id (`c:ada`,
+/// `si:scout`), which can change; `uuid` is its permanent Silicon Accounts uuid (API v2). The device
+/// wire (`DeviceSelf.owner`) never carries `uuid`, so installed apps read exactly what they did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Member {
     #[serde(rename = "type")]
@@ -24,14 +26,39 @@ pub struct Member {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// 2.0: the permanent Silicon Accounts 128-bit UUID (canonical lowercase UUIDv4). API v2 only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
 }
 
+impl Member {
+    /// A Carbon or Silicon by public id, with no display name or uuid.
+    pub fn new(kind: MemberKind, id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            id: id.into(),
+            display_name: None,
+            uuid: None,
+        }
+    }
+
+    /// Adds the permanent Silicon Accounts uuid.
+    pub fn with_uuid(mut self, uuid: impl Into<String>) -> Self {
+        self.uuid = Some(uuid.into());
+        self
+    }
+}
+
+/// Who can see a device. 2.0: every device is `personal`, private to the Carbon who paired it and
+/// the Silicons they give access to; an API v2 service refuses `team` (`422 invalid_input`) and
+/// always answers `personal`. `team` stays only so 1.x answers still decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
-    #[default]
+    /// 1.x only: Extend 3's shared devices. API v2 refuses it.
     Team,
-    /// Hidden from other members except Silicons explicitly granted access in this organization.
+    /// Private to the Carbon who paired it and the Silicons they give access to.
+    #[default]
     Personal,
 }
 
@@ -59,9 +86,13 @@ pub struct InUse {
     pub since: Timestamp,
     #[serde(default)]
     pub paused: bool,
-    /// 1.1: the Team the Silicon is using the device in. Owner views only.
+    /// 1.1 (API v1 only); API v2 never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// 2.0: the Silicon's permanent Silicon Accounts uuid (`silicon_id` is its current public id).
+    /// API v2 only; never on the device wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silicon_uuid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -175,7 +206,7 @@ pub struct Device {
     /// didn't pair. A remote Stop can't end it; the computer's own Stop can.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub in_use_by_other_carried: bool,
-    /// Open wake requests the viewer may see: every Team's on the owner's pair, a Silicon's own.
+    /// Open wake requests the viewer may see: all of them on the owner's pair, a Silicon's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_wake_requests: Option<i64>,
     /// The open wake requests themselves, on single-device reads.
@@ -187,8 +218,8 @@ pub struct Device {
     /// Whether another Carbon also paired this device. It never says who. Owner views only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paired_by_others: Option<bool>,
-    /// Silicon views: other pairs of this same physical device the Silicon has access to in the
-    /// same Team (another Carbon's id for it).
+    /// Silicon views: other pairs of this same physical device the Silicon has access to
+    /// (another Carbon's id for it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub same_device: Option<Vec<DeviceId>>,
     /// Whether the device shows the badge, banner or notification naming the Silicon using it.
@@ -341,13 +372,6 @@ pub struct AttachmentCreate {
     pub address: Option<String>,
 }
 
-/// Import a configured device owned by the current account into its selected organization.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct DeviceImport {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visibility: Option<Visibility>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DevicePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -382,12 +406,26 @@ pub struct AccessGrant {
     pub granted_at: Timestamp,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub last_used_at: Option<Timestamp>,
-    /// 1.1: the Silicon's Team, which the grant is for. A Silicon may have one grant per Team.
+    /// 1.1 (API v1 only). API v2 has one grant per pair and Silicon, and never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
-    /// 1.1: whether the owner turned off this Silicon's wake requests in this Team.
+    /// 1.1: whether the owner turned off this Silicon's wake requests on this pair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake_muted: Option<bool>,
+    /// 2.0: the Silicon's permanent Silicon Accounts uuid (`silicon_id` is its current public id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silicon_uuid: Option<String>,
+    /// 2.0: the granting Carbon's permanent uuid (`granted_by` is their current public id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_by_uuid: Option<String>,
+    /// 2.0, custodian views (`GET /api/v2/silicons/{silicon}/grants`): the device's name and OS,
+    /// and the Carbon who paired it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_os: Option<DeviceOs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Member>,
 }
 
 // ───────────── Sessions and commands ─────────────
@@ -447,7 +485,7 @@ impl EndReason {
             Self::PairRevoked => "the pair was revoked on the device",
             Self::PairExpired => "the device went unused for longer than its pairing lasts",
             Self::SiliconLoggedOut => "the Silicon logged out",
-            Self::LeftTeam => "a member left the team",
+            Self::LeftTeam => "a membership it depended on ended (before Extend 4)",
             Self::DeviceOffline => "the device stayed offline for 2 minutes",
             Self::EnvironmentDisabled => "the test environment was disabled",
             Self::EnvironmentCleaned => "the test environment was cleaned",
@@ -479,9 +517,12 @@ pub struct Session {
     pub capabilities: Option<Vec<Capability>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands: Option<Vec<String>>,
-    /// 1.1: the Team the Silicon uses the device in.
+    /// 1.1 (API v1 only); API v2 never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// 2.0: the Silicon's permanent Silicon Accounts uuid (`silicon_id` is its current public id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silicon_uuid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -621,9 +662,15 @@ pub struct FileInfo {
         skip_serializing_if = "Option::is_none"
     )]
     pub created_at: Option<Timestamp>,
-    /// 1.1: the Team the file was made in (the session's Team). Opening it needs a login for it.
+    /// 1.1 (API v1 only); API v2 never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// 2.0: the permanent uuid of the Silicon that made it (`created_by` is its current public id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_uuid: Option<String>,
+    /// 2.0: the permanent uuid of the Carbon it is shared with (`shared_with` is their current id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_with_uuid: Option<String>,
 }
 
 // ───────────── Requests and activity ─────────────
@@ -657,7 +704,7 @@ pub struct RequestInfo {
     /// is `failed` (what happened, why, and what to do).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    /// 1.1: the requesting Silicon's Team, for the requester's side and its Carbon.
+    /// 1.1 (API v1 only): set for the requester's side and its Carbon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// 1.1: who the request went to: the Silicon using the device (`holder`, as in 1.0), or the
@@ -671,6 +718,12 @@ pub struct RequestInfo {
     /// request is routed to sees the requesting Silicon (Carbon decision, 2026-09-27).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub from_hidden: bool,
+    /// 2.0: the requesting Silicon's permanent uuid (`from` is its current public id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_uuid: Option<String>,
+    /// 2.0: the recipient's permanent uuid, when the viewer may see who it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_uuid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -692,12 +745,12 @@ pub struct ActivityEntry {
     pub files: Vec<Uuid>,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub details: serde_json::Value,
-    /// 1.1: the acting Silicon's Team; absent for Carbon and device-level entries.
+    /// 1.1 (API v1 only); API v2 never sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
 }
 
-// ───────────── Auth, discovery, testing ─────────────
+// ───────────── Versions, reports and the device wire ─────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TestingEnvironment {
@@ -712,72 +765,6 @@ pub struct TestingEnvironment {
 
 fn default_limit() -> i64 {
     crate::TEST_DEVICE_LIMIT
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoginInput {
-    pub slt: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RefreshInput {
-    pub refresh_token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LogoutInput {
-    pub token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AuthSession {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub token_type: String,
-    pub expires_in: i64,
-    pub member: Member,
-    pub teams: Vec<String>,
-    #[serde(default)]
-    pub testing_environment: Option<TestingEnvironment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Me {
-    pub authenticated: bool,
-    pub member: Member,
-    pub teams: Vec<String>,
-    #[serde(default)]
-    pub team: Option<String>,
-    #[serde(default)]
-    pub team_role: Option<String>,
-    #[serde(default)]
-    pub testing_environment: Option<TestingEnvironment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct IamInfo {
-    pub app_id: String,
-    pub iam_base_url: String,
-    /// Where to send a Carbon to sign in: `{iam_login_url}?app_id=…&redirect_uri=…`; IAM appends `slt=…`.
-    #[serde(default)]
-    pub iam_login_url: Option<String>,
-    pub api_base_url: String,
-    pub website_url: String,
-    pub docs_url: String,
-    pub repository_url: String,
-    #[serde(default)]
-    pub testing_environment: Option<TestingEnvironment>,
-}
-
-/// A Silicon in the caller's team, for picking who gets access.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TeamSilicon {
-    pub id: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    /// 1.1: the Team it was listed from (`GET /api/v1/team/silicons?team=any`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -873,12 +860,12 @@ impl SleepState {
 }
 
 open_enum! {
-    /// Whether Extend's Tings reach a member in a Team.
+    /// Whether Extend's Tings reach an account.
     pub enum TingStatus {
         On => "on",
         /// The member turned Extend's Tings off in Ting.
         Off => "off",
-        /// Not registered yet (Extend needs the member's login for that Team).
+        /// Not registered with Ting yet.
         Pending => "pending",
     }
 }
@@ -892,7 +879,7 @@ open_enum! {
         Deferred => "deferred",
         Delivered => "delivered",
         Failed => "failed",
-        /// No Ting of its own: an earlier Ting for the same device and Team covers it.
+        /// No Ting of its own: an earlier Ting for the same device covers it.
         Covered => "covered",
     }
 }
@@ -949,7 +936,7 @@ open_enum! {
 
 open_enum! {
     pub enum WakeAnswerKind {
-        /// "It's awake": ends every open request on the device, in every Team.
+        /// "It's awake": ends every open request on the device, whichever Carbon's.
         Woken => "woken",
         /// Ends the requests on the answering Carbon's own pair.
         Declined => "declined",
@@ -959,7 +946,8 @@ open_enum! {
 open_enum! {
     /// Who a request for a device in use went to.
     pub enum RequestRoute {
-        /// The Silicon using the device (same Carbon and Team as the requester), as in 1.0.
+        /// The Silicon using the device (through the same Carbon's pair as the requester), as in
+        /// 1.0.
         Holder => "holder",
         /// The Carbon who gave the Silicon using it access.
         Carbon => "carbon",
@@ -1031,7 +1019,7 @@ pub struct WakeSettings {
     /// Mute one Silicon's wake requests instead of the whole pair's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silicon_id: Option<String>,
-    /// With `silicon_id`: only its grant in this Team (every Team's when absent).
+    /// 1.1 (API v1 only); API v2 refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
 }
@@ -1054,11 +1042,13 @@ impl WakeSettings {
     }
 }
 
-/// A Silicon whose wake requests the owner turned off, in one Team.
+/// A Silicon whose wake requests the owner turned off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MutedSilicon {
     pub silicon_id: String,
+    /// 1.1 (API v1 only); API v2 leaves it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub team: String,
 }
 
@@ -1112,18 +1102,19 @@ impl HostDevice {
 }
 
 /// A Silicon's request that its Carbon wake a device, envelope type `wake_request`. The owner of
-/// the pair sees every Team's requests on it; a Silicon sees its own.
+/// the pair sees every request on it; a Silicon sees its own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct WakeRequest {
     pub wake_id: Uuid,
     /// The pair the Silicon asked through.
     pub device_id: DeviceId,
-    /// The asking Silicon's Team.
+    /// 1.1 (API v1 only); API v2 leaves it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub team: String,
-    /// The asking Silicon.
+    /// The asking Silicon (its current public id).
     pub from: String,
-    /// The Carbon who gave it access (the pair's owner).
+    /// The Carbon who gave it access, the pair's owner (their current public id).
     pub to: String,
     /// The latest ask's reason, exactly as written.
     pub reason: String,
@@ -1166,6 +1157,12 @@ pub struct WakeRequest {
     /// For a carried device: the computer it pairs through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostDevice>,
+    /// 2.0: the asking Silicon's permanent uuid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_uuid: Option<String>,
+    /// 2.0: the pair owner's permanent uuid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_uuid: Option<String>,
 }
 
 impl WakeRequest {
@@ -1204,16 +1201,21 @@ impl WakeRequest {
             answer_ting: None,
             answer_ting_last_error: None,
             host: None,
+            from_uuid: None,
+            to_uuid: None,
         }
     }
 }
 
-/// Whether Extend's Tings reach a member in a Team (`GET`/`PUT /api/v1/ting-registration`),
-/// envelope type `ting_registration`. With `?team=any` the answer is a `list` page of these.
+/// Whether Extend's Tings reach an account (`GET`/`PUT /api/v2/ting-registration`), envelope
+/// type `ting_registration`. (API v1's `?team=any` answered a `list` page of these.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TingRegistration {
+    /// 1.1 (API v1 only). API v2 has one registration per account and leaves it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub team: String,
+    /// The member's current public id.
     pub member: String,
     pub status: TingStatus,
     #[serde(
@@ -1230,10 +1232,17 @@ pub struct TingRegistration {
     pub refused_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    /// App types Ting reported missing on sends to this Team, by full name. A Ting manager in the
-    /// app's owning Team registers them once for all delivery Teams ([`crate::ting::register_command`]).
+    /// App types Ting reported missing, by full name.
     #[serde(default)]
     pub missing_types: Vec<String>,
+    /// 2.0: the member's permanent Silicon Accounts uuid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_uuid: Option<String>,
+    /// 2.0: whether this Extend service delivers notifications through Ting at all. `false` while
+    /// Ting is not configured on the server: requests and wake requests are then only on the
+    /// website, in the CLI and on the device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_enabled: Option<bool>,
 }
 
 impl TingRegistration {
@@ -1246,6 +1255,8 @@ impl TingRegistration {
             refused_at: None,
             last_error: None,
             missing_types: vec![],
+            member_uuid: None,
+            delivery_enabled: None,
         }
     }
 }
@@ -1272,50 +1283,6 @@ impl DeviceStopped {
             stopped_at,
             in_use_by_other: true,
         }
-    }
-}
-
-/// Whether a Team's directory could be read, for lists across Teams.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TeamReach {
-    pub team: String,
-    pub ok: bool,
-    /// Why it couldn't, when `ok` is false.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ApiError>,
-}
-
-impl TeamReach {
-    pub fn reached(team: impl Into<String>) -> Self {
-        Self {
-            team: team.into(),
-            ok: true,
-            error: None,
-        }
-    }
-    pub fn failed(team: impl Into<String>, error: ApiError) -> Self {
-        Self {
-            team: team.into(),
-            ok: false,
-            error: Some(error),
-        }
-    }
-}
-
-/// `GET /api/v1/team/silicons?team=any`, envelope type `team_silicons`: the Silicons of every
-/// Team the Carbon's login reaches, each tagged with its Team, and how each Team's read went.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TeamSilicons {
-    pub items: Vec<TeamSilicon>,
-    #[serde(default)]
-    pub teams: Vec<TeamReach>,
-}
-
-impl TeamSilicons {
-    pub fn new(items: Vec<TeamSilicon>, teams: Vec<TeamReach>) -> Self {
-        Self { items, teams }
     }
 }
 
@@ -1422,7 +1389,6 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
-    use crate::error::ErrorCode;
 
     const WAKE: &str = "0192f3a4-0000-7000-8000-000000000001";
 
@@ -1695,27 +1661,6 @@ mod tests {
             &DeviceStopped::new("7c1e09ab".parse().unwrap(), datetime!(2026-09-27 10:10 UTC)),
             json!({"device_id":"7c1e09ab","stopped_at":"2026-09-27T10:10:00Z","in_use_by_other":true}),
         );
-        let err = ApiError::new(
-            ErrorCode::NotATeamMember,
-            "c:alice's Extend login doesn't reach globex.",
-        );
-        let reach = TeamSilicons::new(
-            vec![TeamSilicon {
-                id: "si:chef".into(),
-                display_name: Some("Chef".into()),
-                team: Some("labs".into()),
-            }],
-            vec![TeamReach::reached("labs"), TeamReach::failed("globex", err.clone())],
-        );
-        exact(
-            &reach,
-            json!({"items":[{"id":"si:chef","display_name":"Chef","team":"labs"}],
-                   "teams":[{"team":"labs","ok":true},{"team":"globex","ok":false,"error":serde_json::to_value(&err).unwrap()}]}),
-        );
-        // The 1.0 answer (no `teams`, no `team`) still decodes.
-        let old: TeamSilicons =
-            serde_json::from_value(json!({"items":[{"id":"si:chef","display_name":null}]})).unwrap();
-        assert_eq!((old.items[0].team.as_deref(), old.teams.len()), (None, 0));
     }
 
     #[test]
@@ -1850,10 +1795,6 @@ mod tests {
             serde_json::from_value::<FileInfo>(serde_json::to_value(&f).unwrap()).unwrap(),
             f
         );
-
-        let ts = json!({"id":"si:chef","display_name":"Chef"});
-        let t: TeamSilicon = serde_json::from_value(ts.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&t).unwrap(), ts);
     }
 
     #[test]

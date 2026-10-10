@@ -1,0 +1,37 @@
+{
+  "api_version": 2,
+  "call": "Authed::telemetry",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "telemetry.send",
+  "request": {
+    "body": {
+      "data": {
+        "client_version": "1.0.0",
+        "command": "device ls",
+        "duration_ms": 120,
+        "error_code": null,
+        "event": "command",
+        "source": "cli",
+        "step": "device ls",
+        "success": true
+      },
+      "type": "telemetry"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "POST",
+    "path": "/api/v2/telemetry"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

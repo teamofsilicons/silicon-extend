@@ -74,8 +74,10 @@ pub async fn report(
     let hash = hash_json(&input);
     let st = state.clone();
     let world = auth.world.clone();
-    let member = auth.p.id().to_owned();
-    idempotent(&state, &auth.world, auth.p.id(), "reports", &headers, &hash, || async move {
+    let member = auth.p.uuid().to_owned();
+    // The report email names the reporter by id, with the uuid that stays the same.
+    let shown = format!("{} ({})", auth.p.public_id(), auth.p.uuid());
+    idempotent(&state, &auth.world, auth.p.uuid(), "reports", &headers, &hash, || async move {
         // A replay is not a new report and must not consume the hourly quota.
         st
             .rate_limit(
@@ -86,19 +88,17 @@ pub async fn report(
             )
             .await?;
         let id = Uuid::now_v7();
-        let notification = if world.is_test() {
-            "simulated"
-        } else if st.cfg.postmark_token.is_none() {
+        let notification = if st.cfg.postmark_token.is_none() {
             tracing::warn!(report_id = %id, "no Postmark token; report stored but not emailed");
             "simulated"
         } else {
-            match postmark(&st, &input, id, &member).await {
+            match postmark(&st, &input, id, &shown).await {
                 Ok(()) => "sent",
                 Err(e) => {
                     tracing::warn!(report_id = %id, error = %e, "Postmark failed; retrying in the background");
                     let st2 = st.clone();
                     let input2 = input.clone();
-                    let member2 = member.clone();
+                    let member2 = shown.clone();
                     tokio::spawn(async move {
                         for wait in [30u64, 300, 1800] {
                             tokio::time::sleep(Duration::from_secs(wait)).await;
@@ -168,12 +168,12 @@ pub async fn telemetry(
             return Err(AppError::invalid(format!("telemetry needs {required}")));
         }
     }
-    tracing::info!(target: "telemetry", member = auth.p.id(), world = %auth.world.schema, event = %data, "telemetry");
+    tracing::info!(target: "telemetry", member = auth.p.uuid(), event = %data, "telemetry");
     sqlx::query(sql!(
         "INSERT INTO {} (member_id, event) VALUES ($1, $2)",
         auth.world.t("telemetry")
     ))
-    .bind(auth.p.id())
+    .bind(auth.p.uuid())
     .bind(&data)
     .execute(&state.pool)
     .await?;

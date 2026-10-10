@@ -31,15 +31,14 @@ async fn host_app_can_only_change_a_device_carried_by_its_authenticated_pair() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
-    let (mac, credential) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Mac", &[]).await;
-    let (_, bob_credential) = pair_another(&env, &credential, &bob, Some("acme"), &[]).await;
+    let (mac, credential) = pair(&env, &alice, DeviceOs::Macos, "Mac", &[]).await;
+    let (_, bob_credential) = pair_another(&env, &credential, &bob, &[]).await;
     let host = App::connect(&env, &credential, hello(DeviceOs::Macos, "1.1.0")).await;
     let (s, created) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{mac}/attachments"),
+        &format!("/api/v2/devices/{mac}/attachments"),
         &alice,
-        None,
         Some(json!({"type":"attachment", "data":{"os":"ipados", "name":"iPad"}})),
     )
     .await;
@@ -52,8 +51,8 @@ async fn host_app_can_only_change_a_device_carried_by_its_authenticated_pair() {
     assert_eq!(s, 200, "{body}");
     assert_eq!(body["data"]["device_id"], ipad);
     assert_eq!(body["data"]["in_use_indicator"], "hidden");
-    assert_eq!(indicator(&env, &alice, None, ipad).await.0, "hidden");
-    assert_eq!(indicator(&env, &alice, None, &mac).await.0, "shown");
+    assert_eq!(indicator(&env, &alice, ipad).await.0, "hidden");
+    assert_eq!(indicator(&env, &alice, &mac).await.0, "shown");
     assert_eq!(
         host.wait("attach", |f| f["device_id"] == ipad).await["in_use_indicator"],
         "hidden"
@@ -72,37 +71,15 @@ async fn host_app_can_only_change_a_device_carried_by_its_authenticated_pair() {
     assert_eq!(s, 401);
     let (s, _) = device_patch_path(&env, &credential, &path, banner("dimmed")).await;
     assert_eq!(s, 422);
-    assert_eq!(indicator(&env, &alice, None, ipad).await.0, "hidden");
-    let (_, secret) = open_test_env(&env).await;
-    let test_alice = login_in(&env, &secret, "c:alice").await;
-    let (_, test_credential) = pair_in(&env, &secret, &test_alice, DeviceOs::Macos, "Test Mac")
-        .await
-        .unwrap();
-    let (s, _) = device_patch_path(&env, &test_credential, &path, banner("shown")).await;
-    assert_eq!(s, 404, "test credentials cannot change a production device");
-    let (s, body) = api(&env, "DELETE", &format!("/api/v1/devices/{ipad}"), &alice, None, None).await;
+    assert_eq!(indicator(&env, &alice, ipad).await.0, "hidden");
+    let (s, body) = api(&env, "DELETE", &format!("/api/v2/devices/{ipad}"), &alice, None).await;
     assert_eq!(s, 204, "{body}");
-    let (s, _) = device_patch_path(&env, &credential, &path, banner("shown")).await;
-    assert_eq!(s, 200, "an organization removal retains native device configuration");
-    let actor = env
-        .state
-        .iam
-        .authorize(&alice, Some("acme"), None)
-        .await
-        .unwrap()
-        .member;
-    extend_service::domain::unpair(
-        &env.state,
-        &extend_service::db::World::production(),
-        ipad,
-        extend_protocol::model::EndReason::PairRevoked,
-        &actor,
-    )
-    .await
-    .unwrap();
+    // Removing the carried device unpairs it: nothing can change it any more.
+    let (s, body) = device_patch_path(&env, &credential, &path, banner("shown")).await;
     assert_eq!(
-        device_patch_path(&env, &credential, &path, banner("shown")).await.0,
-        404
+        (s, body["data"]["code"].as_str()),
+        (404, Some("device_not_found")),
+        "{body}"
     );
 }
 
@@ -110,8 +87,8 @@ fn banner(value: &str) -> Value {
     json!({"type": "device", "data": {"in_use_indicator": value}})
 }
 
-async fn indicator(env: &Env, token: &str, team: Option<&str>, device_id: &str) -> (String, i64) {
-    let (s, v) = api(env, "GET", &format!("/api/v1/devices/{device_id}"), token, team, None).await;
+async fn indicator(env: &Env, token: &str, device_id: &str) -> (String, i64) {
+    let (s, v) = api(env, "GET", &format!("/api/v2/devices/{device_id}"), token, None).await;
     assert_eq!(s, 200, "{v}");
     (
         v["data"]["in_use_indicator"].as_str().unwrap_or("absent").to_owned(),
@@ -119,7 +96,7 @@ async fn indicator(env: &Env, token: &str, team: Option<&str>, device_id: &str) 
     )
 }
 
-type ActivityRow = (String, String, Value, Option<String>, Option<String>);
+type ActivityRow = (String, String, Value, Option<String>);
 
 fn banner_rows(log: &[ActivityRow]) -> Vec<(String, String, Value)> {
     log.iter()
@@ -134,14 +111,14 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
     let chef = login(&env, "si:chef").await;
-    let (d, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &["si:chef"]).await;
+    let (d, cred) = pair(&env, &alice, DeviceOs::Android, "Pixel", &["si:chef"]).await;
     let app_a = App::connect(&env, &cred, hello(DeviceOs::Android, "1.1.0")).await;
-    let (d2, cred2) = pair_another(&env, &cred, &bob, Some("acme"), &[]).await;
+    let (d2, cred2) = pair_another(&env, &cred, &bob, &[]).await;
     let app_b = App::connect(&env, &cred2, hello(DeviceOs::Android, "1.1.0")).await;
 
     // Shown by default, everywhere it is read.
-    assert_eq!(indicator(&env, &alice, None, &d).await.0, "shown");
-    assert_eq!(indicator(&env, &chef, Some("acme"), &d).await.0, "shown");
+    assert_eq!(indicator(&env, &alice, &d).await.0, "shown");
+    assert_eq!(indicator(&env, &chef, &d).await.0, "shown");
     let (_, me) = device_api(&env, "GET", "/api/v1/device", &cred).await;
     assert_eq!(me["data"]["in_use_indicator"], "shown");
 
@@ -149,9 +126,8 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
     let (s, e) = api(
         &env,
         "PATCH",
-        &format!("/api/v1/devices/{d}"),
+        &format!("/api/v2/devices/{d}"),
         &chef,
-        Some("acme"),
         Some(banner("hidden")),
     )
     .await;
@@ -160,9 +136,8 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
     let (s, e) = api(
         &env,
         "PATCH",
-        &format!("/api/v1/devices/{d}"),
+        &format!("/api/v2/devices/{d}"),
         &alice,
-        None,
         Some(banner("dimmed")),
     )
     .await;
@@ -171,22 +146,21 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
     // alice hides it: one setting, so bob's pair and the device app read it hidden too.
     app_a.clear();
     app_b.clear();
-    let (_, v2_before) = indicator(&env, &bob, None, &d2).await;
+    let (_, v2_before) = indicator(&env, &bob, &d2).await;
     let (s, v) = api(
         &env,
         "PATCH",
-        &format!("/api/v1/devices/{d}"),
+        &format!("/api/v2/devices/{d}"),
         &alice,
-        None,
         Some(banner("hidden")),
     )
     .await;
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["data"]["in_use_indicator"], "hidden");
-    let (b_value, v2_after) = indicator(&env, &bob, None, &d2).await;
+    let (b_value, v2_after) = indicator(&env, &bob, &d2).await;
     assert_eq!(b_value, "hidden");
     assert!(v2_after > v2_before, "bob's pair's ETag changed with it");
-    assert_eq!(indicator(&env, &chef, Some("acme"), &d).await.0, "hidden");
+    assert_eq!(indicator(&env, &chef, &d).await.0, "hidden");
     let (_, me2) = device_api(&env, "GET", "/api/v1/device", &cred2).await;
     assert_eq!(me2["data"]["in_use_indicator"], "hidden");
     // Every live connection of the device re-reads it.
@@ -197,22 +171,21 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
         banner_rows(&activity(&env, &d).await),
         vec![(
             "banner_hidden".into(),
-            "c:alice".into(),
+            uuid("c:alice"),
             json!({"in_use_indicator": "hidden"})
         )]
     );
     let bob_log = activity(&env, &d2).await;
     assert!(banner_rows(&bob_log).is_empty(), "{bob_log:?}");
-    assert!(!format!("{bob_log:?}").contains("c:alice"));
+    assert!(!format!("{bob_log:?}").contains("c:alice") && !format!("{bob_log:?}").contains(&uuid("c:alice")));
 
     // The same value again changes and logs nothing.
     app_a.clear();
     let (s, _) = api(
         &env,
         "PATCH",
-        &format!("/api/v1/devices/{d}"),
+        &format!("/api/v2/devices/{d}"),
         &alice,
-        None,
         Some(banner("hidden")),
     )
     .await;
@@ -222,9 +195,8 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
     let (s, v) = api(
         &env,
         "PATCH",
-        &format!("/api/v1/devices/{d}"),
+        &format!("/api/v2/devices/{d}"),
         &alice,
-        None,
         Some(json!({"type": "device", "data": {"name": "Alice's Pixel"}})),
     )
     .await;
@@ -242,7 +214,7 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["type"], "device_self");
     assert_eq!(v["data"]["in_use_indicator"], "shown");
-    assert_eq!(indicator(&env, &alice, None, &d).await.0, "shown");
+    assert_eq!(indicator(&env, &alice, &d).await.0, "shown");
     app_a.wait("refresh", |_| true).await;
     app_b.wait("refresh", |_| true).await;
     for pair in [&d, &d2] {
@@ -282,14 +254,13 @@ async fn one_setting_per_device_changed_by_its_carbons_or_its_app() {
 async fn a_carried_devices_banner_reaches_its_computer() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
-    let (mac, cred) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Studio Mac", &[]).await;
+    let (mac, cred) = pair(&env, &alice, DeviceOs::Macos, "Studio Mac", &[]).await;
     let host = App::connect(&env, &cred, hello(DeviceOs::Macos, "1.1.0")).await;
     let (s, d) = api(
         &env,
         "POST",
-        &format!("/api/v1/devices/{mac}/attachments"),
+        &format!("/api/v2/devices/{mac}/attachments"),
         &alice,
-        None,
         Some(json!({"type": "attachment", "data": {"os": "ios", "name": "Alice's iPhone"}})),
     )
     .await;
@@ -303,9 +274,8 @@ async fn a_carried_devices_banner_reaches_its_computer() {
     let (s, v) = api(
         &env,
         "PATCH",
-        &format!("/api/v1/devices/{phone}"),
+        &format!("/api/v2/devices/{phone}"),
         &alice,
-        None,
         Some(banner("hidden")),
     )
     .await;
@@ -320,7 +290,7 @@ async fn a_carried_devices_banner_reaches_its_computer() {
         (Some("hidden"), Some(false))
     );
     // The Mac's own banner is its own setting.
-    assert_eq!(indicator(&env, &alice, None, &mac).await.0, "shown");
+    assert_eq!(indicator(&env, &alice, &mac).await.0, "shown");
     assert!(host.of("refresh").is_empty(), "the Mac's own setting didn't change");
 
     // A computer that reconnects is told again.
@@ -331,51 +301,15 @@ async fn a_carried_devices_banner_reaches_its_computer() {
 }
 
 #[tokio::test]
-async fn test_environments_behave_the_same() {
-    let env = start().await;
-    let (_envid, secret) = open_test_env(&env).await;
-    let alice = login_in(&env, &secret, "c:alice").await;
-    let (d, cred) = pair_in(&env, &secret, &alice, DeviceOs::AndroidTv, "Den TV")
-        .await
-        .unwrap();
-    let app = App::connect(&env, &cred, hello(DeviceOs::AndroidTv, "1.1.0")).await;
-    let (s, v) = api_in(
-        &env,
-        &secret,
-        "PATCH",
-        &format!("/api/v1/devices/{d}"),
-        Some(&alice),
-        None,
-        Some(banner("hidden")),
-    )
-    .await;
-    assert_eq!(
-        (s, v["data"]["in_use_indicator"].as_str()),
-        (200, Some("hidden")),
-        "{v}"
-    );
-    app.wait("refresh", |_| true).await;
-    let (_, me) = device_api(&env, "GET", "/api/v1/device", &cred).await;
-    assert_eq!(me["data"]["in_use_indicator"], "hidden");
-    let (s, v) = device_patch(&env, &cred, json!({"in_use_indicator": "shown"})).await;
-    assert_eq!((s, v["data"]["in_use_indicator"].as_str()), (200, Some("shown")), "{v}");
-    // Production never sees it.
-    let prod = login(&env, "c:alice").await;
-    let (s, _) = api(&env, "GET", &format!("/api/v1/devices/{d}"), &prod, None, None).await;
-    assert_eq!(s, 404);
-}
-
-#[tokio::test]
 async fn a_conditional_settings_patch_is_atomic() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
-    let (d, _) = pair(&env, &alice, Some("acme"), DeviceOs::Android, "Pixel", &[]).await;
-    let (_, version) = indicator(&env, &alice, None, &d).await;
+    let (d, _) = pair(&env, &alice, DeviceOs::Android, "Pixel", &[]).await;
+    let (_, version) = indicator(&env, &alice, &d).await;
     let patch = |name: &'static str, indicator: &'static str| {
         reqwest::Client::new()
-            .patch(format!("{}/api/v1/devices/{d}", env.base))
+            .patch(format!("{}/api/v2/devices/{d}", env.base))
             .bearer_auth(&alice)
-            .header("x-org-id", "acme")
             .header("if-match", format!("\"{version}\""))
             .json(&json!({"type":"device","data":{"name":name,"in_use_indicator":indicator}}))
             .send()
@@ -386,7 +320,7 @@ async fn a_conditional_settings_patch_is_atomic() {
     let winner = if a.status().is_success() { "hidden" } else { "shown" };
     let loser = if a.status().is_success() { b } else { a };
     assert!(matches!(loser.status().as_u16(), 409 | 412));
-    let (_, after) = api(&env, "GET", &format!("/api/v1/devices/{d}"), &alice, None, None).await;
+    let (_, after) = api(&env, "GET", &format!("/api/v2/devices/{d}"), &alice, None).await;
     assert_eq!(after["data"]["in_use_indicator"], winner);
     assert_eq!(
         after["data"]["name"],

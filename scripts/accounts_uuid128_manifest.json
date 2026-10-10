@@ -1,0 +1,42 @@
+{
+  "app": "extend",
+  "schema": "extend",
+  "schemas": [
+    "extend"
+  ],
+  "columns": [
+    "extend.accounts.uuid",
+    "extend.accounts.custodian_uuid",
+    "extend.accounts_events.account_uuid",
+    "extend.activity.actor_id",
+    "extend.device_access.silicon_id",
+    "extend.device_access.granted_by",
+    "extend.devices.owner_id",
+    "extend.files.created_by",
+    "extend.files.shared_with",
+    "extend.idempotency.principal",
+    "extend.identity_links.accounts_uuid",
+    "extend.proof_grants.account_uuid",
+    "extend.reports.member_id",
+    "extend.requests.from_id",
+    "extend.requests.to_id",
+    "extend.requests.routed_to_id",
+    "extend.sessions.silicon_id",
+    "extend.ting_enrolments.account_uuid",
+    "extend.wake_requests.from_id",
+    "extend.wake_requests.to_id"
+  ],
+  "json_columns": [
+    "extend.idempotency.response",
+    "extend.sessions.takeover"
+  ],
+  "preserved": [
+    "requests.ting_body and wake_requests.ting_body/answer_ting_body: immutable delivery snapshots, retain delivery identity and original body",
+    "device_access_archive and all *_iam_id: archived identities",
+    "activity args/files/details and device setup/capabilities: device/user payloads, not account authority",
+    "all native device/session IDs, credentials/digests, Briefcase file IDs/URLs and provider artifacts"
+  ],
+  "lock_tables": [
+    "extend.accounts_uuid128_retired_bodies"
+  ]
+}

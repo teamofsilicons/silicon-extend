@@ -23,7 +23,6 @@ use futures::{SinkExt as _, StreamExt as _};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use super::devices::env_view;
 use super::enroll::version_at_least;
 use super::{no_content, ok};
 use crate::db::World;
@@ -38,32 +37,9 @@ async fn this_device(state: &AppState, auth: &DeviceAuth) -> AppResult<DeviceRow
         .ok_or_else(|| AppError::new(ErrorCode::Unauthorized, "This device is no longer paired."))
 }
 
-fn carbon(id: &str) -> Member {
-    Member {
-        kind: MemberKind::Carbon,
-        id: id.to_owned(),
-        display_name: None,
-    }
-}
-
+/// The Carbon who owns a pair, as the actor of what the device itself does on that pair.
 fn owner(d: &DeviceRow) -> Member {
-    carbon(&d.owner_id)
-}
-
-async fn test_selection(state: &AppState, world: &World) -> Option<crate::iam::TestingSelection> {
-    let id = world.environment_id?;
-    let name: Option<String> =
-        sqlx::query_scalar("SELECT name FROM extend_global.test_environments WHERE environment_id = $1")
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
-    Some(crate::iam::TestingSelection {
-        environment_id: id,
-        name: name.unwrap_or_else(|| id.to_string()),
-        secret: String::new(),
-    })
+    crate::accounts::actor(MemberKind::Carbon, &d.owner_id)
 }
 
 /// The world's key for `hardware_key` (DeviceSelf.hardware_salt): every computer in the world
@@ -96,19 +72,24 @@ async fn self_view(state: &Shared, world: &World, d: &DeviceRow) -> AppResult<Re
         .filter(|s| s.state == "paused")
         .and_then(|s| s.takeover.clone())
         .and_then(|t| serde_json::from_value(t).ok());
-    let sel = test_selection(state, world).await;
+    // The device wire is exactly 1.x: the owner by public id (no uuid), the stored Team string
+    // ('' for pairs made since 4.0), no environment.
     Ok(ok(
         "device_self",
         DeviceSelf {
             device_id: view.device_id,
             name: d.name.clone(),
-            owner: owner(d),
+            owner: Member::new(MemberKind::Carbon, view.owner.id.clone()),
             team: d.team.clone(),
             os: d.os(),
-            in_use: view.in_use.map(|u| InUse { team: None, ..u }),
+            in_use: view.in_use.map(|u| InUse {
+                team: None,
+                silicon_uuid: None,
+                ..u
+            }),
             takeover,
             setup: d.setup(),
-            environment: env_view(state, sel.as_ref(), world).await,
+            environment: None,
             instance_id: Some(d.instance_id),
             hardware_salt: if d.is_computer() {
                 hardware_salt(state, world).await
@@ -355,28 +336,11 @@ pub async fn upload(
 
 pub async fn socket(State(state): State<Shared>, auth: DeviceAuth, ws: WebSocketUpgrade) -> AppResult<Response> {
     this_device(&state, &auth).await?;
-    // The fence guards the handshake only; a live socket must not hold a clean or disable back.
-    let DeviceAuth {
-        world,
-        device_id,
-        fence,
-    } = auth;
-    drop(fence);
+    let DeviceAuth { world, device_id } = auth;
     Ok(ws
         .max_message_size(16 << 20)
         .on_upgrade(move |socket| run(state, world, device_id, socket))
         .into_response())
-}
-
-/// Why the service dropped a device's socket, when it's because its test environment closed
-/// (the pair stays): the close reason the device gets with `close::ENVIRONMENT_UNAVAILABLE`.
-async fn closed_environment(state: &AppState, world: &World) -> Option<&'static str> {
-    let env = world.environment_id?;
-    match state.environment(env).await.ok()??.state.as_str() {
-        "disabled" => Some("test environment disabled; still paired, reconnect later"),
-        "preparing" => Some("test environment not ready; still paired, reconnect later"),
-        _ => None,
-    }
 }
 
 fn text(frame: &ServiceFrame) -> Message {
@@ -384,9 +348,7 @@ fn text(frame: &ServiceFrame) -> Message {
 }
 
 async fn session_started(state: &AppState, world: &World, h: &DeviceRow, target: bool) -> Option<ServiceFrame> {
-    let (Some(sid), Some(si), Some(since), Some(team)) =
-        (&h.in_use_session, &h.in_use_silicon, h.in_use_since, &h.in_use_team)
-    else {
+    let (Some(sid), Some(si), Some(since)) = (&h.in_use_session, &h.in_use_silicon, h.in_use_since) else {
         return None;
     };
     if !h.held_here() {
@@ -395,9 +357,9 @@ async fn session_started(state: &AppState, world: &World, h: &DeviceRow, target:
     Some(ServiceFrame::SessionStarted {
         target: if target { h.device_id.parse().ok() } else { None },
         session_id: sid.parse().ok()?,
-        silicon_id: si.clone(),
+        silicon_id: state.accounts.directory.public_id(si).await,
         since,
-        side: domain::side_of(state, world, h, team).await.ok(),
+        side: domain::side_of(state, world, h).await.ok(),
     })
 }
 
@@ -405,11 +367,7 @@ async fn session_started(state: &AppState, world: &World, h: &DeviceRow, target:
 /// through it, the devices it carries with theirs, the open wake requests on them, and a new
 /// credential when a rotation is owed. It reconciles only this pair's own devices.
 async fn greet(state: &AppState, world: &World, device_id: &str) -> Vec<ServiceFrame> {
-    let mut frames = Vec::new();
-    let sel = test_selection(state, world).await;
-    frames.push(ServiceFrame::Environment {
-        environment: env_view(state, sel.as_ref(), world).await,
-    });
+    let mut frames = vec![ServiceFrame::Environment { environment: None }];
     if let Ok(Some(d)) = domain::load_device(state, world, device_id).await
         && let Some(f) = session_started(state, world, &d, false).await
     {
@@ -486,11 +444,6 @@ async fn run(state: Shared, world: World, device_id: String, socket: WebSocket) 
         tokio::select! {
             out = rx.recv() => {
                 let Some(frame) = out else {
-                    // The service dropped this socket; when that's because the test environment
-                    // closed, say so with a code that keeps the pair.
-                    if let Some(reason) = closed_environment(&state, &world).await {
-                        let _ = sink.send(close_with(close::ENVIRONMENT_UNAVAILABLE, reason)).await;
-                    }
                     break;
                 };
                 match frame {
@@ -715,7 +668,7 @@ async fn handle(
                 && let Some(sid) = &d.in_use_session
             {
                 let actor = match d.in_use_carbon.as_deref() {
-                    Some(c) => carbon(c),
+                    Some(c) => crate::accounts::actor(MemberKind::Carbon, c),
                     None => owner(&d),
                 };
                 let _ = super::sessions::release(state, world, sid, &actor).await;
@@ -818,9 +771,6 @@ pub async fn apply_awake(
         Ok(true) if awake => {
             let (state, world) = (state.clone(), world.clone());
             tokio::spawn(async move {
-                let Some(_fence) = state.world_open(&world).await else {
-                    return;
-                };
                 if input_seen == Some(false) {
                     // Awake without an unlock or real input counts for nothing; the owners of the
                     // pairs with open requests can see it happened.
@@ -1087,7 +1037,7 @@ async fn link(state: &AppState, world: &World, c: &DeviceRow, other: &str, targe
     // Its open wake requests follow it (unless the same Silicon already asked on the device).
     sqlx::query(sql!(
         "UPDATE {w} x SET instance_id = $2 WHERE x.device_id = $1 AND x.state = 'open'
-           AND NOT EXISTS (SELECT 1 FROM {w} y WHERE y.instance_id = $2 AND y.state = 'open' AND y.team = x.team AND y.from_id = x.from_id)",
+           AND NOT EXISTS (SELECT 1 FROM {w} y WHERE y.instance_id = $2 AND y.state = 'open' AND y.from_id = x.from_id)",
         w = world.t("wake_requests")
     ))
     .bind(&c.device_id)

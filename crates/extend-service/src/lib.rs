@@ -10,6 +10,7 @@ macro_rules! sql {
     ($($t:tt)*) => { sqlx::AssertSqlSafe(format!($($t)*)) };
 }
 
+pub mod accounts;
 pub mod config;
 pub mod db;
 pub mod delivery;
@@ -17,11 +18,9 @@ pub mod domain;
 pub mod error;
 pub mod files;
 pub mod hub;
-pub mod iam;
-pub mod membership;
-pub mod obo;
-pub mod organizations;
-pub mod revocation;
+pub mod identity;
+pub mod lifecycle;
+pub mod proofs;
 pub mod routes;
 pub mod scheduler;
 pub mod state;
@@ -32,107 +31,91 @@ pub mod wake;
 
 use std::sync::Arc;
 
-use config::{Config, FilesMode, IamMode, TingMode};
+use config::{AccountsMode, Config, FilesMode, TingMode};
 use state::{AppState, Shared};
-use tokio::sync::RwLock;
 
 /// Builds the shared state from configuration: connects the database, runs migrations, and wires
-/// IAM, Briefcase and Ting (or their local stand-ins).
+/// Silicon Accounts, Briefcase and Ting (or their local stand-ins).
 pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
     // Space Station's HTTP stack needs a process-wide TLS provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    for v in &cfg.obsolete {
+        tracing::warn!(variable = %v, "this variable belonged to Silicon IAM or Honeycomb and is no longer read; remove it");
+    }
     let pool = db::connect(&cfg.database_url).await?;
     db::migrate_global(&pool).await?;
-    // Every test world that still exists reaches the current schema before anything touches it:
-    // the scheduler walks them, and device sockets reach worlds nobody has selected yet.
-    let test_worlds = db::ensure_test_worlds(&pool).await?;
     std::fs::create_dir_all(cfg.data_dir.join("uploads"))?;
-    let (iam, local_iam): (iam::DynIam, Option<Arc<iam::LocalIam>>) = match &cfg.iam {
-        IamMode::Sdk {
-            base_url,
-            app_id,
-            app_secret,
-        } => (
-            Arc::new(
-                iam::SdkIam::connect(
-                    base_url,
-                    app_id,
-                    app_secret,
-                    cfg.webhook_secret.clone(),
-                    cfg.webhook_previous_secret.clone(),
-                )
-                .await?
-                .with_delegations(
-                    pool.clone(),
-                    cfg.delegation_key
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("EXTEND_DELEGATION_ENCRYPTION_KEY is required with SDK IAM"))?,
-                ),
-            ),
+    let (api, local): (Arc<dyn accounts::api::AccountsApi>, _) = match &cfg.accounts {
+        AccountsMode::Sdk { app_secret } => (
+            Arc::new(accounts::api::SdkApi::new(
+                &cfg.accounts_api_url,
+                &cfg.app_id,
+                app_secret,
+            )?),
             None,
         ),
-        IamMode::Local => {
-            let local = Arc::new(iam::LocalIam::new(cfg.local_members.clone(), pool.clone()));
-            if cfg.tuning.local_iam_strict_readers {
-                local.set_reader_mode(iam::ReaderMode::Strict);
-            }
-            (local.clone(), Some(local))
+        AccountsMode::Local => {
+            let local = Arc::new(accounts::local::LocalAccounts::new(&cfg.accounts_url, &cfg.app_id));
+            (local.clone() as Arc<dyn accounts::api::AccountsApi>, Some(local))
         }
     };
+    let accounts = accounts::Accounts::new(&cfg.app_id, &cfg.accounts_url, api.clone(), local, pool.clone());
+    accounts.prefetch().await;
+    let proofs = Arc::new(proofs::ProofStore::new(pool.clone(), cfg.delegation_key.clone(), api));
     let files: files::DynFiles = match &cfg.files {
         FilesMode::Briefcase { api_url, web_url } => Arc::new(files::BriefcaseFiles::new(
             api_url.clone(),
             web_url.clone(),
-            iam.clone(),
+            cfg.app_id.clone(),
+            proofs.clone(),
         )),
         FilesMode::Local => Arc::new(files::LocalFiles::new(&cfg.data_dir.join("files"), &cfg.public_url)?),
     };
     let (notifier, local_ting): (ting::DynNotifier, _) = match &cfg.ting {
-        TingMode::Ting { base_url } => (Arc::new(ting::TingNotifier::new(base_url.clone(), iam.clone())), None),
+        TingMode::Off => {
+            tracing::warn!(
+                "notifications through Ting are off (EXTEND_TING_URL is unset): requests and wake requests are shown on the \
+                 website, in the CLI and on the device only"
+            );
+            (
+                Arc::new(ting::OffNotifier {
+                    app_id: cfg.app_id.clone(),
+                }),
+                None,
+            )
+        }
+        TingMode::Ting { base_url } => (
+            Arc::new(ting::TingNotifier::new(
+                base_url.clone(),
+                cfg.app_id.clone(),
+                proofs.clone(),
+            )),
+            None,
+        ),
         TingMode::Local => {
             let t = Arc::new(ting::LocalNotifier::default());
             (t.clone(), Some(t))
         }
     };
-    let state = Arc::new(AppState {
+    tracing::info!(
+        accounts = %cfg.accounts_url,
+        app_id = %cfg.app_id,
+        mode = if matches!(cfg.accounts, AccountsMode::Local) { "local stand-in" } else { "silicon accounts" },
+        "signing in with Silicon Accounts"
+    );
+    Ok(Arc::new(AppState {
         cfg,
         pool,
-        iam,
-        local_iam,
+        accounts,
+        proofs,
         files,
         notifier,
         local_ting,
         hub: hub::Hub::default(),
-        auth_cache: iam::AuthCache::default(),
         http: reqwest::Client::new(),
-        ready_worlds: RwLock::new(test_worlds.iter().cloned().collect()),
-        selections: Default::default(),
-        selection_revisions: Default::default(),
-        fences: Default::default(),
         session_principals: Default::default(),
         limits: Default::default(),
-        owner_cache: Default::default(),
-        waiting_logins: Default::default(),
-        ting_checked: Default::default(),
-    });
-    // Tings that wait for a member's login go at that member's next call; which members those
-    // are is rebuilt from the database (the logins Extend held died with the last process).
-    organizations::reconcile(&state, &db::World::production())
-        .await
-        .map_err(|e| anyhow::anyhow!("Reconcile organization access: {}", e.0.message))?;
-    scheduler::rebuild_waiting(&state, &db::World::production()).await;
-    for schema in &test_worlds {
-        if let Some(id) = schema
-            .strip_prefix("extend_test_")
-            .and_then(|s| uuid::Uuid::parse_str(s).ok())
-        {
-            organizations::reconcile(&state, &db::World::test(id))
-                .await
-                .map_err(|e| anyhow::anyhow!("Reconcile organization access: {}", e.0.message))?;
-            scheduler::rebuild_waiting(&state, &db::World::test(id)).await;
-        }
-    }
-    Ok(state)
+    }))
 }
 
 /// Serves until the process is told to stop.

@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEV=${1:?Pass the paired Android test device id}
 export EXTEND_API_URL=${2:-http://127.0.0.1:8480} EXTEND_TELEMETRY=off
+# The local service's Silicon Accounts stand-in (e2e/dev.env): accounts sign in with a short-lived
+# token from it, exactly as with Silicon Accounts.
+export ACCOUNTS_URL="$EXTEND_API_URL/dev/accounts"
+slt() { curl -sS --fail-with-body -XPOST "$ACCOUNTS_URL/slt" -H 'content-type: application/json' \
+  -d "{\"type\":\"slt\",\"data\":{\"id\":\"$1\"${2:+,\"custodian\":\"$2\"}}}" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["slt"])'; }
 WORK=$(mktemp -d)
 export SILICON_HOME="$WORK/chef"
 mkdir -p "$SILICON_HOME" "$WORK/alice"
@@ -15,8 +21,8 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
-"$EXTEND" login si:chef >/dev/null
-SILICON_HOME="$WORK/alice" "$EXTEND" login c:alice >/dev/null
+slt si:chef c:alice | "$EXTEND" login --slt-stdin >/dev/null
+slt c:alice | SILICON_HOME="$WORK/alice" "$EXTEND" login --slt-stdin >/dev/null
 SID=$("$EXTEND" session new "$DEV" --connect)
 "$EXTEND" adb shell id -u | grep -qx 2000
 printf 'PASS local Android shell through Extend\n'
