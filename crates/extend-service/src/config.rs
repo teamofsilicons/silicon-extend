@@ -315,7 +315,7 @@ impl Config {
         }
         let files = match var_or("EXTEND_FILES_MODE", if production { "briefcase" } else { "local" }).as_str() {
             "briefcase" => FilesMode::Briefcase {
-                api_url: var_or("EXTEND_BRIEFCASE_URL", "https://backend.briefcase.teamofsilicons.com"),
+                api_url: var_or("EXTEND_BRIEFCASE_URL", "https://api.briefcase.teamofsilicons.com"),
                 web_url: var_or("EXTEND_BRIEFCASE_WEB_URL", "https://briefcase.teamofsilicons.com"),
             },
             "local" if production => bail!("EXTEND_FILES_MODE=local is refused in production"),
@@ -495,6 +495,11 @@ mod tests {
         assert_eq!(ok.app_id, "extend");
         assert_eq!(ok.accounts_url, "https://accounts.teamofsilicons.com");
         assert_eq!(ok.accounts_api_url, ok.accounts_url);
+        assert!(matches!(
+            ok.files,
+            FilesMode::Briefcase { ref api_url, .. }
+                if api_url == "https://api.briefcase.teamofsilicons.com"
+        ));
         // Ting is off unless its URL is set.
         assert_eq!(ok.ting, TingMode::Off);
         let on = production(&[WEBHOOK, ("EXTEND_TING_URL", "https://backend.ting.teamofsilicons.com/")]).unwrap();
