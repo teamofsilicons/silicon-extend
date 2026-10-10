@@ -33,7 +33,8 @@ service.
   (`Silicon-Extend-API-Version: 1` on `/api/v1/…`, 2 on `/api/v2/…`). `SUPPORTED_API_VERSIONS` is
   `[2]`; `DEVICE_API_VERSION` is 1.
 - `needs_refresh` is true for `401 token_expired` only.
-- Service URLs: https, or http for localhost, `127.0.0.1` and `[::1]` only (no longer `10.0.2.2`).
+- Service URLs: https, or http only for this machine (`localhost`, `*.localhost`, `127.0.0.0/8`,
+  `[::1]`); `10.0.2.2` is no longer accepted.
 
 ### Removed
 
