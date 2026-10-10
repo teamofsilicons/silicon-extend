@@ -56,14 +56,42 @@ pub async fn receive(state: &AppState, event: &WebhookEvent) -> AppResult<()> {
         tx.commit().await?;
         return Ok(());
     }
-    apply(state, &world, event).await?;
+    let mut identities: Vec<&str> = account.as_deref().into_iter().collect();
+    match &event.payload {
+        WebhookPayload::AccountUpdated(d) => {
+            if let Some(a) = &d.account {
+                identities.push(a.uuid.as_str());
+                if let Some(custodian) = &a.custodian {
+                    identities.push(custodian.uuid.as_str());
+                }
+            }
+        }
+        WebhookPayload::CustodianChanged(d) => {
+            if let Some(custodian) = &d.from {
+                identities.push(custodian.uuid.as_str());
+            }
+            if let Some(custodian) = &d.to {
+                identities.push(custodian.uuid.as_str());
+            }
+        }
+        _ => {}
+    }
+    let retired: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM extend.accounts_uuid128_map WHERE old_uuid=ANY($1))")
+            .bind(identities)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !retired {
+        apply(state, &world, event).await?;
+    }
+
     sqlx::query(sql!(
         "INSERT INTO {} (event_id, event_type, account_uuid, occurred_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         world.t("accounts_events")
     ))
     .bind(&event.event_id)
     .bind(&event.event_type)
-    .bind(&account)
+    .bind(if retired { None } else { account.as_deref() })
     .bind(event.occurred_at)
     .execute(&mut *tx)
     .await?;

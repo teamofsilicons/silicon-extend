@@ -349,3 +349,35 @@ async fn removing_extends_access_ends_what_a_carbon_runs_and_keeps_their_devices
     let (_, access) = api(&env, "GET", &format!("/api/v2/devices/{d}/access"), &again, None).await;
     assert_eq!(access["data"]["items"][0]["silicon_id"], "si:sous", "{access}");
 }
+
+#[tokio::test]
+async fn retired_webhook_subjects_and_nested_custodians_cannot_return() {
+    let env = start().await;
+    let chef = login(&env, "si:chef").await;
+    assert_eq!(api(&env, "GET", "/api/v2/me", &chef, None).await.0, 200);
+    sqlx::query("INSERT INTO extend.accounts_uuid128_map(old_uuid,new_uuid,kind,mapping_sha256) VALUES('OldRetired','c750a68a-1bc2-4b3f-888e-0349c9d7289a','carbon','test')").execute(&env.pool).await.unwrap();
+    for (kind, data) in [
+        ("membership.signed_out", json!({"uuid":"OldRetired"})),
+        (
+            "silicon.custodian_changed",
+            json!({"uuid":uuid("si:chef"),"to":{"uuid":"OldRetired","id":"c:retired"}}),
+        ),
+        (
+            "account.updated",
+            json!({"uuid":uuid("si:chef"),"account":{"uuid":uuid("si:chef"),"kind":"silicon","id":"si:chef","version":999,"custodian":{"uuid":"OldRetired","id":"c:retired"}}}),
+        ),
+    ] {
+        assert_eq!(deliver(&env, kind, data).await, 204);
+    }
+    let current: Option<String> = sqlx::query_scalar("SELECT custodian_uuid FROM extend.accounts WHERE uuid=$1")
+        .bind(uuid("si:chef"))
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(current, Some(uuid("c:alice")));
+    let recreated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM extend.accounts WHERE uuid='OldRetired')")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert!(!recreated);
+}
