@@ -10,46 +10,51 @@ reads a screen as a list of things to act on (buttons, fields, lists) and acts o
 
 **Start here:** product intent is [`understanding/UNDERSTANDING.md`](understanding/UNDERSTANDING.md)
 (Carbon-edited). The wire contracts are [`api.yaml`](understanding/api.yaml) and
-[`cli.yaml`](understanding/cli.yaml); formats and flows are in
-[`TECHNICAL.md`](understanding/TECHNICAL.md).
+[`cli.yaml`](understanding/cli.yaml), and formats and flows are in
+[`TECHNICAL.md`](understanding/TECHNICAL.md). Those files still describe Extend 3; Extend 4's
+versions wait for a Carbon's approval in [`docs/migration/contracts/`](docs/migration/contracts/),
+with the proposed UNDERSTANDING changes in
+[`docs/migration/understanding-proposal.md`](docs/migration/understanding-proposal.md).
 
-**Status:** 1.0.0 is live; 1.1.0 is being built (devices that belong to the Carbons who paired them,
-several Carbons per device, waking a device, setup retry). The service runs at
+**Extend 4** signs everyone in with [Silicon Accounts](https://accounts.teamofsilicons.com) and
+ships its CLI through [Silicon Apps](https://apps.teamofsilicons.com) (developer docs:
+[developers.teamofsilicons.com](https://developers.teamofsilicons.com)). Every account is personal:
+a device belongs to the Carbon who paired it, that Carbon gives access to Silicons by their id, and
+a Silicon's custodian sees and can stop what that Silicon does. The service runs at
 `backend.extend.teamofsilicons.com`, the website at
 [extend.teamofsilicons.com](https://extend.teamofsilicons.com), and the device apps are on the
 [releases page](https://github.com/teamofsilicons/silicon-extend/releases). Windows is a preview.
-What is still open, and what needs a Carbon's decision, is in
-[docs/completion-work.md](docs/completion-work.md); what was run is in
-[docs/verification.md](docs/verification.md). This product was called Silicon Bridge until
-2026-09-26.
+The switch from Extend 3 is in [docs/migration/](docs/migration/) (decisions, the cutover runbook,
+progress); records from before it are in [docs/history/](docs/history/). This product was called
+Silicon Bridge until 2026-09-26.
 
 ## Use it
 
 ```sh
-honeycomb install 'extend'
-extend login <slt>                      # a short-lived token from Silicon IAM; Extend never asks for a password
-extend device ls                        # Silicon: devices you can use. Carbon: devices you paired
-extend device show 7c1e09ab             # what you can do on it right now
-extend session new 7c1e09ab --connect   # one Silicon at a time; prints the session id (a3f)
-extend device wake 0d44e1f2 --reason "…"  # 1.1: ask its Carbon to wake a device that isn't awake
-extend snapshot -i                      # read the screen as elements with @refs
+silicon-apps install extend                 # Silicon Apps installs the CLI and keeps it up to date
+silicon-accounts login --app extend -q | extend login --slt-stdin   # a Silicon signs in; no password, no page
+extend login                                # a Carbon signs in by approving the code it shows
+extend device ls                            # Silicon: devices you can use. Carbon: devices you paired
+extend device show 7c1e09ab                 # what you can do on it right now
+extend session new 7c1e09ab --connect       # one Silicon at a time; prints the session id (a3f)
+extend device wake 0d44e1f2 --reason "…"    # ask its Carbon to wake a device that isn't awake
+extend snapshot -i                          # read the screen as elements with @refs
 extend click @e2
-extend screenshot --ttl 7d              # stored in Briefcase, link printed
+extend screenshot --ttl 7d                  # stored in Briefcase, link printed
 extend session end
 ```
 
-A Carbon pairs devices on [extend.teamofsilicons.com](https://extend.teamofsilicons.com) or with
-`extend device pair <code> --name <name> --access si:chef`. `extend --help` is a tree of
-documentation; every node explains itself. More: [docs/cli.md](docs/cli.md). Briefcase storage and Ting notifications use
-[separate feature permissions](docs/FEATURE_PERMISSIONS.md); deployment requirements
-are in the [OBO cutover guide](docs/OBO_CUTOVER.md).
+A Carbon pairs devices on [extend.teamofsilicons.com](https://extend.teamofsilicons.com) (signed in
+with Silicon Accounts) or with `extend device pair <code> --name <name> --access si:chef`, and sees
+the Silicons they look after with `extend silicon ls`. `extend --help` is a tree of documentation;
+every node explains itself. More: [docs/cli.md](docs/cli.md).
 
 ## What's here
 
 | Path | What |
 |---|---|
 | `crates/extend-protocol` | Wire types shared by everything: identifiers, envelopes, errors, WebSocket frames, capabilities |
-| `crates/extend-service` | The Extend service (Rust, axum, PostgreSQL): pairing, access, sessions, the relay to devices, test environments |
+| `crates/extend-service` | The Extend service (Rust, axum, PostgreSQL): pairing, access, sessions, the relay to devices, Silicon Accounts sign-in and webhooks |
 | `crates/silicon-extend-client` | The official Rust client ([docs/client.md](docs/client.md)) |
 | `crates/extend-cli` | The `extend` command, built only on the client |
 | `crates/extend-agent` | The Extend app for Mac, Windows and Linux (menu bar / tray + device agent) |
@@ -57,23 +62,24 @@ are in the [OBO cutover guide](docs/OBO_CUTOVER.md).
 | `crates/extend-hosted` | Drivers for devices a computer carries: iPhone, iPad, Apple TV, Samsung, LG |
 | `apps/android` | The Extend app for Android phones, tablets, Android TV, Google TV and Fire OS |
 | `apps/desktop` | Packaging for the desktop app |
-| `web` | The configuration website (SolidJS) |
+| `web` | The configuration website |
 | `vendor/extend-engine` | The device engine, our fork of an MIT-licensed project ([what changed](vendor/extend-engine/FORK.md)) |
-| `docs` | [Device protocol](docs/device-protocol.md), [CLI](docs/cli.md), [client](docs/client.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [verification record](docs/verification.md), [open gates](docs/completion-work.md), [requests to other services](docs/requests/ting-app-level-types.md) |
+| `docs` | [Device protocol](docs/device-protocol.md), [CLI](docs/cli.md), [client](docs/client.md), [development](docs/development.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [release notes](docs/releases/), [history](docs/history/) |
 | `contracts` | Consumer contract fixtures the service's CI replays ([format](contracts/README.md)) |
-| `deploy/aws` | A single-host production stack for the service (not deployed) |
+| `packaging`, `scripts` | The Silicon Apps manifest template and `scripts/package-apps.sh`, which packs one CLI archive per target |
+| `deploy/aws` | The service's production stack ([runbook](deploy/aws/README.md)) |
 | `e2e` | End-to-end suites and fixtures |
 
 ## Develop
 
-See [docs/development.md](docs/development.md). In short:
+See [docs/development.md](docs/development.md). In short, with PostgreSQL 16 or newer on
+`127.0.0.1:5440` (user and password `extend`; any other server works through
+`EXTEND_TEST_ADMIN_URL` and `EXTEND_DATABASE_URL`):
 
 ```sh
-docker run -d --name silicon-extend-postgres -e POSTGRES_USER=extend -e POSTGRES_PASSWORD=extend -e POSTGRES_DB=extend -p 127.0.0.1:5440:5432 postgres:16.9-bookworm
 cargo test --workspace                        # unit + service end-to-end (creates throwaway databases)
-set -a; . e2e/dev.env; set +a; cargo run -p extend-service &
+set -a; . e2e/dev.env; set +a; cargo run -p extend-service &   # local Silicon Accounts, Briefcase and Ting stand-ins
 cargo build -p silicon-extend-cli -p extend-service --example fake_device && bash e2e/cli-e2e.sh
-cd web && pnpm install && pnpm dev            # website against the local service
 ```
 
 ## Found a bug?

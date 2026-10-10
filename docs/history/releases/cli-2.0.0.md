@@ -18,7 +18,7 @@ extend fill @e3 "hello"
 The refs in this example are placeholders: use refs returned by your current snapshot. Inspect
 the resulting screen before the next action. `extend snapshot --raw` reads the full accessibility
 tree exposed by the device. Rust consumers use `Authed::run` with ordinary `CommandRequest`
-values; [the client guide](../client.md) shows session and command handling.
+values; [the client guide](../../client.md) shows session and command handling.
 
 The ordinary HTTP API remains v1. Existing ordinary command calls continue to work; callers of
 the removed model-selection APIs must move to the snapshot/ref workflow. Prior release notes
@@ -32,6 +32,6 @@ unchanged.
 Update the CLI through `honeycomb install extend`, or install
 `cargo install silicon-extend-cli --version 2.0.0 --locked`. Rust consumers should use
 `silicon-extend-client = "2"`. Remove obsolete provider configuration from agent launch
-environments. Server operators should follow the [deployment guide](../deployment.md) to remove
+environments. Server operators should follow the [deployment guide](../../deployment.md) to remove
 retired runtime settings and refresh the host environment renderer. There is no database
 migration for this release.

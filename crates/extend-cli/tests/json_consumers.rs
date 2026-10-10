@@ -73,7 +73,6 @@ fn scripts_that_run_extend_read_its_json_unwrapped() {
     // The lanes known to parse `extend --json`; if this drops, the scan stopped finding them.
     for known in [
         "e2e/cli-e2e.sh",
-        "e2e/real-iam/realiam.py",
         "e2e/android-recording-service.py",
         "apps/desktop/linux-e2e/record-service-e2e.py",
         "apps/desktop/macos/text-e2e.py",

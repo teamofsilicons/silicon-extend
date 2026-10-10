@@ -3,8 +3,8 @@
 The app is one Rust binary, [`crates/extend-agent`](../../crates/extend-agent/README.md). This
 directory packages it and holds the Linux end-to-end environment. The published 1.0 macOS app
 is Developer ID signed and notarized. The 1.1 candidate has also passed Apple notarization,
-stapling and Gatekeeper assessment; publication and the remaining native checks are tracked in
-[`docs/completion-work.md`](../../docs/completion-work.md).
+stapling and Gatekeeper assessment; publication and the remaining native checks were tracked in
+[`docs/history/completion-work.md`](../../docs/history/completion-work.md).
 
 | Path | What it does |
 |---|---|
@@ -135,7 +135,7 @@ deleted. Assembling a new app deletes the previous app's three zip variants and 
   zipped); sizes change with every build.
 - Checked on 2026-09-27 (in a scratch copy, with pnpm and cargo stubbed and ad-hoc signing): the
   build through symlinked paths, the signing-aware zip names, the checked Node download and the
-  notarization failure paths with stubbed Apple tools. See `docs/verification.md`.
+  notarization failure paths with stubbed Apple tools. See `docs/history/verification.md`.
 - Seen when a freshly assembled, unsigned bundle launches its bundled Node: macOS sometimes held it
   at `_dyld_start` while `syspolicyd` timed out ("ASP: Security policy would not allow process"); a
   fresh bundle path worked. If a Mac build seems to hang right after "Assemble", this is the likely
@@ -165,7 +165,7 @@ As of 2026-09-27:
 - Verified live on 2026-09-26: manual stop, a short duration limit, a 16-MiB file limit and abrupt
   owner exit (session `105`). Not verified: the full 30-minute and 1-GiB limits, hidden Stage Manager
   windows, two displays, and the 2026-09-27 changes above, whose live checks drive the desktop and
-  were not run (`docs/verification.md`).
+  were not run (`docs/history/verification.md`).
 
 After pairing the GUI app to the local test service, run:
 
@@ -305,8 +305,9 @@ share/applications/silicon-extend.desktop
   probe and the Atspi import work) and with Recommends (also ffmpeg, ffprobe, xwininfo, xdotool and
   the X libraries app recording loads). It needs network access for apt.
 
-To check an installed package against a local development service with local IAM members
-`c:alice` and `si:chef`, run from the host (requires the built CLI and ffmpeg):
+To check an installed package against a local development service (`e2e/dev.env`, with its local
+Silicon Accounts stand-in) as `c:alice` and her Silicon `si:chef`, run from the host (requires the
+built CLI and ffmpeg):
 
 ```sh
 python3 apps/desktop/linux-e2e/record-service-e2e.py --package target/desktop/linux/silicon-extend_1.0.0_arm64.deb
@@ -321,7 +322,7 @@ both videos and compares repeat downloads byte for byte. It ends its session, re
 device and stops its container. Artifacts, `summary.txt` and the two install logs stay under
 `target/desktop/linux-recording/service-recording-*/`.
 Use `--service-url` and `--container-service-url` when the host/container addresses differ.
-This verifies local relay and file storage, not production IAM or Briefcase integration.
+This verifies local relay and file storage, not production Silicon Accounts or Briefcase integration.
 
 ## Windows
 
@@ -343,7 +344,7 @@ test runs and require the runner opt-in. The captured PNG covers the full dispos
 desktop; this lane does not establish physical sleep/lock, UAC, multi-monitor or banner behavior.
 Its logs, runner metadata and owned-fixture evidence upload even when the checks fail.
 For a Windows-specific rerun, dispatch `release.yml` with `windows_only=true`; that skips the
-CLI/Honeycomb and Linux jobs. Normal manual dispatches and release tags still build every target.
+CLI (its Silicon Apps archives) and Linux jobs. Normal manual dispatches and release tags still build every target.
 
 ### Packaged daemon update verification
 

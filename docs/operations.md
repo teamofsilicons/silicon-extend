@@ -19,17 +19,16 @@ A scheduler in the service runs every 2 seconds:
 - Every 30 seconds: pairs that went unused longer than their owner allowed end (`pair_expired`);
   files past their self-destruct time are deleted; requests Ting hasn't accepted are retried;
   unclaimed uploads are removed.
-- Self-destruct and Ting retries act as the Silicon, with the latest login Extend holds for it in
-  that team and world (its authorization cache, else a running session; no session is needed).
+- Self-destruct deletes a file as the Silicon that made it, with the Briefcase proof Extend keeps
+  for that Silicon (its refresh token sealed with `EXTEND_DELEGATION_ENCRYPTION_KEY` in the
+  database, so it survives restarts and the Silicon needn't be using Extend). Without a usable
+  proof (the Silicon signed out of Extend or removed its access) the file waits and is tried again.
   A file's record is deleted only once Briefcase confirms (a 404 counts as gone); a failure is
   logged at `warn` with `file_id`, `tries`, `retry_in_s`, the error and a hint, and retried after
   1 minute, doubling to 1 hour. Up to 100 files per pass, not counting ones still backing off. A
-  pending request gets 6 attempts, the first send included; each is counted even when no login is
-  held, and the last marks it `failed` with `last_error` and logs `request_failed` on the device.
-  Logins are held in memory: after a restart these wait for (or, for requests, fail without) the
-  Silicon's next use of Extend (`TECHNICAL.md` open question C2).
-- Each pass over a test world holds that world's fence and skips worlds that aren't open, so a
-  clean, disable or purge never races the scheduler.
+  pending request gets 6 attempts, the first send included; the last marks it `failed` with
+  `last_error` and logs `request_failed` on the device. Extend sends every Ting as itself (below),
+  so no one's sign-in is needed for a retry.
 - Every 5 minutes each instance re-reads the API version lifecycle and sunsets a deprecated major
   that has gone 7 consecutive days without a request (`TECHNICAL.md` section 10). Requests are
   counted per major and UTC day in `extend_global.api_version_usage`.
@@ -50,7 +49,7 @@ A scheduler in the service runs every 2 seconds:
   on". An `idempotency_conflict` answer counts as delivered. While Ting is off on the server
   (`EXTEND_TING_URL` unset), nothing is sent or retried: requests are recorded `failed` with why and
   stay visible on the website, in the CLI and on the device. Requests stored before Extend 4 (no
-  frozen body, addressed through a Team) are marked failed with why.
+  frozen body) can't be sent and are marked failed with why.
 - At start, after a rollback to 1.0.0, the service restores the grants the down step set aside
   (unless they were revoked or their pair ended since), logging each as `access_granted` with
   `{"restored_after_rollback": true}`.
@@ -61,9 +60,9 @@ A scheduler in the service runs every 2 seconds:
 |---|---|---|
 | `EXTEND_MAX_PAIRS_PER_DEVICE` | 8 | Most Carbons one device may be paired to. A guard on sockets per device, not a product rule; the 9th "Pair with another Carbon" answers `409` with that number. |
 
-The 1.1 membership settings (`EXTEND_MEMBERSHIP_SWEEP_HOURS`, `EXTEND_OWNER_CHECK_CACHE_S`,
-`EXTEND_OWNER_CHECK_AT_USE`, `EXTEND_TEST_LINK_WINDOW_S`, `EXTEND_LOCAL_IAM_READERS`) went with Teams
-and test environments in 4.0; the service logs them as ignored.
+Extend 3's membership and test settings (`EXTEND_MEMBERSHIP_SWEEP_HOURS`,
+`EXTEND_OWNER_CHECK_CACHE_S`, `EXTEND_OWNER_CHECK_AT_USE`, `EXTEND_TEST_LINK_WINDOW_S`,
+`EXTEND_LOCAL_IAM_READERS`) do nothing in Extend 4; the service logs any it finds as ignored.
 
 ## Waking a device
 
@@ -106,21 +105,19 @@ are never logged. `connection_replaced` in a pair's activity log means another c
 pair's credential took over a live one: on a computer several Carbons paired, suspect a copied
 credential (the next rotation, at the end of the next session there, makes the copy useless). Every response has `X-Request-ID`; errors carry it too,
 so a CLI error message can be traced to its log lines. Telemetry events arrive at
-`/api/v1/telemetry` and are stored per world in `telemetry` and logged under target `telemetry`.
-They are exported to Space Station when `EXTEND_SPACE_STATION_KEY` is set (per test environment:
-`EXTEND_TEST_TELEMETRY_KEYS`); no ingest key has been available, so the export has not been seen
+`/api/v2/telemetry`, are stored in `telemetry` and logged under target `telemetry`, and name the
+account by its uuid and current id. They are exported to Space Station when
+`EXTEND_SPACE_STATION_KEY` is set; no ingest key has been available, so the export has not been seen
 working against Space Station.
 
 ## Rate limits
 
 Pairing-code claims are limited per Carbon (5 failed per 10 minutes; the per-address limit
-`TECHNICAL.md` proposes was never built), answers about codes from another environment to 20 per
-Carbon per 15 minutes, bug reports to 10 per member per hour, and new enrollments to 60 per hour per
-client address (read from `X-Forwarded-For` only when the peer is in `EXTEND_TRUSTED_PROXY_CIDRS`),
+`TECHNICAL.md` proposes was never built), bug reports to 10 per account per hour, and new
+enrollments to 60 per hour per client address (read from `X-Forwarded-For` only when the peer is in `EXTEND_TRUSTED_PROXY_CIDRS`),
 "Pair with another Carbon" included. 1.1 adds: at most 3 waiting "Pair with another Carbon" codes per
 device, one setup retry per device every 5 s, and the wake limits above.
-Adds to one test environment take turns; one that waits more than 10 s (5 s on the database lock)
-gets `429 rate_limited`. The counters live in the process's memory, so a restart resets them. Several end-to-end runs against one shared development service use up the
+The counters live in the process's memory, so a restart resets them. Several end-to-end runs against one shared development service use up the
 enrollment limit within minutes (HTTP 429 `rate_limited`, with a retry time); run test lanes against
 their own service instance.
 

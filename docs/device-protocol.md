@@ -16,8 +16,9 @@ Words used below:
   c:bob has two).
 - The **device engine** is what reads the screen and acts on Mac and Linux computers (and on a Mac
   carrying an iPhone or iPad). Apps name its version `engine_version`.
-- A **side** is a Team plus the Carbon who gave access. Two Silicons are on the same side when they
-  act in the same Team through the same Carbon's pair.
+- A **side** is the Carbon who gave access. Two Silicons are on the same side when they use the
+  device through the same Carbon's pair. (Before Extend 4 a side was also bound to the grouping the
+  pair was made in; side tags stay opaque either way.)
 
 ## 1. Before pairing: enrollment
 
@@ -34,13 +35,9 @@ POST /api/v1/enrollments
 device engine's version as `engine_version` (1.0 apps send `agent_device_version`, which is still
 read).
 
-An app started for a test environment sends that environment's app secret in
-`X-Testing-Application-Secret` when it creates the enrollment; its code then pairs the device only
-into that environment (and a code made without the header only into production). Send the same
-header, or none, when reading, discarding or connecting to the enrollment; another environment's
-secret is `401 testing_secret_invalid`. An unknown, revoked or disabled environment's secret is
-`401 testing_secret_invalid`, and one Honeycomb hasn't finished preparing is `503
-testing_environment_not_ready`; neither falls back to production.
+Extend 4 has no test environments. A request that still sends `X-Testing-Application-Secret` (an
+app built to pair into one of Extend 3's test environments) is refused with
+`401 testing_secret_invalid` and never runs in production instead; production apps don't send it.
 
 New enrollments are limited to 60 per hour per network address. A `429 rate_limited` carries
 `details.retry_after_s`: wait that long before creating another enrollment (the Android app waits
@@ -91,8 +88,7 @@ codes and, once a Carbon enters the code on the website, `paired` with a new `de
 credential. Keep every credential; each is a separate pair (section 2).
 
 - The service ties the code to this physical device. The app never names the device itself: holding
-  a live credential is the proof. The code pairs only into this device's world (production or its
-  test environment), and all pairs of a device are in the same world.
+  a live credential is the proof.
 - Before showing the code, warn the Carbon (section 4). A computer gets the shared-computer warning.
 - A Carbon who already paired this device gets `409 conflict` when they enter the code ("You already
   paired this device: it's <their name for it> (<id>) in your devices."). The code stays valid for
@@ -117,17 +113,10 @@ Authorization: Extend-Device <device_credential>
 
 Keep it open always. Reconnect with exponential backoff from 1 s to 60 s with full jitter. Close
 codes: `4401` credential invalid or pair ended (forget that credential), `4409` superseded by a
-newer connection (don't reconnect on your own), `4426` app too old, and `4503` the device's test
-environment is closed for now (Honeycomb disabled it, or it is waiting for Honeycomb to confirm
-every service is ready; the reason says which, for example "test environment disabled; still
-paired, reconnect later"): **keep the credential** and reconnect with the usual backoff. A disable
-never unpairs a device, and `restore` brings the same credential back. Treat any other code as a
-dropped connection.
-
-While the environment is closed, the upgrade request and every device HTTP route answer
-`503 testing_environment_not_ready` instead of 401, with a hint that the device stays paired; keep
-the credential and retry with backoff. Only `401` (or close `4401`) means the pair ended. A clean
-of the environment does end every pair in it (`unpaired`, then `4401`).
+newer connection (don't reconnect on your own), and `4426` app too old. Treat any other code as a
+dropped connection. Extend 3 also closed with `4503` and answered `503 testing_environment_not_ready`
+while a test environment was closed; Extend 4 never does, and an app that sees either still keeps
+the credential and retries with backoff. Only `401` (or close `4401`) means the pair ended.
 
 ### One connection per pair (1.1)
 
@@ -150,7 +139,6 @@ one-pair case. The rules per connection:
   the physical device, whichever pair the session runs through.
 - `awake` may go on any connection; the service applies it to the physical device (section
   "Awake").
-- `environment` is the same on every pair.
 - A host computer reconciles carried devices per connection: when one pair reconnects, it considers
   only the devices carried through that pair, so one pair reconnecting never ends a session on a
   device carried through another pair.
@@ -207,8 +195,9 @@ the service doesn't know makes a 1.0 service drop the whole hello, so send only 
   (1.1) is the session's side tag: see "Wake requests on the device".
 - `session_ended` → clear it.
 - `takeover` → show the reason and a **Done** button; Done sends `{"type":"takeover_done"}`.
-- `refresh` → re-read `GET /api/v1/device` (name, owner, environment).
-- `environment` non-null → show a permanent test-environment banner with its name.
+- `refresh` → re-read `GET /api/v1/device` (name, owner).
+- `environment` (Extend 3's test environments): Extend 4 never sends it, and `environment` in
+  `paired` and `GET /api/v1/device` is always `null`. Apps keep decoding it.
 - `unpaired` → forget that pair's credential; with no pair left, return to the pairing screen.
 - `attach` / `setup_code` are only sent to host computers (Mac, Windows, Linux).
 - `wake_request`, `wake_request_ended` (1.1): see "Wake requests on the device".
@@ -354,7 +343,7 @@ service tells the Carbon through Ting and sends the device:
 - It goes on the connection of the pair the Silicon asked through. For a carried device it goes to
   the host with `target`, and the host shows nothing: it checks that device every 5 s until the
   request ends, so it can report it awake quickly.
-- It never names a Team or a Carbon. `side` is the request's side tag.
+- It never names a Carbon. `side` is the request's side tag.
 - **Redaction.** While the device (or anything in its lock group: a computer and the devices it
   carries) is used by a Silicon on another side than the request's, the service leaves out
   `silicon_id` and `reason`. Show "A Silicon asked to use this device; its Carbon was told through
@@ -558,7 +547,8 @@ POST   /api/v1/device/enrollments  → 201 enrollment. "Pair with another Carbon
 
 All with `Authorization: Extend-Device <device_credential>` of one pair.
 
-- `team` is the Team the Carbon had selected when pairing. It authorizes nothing; show it nowhere.
+- `team` is the grouping an Extend 3 pair was made in, and `""` for pairs made since Extend 4. It
+  authorizes nothing; show it nowhere.
 - `in_use` is set only when the session runs through this pair. The device is in use when any of
   its pairs says so, or when `session_started` said so on any connection.
 - `instance_id` (1.1): the physical device; every pair of it shares one.
@@ -592,7 +582,6 @@ All with `Authorization: Extend-Device <device_credential>` of one pair.
    device from that Carbon's account only.
 8. For each pair whose connection was taken over: "Another connection took over <Carbon>'s pair on
    this device", with Reconnect.
-9. A test-environment banner with its name whenever `environment` is set.
 
 It starts when the device starts and keeps a socket open for every pair.
 
@@ -623,8 +612,8 @@ driver and its session/recording state. Carbons can also set it through the exis
 Silicons cannot. Both APIs are covered by the client contract fixtures.
 
 A computer's native app can also PATCH `/api/v1/device/attachments/{device_id}` with the same
-body and its host pair's credential. The target must be carried by that exact host pair in the
-same world; another Carbon's host credential, unrelated targets and removed devices are refused.
+body and its host pair's credential. The target must be carried by that exact host pair;
+another Carbon's host credential, unrelated targets and removed devices are refused.
 The response is the target's `device_self`. This changes the physical device's shared setting,
 so every pair and host sees the new value. It does not replace an attached live driver.
 
@@ -636,4 +625,4 @@ together. The settings request runs independently so it cannot block Stop.
 Android and desktop banner timers use a 10-second deadline without ending the session or the
 screen hold. Hidden suppresses in-use announcements and desktop icon changes. Takeover requests
 still show until answered; Stop remains in the app and website. The Android TV badge is positioned
-at bottom centre. Test-environment disclosure is separate from this preference.
+at bottom centre.

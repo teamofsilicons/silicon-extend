@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Verify an existing Linux arm64 release .deb on an owned Docker X11 desktop.
 
+Extend 3 rehearsal (the 1.0 -> 1.1 release gate): it starts the service with Extend 3's local sign-in
+stand-in and calls the 3.x account routes, so it runs only against a 1.1-3.1 service. Its results
+are in docs/history/verification.md.
+
 Uses an already-built silicon-extend-linux-e2e image, an exact owned PostgreSQL database,
 and a fresh local service with synthetic IAM. No build, installed host app, existing service,
 shared output, or other container is changed. Screenshots/input affect only this container.

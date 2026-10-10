@@ -410,7 +410,7 @@ declare itself a disability-support accessibility tool to change the controls An
   `tools/fake-service/bcmd <command> [args…]` sends one command to a device paired with a running
   fake (`/_test/command`); `/_test/frame` and `/_test/close` send any frame or close code.
 - **Real service** (`crates/extend-service` on `http://127.0.0.1:8480`, emulator `10.0.2.2:8480`,
-  local IAM mode) with the `extend` CLI: the code read off the device's screen claimed with
+  with its local stand-ins) with the `extend` CLI: the code read off the device's screen claimed with
   `POST /api/v1/pairings` as `c:alice`; the device came online `ready` with the reported
   capabilities/missing; as `si:chef`: `session new --connect`, `open`, `snapshot -i`, `click @e7`,
   `back`, `screenshot` (stored), `replay <local .ad>` (sent as an attachment), `notifications`,
@@ -853,8 +853,9 @@ service, have its accessibility service active and grant `si:chef` access; the l
 owner is `c:alice`. The lane opens only its animated test activity, captures for 187 seconds,
 checks uploaded video decoding and late frames, and compares downloads by Silicon and Carbon.
 It ends its session and closes its fixture without removing the existing device pairing.
-Artifacts and logs are kept under `target/android-recording/`. Local IAM/storage evidence
-does not verify production IAM/OBO or Briefcase.
+Artifacts and logs are kept under `target/android-recording/`. The lane uses the service's local
+Silicon Accounts and storage stand-ins, so it doesn't verify production Silicon Accounts or
+Briefcase.
 
 For automatic debugging recovery, use a dedicated emulator paired with
 `tools/fake-service/fake_extend.py --port 8498` without a scenario. Install both debug APKs,

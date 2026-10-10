@@ -97,7 +97,7 @@ What ships where:
   time, its Java classes are not obfuscated (the app is not minified), the in-app notices name the
   source, and they explain how to replace either part and re-sign the APK. Its checksum is pinned
   in `apps/android/gradle/verification-metadata.xml`. Whether this approach is sufficient is
-  listed for the Carbon's confirmation in `docs/completion-work.md`.
+  listed for the Carbon's confirmation in `docs/history/completion-work.md`.
 
 ### silicon-accounts-client 0.4.0 (Extend service)
 
@@ -117,7 +117,7 @@ unmodified (the website and the desktop window use latin subsets).
 
 The OFL 1.1 text is in the Android notices file (`apps/android/app/src/main/assets/open_source_licences.txt`)
 and at https://openfontlicense.org. The website ships it in `/licences.txt`. The desktop window does
-not yet ship the licence text next to the fonts (open gate in `docs/completion-work.md`).
+not yet ship the licence text next to the fonts (open gate in `docs/history/completion-work.md`).
 
 ## Android dependencies
 

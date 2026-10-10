@@ -11,7 +11,7 @@ additional release prerequisite.
 
 The current list of what stands between this checkout and a released Silicon Extend 1.1.0,
 updated on 2026-09-28. The Carbon-owned
-[`understanding/UNDERSTANDING.md`](../understanding/UNDERSTANDING.md) is the product authority;
+[`understanding/UNDERSTANDING.md`](../../understanding/UNDERSTANDING.md) is the product authority;
 nothing here changes it. An implementation, a passing mock or an emulator run does not close a
 physical-device or production gate. What was run, and on what, is in
 [`verification.md`](verification.md). The 1.1.0 integration and subsequent fixes are local commits

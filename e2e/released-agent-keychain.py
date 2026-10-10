@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Rehearse signed Mac 1.0 -> 1.1 Keychain migration in a fresh local-service namespace.
 
+Extend 3 rehearsal (the 1.0 -> 1.1 release gate): it starts the service with Extend 3's local sign-in
+stand-in and calls the 3.x account routes, so it runs only against a 1.1-3.1 service. Its results
+are in docs/history/verification.md.
+
 Requires explicit --allow-native-keychain and exact old/new signed executables. Uses only
 three preflighted Keychain accounts at a random loopback port, a private SILICON_HOME,
 an owned database and child processes. No secret is read by security(1), UI/engine is

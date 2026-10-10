@@ -13,7 +13,7 @@ registers it through the supported CLI. In each used context, Extend needs these
 - `extend.device.wake_declined`
 
 All four production types were registered and listed in the owning Team `tos` on 2026-09-28,
-as described in [operations](../operations.md). Do not register duplicates
+as described in [operations](../../operations.md). Do not register duplicates
 in every Team receiving a notification. Test contexts need their own supported setup; this does
 not imply registrations survive a context clean.
 
