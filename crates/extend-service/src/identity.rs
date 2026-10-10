@@ -2,7 +2,7 @@
 //!
 //! Before 4.0 every identity column held an IAM public id as text (`c:handle`, `si:handle`), and
 //! most rows carried the Team they were made in. From 4.0 those columns hold Silicon Accounts
-//! uuids (short case-sensitive strings that never contain `:`), and Teams are history.
+//! UUIDs (canonical lowercase 128-bit UUIDv4 strings), and Teams are history.
 //!
 //! - Schema version 9 ([`WORLD_4_0_ACCOUNTS`]) is additive: the accounts cache, webhook dedupe,
 //!   held proofs, Ting enrolments per account, `identity_links`, a shadow column `*_iam_id` next

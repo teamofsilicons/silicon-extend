@@ -26,7 +26,7 @@ pub struct Member {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    /// 2.0: the permanent Silicon Accounts uuid (short, case-sensitive, e.g. `zQo`). API v2 only.
+    /// 2.0: the permanent Silicon Accounts 128-bit UUID (canonical lowercase UUIDv4). API v2 only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uuid: Option<String>,
 }

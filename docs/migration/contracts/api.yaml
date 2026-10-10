@@ -58,7 +58,7 @@ info:
       `Silicon-Extend-API-Version`, `Content-Disposition`, `Content-Range`, `Deprecation` and `Sunset`.
 
     Accounts, devices and custodians (Extend 4)
-    - Every Carbon and Silicon is a personal Silicon Accounts account: a permanent `uuid` (short, case-sensitive) that
+    - Every Carbon and Silicon is a personal Silicon Accounts account: a permanent `uuid` (a canonical lowercase 128-bit UUIDv4) that
       Extend keys everything on, and a public id (`c:ada`, `si:scout`) that can change. Answers carry both where a
       person is named (`*_uuid` next to the id). A caller may name an account by either; ids resolve through Silicon
       Accounts (current ids only), and an id nobody has is `422 invalid_input`.

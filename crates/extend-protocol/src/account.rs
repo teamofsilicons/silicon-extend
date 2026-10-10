@@ -1,5 +1,5 @@
 //! 2.0: accounts. Every Carbon and Silicon is a personal Silicon Accounts account: a permanent
-//! `uuid` (short and case-sensitive, like `zQo`) that Extend keys everything on, and a public id
+//! `uuid` (a canonical lowercase 128-bit UUIDv4) that Extend keys everything on, and a public id
 //! (`c:ada`, `si:scout`) that people see and that can change. A Silicon always has one custodian,
 //! a Carbon. These shapes are what API v2 (`/api/v2/…`) answers; the device wire never uses them.
 

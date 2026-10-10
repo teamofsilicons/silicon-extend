@@ -90,7 +90,7 @@ pub struct Custodian {
 /// Who signed in: the account in Silicon Accounts' token response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedInAccount {
-    /// The permanent uuid (short and case-sensitive, like `zQo`). Key on this.
+    /// The permanent 128-bit UUID (canonical lowercase UUIDv4). Key on this.
     pub uuid: String,
     /// The current public id (`c:ada`, `si:scout`). It can change.
     pub id: String,
