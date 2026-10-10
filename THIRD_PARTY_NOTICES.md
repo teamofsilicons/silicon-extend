@@ -10,7 +10,7 @@ What ships where:
 
 | Artifact | Third-party parts it carries | Where its notices are |
 |---|---|---|
-| `extend` CLI (Honeycomb archive, six targets) | Rust crates | `licences/` in every target of the archive (`targets/<target>/licences/`): `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
+| `extend` CLI (Honeycomb archive, six targets) | Rust crates, including `silicon-accounts-client` | `licences/` in every target of the archive (`targets/<target>/licences/`): `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
 | Extend service (container image) | Rust crates, including `silicon-accounts-client` | `/usr/share/doc/silicon-extend/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt` |
 | Mac app (`Silicon Extend.app`) | Rust crates, the device engine (a fork of agent-device) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`, `agent-device/LICENSE`, `node/LICENSE` |
 | Linux tarball and `.deb` | Rust crates, the device engine (a fork of agent-device, including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `share/doc/silicon-extend/` (`LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`), `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE` |

@@ -7,7 +7,8 @@ published consumer fails before it ships.
 
 ```
 contracts/
-  v1/client/          silicon-extend-client (and so the extend CLI, which calls Extend only through it), current version
+  v2/client/          silicon-extend-client 4.x (and so the extend CLI, which calls Extend only through it): its account calls
+  v1/client/          silicon-extend-client 4.x: its device-side calls (the device wire), the version it shares with the apps
   v1/client-1.0.0/    the released 1.0.0 client's fixtures, frozen: 1.0.0 CLIs and apps built on it are still in use
   v1/client-1.1.0/    the released 1.1.0 client's fixtures, frozen before the 1.2.0 client release
   v1/client-1.2.0/    the released 1.2.0 client's fixtures, frozen before managed selection in 1.3.0
@@ -29,7 +30,11 @@ the device wire must still be accepted with every field the client reads; those 
 route must get `410 api_version_sunset` with the hint `silicon-apps update extend` (and a request
 that still selects a test environment gets `testing_secret_invalid`). Honeycomb's lifecycle
 fixtures moved to `retired/honeycomb/` and must get 404. API v2's consumer is the 4.0 client
-crate, which records its fixtures under `v2/client/`.
+crate: its `contract_fixtures` test writes each call under the major its path names, so its account
+calls are in `v2/client/` and its device-side calls in `v1/client/` (the 3.x client's account
+fixtures left `v1/client/`; their frozen copies in `v1/client-3.1.1/` get the 410). The service
+replays `v2/client/` like any served major: every fixture must be accepted with every field the
+client reads.
 
 A consumer that is still in use keeps its fixtures until its version stops being supported. So a new
 release adds fixtures instead of editing the old ones:
