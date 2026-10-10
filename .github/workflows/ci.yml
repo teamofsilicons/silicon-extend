@@ -97,3 +97,5 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: npx @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash
+      # The Extend 4 review copy (Silicon Accounts, API v2), until a Carbon approves it into understanding/.
+      - run: npx @redocly/cli@2.49.0 lint docs/migration/contracts/api.yaml --skip-rule no-path-trailing-slash
