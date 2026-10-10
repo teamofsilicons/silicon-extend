@@ -213,7 +213,7 @@ async fn serve(fake: &Fake, credential: &str) -> anyhow::Result<()> {
                 let mut out = CommandOutcome {
                     id: c.id,
                     ok: true,
-                    output: serde_json::json!({"command": c.command, "args": c.args}),
+                    output: serde_json::json!({"command": c.command, "args": c.args, "attachments": c.attachments}),
                     text: Some(format!("{} {} → ok on the fake device", c.command, c.args.join(" "))),
                     error: None,
                     files: vec![],
