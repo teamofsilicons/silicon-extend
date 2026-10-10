@@ -358,3 +358,171 @@ with `e2e/clean-test-dbs.sh`.
 - The shared stack's issuer is `http://localhost:9590`: the CLI's `ACCOUNTS_URL` must be exactly
   that, or the service's discovery check refuses the sign-in as `accounts_mismatch` (by design).
 - `HOSTNAME` is often not exported; the device-flow label falls back to "extend CLI".
+
+## 2026-10-10 — Stage 3: packaging, CI, deployment configuration and documentation
+
+Everything around the code now says and does Silicon Accounts and Silicon Apps; nothing was pushed,
+released or deployed. Decisions 58–73 are in [decisions.md](decisions.md#packaging-ci-deployment-and-docs-stage-3-2026-10-10);
+the production runbook is [cutover.md](cutover.md) (rewritten as one runbook from the earlier
+stages' notes); UNDERSTANDING edits are §9 of [understanding-proposal.md](understanding-proposal.md).
+
+### What changed
+
+- **Packaging** (`packaging/apps.yaml.in`, `scripts/package-apps.sh` → `scripts/package_apps.py`,
+  `scripts/test_package_apps.py`): one archive per target, `dist/apps/extend-<version>-<target>.tar.gz`
+  + `.sha256`, holding `apps.yaml` (that target only), `bin/extend[.exe]` and `licences/`. It refuses
+  a version other than the CLI crate's, a binary for another system or processor, a Linux binary
+  needing glibc > 2.39, and (where the machine can run it; `--discovery require` makes "can't" an
+  error) a binary whose `--help`, `accounts --json` or `login status --json` answers wrongly in an
+  empty `env -i` home or that writes to it; `--check-only` for build runners. `silicon-apps`
+  validate/pack run with an empty `--home` and an unreachable server. `honeycomb.yaml`,
+  `scripts/package-cli.py` and its test are deleted.
+- **CI**: `release.yml` keeps the six targets on their runners, checks each binary where it was
+  built, then packs and uploads `extend-silicon-apps-release` (archives, `.sha256`, `SHA256SUMS`);
+  `cli-v<CLI version>` and `v<workspace version>` tags as before, checked; the Honeycomb packager and
+  its pinned install are gone. `ci.yml` runs the packager and deploy tests; its CLI end-to-end step
+  runs the rewritten `e2e/cli-e2e.sh`. `e2e/run-all.sh` runs the packager tests and lints the API
+  review copy.
+- **Deployment configuration** (`deploy/aws/`): the host's `extend-render-env` requires
+  `EXTEND_APP_SECRET` and `EXTEND_ACCOUNTS_WEBHOOK_SECRET`, defaults `ACCOUNTS_URL`/`EXTEND_APP_ID`,
+  gives `EXTEND_TING_URL` no default (the 3.x renderer defaulted it, which would have turned Ting on
+  at cutover), names Extend 3's keys without forwarding them; `refresh-host-helper.py` replaces a
+  host helper over SSM (dry run unless `--send`); README rewritten (the secret, the refresh, the 4.0
+  rollback). No IAM hosts remain; Caddy needed no change (`/webhooks/accounts` passes, `/dev/*` is
+  404). There is no CSP to change on the API host; the website's CSP is the web kit's (web stages).
+- **Local sign-in** (service, development only): the Silicon Accounts stand-in mints short-lived
+  tokens (`POST /dev/accounts/slt`) and answers `/dev/accounts/v1/oauth/token` (short-lived token
+  and refresh grants, `client_id=extend`, rotation with reuse detection) and `/v1/oauth/revoke`;
+  Extend's own logout revokes its refresh tokens too. `tests/dev_sign_in.rs` drives it with the
+  official client.
+- **`e2e/cli-e2e.sh`** rewritten for Extend 4 on that (117 checks): discovery, the runtime's forms,
+  sign-in and the token never on disk, pairing, access by id, device commands, files, requests
+  within and across custodians, takeover, the custodian's views, removal, a second Carbon's pair,
+  waking (and a missing Ting type), setup retry, a Carbon's logout ending sessions, `config home`,
+  the removed test-environment spellings. The four manual hardware lanes sign in the same way (not
+  run: they need devices or Docker).
+- **Device apps' copy** back to 1.1's per-Carbon wording (Android and desktop); the desktop app no
+  longer shows a stored Team (new pairs printed "in " in its status line). No native release.
+- **Docs**: README, deployment (Silicon Apps release steps, website settings, device apps), development
+  (PostgreSQL without Docker, the local sign-in recipe, test table, vocabulary), operations,
+  device protocol, app READMEs, notices, `docs/releases/4.0.0.md`; the TECHNICAL review copy's
+  architecture, CLI internals and settled open questions. Extend 3's records moved unchanged to
+  `docs/history/` with an index (verification, open gates, OBO cutover, feature permissions,
+  organization devices, IAM 5 release, release notes, requests, 1.1–3.1 release procedures).
+  Removed: `e2e/real-iam`, `e2e/released-cli-compat.py`, `e2e/web-upgrade-rehearsal.mjs`.
+
+### Commits
+
+| commit | subject |
+|---|---|
+| `870ad7b` | Package the extend CLI for Silicon Apps instead of Honeycomb |
+| `048d815` | Build Silicon Apps release archives in CI |
+| `43023fb` | Render the Silicon Accounts settings on the production host |
+| `19ce9c9` | Describe pairs as each Carbon's own in the device apps |
+| `6d94c89` | Sign the CLI in to the local Silicon Accounts stand-in |
+| `bdbe64a` | Document Extend 4 and move Extend 3's records to docs/history |
+| `ccfd674` | Write the production cutover runbook and the ship stage's decisions |
+| `35b0963` | Keep Silicon IAM and Honeycomb out of the release workflow and notices |
+| `dbc57aa` | Bring the TECHNICAL review copy's architecture and CLI notes to Extend 4 |
+| (this) | Log the ship stage |
+
+### Tests and proofs
+
+All Rust commands with `CARGO_TARGET_DIR=$PWD/target/mig CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3`.
+
+| Command | Result |
+|---|---|
+| `EXTEND_TEST_ADMIN_URL=postgres://postgres@127.0.0.1:5460/postgres cargo test --workspace --locked --exclude extend-agent --no-fail-fast` (after the last code change) | **397 passed, 0 failed, 5 ignored**: service lib 37 + integration 128 (the 125 of stage 2 + `dev_sign_in` 3), hosted 82 (4 ignored), CLI 34 unit + 1 + 15 + 28 + 8 + 2, client 9 + 3 + 1 + 1 + 8 + 3 doc, protocol 32 + 5; the migration capture test ignored |
+| `cargo test --locked -p extend-agent` (after the device-app copy change) | 206 passed, 1 ignored; `fake_service` 27 passed |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` (agent included) | clean |
+| `cargo fmt --all -- --check`; `cargo check --workspace --all-targets --locked` | clean; ok |
+| `python3 -m unittest discover -s scripts -p 'test_*.py'` | 12 passed, including the full pack with this Mac's `silicon-apps` 0.2.0 (isolated home, no server) |
+| `python3 -m unittest discover -s deploy/aws -p 'test_*.py'` | 16 passed (renderer 11, helper refresh 5) |
+| `cargo build --release --locked -p silicon-extend-cli`, then `PACKAGE_DISCOVERY=require scripts/package-apps.sh 4.0.0 macos-aarch64 target/mig/release/extend` | packaged `dist/apps/extend-4.0.0-macos-aarch64.tar.gz` (4,379,068 bytes, sha256 `3255bab2b10ff82ba55520b2d57120c8293f149f3307f6ecd10e756ed03ae861`; packing again gives the same bytes); files: `apps.yaml`, `bin/extend`, `licences/{LICENSE,THIRD_PARTY_LICENSES.txt,THIRD_PARTY_NOTICES.md}` |
+| `silicon-apps validate <extracted archive> --home <empty> --server http://127.0.0.1:9 --json` | `valid: true`, no errors, version 4.0.0, targets `[macos-aarch64]` |
+| From the extracted archive, `env -i HOME=$E SILICON_HOME=$E PATH=/usr/bin:/bin bin/extend …` | `--help` exit 0 (5,209 bytes); `accounts --json` exit 0 (`app_id` extend, `version` 4.0.0, `install` `silicon-apps install extend`); `login status --json` exit 0, exactly `{"authenticated":false}`; 0 files written |
+| `scripts/package-apps.sh 4.0.0 linux-x86_64 <mac binary>`; `… 4.0.1 macos-aarch64 …` | exit 1 "linux-x86_64 needs a little-endian ELF executable"; exit 1 "version 4.0.1 differs from crates/extend-cli/Cargo.toml (4.0.0)" |
+| The renderer's output with fixture secrets fed to `extend-service migrate` (`env -i`, production) | passes the production config checks and stops at the database (unreachable on purpose); without `EXTEND_APP_SECRET` or `ACCOUNTS_URL` it names the missing setting |
+| `deploy/aws/refresh-host-helper.py <helper>` for all three helpers; their scripts through `bash -n` | dry runs only (nothing sent); every helper extracts, has no `${…}` and passes `bash -n`; the commands, run against a scratch directory, replace the helper and keep the `.bak` |
+| `release.yml`, `ci.yml`, `standalone.yaml` | parse with PyYAML and Ruby (the template with a tag-aware loader); every `needs` exists; the tag check run for `cli-v4.0.0` and `v1.1.0` (pass) and `cli-v3.1.1`, `v4.0.0` (refused with the expected tag); UserData is 13,212 bytes (EC2's limit is 16,384). actionlint and cfn-lint aren't installed here |
+| `bash e2e/cli-e2e.sh http://127.0.0.1:4221` (service from `e2e/dev.env` on 4221, Postgres 5460) | **All 117 checks passed**, four runs, the last on a fresh database with the final binaries |
+| Markdown link check over every tracked `.md` (scratch script) | 0 broken links or anchors |
+
+Not run here: the old website's `pnpm test`/`pnpm build` (no `node_modules` in this worktree; its
+docs generator treats the moved `ORGANIZATION_DEVICES.md` as optional, and the web stages replace it),
+the Android JVM tests (the change is two Kotlin strings, restored from the 1.1.2 release), and the
+manual hardware lanes.
+
+### Sweep
+
+`git grep -n -i -E 'iam|honeycomb|org_id|organi[sz]ation|\borg\b|tenant'` outside `vendor/`,
+`apps/android/vendor/` and `docs/history/` (excluded by design) finds 1,139 lines in 122 files.
+Every one is intentional:
+
+- **`web/**`** (49 files, 473 lines): the 3.x Vite site, replaced wholesale by the web stages.
+- **`understanding/*`**: the Carbon's contract files, unchanged by rule; the changes are proposed in
+  `docs/migration/understanding-proposal.md` and the review copies in `docs/migration/contracts/`.
+- **`docs/migration/**`**: the migration record. The TECHNICAL review copy still carries 1.x–3.x
+  passages in §3 (marked as the 1.0–3.1 schema), §4, §5, §7 and §11–§13, which its 4.0 sections
+  override; it says so at the top.
+- **`contracts/`**: the frozen 1.0.0–3.1.1 client fixtures (`iam.get.json`, `permissions.*.json`),
+  replayed to prove they get `410`, and `retired/honeycomb/*`, replayed to prove they get `404`;
+  `contracts/README.md` describes them.
+- **Service code**: `identity.rs` (the re-key from IAM public ids: `iam_public_id`, the `*_iam_id`
+  shadow columns), `db.rs` (historical migrations, byte-identical to origin/main's), `domain.rs`
+  (the archive's `*_iam_id` columns), `config.rs` and `lib.rs` (the obsolete-variable list and its
+  warning), `routes/mod.rs`, `routes/webhook.rs`, `state.rs`, `versions.rs` (why the retired routes
+  and the test header are refused), `ting.rs` (a test that bodies carry no `org_id`).
+- **Service tests**: `contracts.rs`, `accounts_migration.rs`, `accounts_auth.rs`, `e2e.rs`,
+  `cross_app_stub.rs`, `migration.rs`, `core_gaps.rs` (old ids re-keyed, old tokens and routes
+  refused).
+- **CLI**: `args.rs`, `help.rs`, `main.rs` (the hidden `iam` alias the runtime still runs),
+  `signin.rs`, `store.rs` (spotting and clearing Extend 3's files), `retired.rs` (removed
+  spellings); tests `cli_accounts.rs` (help mentions neither; legacy files) and `json_consumers.rs`.
+  Client: `CHANGELOG.md`, `tests/sign_in.rs` (an `oac_` token refused before it is sent). Protocol:
+  `CHANGELOG.md`, `tests/compat_1_0/*` (the 1.0.0 sources old frames are decoded with).
+- **Deploy**: AWS's own IAM (`CAPABILITY_NAMED_IAM`, `AWS::IAM::Role`, `IamInstanceProfile`), the
+  renderer's list of Extend 3 keys it drops and its tests, `deploy/aws/README.md`,
+  `docs/deployment.md` and `docs/operations.md` naming those variables for operators.
+- **Docs and lanes**: `docs/development.md` (the vocabulary rule itself), `e2e/cli-e2e.sh` (checks
+  the hidden alias), the three 1.0→1.1 device-agent rehearsals (marked "Extend 3 only").
+- **False positives**: `MediaMuxer`/`MediaMetadataRetriever` (Android), base64 font data in the
+  desktop page, the engine's `--tenant` flag, the desktop page's forbidden-words test, the GPL text in
+  Android's licence file.
+
+### Blocked on
+
+- Unchanged from stages 1–2: **Briefcase** 4.0 accepting proofs from `extend` (and, new, its
+  latest notes say the byte transfer no longer needs `X-Org-ID` and permanent links take the
+  owner-id form with `/org/…` kept as an alias: re-check at integration), and **Ting** on Silicon
+  Accounts (delivery stays off). Neither blocks this stage.
+
+### Left for later stages
+
+- **e2e**: `scripts/dev-accounts.sh` and the scenarios against the shared stack; scenario 7 can use
+  `scripts/package-apps.sh` (the macOS archive above is in `dist/apps/`, gitignored). The three
+  1.0→1.1 device-agent rehearsals (`e2e/released-agent-*.py`, `e2e/linux-release-rehearsal.py`)
+  still need Extend 3; re-targeting one at the released 1.1 apps and service 4.0 would be the
+  strongest proof that installed device apps keep working.
+- **Web**: replace `web/` (its `vercel.json`, `.env.example`, docs pages); the deployment guide's
+  website section and cutover step 2.7 name the web kit's settings (`APP_ID`, `APP_SECRET`,
+  `ACCOUNTS_URL`, `APP_API_URL`, `SESSION_SECRET`, `PUBLIC_URL`): adjust both if the web stage
+  names them otherwise. Don't publish the TECHNICAL review copy as a docs page before its
+  editorial pass.
+- **Integration**: the Briefcase transfer and link form above.
+
+### Gotchas
+
+- This Mac has `honeycomb` on PATH: the old packager test ran (and failed) until it was deleted.
+- `silicon-apps validate` takes a directory or an archive; with `--json` it prints `{"valid": …}`.
+  Always pass `--home <empty dir> --server http://127.0.0.1:9` so the production sign-in on this Mac
+  is never read.
+- `extend --version` asks the Extend service which API versions it speaks (it printed production's
+  3.x answer here, "API unreachable … Update the CLI with `honeycomb install 'extend'`", which is the
+  3.x server's hint); use `accounts --json` for the version offline.
+- `json_consumers.rs` flags any `jq_ 'd["data"]…'` in a script that runs the CLI, even when it parses
+  the service's envelope; read service envelopes with a plain `python3 -c` instead.
+- GNU `stat -f` means "file system": portable scripts read a file's mode with Python.
+- No process from this stage is left running (`.mig/pids` empty, nothing listening on 4220–4239),
+  and every database it made on 5460 was dropped (`extend_ship_e2e` and the suites' throwaway
+  databases, with `e2e/clean-test-dbs.sh`).
