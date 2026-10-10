@@ -1,0 +1,15 @@
+# Silicon Apps manifest template for one `extend` CLI package.
+#
+# scripts/package-apps.sh renders this file as apps.yaml at the root of each archive: comment lines
+# are dropped, @VERSION@ becomes the CLI's version (crates/extend-cli/Cargo.toml), @TARGET@ one
+# Silicon Apps target and @BINARY@ bin/extend (bin/extend.exe on Windows). Each archive lists only
+# its own target, so every target uploads and is validated on its own. The archive also carries
+# licences/ (Extend's licence and every bundled component's), which the manifest doesn't name.
+# Reference: https://developers.teamofsilicons.com/docs/apps/reference/manifest
+schema_version: 1
+app_id: extend
+version: @VERSION@
+command: extend
+targets:
+  @TARGET@:
+    binary: @BINARY@

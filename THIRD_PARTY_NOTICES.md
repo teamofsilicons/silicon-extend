@@ -10,7 +10,7 @@ What ships where:
 
 | Artifact | Third-party parts it carries | Where its notices are |
 |---|---|---|
-| `extend` CLI (Honeycomb archive, six targets) | Rust crates, including `silicon-accounts-client` | `licences/` in every target of the archive (`targets/<target>/licences/`): `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
+| `extend` CLI (Silicon Apps archives, one per target) | Rust crates, including `silicon-accounts-client` | `licences/` in every archive, beside `bin/extend`: `LICENSE`, this file, and `THIRD_PARTY_LICENSES.txt` (every Rust crate's licence text) |
 | Extend service (container image) | Rust crates, including `silicon-accounts-client` | `/usr/share/doc/silicon-extend/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt` |
 | Mac app (`Silicon Extend.app`) | Rust crates, the device engine (a fork of agent-device) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `Contents/Resources/`: `LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`, `agent-device/LICENSE`, `node/LICENSE` |
 | Linux tarball and `.deb` | Rust crates, the device engine (a fork of agent-device, including its `linux/` Python workers) and its bundled JavaScript packages, Node.js 22.23.3, fonts inlined in the window | `share/doc/silicon-extend/` (`LICENSE`, this file, `THIRD_PARTY_LICENSES.txt`), `lib/silicon-extend/agent-device/LICENSE`, `lib/silicon-extend/node/LICENSE` |
@@ -244,7 +244,7 @@ By licence expression (as `cargo metadata` reports it, with `A/B` spelled `A OR 
   `cargo about generate about.hbs -o THIRD_PARTY_LICENSES.txt` (`about.toml` lists the accepted
   licences; a crate under any other licence stops the generation). The CLI archive, the service
   image and the desktop packages copy `LICENSE`, this file and `THIRD_PARTY_LICENSES.txt`
-  (`scripts/package-cli.py`, `Dockerfile`, `apps/desktop/*/build-*`).
+  (`scripts/package_apps.py`, `Dockerfile`, `apps/desktop/*/build-*`).
 - **The device engine:** after rebuilding it, re-read `deps.onlyBundle` in
   `vendor/extend-engine/tsdown.config.ts` and the licences of those packages; record changes to it
   in `vendor/extend-engine/FORK.md`.
