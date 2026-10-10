@@ -1806,7 +1806,7 @@ async fn silicon(ctx: &mut Ctx, args: &[String]) -> R<i32> {
 fn unknown_setting(k: &str) -> CliError {
     if k == "team" {
         return CliError::usage(
-            "the team setting was removed in Extend 4: there are no Teams",
+            "the team setting was removed in Extend 4: devices aren't shared through groups any more",
             "Nothing replaces it: `extend device ls` lists every device you can use or paired. `extend config unset team` clears an old value.",
         );
     }
@@ -1932,7 +1932,7 @@ async fn config(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             if k == "team" && ctx.cfg.remove("team").is_some() {
                 store::save_config(&ctx.cfg)?;
                 ctx.emit(json!({"key": k, "value": null}), || {
-                    "Cleared the old team setting (Extend 4 has no Teams).".into()
+                    "Cleared the old team setting, which Extend 4 doesn't use.".into()
                 });
                 return Ok(0);
             }

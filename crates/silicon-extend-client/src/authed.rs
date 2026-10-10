@@ -465,8 +465,7 @@ impl<'a> Authed<'a> {
     }
 
     /// Turns wake requests off (or on again) for the Carbon's pair of a device, or for one Silicon
-    /// on it (`settings.silicon_id`). Turning them off withdraws the open ones. (A `team` is refused:
-    /// Extend 4 has no Teams.)
+    /// on it (`settings.silicon_id`). Turning them off withdraws the open ones. (A `team` is refused.)
     pub async fn set_wake_settings(&self, device_id: &str, settings: &WakeSettings) -> Result<WakeSettingsView> {
         decode(
             self.c

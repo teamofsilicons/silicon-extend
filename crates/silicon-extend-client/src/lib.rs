@@ -8,8 +8,8 @@
 //!   way Extend's own tools do: the device flow for Carbons, a short-lived token for Silicons, and
 //!   rotating refresh tokens. The access token goes to [`Client::authed`].
 //! - The account API is **API v2** (`/api/v2/…`): devices, access, sessions, commands, requests,
-//!   waking, files, and the custodian views of the Silicons a Carbon looks after. There are no Teams:
-//!   a device belongs to the Carbon who paired it, and a Silicon uses what it was given access to.
+//!   waking, files, and the custodian views of the Silicons a Carbon looks after. A device belongs
+//!   to the Carbon who paired it, and a Silicon uses what it was given access to.
 //! - The device wire (`/api/v1/device…`, `/api/v1/enrollments…`) is unchanged for the Extend apps on
 //!   devices; [`Client::enroll`] and the other device-side calls speak it.
 //!
@@ -44,7 +44,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-/// API majors this crate agrees on for the account API: 2 (Silicon Accounts sign-in, no Teams).
+/// API majors this crate agrees on for the account API: 2 (Silicon Accounts sign-in).
 pub const SUPPORTED_API_VERSIONS: &[u32] = &[ACCOUNT_API_VERSION];
 /// The device wire's major, pinned on every `/api/v1/…` call (the Extend apps' API).
 pub const DEVICE_API_VERSION: u32 = API_VERSION;

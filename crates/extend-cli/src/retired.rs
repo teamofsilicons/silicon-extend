@@ -6,10 +6,9 @@ use extend_protocol::ErrorCode;
 
 use crate::error::CliError;
 
-const NO_TEAMS: &str = "Extend 4 has no Teams: a device belongs to the Carbon who paired it, and a Silicon uses the devices it was given access to.";
+const NO_TEAMS: &str = "Devices aren't shared through groups any more: a device belongs to the Carbon who paired it, and a Silicon uses the devices it was given access to.";
 const NO_TESTS: &str = "Extend 4 has no test environments.";
-const ONE_SIGN_IN: &str =
-    "A state directory holds one sign-in (Silicon Accounts has no organizations to choose between).";
+const ONE_SIGN_IN: &str = "A state directory holds one sign-in, of one account.";
 
 /// `extend <words…>` when it names a removed command.
 pub fn command(words: &[&str]) -> Option<CliError> {
@@ -50,7 +49,7 @@ pub fn command(words: &[&str]) -> Option<CliError> {
         ),
         ["device", "importable" | "import", ..] => gone(
             &format!("device {}", words[1]),
-            "Devices aren't imported into organizations any more: every device you paired is yours.",
+            "Devices aren't imported any more: every device you paired is yours.",
             "List them with `extend device ls`.",
         ),
         ["device", "visibility", ..] => gone(
@@ -94,11 +93,11 @@ pub fn flag(path: &str, flag: &str) -> Option<CliError> {
             "Drop --visibility; give Silicons access with --access <si:id> (pair) or `extend device access grant`.",
         ),
         ("ting status" | "ting on", "--all-teams") => removed(
-            "Extend's notifications reach an account through one registration, not one per Team.",
+            "Extend's notifications reach an account through one registration.",
             "Drop --all-teams.",
         ),
         ("device wake-requests", "--only-team") => removed(
-            "a Silicon has one grant per device, not one per Team.",
+            "a Silicon has one grant per device.",
             "Drop --only-team; --silicon <si:id> alone mutes that Silicon on your pair.",
         ),
         _ => None,

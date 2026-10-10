@@ -10,8 +10,8 @@ silicon-extend-client = "4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Everyone signs in with [Silicon Accounts](https://accounts.teamofsilicons.com): there are no
-organizations to choose, and a device belongs to the Carbon who paired it. Account calls use API v2
+Everyone signs in with [Silicon Accounts](https://accounts.teamofsilicons.com) with a personal
+account, and a device belongs to the Carbon who paired it. Account calls use API v2
 (`/api/v2/…`); the device wire the installed Extend apps speak stays API v1, and the client pins
 each request to the major its path names.
 

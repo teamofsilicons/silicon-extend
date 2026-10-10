@@ -17,8 +17,7 @@ extend accounts --json               # app_id "extend", the Silicon Accounts and
 extend logout
 ```
 
-Everyone signs in with Silicon Accounts. Extend never asks for a password, and there are no
-organizations to choose.
+Everyone signs in with Silicon Accounts, with a personal account. Extend never asks for a password.
 
 - **Carbons** approve a code: `extend login` prints a link and a code; open the link on any device,
   check it is Extend asking, and approve. The CLI waits (up to 10 minutes). `--open` opens the link
@@ -191,8 +190,8 @@ extend ting status                                                  # do Extend'
 
 ## What Extend 4 removed
 
-Extend 4 has no Teams and no test environments. These Extend 3 spellings are refused with exit 2,
-saying what to do instead: `--team`, `--test`, `extend team …`, `extend permission …`, `extend env`,
+Devices aren't shared through groups any more, and there are no test environments. These Extend 3
+spellings are refused with exit 2, saying what to do instead: `--team`, `--test`, `extend team …`, `extend permission …`, `extend env`,
 `extend config test …`, `extend login contexts|use`, `extend device import|importable|visibility`,
 and the flags `--visibility`, `--team-visible`, `--all-teams` and `--only-team`. A script that still
 sets `EXTEND_TEST_SECRET` is refused before anything is sent. A sign-in Extend 3 saved is never used:

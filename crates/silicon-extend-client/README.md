@@ -59,7 +59,7 @@ Access tokens live 30 minutes. When Extend answers `401 token_expired`
   `silicon(id)`, `silicon_grants(id)`, `renounce(silicon, device)`, and the `silicon` filter on
   sessions, files and requests.
 
-There are no Teams: a device belongs to the Carbon who paired it and the Silicons they give access
+A device belongs to the Carbon who paired it and the Silicons they give access
 to, by `si:` id or uuid. A Carbon sees and can stop what the Silicons they look after do in
 Extend, and never acts as them.
 
