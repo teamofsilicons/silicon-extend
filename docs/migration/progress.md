@@ -539,8 +539,14 @@ Added canonical UUID acceptance, an explicit identity-column mapping consumer wi
 
 The checked CSV consumer now refuses incomplete legacy-account coverage before changing data and parks unaccepted prepared notifications without rewriting historical body/event identities. Dry-run, apply, idempotent reapply, conflicting-map refusal and missing-map refusal passed populated PostgreSQL clones. Explicit pending notification fixtures verified immutable-body preservation and replay exclusion. See [uuid128.md](uuid128.md) for schema-specific preservation rules and local evidence. No production data or original checkout changed.
 
-World schema11 persists retired notification-body hashes. The actual send boundary fails closed if retirement cannot be checked. Accounts auth7/7 and schema/migration5/5 passed, including direct replay refusal; all-target service clippy passed (`.mig/uuid-delivery-tests.log`, `.mig/uuid-delivery-clippy.log`).
+World schema 11 persists retired notification-body hashes. The actual send boundary fails closed if retirement cannot be checked. Accounts auth 7/7 and schema/migration 5/5 passed, including direct replay refusal; all-target service clippy passed (`.mig/uuid-delivery-tests.log`, `.mig/uuid-delivery-clippy.log`).
 
 Verified webhook handling now ignores retired top-level subjects and embedded custodian identities before writing account state, and records an acknowledged delivery without reintroducing the retired account reference. Repeated delayed deliveries remain harmless. Regression covers signed-out subjects, custodian changes and profile updates; the Accounts webhook suite passed 9/9 (`.mig/uuid-event-suite.log`).
 
 The local development harness now accepts `EXTEND_DEV_BRIEFCASE_URL` and `EXTEND_DEV_BRIEFCASE_WEB_URL` for an existing real local Briefcase service, and skips starting its stand-in in that mode. Both URLs are restricted to loopback. This allows the same native screenshot/file path to be verified against actual Briefcase storage and delegated authorization.
+
+The final local macOS ARM64 CLI was rebuilt after UUID/auth fixes, then repackaged with required native signed-out discovery and extracted-archive validation. Evidence: `.mig/uuid-final-package.log`; artifacts remain local under `dist/apps/`. This is local release preparation, not publication.
+
+## Coordinated local UUID backfill — 10 October 2026
+
+With API/worker writers stopped and full database/private-state backups captured, applied the shared Accounts export (211 rows, SHA256 `750423f3117e11f5eb42025b457ff0f1bf42bd463c31b7e106d9cd10978ca4d9`) to `extend_e2e`: 20 cached account rows moved and 6 held proof grants were authenticated/resealed. Dry-run, apply and unchanged replay passed. Exact resource IDs, archive/prepared payloads, Hook secret ciphertext and decrypted DM/Extend proof hashes matched their pre-apply snapshots. The live store had no unaccepted prepared deliveries left to park; separate populated queue regressions cover that case. Evidence: Commit `.mig/cutover/applied.json` and `retention-verified.json`. Production remains untouched.
