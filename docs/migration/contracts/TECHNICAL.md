@@ -116,14 +116,14 @@ was a world of its own).
 
 ### Identifiers owned by other services
 
-Extend stores and passes these. It never mints or parses beyond the prefix rules below.
+Extend stores and passes these. It never mints account UUIDs; it validates their canonical format and the public-id prefix rules below.
 
 | Name | Example | Format | Owner |
 |---|---|---|---|
-| Account uuid | `zQo`, `8YnY5M4E` | Short, case-sensitive letters and digits; never contains `:`. Permanent: Extend keys every person on it. | Silicon Accounts |
+| Account uuid | `d7ce239a-7b3e-4e0b-9236-b936405c1fda` | A 128-bit (16-byte) UUIDv4, represented as a canonical lowercase 36-character hyphenated string. Permanent: Extend keys every person on it. Legacy short alphanumeric UUIDs remain parseable during migration; the cutover ledger rejects retired identities. | Silicon Accounts |
 | Carbon id | `c:alice` | `c:` + handle. The current public id: it can change, so Extend shows it and never keys on it. | Silicon Accounts |
 | Silicon id | `si:chef` | `si:` + handle, as above | Silicon Accounts |
-| Membership id | `extend:zQo` | `{app_id}:{uuid}` | Silicon Accounts |
+| Membership id | `extend:d7ce239a-7b3e-4e0b-9236-b936405c1fda` | `{app_id}:{uuid}` | Silicon Accounts |
 | `app_id` | `extend` | Extend's app id in Silicon Accounts and Silicon Apps | Silicon Apps |
 | App secret | `sa_app_extend_…` | Opaque; Extend's server-side credential for introspection, lookups and proofs | Silicon Apps |
 | Access token | `eyJ…` | EdDSA-signed JWT: `aud` = `extend`, `iss` = `ACCOUNTS_URL`, `sub` = account uuid, `kind`, `id`, `fid` (sign-in family), `iat`, `exp` (30 minutes) | Silicon Accounts |
@@ -1078,7 +1078,8 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
   the account's uuid, id, kind, name and custodian, how it signed in, and the Silicon Accounts and
   Extend URLs it is for; it is never sent anywhere else), `config.toml`,
   `sessions/acct-<hex of the uuid>/current` and `…/{session_id}.json` (device, capabilities; keyed by
-  the account, in hex because uuids are case-sensitive and some file systems aren't). Extend 3's
+  the account, with hex encoding retained for legacy case-sensitive identifiers on case-insensitive file systems;
+  new canonical UUIDs are lowercase). Extend 3's
   files are never used: its `auth.json` reads as "sign in again", and the next `login` or `logout`
   deletes its `contexts/` and `test/`.
 - **Token refresh** happens when less than 60 s are left, under an operating-system lock on
