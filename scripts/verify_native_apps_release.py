@@ -79,11 +79,15 @@ def verify(folder, app, version, target, source, verifier, output):
                 raise ValueError(f'{app} {arguments} failed: {result.stderr[:500]}')
         if not (commands[0]['stdout'].strip() or commands[0]['stderr'].strip()):
             raise ValueError('Help was empty')
-        if json.loads(commands[1]['stdout']).get('app_id') != app:
+        accounts = json.loads(commands[1]['stdout'])
+        if accounts.get('app_id') != app or accounts.get('version') != version:
             raise ValueError('Wrong Accounts app id')
         if json.loads(commands[2]['stdout']).get('authenticated') is not False:
             raise ValueError('Empty home must be signed out')
-        if commands[3]['stdout'].strip() != f'{app} {version}':
+        # Extend --version also reports negotiated service compatibility. Its local
+        # CLI and client version prefix is fixed; preserve the complete real output.
+        expected_prefix = f'extend {version} (silicon-extend-client {version}), API '
+        if not commands[3]['stdout'].startswith(expected_prefix):
             raise ValueError('Version output differs from manifest')
     report = {'app_id': app, 'version': commands[3]['stdout'].strip(), 'source_commit': source,
               'verifier_commit': verifier, 'target': target, 'archive': archive.name, 'sha256': digest,
