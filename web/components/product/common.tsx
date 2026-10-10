@@ -1,7 +1,7 @@
 "use client";
 import {useState, type ReactNode} from "react";
 import {useQuery, useQueryClient} from "@tanstack/react-query";
-import {Button} from "@/components/arc/button/button";
+import {Button} from "@/components/silicon-ui/button/button";
 import {ErrorAlert} from "@/components/foundation/feedback/error-alert";
 import {ApiError} from "@/lib/errors";
 import {request, type RequestOptions} from "@/lib/client/api";

@@ -1,6 +1,6 @@
 # Silicon Extend website
 
-Next.js 16, React 19 and the shared Silicon Arc UI. The product pages call the real Extend API through a same-origin server proxy. Silicon Accounts tokens stay in a sealed, HttpOnly cookie; the browser never receives an access or refresh token in JavaScript. Sign-in uses PKCE and state, token claims are checked against Accounts JWKS, and writes require a same-origin request.
+Next.js 16, React 19 and the shared Silicon Silicon UI. The product pages call the real Extend API through a same-origin server proxy. Silicon Accounts tokens stay in a sealed, HttpOnly cookie; the browser never receives an access or refresh token in JavaScript. Sign-in uses PKCE and state, token claims are checked against Accounts JWKS, and writes require a same-origin request.
 
 ## Run locally
 

@@ -2,9 +2,9 @@
 import Link from "next/link";
 import {useState} from "react";
 import {Page as Layout,PageHeader,Surface,Section} from "@/components/foundation/layout/layout";
-import {Button} from "@/components/arc/button/button";
-import {Textarea} from "@/components/arc/textarea/textarea";
-import {HoldToConfirm} from "@/components/arc/hold-to-confirm/hold-to-confirm";
+import {Button} from "@/components/silicon-ui/button/button";
+import {Textarea} from "@/components/silicon-ui/textarea/textarea";
+import {HoldToConfirm} from "@/components/silicon-ui/hold-to-confirm/hold-to-confirm";
 import {call,useResource,useAction,Feedback,Empty,ResourceError,More} from "./common";
 import {Sessions,Files} from "./device-detail";
 import type {Account,Silicon,Page,Grant,Request} from "@/lib/product/types";
