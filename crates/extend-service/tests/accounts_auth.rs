@@ -240,3 +240,14 @@ async fn retired_uuid_tokens_cannot_recreate_the_old_account() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn retired_notification_bodies_are_refused_even_if_an_operation_retries() {
+    let env = start().await;
+    let body = json!({"type":"extend.request","recipient":"OldAccount","value":"frozen"});
+    sqlx::query("INSERT INTO extend.accounts_uuid128_retired_bodies(body_sha256) VALUES(sha256(convert_to($1::jsonb::text,'UTF8')))").bind(&body).execute(&env.pool).await.unwrap();
+    let attempt = extend_service::delivery::send(&env.state, &extend_service::db::World::production(), &body).await;
+    assert!(attempt.disabled);
+    assert!(!attempt.delivered && !attempt.tried);
+    assert!(attempt.error.unwrap().contains("old notification is retired"));
+}

@@ -534,3 +534,9 @@ The inherited local Accounts stack scripts are completed and committed. Real Acc
 ## UUID128 compatibility and checked backfill — 10 October 2026
 
 Added canonical UUID acceptance, an explicit identity-column mapping consumer with transactional dry-run/apply/reapply and a retired-subject fence. Populated clone verification preserved resource IDs, provider paths, native credentials and signed bodies; 19 accounts and 6 encrypted proof grants migrated. See [uuid128.md](uuid128.md) for the cutover sequence and evidence. Production and original checkouts remain untouched.
+
+## UUID cutover replay and coverage verification — 10 October 2026
+
+The checked CSV consumer now refuses incomplete legacy-account coverage before changing data and parks unaccepted prepared notifications without rewriting historical body/event identities. Dry-run, apply, idempotent reapply, conflicting-map refusal and missing-map refusal passed populated PostgreSQL clones. Explicit pending notification fixtures verified immutable-body preservation and replay exclusion. See [uuid128.md](uuid128.md) for schema-specific preservation rules and local evidence. No production data or original checkout changed.
+
+World schema11 persists retired notification-body hashes. The actual send boundary fails closed if retirement cannot be checked. Accounts auth7/7 and schema/migration5/5 passed, including direct replay refusal; all-target service clippy passed (`.mig/uuid-delivery-tests.log`, `.mig/uuid-delivery-clippy.log`).

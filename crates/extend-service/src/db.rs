@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
     WORLD_3_1_VISIBLE_DEFAULT,
     crate::identity::WORLD_4_0_ACCOUNTS,
     WORLD_UUID128,
+    WORLD_UUID128_DELIVERY_FENCE,
 ];
 
 /// Schema version 6 (3.0): IAM feature approvals and OBO grants. Inert since 4.0 (Silicon
@@ -524,7 +525,7 @@ ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text 
 "#;
 
 /// The schema version this service brings the world to (4.0: Silicon Accounts, no Teams).
-pub const WORLD_VERSION: i32 = 10;
+pub const WORLD_VERSION: i32 = 11;
 
 /// Brings the global schema up to date, then the `extend` schema ([`ensure_world`]).
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
@@ -676,5 +677,13 @@ CREATE TABLE IF NOT EXISTS {s}.accounts_uuid128_map (
  kind text NOT NULL CHECK (kind IN ('carbon','silicon')),
  mapping_sha256 text NOT NULL,
  applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+"#;
+
+// A retried or reactivated wake operation must never send a frozen pre-cutover identity body.
+const WORLD_UUID128_DELIVERY_FENCE: &str = r#"
+CREATE TABLE {s}.accounts_uuid128_retired_bodies (
+ body_sha256 bytea PRIMARY KEY CHECK(octet_length(body_sha256)=32),
+ retired_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 "#;

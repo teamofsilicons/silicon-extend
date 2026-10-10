@@ -51,7 +51,7 @@ async fn an_empty_database_migrates_to_4_0() {
     let (_, pool) = database().await;
     db::migrate_global(&pool).await.unwrap();
     assert_eq!(version(&pool).await, db::WORLD_VERSION);
-    assert_eq!(db::WORLD_VERSION, 10);
+    assert_eq!(db::WORLD_VERSION, 11);
     for table in [
         "accounts",
         "accounts_events",

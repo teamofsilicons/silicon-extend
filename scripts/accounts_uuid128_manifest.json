@@ -35,5 +35,8 @@
     "device_access_archive and all *_iam_id: archived identities",
     "activity args/files/details and device setup/capabilities: device/user payloads, not account authority",
     "all native device/session IDs, credentials/digests, Briefcase file IDs/URLs and provider artifacts"
+  ],
+  "lock_tables": [
+    "extend.accounts_uuid128_retired_bodies"
   ]
 }

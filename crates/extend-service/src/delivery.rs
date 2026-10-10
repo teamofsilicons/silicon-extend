@@ -54,6 +54,29 @@ fn explain(e: &crate::error::AppError) -> String {
 
 /// Sends a frozen body, and records what Ting said about the type and the recipient.
 pub async fn send(state: &AppState, world: &World, body: &Value) -> Attempt {
+    let retired = sqlx::query_scalar::<_, bool>(sql!(
+        "SELECT EXISTS(SELECT 1 FROM {} WHERE body_sha256=sha256(convert_to($1::jsonb::text,'UTF8')))",
+        world.t("accounts_uuid128_retired_bodies")
+    ))
+    .bind(body)
+    .fetch_one(&state.pool)
+    .await;
+    match retired {
+        Ok(true) => {
+            return Attempt {
+                disabled: true,
+                error: Some("Accounts identity migrated; this old notification is retired.".to_owned()),
+                ..Attempt::default()
+            };
+        }
+        Err(_) => {
+            return Attempt {
+                error: Some("Could not confirm whether this notification was retired; retry later.".to_owned()),
+                ..Attempt::default()
+            };
+        }
+        Ok(false) => {}
+    }
     if !state.notifier.enabled() {
         return Attempt {
             disabled: true,
