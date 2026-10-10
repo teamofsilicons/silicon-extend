@@ -542,3 +542,5 @@ The checked CSV consumer now refuses incomplete legacy-account coverage before c
 World schema11 persists retired notification-body hashes. The actual send boundary fails closed if retirement cannot be checked. Accounts auth7/7 and schema/migration5/5 passed, including direct replay refusal; all-target service clippy passed (`.mig/uuid-delivery-tests.log`, `.mig/uuid-delivery-clippy.log`).
 
 Verified webhook handling now ignores retired top-level subjects and embedded custodian identities before writing account state, and records an acknowledged delivery without reintroducing the retired account reference. Repeated delayed deliveries remain harmless. Regression covers signed-out subjects, custodian changes and profile updates; the Accounts webhook suite passed 9/9 (`.mig/uuid-event-suite.log`).
+
+The local development harness now accepts `EXTEND_DEV_BRIEFCASE_URL` and `EXTEND_DEV_BRIEFCASE_WEB_URL` for an existing real local Briefcase service, and skips starting its stand-in in that mode. Both URLs are restricted to loopback. This allows the same native screenshot/file path to be verified against actual Briefcase storage and delegated authorization.

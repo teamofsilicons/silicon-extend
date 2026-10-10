@@ -160,7 +160,14 @@ class Config:
         self.web_port, self.api_port, self.briefcase_port = self.base, self.base + 1, self.base + 2
         self.api_url = f"http://127.0.0.1:{self.api_port}"
         self.webhook_url = f"{self.api_url}{WEBHOOK_PATH}"
-        self.briefcase_url = f"http://127.0.0.1:{self.briefcase_port}"
+        self.external_briefcase = environ.get("EXTEND_DEV_BRIEFCASE_URL", "").rstrip("/")
+        self.briefcase_url = self.external_briefcase or f"http://127.0.0.1:{self.briefcase_port}"
+        self.briefcase_web_url = environ.get("EXTEND_DEV_BRIEFCASE_WEB_URL", self.briefcase_url).rstrip("/")
+        for name, value in (("EXTEND_DEV_BRIEFCASE_URL", self.briefcase_url),
+                            ("EXTEND_DEV_BRIEFCASE_WEB_URL", self.briefcase_web_url)):
+            parsed = urlparse(value)
+            if parsed.scheme not in ("http", "https") or parsed.hostname not in LOOPBACK:
+                raise Failure(f"{name} must point to a local Briefcase service")
         self.pg = environ.get("EXTEND_DEV_PG", "postgres://postgres@127.0.0.1:5460").rstrip("/")
         self.db = environ.get("EXTEND_DEV_DB", "extend_e2e")
         self.dir = Path(environ.get("EXTEND_DEV_DIR", ROOT / ".mig" / "dev-accounts")).resolve()
@@ -229,7 +236,7 @@ class Config:
         })
         if self.files == "briefcase":
             env["EXTEND_BRIEFCASE_URL"] = self.briefcase_url
-            env["EXTEND_BRIEFCASE_WEB_URL"] = f"http://localhost:{self.briefcase_port}"
+            env["EXTEND_BRIEFCASE_WEB_URL"] = self.briefcase_web_url
         return env
 
 
@@ -444,6 +451,8 @@ def give_webhook_back(cfg):
 def start_briefcase_stub(cfg):
     if cfg.files != "briefcase":
         return "not used (EXTEND_DEV_FILES=local)"
+    if cfg.external_briefcase:
+        return f"using existing local Briefcase at {cfg.briefcase_url}"
     if running(cfg, "extend-briefcase-stub"):
         return "already running"
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "BRIEFCASE_STUB_APP_SECRET": cfg.briefcase_secret}
