@@ -303,3 +303,81 @@ where the code needed an answer. Contract changes are proposed, not applied:
     `understanding-proposal.md` §8.
 57. **Telemetry** is unchanged (Space Station through Extend's `/api/v2/telemetry`, opt-out, command
     and step names only); it never refreshes a sign-in just to send an event.
+
+# Packaging, CI, deployment and docs (stage 3, 2026-10-10)
+
+## Packaging
+
+58. **One Silicon Apps archive per target**: `apps.yaml` naming only that target, `bin/extend`
+    (`bin/extend.exe`), and `licences/` with `LICENSE`, `THIRD_PARTY_NOTICES.md` and
+    `THIRD_PARTY_LICENSES.txt`. The licences stay because the binary carries MIT and Apache crates
+    whose notices must travel with every copy (the Honeycomb archive carried them too); Silicon
+    Apps' validation accepts files the manifest doesn't name, and installs the whole package.
+59. **The archive's version is the CLI crate's** (`crates/extend-cli/Cargo.toml`, 4.0.0), not the
+    workspace's (1.1.0, the desktop apps'); the packager refuses any other. Its discovery check reads
+    the version from `extend accounts --json` (offline) and never runs `extend --version`, which
+    asks the Extend service which API versions it speaks: packaging must not depend on the network.
+60. **Discovery runs where the binary can run.** The release runners build natively except the
+    ARM64 Windows binary (cross-built on x64) and the Intel Mac binary (on Apple silicon, Rosetta or
+    not): `--discovery require` for the four native builds, `auto` for those two, whose commands
+    Silicon Apps' worker runs at upload anyway. A Linux binary needing glibc newer than 2.39
+    (Ubuntu 24.04: the runners, the validation workers, the fleet) is refused.
+61. **Release tags keep the repo's two lanes**: `cli-v<CLI version>` releases the CLI alone and
+    `v<workspace version>` the whole product, desktop apps included; both pack the CLI at its own
+    version, and the tag must match its version. Same runners and toolchains as before: native
+    Ubuntu 24.04 builds (Extend never used a zigbuild glibc baseline), MSVC on Windows, macOS 15.
+62. **The packer runs isolated**: `silicon-apps validate|pack` with an empty `--home` and
+    `--server`/`--accounts-url` pointing at a loopback port nothing listens on, so a sign-in saved on
+    the machine (this Mac's CLIs are signed in to production) is never read or used.
+
+## Deployment
+
+63. **The host's renderer** requires `EXTEND_APP_SECRET` and `EXTEND_ACCOUNTS_WEBHOOK_SECRET` with
+    the database URL, delegation key, Postmark token and report recipients; it defaults
+    `ACCOUNTS_URL` and `EXTEND_APP_ID` to production. `EXTEND_TING_URL` has **no default**: the 3.x
+    renderer defaulted it to Ting's production URL, which with 4.0 would have turned notifications
+    through Ting on at cutover, against D4. Extend 3's keys are named (never their values) and never
+    forwarded, so the secret can keep them until a rollback is no longer wanted.
+64. **Host helpers are refreshed over SSM** (`deploy/aws/refresh-host-helper.py`, prints what it
+    would send unless `--send`), never by a stack update: the instance has stop protection, so
+    CloudFormation can't apply new UserData, and a stop would change the public IP. The old helper is
+    kept beside the new one as a `.bak`, which is the renderer's rollback.
+65. **Rollback restores the snapshot into a new instance and points `EXTEND_DATABASE_URL` at it**,
+    rather than renaming RDS instances under the CloudFormation-managed one; the 4.0 database stays
+    for a later attempt.
+66. **The CLI release comes last in the window**, after the service and website check out: Silicon
+    Apps has no earlier `extend` release to fall back to (3.x lives in Honeycomb), so a rollback after
+    a CLI release would send Silicons back to Honeycomb.
+67. **`allowed_origins` isn't needed** in Extend's sign-in setup (it is for pages that frame the
+    sign-in buttons; the website uses the hosted pages). The service stage's note listed it.
+
+## Development and CI
+
+68. **The local Silicon Accounts stand-in signs the CLI in the way Silicon Accounts does**: it mints
+    short-lived tokens (`POST /dev/accounts/slt`) and answers the token endpoint's short-lived token
+    and refresh grants and the revoke endpoint for `client_id=extend`. So the real CLI's sign-in,
+    refresh and logout paths run against a local service, and `e2e/cli-e2e.sh` (rewritten for
+    Extend 4, 117 checks, still in CI) needs no Silicon Accounts stack. It is development-only: the
+    routes refuse unless `EXTEND_ACCOUNTS_MODE=local`, production refuses that mode, and Caddy
+    answers 404 for `/dev/*`. It has no device flow; Carbons sign in locally with a short-lived token
+    too (production allows that as well).
+69. **The manual hardware lanes** (Android adb and recording, Linux recording, macOS text) sign in the
+    same way; they need devices or Docker and weren't run here.
+70. **Extend 3's records move to `docs/history/`** unchanged, with an index. Removed, because they
+    can't run against Extend 4 and rehearsed an upgrade that is done: the real-IAM harness
+    (`e2e/real-iam`), the released 1.0 CLI lane and the 1.0 website rehearsal (their results stay in
+    `docs/history/verification.md`, the code in git history). Kept and marked "Extend 3 only": the
+    three 1.0 to 1.1 device-agent rehearsals, the closest thing to a test of released device apps
+    against a new service; re-targeting one at the released 1.1 apps and service 4.0 would be the
+    strongest proof that installed apps keep working.
+71. **The device apps' copy goes back to 1.1's per-Carbon wording** (each Carbon has their own pair;
+    revoking removes the device from that Carbon's account), and the desktop app stops showing a
+    pair's stored Team (new pairs store an empty one, which its status line printed as "in "). The
+    wire is unchanged and nothing is released now.
+72. **The 3.x website is left as it is** in this stage: the web stages replace `web/` wholesale with
+    the Next.js site, including its Vercel settings and docs pages. Its sweep hits are listed as
+    intentional until then.
+73. **Briefcase's contract moved since the service stage**: its latest cutover notes say the byte
+    transfer no longer needs `X-Org-ID` and permanent links take the owner-id form, keeping the
+    `/org/{…}/…` form Extend writes as an alias. Not changed here; the cutover runbook and progress
+    log flag it for the integration stage.

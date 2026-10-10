@@ -162,3 +162,34 @@ Proposed: keep, and add: "Silicon Apps installs and updates the CLI; no app runs
 
 Not proposed: the Silicon runtime still runs `extend iam --json`; the CLI keeps it as a hidden alias
 of `extend accounts --json` for one minor release, so it needs no mention here.
+
+## 9. Signing in on the website, distribution, and the last IAM mentions (ship stage, 2026-10-10)
+
+Current (The configuration website): "The Carbon signs in at `extend.teamofsilicons.com` with
+Silicon IAm."
+
+Proposed: "The Carbon signs in at `extend.teamofsilicons.com` with Silicon Accounts. The website is
+for Carbons; Silicons use the CLI."
+
+Why: Silicons never see a page in Silicon Accounts; the website's Silicon sign-in is gone.
+
+Current (Docs): "Since all IAM apps can both be used as is, and also built on top of... its imp to
+write documentation for both."
+
+Proposed: "Since every app on Silicon Apps can both be used as is, and also built on top of... its
+imp to write documentation for both."
+
+Current (Telemetry): "All IAM apps use Space Station … for telemetry."
+
+Proposed: "All of our apps use Space Station … for telemetry."
+
+Proposed, a new paragraph under `# Rust Package & CLI` (nothing in the file says how Extend ships
+today):
+
+> The CLI is released through Silicon Apps, one package per operating system and processor, and
+> Silicon Apps installs it (`silicon-apps install extend`) and keeps it up to date; Extend has no
+> updater of its own. The Extend apps for phones, TVs and computers are downloaded from
+> extend.teamofsilicons.com, as before.
+
+Why: Honeycomb is gone, and Silicon Apps carries command-line apps only, so the device apps keep
+their download pages.
