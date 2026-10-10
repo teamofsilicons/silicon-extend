@@ -1,0 +1,32 @@
+{
+  "api_version": 2,
+  "call": "Authed::me",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "auth.me",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "GET",
+    "path": "/api/v2/me"
+  },
+  "response": {
+    "non_null": [
+      "/id",
+      "/type",
+      "/uuid"
+    ],
+    "required": [
+      "/id",
+      "/type",
+      "/uuid"
+    ],
+    "status": "2xx",
+    "type": "me"
+  }
+}

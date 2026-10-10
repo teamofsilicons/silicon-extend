@@ -1,0 +1,47 @@
+{
+  "api_version": 2,
+  "call": "Authed::keep_file",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "file"
+  ],
+  "operation": "files.keep",
+  "request": {
+    "body": {
+      "data": {},
+      "type": "keep"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "POST",
+    "path": "/api/v2/files/{file_id}/keep"
+  },
+  "response": {
+    "non_null": [
+      "/content_type",
+      "/file_id",
+      "/kind",
+      "/name",
+      "/permanent",
+      "/size_bytes",
+      "/url"
+    ],
+    "required": [
+      "/content_type",
+      "/file_id",
+      "/kind",
+      "/name",
+      "/permanent",
+      "/self_destruct_at",
+      "/size_bytes",
+      "/url"
+    ],
+    "status": "2xx",
+    "type": "file"
+  }
+}

@@ -1,4 +1,6 @@
-//! Everything the CLI keeps on disk, under `{home}/.extend/` (`understanding/cli.yaml`, state_files).
+//! Everything the CLI keeps on disk, under `{home}/.extend/` (`docs/migration/contracts/cli.yaml`,
+//! state_files): the sign-in (`auth.json`, see `signin.rs`), settings (`config.toml`) and what it
+//! last read about device sessions (`sessions/`).
 //!
 //! `home` is `$SILICON_HOME`, else the user's home directory. `extend config home <dir>` moves the
 //! state to `<dir>/.extend`; the chosen directory is recorded in `{default}/.extend/home` so later
@@ -70,7 +72,9 @@ pub fn point_to(new_root: &Path) -> anyhow::Result<()> {
     write_private(&pointer(), home.to_string_lossy().as_bytes())
 }
 
-/// The state files and directories, relative to the state directory.
+/// The state files and directories, relative to the state directory. `test` and `contexts` are
+/// Extend 3's (test environments and per-organization sign-ins): moved along so nothing is left
+/// behind, and removed at the next sign-in or sign-out.
 pub const STATE_ENTRIES: &[&str] = &["auth.json", "config.toml", "test", "sessions", "contexts"];
 
 /// Which of [`STATE_ENTRIES`] exist in `root`.
@@ -157,244 +161,6 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Auth {
-    pub api_url: String,
-    pub access_token: String,
-    pub refresh_token: String,
-    /// Unix seconds when the access token expires.
-    pub expires_at: i64,
-    pub member_id: String,
-    pub member_kind: String,
-    pub teams: Vec<String>,
-    pub team: Option<String>,
-}
-
-/// Where login state lives: production, or one test environment.
-#[derive(Debug, Clone)]
-pub enum Plane {
-    Production,
-    Test { id: String, secret: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TestEnv {
-    /// Saved by `extend config test add`. Empty when the environment is used through
-    /// `EXTEND_TEST_SECRET`, which is never written to disk.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub secret: String,
-    pub name: Option<String>,
-    pub auth: Option<Auth>,
-    /// Digest of an `EXTEND_TEST_SECRET` already checked to belong to this environment.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verified_env_secret: Option<String>,
-}
-
-impl Plane {
-    pub fn auth_path(&self) -> PathBuf {
-        match self {
-            Plane::Production => root().join("auth.json"),
-            Plane::Test { id, .. } => test_path(id),
-        }
-    }
-    pub fn is_test(&self) -> bool {
-        matches!(self, Plane::Test { .. })
-    }
-}
-
-fn test_path(id: &str) -> PathBuf {
-    root().join("test").join(format!("{id}.json"))
-}
-
-/// The saved test environment `id`, or `None` when it was never added or used.
-pub fn find_test(id: &str) -> anyhow::Result<Option<TestEnv>> {
-    let path = test_path(id);
-    match fs::read(&path) {
-        Ok(raw) => Ok(Some(
-            serde_json::from_slice(&raw).with_context(|| format!("reading {}", path.display()))?,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
-}
-
-pub fn save_test(id: &str, env: &TestEnv) -> anyhow::Result<()> {
-    write_private(&test_path(id), &serde_json::to_vec_pretty(env)?)
-}
-
-pub fn remove_test(id: &str) -> bool {
-    let _ = fs::remove_dir_all(root().join("contexts").join(format!("test-{id}")));
-    fs::remove_file(test_path(id)).is_ok()
-}
-
-pub fn list_tests() -> Vec<(String, TestEnv)> {
-    let Ok(dir) = fs::read_dir(root().join("test")) else {
-        return vec![];
-    };
-    let mut v: Vec<_> = dir
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let id = name.strip_suffix(".json")?.to_owned();
-            let env: TestEnv = serde_json::from_slice(&fs::read(e.path()).ok()?).ok()?;
-            Some((id, env))
-        })
-        .collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
-    v
-}
-
-pub fn load_auth(plane: &Plane) -> Option<Auth> {
-    match plane {
-        Plane::Production => serde_json::from_slice(&fs::read(plane.auth_path()).ok()?).ok(),
-        Plane::Test { id, .. } => find_test(id).ok()??.auth,
-    }
-}
-
-pub fn save_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
-    let _lock = Lock::acquire("auth-context");
-    if let Some(auth) = auth {
-        if let Some(previous) = load_auth(plane) {
-            save_context(plane, &previous)?;
-        }
-        save_context(plane, auth)?;
-    } else if let Some(old) = load_auth(plane) {
-        let _ = fs::remove_file(context_path(plane, &old));
-    }
-    save_selected_auth(plane, auth)
-}
-
-fn save_selected_auth(plane: &Plane, auth: Option<&Auth>) -> anyhow::Result<()> {
-    match plane {
-        Plane::Production => match auth {
-            Some(a) => write_private(&plane.auth_path(), &serde_json::to_vec_pretty(a)?),
-            None => {
-                let _ = fs::remove_file(plane.auth_path());
-                Ok(())
-            }
-        },
-        Plane::Test { id, .. } => {
-            let mut env = find_test(id)?.unwrap_or_default();
-            env.auth = auth.cloned();
-            save_test(id, &env)
-        }
-    }
-}
-
-impl Auth {
-    pub fn same_context(&self, other: &Self) -> bool {
-        self.api_url == other.api_url
-            && self.member_kind == other.member_kind
-            && self.member_id == other.member_id
-            && self.team == other.team
-    }
-}
-
-fn contexts_dir(plane: &Plane) -> PathBuf {
-    let world = match plane {
-        Plane::Production => "production".to_owned(),
-        Plane::Test { id, .. } => format!("test-{id}"),
-    };
-    root().join("contexts").join(world)
-}
-
-fn context_digest(auth: &Auth) -> String {
-    let binding = serde_json::to_string(&(&auth.api_url, &auth.member_kind, &auth.member_id, &auth.team))
-        .expect("serializable identity");
-    extend_protocol::ids::secret_digest(&binding)
-}
-fn context_path(plane: &Plane, auth: &Auth) -> PathBuf {
-    contexts_dir(plane).join(format!("{}.json", context_digest(auth)))
-}
-
-pub fn save_context(plane: &Plane, auth: &Auth) -> anyhow::Result<()> {
-    write_private(&context_path(plane, auth), &serde_json::to_vec_pretty(auth)?)
-}
-
-pub fn load_context(plane: &Plane, original: &Auth) -> Option<Auth> {
-    let saved: Option<Auth> = fs::read(context_path(plane, original))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
-    saved
-        .filter(|a| a.same_context(original))
-        .or_else(|| load_auth(plane).filter(|a| a.same_context(original)))
-}
-
-/// Refresh an original context without changing a concurrently selected account or organization.
-pub fn save_refreshed_context(plane: &Plane, original: &Auth, auth: &Auth) -> anyhow::Result<bool> {
-    let _lock = Lock::acquire("auth-context");
-    if !load_context(plane, original).is_some_and(|saved| saved.refresh_token == original.refresh_token) {
-        return Ok(false);
-    }
-    save_context(plane, auth)?;
-    if load_auth(plane).is_some_and(|current| current.same_context(auth)) {
-        save_selected_auth(plane, Some(auth))?;
-    }
-    Ok(true)
-}
-
-pub fn remove_context(plane: &Plane, auth: &Auth) -> anyhow::Result<()> {
-    let _lock = Lock::acquire("auth-context");
-    let _ = fs::remove_file(context_path(plane, auth));
-    if load_auth(plane).is_some_and(|selected| selected.same_context(auth)) {
-        save_selected_auth(plane, None)?;
-    }
-    Ok(())
-}
-
-pub fn contexts(plane: &Plane) -> Vec<Auth> {
-    let mut items: Vec<Auth> = fs::read_dir(contexts_dir(plane))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| serde_json::from_slice(&fs::read(e.path()).ok()?).ok())
-        .collect();
-    if let Some(auth) = load_auth(plane) {
-        items.retain(|a| !a.same_context(&auth));
-        items.push(auth);
-    }
-    items.sort_by(|a, b| (&a.member_id, &a.team).cmp(&(&b.member_id, &b.team)));
-    items
-}
-
-/// A simple lock so two CLI processes don't refresh the same token at once. After 10 s the caller
-/// goes on without it: the refresh carries an idempotency key derived from the refresh token, so two
-/// refreshes of one token get the same answer. Only a lock this process created is removed.
-pub struct Lock(Option<PathBuf>);
-
-impl Lock {
-    pub fn acquire(name: &str) -> Self {
-        let path = root().join(format!("{name}.lock"));
-        let _ = fs::create_dir_all(root());
-        for _ in 0..200 {
-            match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Self(Some(path)),
-                Err(_) => {
-                    // A lock older than 30 s belongs to a process that died.
-                    let stale = fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|e| e.as_secs() > 30);
-                    if stale {
-                        let _ = fs::remove_file(&path);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
-        }
-        Self(None)
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        if let Some(path) = &self.0 {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
-
 // ── config.toml: flat `key = "value"` lines ──
 
 /// One setting: its key, what it does and takes, and its default.
@@ -407,8 +173,13 @@ pub struct Setting {
 pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "api_url",
-        about: "Extend service URL: https, or http for a local address only",
+        about: "Extend service URL: https, or http for this machine only (EXTEND_API_URL overrides it)",
         default: "https://backend.extend.teamofsilicons.com",
+    },
+    Setting {
+        key: "accounts_url",
+        about: "Silicon Accounts URL to sign in at: https, or http for this machine only (ACCOUNTS_URL overrides it)",
+        default: "https://accounts.teamofsilicons.com",
     },
     Setting {
         key: "telemetry",
@@ -419,11 +190,6 @@ pub const SETTINGS: &[Setting] = &[
         key: "output",
         about: "text|json; json makes --json the default",
         default: "text",
-    },
-    Setting {
-        key: "team",
-        about: "default team handle (a team this login reaches)",
-        default: "the first team of the login",
     },
     Setting {
         key: "screenshot_scale",
@@ -492,38 +258,33 @@ pub struct SessionCache {
     pub os: String,
     pub capabilities: Vec<String>,
     pub commands: Vec<String>,
-    pub test_id: Option<String>,
     #[serde(default)]
     pub missing: Vec<MissingNote>,
     /// Unix seconds of the last refresh from the service.
     #[serde(default)]
     pub refreshed_at: i64,
-    /// The Team the session runs in (a Silicon's sessions belong to one of its Teams). Commands in
-    /// the session use it when no `--team` is given, so a session started with `--team globex`
-    /// keeps working without repeating it.
-    #[serde(default)]
-    pub team: Option<String>,
 }
 
-fn sessions_dir(plane: &Plane, auth: Option<&Auth>) -> PathBuf {
-    let base = auth
-        .map(|a| root().join("sessions").join(context_digest(a)))
-        .unwrap_or_else(|| root().join("sessions"));
-    match plane {
-        Plane::Production => base.clone(),
-        Plane::Test { id, .. } => base.join(format!("test-{id}")),
+/// Where one account's device sessions are cached: `sessions/acct-<hex of its uuid>/`. Uuids are
+/// case-sensitive (`zQo` is not `ZQO`) and some file systems are not, so the directory name spells
+/// the uuid's bytes in hex. Signed out, `sessions/` itself.
+pub fn sessions_dir(account: Option<&str>) -> PathBuf {
+    let base = root().join("sessions");
+    match account {
+        Some(uuid) => base.join(format!("acct-{}", extend_protocol::ids::hex_lower(uuid.as_bytes()))),
+        None => base,
     }
 }
 
-pub fn current_session(plane: &Plane, auth: Option<&Auth>) -> Option<String> {
-    fs::read_to_string(sessions_dir(plane, auth).join("current"))
+pub fn current_session(account: Option<&str>) -> Option<String> {
+    fs::read_to_string(sessions_dir(account).join("current"))
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
 }
 
-pub fn set_current_session(plane: &Plane, auth: Option<&Auth>, id: Option<&str>) -> anyhow::Result<()> {
-    let path = sessions_dir(plane, auth).join("current");
+pub fn set_current_session(account: Option<&str>, id: Option<&str>) -> anyhow::Result<()> {
+    let path = sessions_dir(account).join("current");
     match id {
         Some(id) => write_private(&path, id.as_bytes()),
         None => {
@@ -533,19 +294,58 @@ pub fn set_current_session(plane: &Plane, auth: Option<&Auth>, id: Option<&str>)
     }
 }
 
-pub fn save_session_cache(plane: &Plane, auth: Option<&Auth>, c: &SessionCache) -> anyhow::Result<()> {
+pub fn save_session_cache(account: Option<&str>, c: &SessionCache) -> anyhow::Result<()> {
     write_private(
-        &sessions_dir(plane, auth).join(format!("{}.json", c.session_id)),
+        &sessions_dir(account).join(format!("{}.json", c.session_id)),
         &serde_json::to_vec_pretty(c)?,
     )
 }
 
-pub fn load_session_cache(plane: &Plane, auth: Option<&Auth>, id: &str) -> Option<SessionCache> {
-    serde_json::from_slice(&fs::read(sessions_dir(plane, auth).join(format!("{id}.json"))).ok()?).ok()
+pub fn load_session_cache(account: Option<&str>, id: &str) -> Option<SessionCache> {
+    serde_json::from_slice(&fs::read(sessions_dir(account).join(format!("{id}.json"))).ok()?).ok()
 }
 
-pub fn remove_session_cache(plane: &Plane, auth: Option<&Auth>, id: &str) {
-    let _ = fs::remove_file(sessions_dir(plane, auth).join(format!("{id}.json")));
+pub fn remove_session_cache(account: Option<&str>, id: &str) {
+    let _ = fs::remove_file(sessions_dir(account).join(format!("{id}.json")));
+}
+
+/// Forgets every cached device session of one account (it signed out).
+pub fn forget_sessions(account: &str) {
+    let _ = fs::remove_dir_all(sessions_dir(Some(account)));
+}
+
+/// Extend 3's state that Extend 4 no longer reads: per-organization sign-ins (`contexts/`), test
+/// environments (`test/`), the lock around them, and session caches kept per organization context
+/// (`sessions/<64 hex>/`, and `sessions/current` from before sign-in). Returns what is there.
+pub fn legacy_state() -> Vec<PathBuf> {
+    let r = root();
+    let mut found: Vec<PathBuf> = ["contexts", "test", "auth-context.lock"]
+        .iter()
+        .map(|e| r.join(e))
+        .filter(|p| p.exists())
+        .collect();
+    if let Ok(dir) = fs::read_dir(r.join("sessions")) {
+        for e in dir.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                found.push(e.path());
+            }
+        }
+    }
+    found
+}
+
+/// Deletes [`legacy_state`]. Returns what it deleted.
+pub fn remove_legacy_state() -> Vec<PathBuf> {
+    let found = legacy_state();
+    for p in &found {
+        if p.is_dir() {
+            let _ = fs::remove_dir_all(p);
+        } else {
+            let _ = fs::remove_file(p);
+        }
+    }
+    found
 }
 
 #[cfg(test)]

@@ -38,8 +38,6 @@ pub const API_VERSION_HEADER: &str = "Silicon-Extend-API-Version";
 /// 1.x only: the header that selected a Honeycomb test environment. A 2.0 service has no test
 /// environments and refuses a request that sends it.
 pub const TESTING_SECRET_HEADER: &str = "X-Testing-Application-Secret";
-/// 1.x only: the header that named a Team. A 2.0 service has no Teams and ignores it.
-pub const TEAM_HEADER: &str = "X-Org-ID";
 /// Seconds a pairing code stays valid.
 pub const PAIRING_CODE_TTL_S: i64 = 300;
 /// Seconds without a command before a session ends on its own.

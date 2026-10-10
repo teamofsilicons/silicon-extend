@@ -1,0 +1,44 @@
+{
+  "api_version": 2,
+  "call": "Authed::setup_code",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "attached"
+  ],
+  "operation": "devices.setup_code",
+  "request": {
+    "body": {
+      "data": {
+        "code": "1234"
+      },
+      "type": "setup_code"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "POST",
+    "path": "/api/v2/devices/{attached_id}/setup/code"
+  },
+  "response": {
+    "non_null": [
+      "/state",
+      "/steps",
+      "/steps/*/key",
+      "/steps/*/status",
+      "/steps/*/title"
+    ],
+    "required": [
+      "/state",
+      "/steps",
+      "/steps/*/key",
+      "/steps/*/status",
+      "/steps/*/title"
+    ],
+    "status": "2xx",
+    "type": "setup"
+  }
+}

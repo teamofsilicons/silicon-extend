@@ -1,10 +1,11 @@
-//! Reading the compatibility matrix (`GET /api/v1/contracts`) for `extend version`: whether the API
+//! Reading the compatibility matrix (`GET /api/v2/contracts`) for `extend version`: whether the API
 //! this CLI speaks is current, deprecated or sunset, and whether this CLI's version is one it works
 //! with.
 
 use serde_json::{Value, json};
 
-pub const UPDATE: &str = "honeycomb install 'extend'";
+/// Silicon Apps keeps extend up to date on its own; this checks for an update now.
+pub const UPDATE: &str = "silicon-apps update extend";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Status {
@@ -250,7 +251,7 @@ mod tests {
         assert_eq!(
             s.message,
             "API v1 is deprecated since 2026-09-01; Extend retires it after 7 consecutive days with zero requests, \
-             no earlier than 2026-10-04. Update with `honeycomb install 'extend'` before then."
+             no earlier than 2026-10-04. Update with `silicon-apps update extend` before then."
         );
 
         let s = evaluate(&matrix("sunset", ">=1.0.0, <2.0.0"), 1, "1.0.0");

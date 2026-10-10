@@ -1,0 +1,42 @@
+{
+  "api_version": 2,
+  "call": "Authed::set_wake_settings",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "wake_settings.update",
+  "request": {
+    "body": {
+      "data": {
+        "muted": true,
+        "silicon_id": "{silicon_id}"
+      },
+      "type": "wake_settings"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "PUT",
+    "path": "/api/v2/devices/{device_id}/wake-settings"
+  },
+  "response": {
+    "non_null": [
+      "/device_id",
+      "/muted",
+      "/silicons_muted",
+      "/silicons_muted/*/silicon_id"
+    ],
+    "required": [
+      "/device_id",
+      "/muted",
+      "/silicons_muted/*/silicon_id"
+    ],
+    "status": "2xx",
+    "type": "wake_settings"
+  }
+}

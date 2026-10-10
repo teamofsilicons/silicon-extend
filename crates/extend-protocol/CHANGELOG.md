@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.0.0
+
+Extend 4: every account signs in with Silicon Accounts, and there are no Teams and no test
+environments. The account API moves to v2 (`/api/v2/…`); the device wire (`/api/v1/device…`,
+`/api/v1/enrollments…`, the WebSocket frames) is byte-for-byte unchanged, so installed Extend apps
+keep working. No `ErrorCode`, `EndReason`, `Capability`, `Visibility` or `DeviceOs` value was added
+or removed, because installed apps refuse values they don't know.
+
+### New
+
+- `account`: `AccountRef`, `AccountMe` (`GET /api/v2/me`), `AccountsInfo` (`GET /api/v2/accounts`),
+  `SignOut` (`POST /api/v2/auth/logout`), `SiliconSummary` (`GET /api/v2/silicons`).
+- `ACCOUNT_API_VERSION` (2) and `APP_ID` (`extend`).
+- Permanent Silicon Accounts uuids next to the public ids: `Member.uuid`, `InUse.silicon_uuid`,
+  `AccessGrant.{silicon_uuid, granted_by_uuid}`, `Session.silicon_uuid`,
+  `FileInfo.{created_by_uuid, shared_with_uuid}`, `RequestInfo.{from_uuid, to_uuid}`,
+  `WakeRequest.{from_uuid, to_uuid}`, `TingRegistration.member_uuid`; custodian views on
+  `AccessGrant` (`device_name`, `device_os`, `owner`); `TingRegistration.delivery_enabled`.
+
+### Changed
+
+- `Visibility::default()` is `Personal`: every device is private to the Carbon who paired it and
+  the Silicons they give access to (`team` stays only so 1.x answers decode).
+- `team` fields are API v1 only and left out of v2 answers; `MutedSilicon.team`,
+  `WakeRequest.team` and `TingRegistration.team` are skipped when empty.
+
+### Removed
+
+- The Silicon IAM sign-in and Team types of the v1 account API: `LoginInput`, `RefreshInput`,
+  `LogoutInput`, `AuthSession`, `Me`, `IamInfo`, `TeamSilicon`, `TeamSilicons`, `TeamReach`,
+  `DeviceImport`, and `TEAM_HEADER`.
+- `ting::register_command` and `ting::OWNER_TEAM_PLACEHOLDER` (a `ting --org` command for a Team).
+
 ## 1.1.0
 
 Devices belong to the Carbons who paired them, several Carbons can pair one device, Silicons can

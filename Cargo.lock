@@ -4517,7 +4517,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-cli"
-version = "3.1.1"
+version = "4.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4532,12 +4532,14 @@ dependencies = [
 
 [[package]]
 name = "silicon-extend-client"
-version = "3.1.1"
+version = "4.0.0"
 dependencies = [
+ "axum",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "silicon-accounts-client",
  "silicon-extend-protocol",
  "thiserror 2.0.21",
  "time",

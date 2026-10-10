@@ -1,0 +1,26 @@
+{
+  "api_version": 2,
+  "call": "Authed::release_takeover",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "takeover"
+  ],
+  "operation": "sessions.takeover_release",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "DELETE",
+    "path": "/api/v2/sessions/{session_id}/takeover"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

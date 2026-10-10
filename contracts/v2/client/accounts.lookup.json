@@ -1,0 +1,32 @@
+{
+  "api_version": 2,
+  "call": "Authed::lookup",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "accounts.lookup",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "GET",
+    "path": "/api/v2/accounts/lookup?id={silicon_id}"
+  },
+  "response": {
+    "non_null": [
+      "/id",
+      "/type",
+      "/uuid"
+    ],
+    "required": [
+      "/id",
+      "/type",
+      "/uuid"
+    ],
+    "status": "2xx",
+    "type": "account"
+  }
+}

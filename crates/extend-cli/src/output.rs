@@ -1,5 +1,5 @@
 //! What the CLI prints: text for a reader, or with `--json` one JSON document, the way every
-//! Team CLI does it: on success the data itself on stdout (`extend iam --json` →
+//! Silicon Apps CLI does it: on success the data itself on stdout (`extend accounts --json` →
 //! `{"app_id": "extend", …}`), on failure `{"error": {…}}` on stderr.
 //!
 //! Colour follows the `color` setting: `auto` (the default) colours a stream only when it is a

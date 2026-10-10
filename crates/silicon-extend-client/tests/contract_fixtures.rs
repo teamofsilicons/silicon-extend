@@ -3,7 +3,9 @@
 //!
 //! Every public call of the crate runs against a recording stand-in for Extend that answers with
 //! the response the crate expects. For each call this test writes
-//! `contracts/v{api}/client/<operation>.json`: the method, the path, the headers that matter, the
+//! `contracts/v{api}/client/<operation>.json`, where `{api}` is the major the call's path names: the
+//! account API (`/api/v2/…`, and the version handshake) under `v2`, the device wire the Extend apps
+//! speak (`/api/v1/device…`, `/api/v1/enrollments…`) under `v1`. Each holds the method, the path, the headers that matter, the
 //! body, the provider state the call needs (`given`), and which response fields the crate can't do
 //! without. Those are found by taking each field out of the expected response in turn (and then
 //! setting it to null) and seeing whether the call still decodes. Test-only values (tokens, ids,
@@ -27,9 +29,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use extend_protocol::model::*;
-use extend_protocol::{API_VERSION, DeviceOs};
+use extend_protocol::{ACCOUNT_API_VERSION, API_VERSION, DeviceOs};
 use serde_json::{Value, json};
 use silicon_extend_client::{ActivityQuery, Client, DeviceQuery, Error, ListQuery};
+
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -39,10 +42,10 @@ const CARBON_TOKEN: &str = "sentinel-carbon-access-token";
 const SILICON_TOKEN: &str = "sentinel-silicon-access-token";
 const OTHER_SILICON_TOKEN: &str = "sentinel-other-silicon-access-token";
 const OTHER_CARBON_TOKEN: &str = "sentinel-other-carbon-access-token";
-const REFRESH_TOKEN: &str = "sentinel-refresh-token";
-const CARBON_SLT: &str = "sentinel-carbon-slt";
-const TEAM: &str = "sentinel-team";
 const SILICON_ID: &str = "si:sentinel-silicon";
+/// The same id as a query value encodes its colon.
+const SILICON_ID_QUERY: &str = "si%3Asentinel-silicon";
+const SILICON_UUID: &str = "sEnT1";
 const DEVICE_ID: &str = "d0d0d0d0";
 const HOST_ID: &str = "b0b0b0b0";
 const ATTACHED_ID: &str = "c0c0c0c0";
@@ -56,12 +59,11 @@ const UPLOAD_ID: &str = "22222222-2222-4222-8222-222222222222";
 const FILE_ID: &str = "33333333-3333-4333-8333-333333333333";
 const WAKE_ID: &str = "55555555-5555-4555-8555-555555555555";
 const PAIRING_CODE: &str = "A1B2C3";
-const TESTING_SECRET: &str = "ask_sentinel-testing-secret";
-const PERMISSION_ID: &str = "77777777-7777-4777-8777-777777777777";
-const PERMISSION_CODE: &str = "obc_sentinel-permission-code";
-const PERMISSION_KEY: &str = "88888888-8888-4888-8888-888888888888";
 const ISI: &str = "sentinel-isi";
 const DEVICE_VERSION: i64 = 4242;
+/// Not a placeholder: a refresh token the replay's Silicon Accounts stand-in doesn't know, so
+/// signing out revokes nothing there.
+const SIGN_OUT_REFRESH_TOKEN: &str = "sar_contract-fixture-refresh-token";
 
 /// Longest first, so no sentinel is replaced inside another.
 const PLACEHOLDERS: &[(&str, &str)] = &[
@@ -69,19 +71,14 @@ const PLACEHOLDERS: &[(&str, &str)] = &[
     (OTHER_CARBON_TOKEN, "{other_carbon_token}"),
     (CARBON_TOKEN, "{carbon_token}"),
     (SILICON_TOKEN, "{silicon_token}"),
-    (REFRESH_TOKEN, "{refresh_token}"),
-    (CARBON_SLT, "{carbon_slt}"),
     (DEVICE_CREDENTIAL, "{device_credential}"),
     (ENROLLMENT_SECRET, "{enrollment_secret}"),
-    (TESTING_SECRET, "{testing_secret}"),
-    (PERMISSION_ID, "{permission_id}"),
-    (PERMISSION_CODE, "{permission_code}"),
     (ENROLLMENT_ID, "{enrollment_id}"),
     (UPLOAD_ID, "{upload_id}"),
     (FILE_ID, "{file_id}"),
     (WAKE_ID, "{wake_id}"),
+    (SILICON_ID_QUERY, "{silicon_id}"),
     (SILICON_ID, "{silicon_id}"),
-    (TEAM, "{team}"),
     (ISI, "{isi}"),
     (DEVICE_ID, "{device_id}"),
     (HOST_ID, "{host_id}"),
@@ -278,21 +275,19 @@ type Fut<'a> = Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>>;
 
 struct Ctx {
     client: Client,
-    /// Built with a test-environment secret.
-    testing: Client,
     /// Built with an internal Silicon id and telemetry off.
     options: Client,
 }
 
 impl Ctx {
     fn carbon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(CARBON_TOKEN, Some(TEAM))
+        self.client.authed(CARBON_TOKEN)
     }
     fn silicon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(SILICON_TOKEN, Some(TEAM))
+        self.client.authed(SILICON_TOKEN)
     }
     fn other_silicon(&self) -> silicon_extend_client::Authed<'_> {
-        self.client.authed(OTHER_SILICON_TOKEN, Some(TEAM))
+        self.client.authed(OTHER_SILICON_TOKEN)
     }
 }
 
@@ -330,12 +325,7 @@ const TS: &str = "2026-09-26T10:00:00.123Z";
 const LATER: &str = "2026-09-26T10:05:00.123Z";
 
 fn member(kind: &str, id: &str) -> Value {
-    json!({"type": kind, "id": id, "display_name": "Sentinel"})
-}
-
-fn env_view() -> Value {
-    json!({"environment_id": "44444444-4444-4444-8444-444444444444", "name": "checkout-e2e", "state": "ready",
-           "paired_devices": 1, "device_limit": 5})
+    json!({"type": kind, "id": id, "display_name": "Sentinel", "uuid": "aLiCe"})
 }
 
 fn setup() -> Value {
@@ -348,9 +338,9 @@ fn setup() -> Value {
 fn device() -> Value {
     let mut d = json!({
         "device_id": DEVICE_ID, "name": "Pixel", "os": "android", "os_version": "15", "model": "Pixel 9",
-        "kind": "phone", "owner": member("carbon", "c:alice"), "team": TEAM, "visibility": "team",
+        "kind": "phone", "owner": member("carbon", "c:alice"), "visibility": "personal",
         "host_device_id": HOST_ID, "state": "ready", "online": true, "last_seen_at": TS,
-        "in_use": {"silicon_id": SILICON_ID, "session_id": SESSION_ID, "since": TS, "paused": false, "team": TEAM},
+        "in_use": {"silicon_id": SILICON_ID, "silicon_uuid": SILICON_UUID, "session_id": SESSION_ID, "since": TS, "paused": false},
         "last_used_at": TS, "paired_at": TS, "pair_ttl_days": 14, "pair_expires_at": LATER, "days_left": 13,
         "access_count": 2, "app_version": "1.0.0", "version": DEVICE_VERSION,
         "capabilities": ["screen.read"], "missing": [{"capability": "adb", "reason": "Wireless debugging is off."}],
@@ -368,7 +358,8 @@ fn device() -> Value {
 
 fn wake_request() -> Value {
     json!({
-        "wake_id": WAKE_ID, "device_id": DEVICE_ID, "team": TEAM, "from": SILICON_ID, "to": "c:alice",
+        "wake_id": WAKE_ID, "device_id": DEVICE_ID, "from": SILICON_ID, "to": "c:alice",
+        "from_uuid": SILICON_UUID, "to_uuid": "aLiCe",
         "reason": "Need the TV awake to check the menu", "created_at": TS, "last_asked_at": TS, "asks": 2,
         "expires_at": LATER, "state": "open", "ended_at": LATER, "end_reason": "woken_on_device",
         "wake_detectable": false, "device_notice": "not_shown", "device_notice_note": "Notifications are off.",
@@ -378,13 +369,9 @@ fn wake_request() -> Value {
 }
 
 fn ting_registration() -> Value {
-    json!({"team": TEAM, "member": "c:alice", "status": "pending", "registered_at": TS, "refused_at": TS,
-           "last_error": "Sign in to Extend for sentinel-team", "missing_types": ["extend.device.wake_requested"]})
-}
-
-fn permissions() -> Value {
-    json!({"items": [{"audience":"briefcase", "endpoint_id":"briefcase.uploads.reserve", "grant_id": PERMISSION_ID,
-        "org_id":TEAM, "actor":{"public_id":"c:alice", "kind":"carbon"}, "expires_at":LATER}]})
+    json!({"member": "c:alice", "member_uuid": "aLiCe", "status": "pending", "registered_at": TS, "refused_at": TS,
+           "last_error": "Ting couldn't be reached", "missing_types": ["extend.device.wake_requested"],
+           "delivery_enabled": true})
 }
 
 fn enrollment_created() -> Value {
@@ -394,10 +381,10 @@ fn enrollment_created() -> Value {
 
 fn session() -> Value {
     json!({
-        "session_id": SESSION_ID, "device_id": DEVICE_ID, "silicon_id": SILICON_ID, "state": "active",
-        "started_at": TS, "last_command_at": TS, "idle_ends_at": LATER, "ended_at": LATER,
+        "session_id": SESSION_ID, "device_id": DEVICE_ID, "silicon_id": SILICON_ID, "silicon_uuid": SILICON_UUID,
+        "state": "active", "started_at": TS, "last_command_at": TS, "idle_ends_at": LATER, "ended_at": LATER,
         "end_reason": "ended_by_silicon", "command_count": 3, "device": device(),
-        "capabilities": ["screen.read"], "commands": ["snapshot"], "team": TEAM
+        "capabilities": ["screen.read"], "commands": ["snapshot"]
     })
 }
 
@@ -406,7 +393,7 @@ fn file() -> Value {
         "file_id": FILE_ID, "name": "screenshot.png", "kind": "screenshot", "content_type": "image/png",
         "size_bytes": 1024, "url": "https://briefcase.example/f/1", "self_destruct_at": LATER, "permanent": false,
         "session_id": SESSION_ID, "device_id": DEVICE_ID, "command_id": UPLOAD_ID, "created_by": SILICON_ID,
-        "shared_with": "c:alice", "created_at": TS, "team": TEAM
+        "created_by_uuid": SILICON_UUID, "shared_with": "c:alice", "shared_with_uuid": "aLiCe", "created_at": TS
     })
 }
 
@@ -417,19 +404,24 @@ fn takeover() -> Value {
 
 fn request_info() -> Value {
     json!({"request_id": UPLOAD_ID, "device_id": DEVICE_ID, "from": "si:sous", "to": SILICON_ID,
+           "from_uuid": "sOuS1", "to_uuid": SILICON_UUID,
            "session_id": SESSION_ID, "reason": "Need it for an OTP", "created_at": TS, "delivery": "delivered",
-           "last_error": "Ting was unavailable", "team": TEAM, "routed_to": "carbon", "to_hidden": true,
+           "last_error": "Ting was unavailable", "routed_to": "carbon", "to_hidden": true,
            "from_hidden": true})
 }
 
 fn grant() -> Value {
-    json!({"device_id": DEVICE_ID, "silicon_id": SILICON_ID, "granted_by": "c:alice", "granted_at": TS,
-           "last_used_at": TS, "team": TEAM, "wake_muted": true})
+    json!({"device_id": DEVICE_ID, "silicon_id": SILICON_ID, "silicon_uuid": SILICON_UUID, "granted_by": "c:alice",
+           "granted_by_uuid": "aLiCe", "granted_at": TS, "last_used_at": TS, "wake_muted": true})
 }
 
-fn auth_session() -> Value {
-    json!({"access_token": CARBON_TOKEN, "refresh_token": REFRESH_TOKEN, "token_type": "Bearer", "expires_in": 900,
-           "member": member("carbon", "c:alice"), "teams": [TEAM], "testing_environment": env_view()})
+fn account(kind: &str, id: &str, uuid: &str) -> Value {
+    json!({"uuid": uuid, "id": id, "type": kind, "display_name": "Sentinel", "pfp_url": "https://iris.example/p"})
+}
+
+fn silicon_summary() -> Value {
+    json!({"uuid": SILICON_UUID, "id": SILICON_ID, "display_name": "Chef", "pfp_url": "https://iris.example/p",
+           "looked_after": true, "granted_by_you": 1, "grants": 2, "running_sessions": 1})
 }
 
 fn page(item: Value) -> Value {
@@ -450,62 +442,26 @@ fn command() -> CommandRequest {
 fn ops() -> Vec<Op> {
     vec![
         op!(
-            "permissions.list",
-            "Authed::permissions",
-            ["permission_grant"],
-            200,
-            "permissions",
-            Some(permissions()),
-            |c| c.carbon().permissions()
-        ),
-        op!(
-            "permissions.start",
-            "Authed::request_permissions",
-            [],
-            200,
-            "permission",
-            Some(json!({"id":PERMISSION_ID,"consent_url":"https://iam.example/obo/consent","expires_at":LATER})),
-            |c| c.carbon().request_permissions(
-                &[silicon_extend_client::PermissionEndpoint {
-                    audience: "briefcase".into(),
-                    endpoint_id: "briefcase.uploads.reserve".into()
-                }],
-                PERMISSION_KEY
-            )
-        ),
-        op!(
-            "permissions.complete",
-            "Authed::complete_permissions",
-            ["permission_request"],
-            200,
-            "permissions",
-            Some(permissions()),
-            |c| c
-                .carbon()
-                .complete_permissions(PERMISSION_ID.parse().unwrap(), PERMISSION_CODE, PERMISSION_KEY)
-        ),
-        op!(
             "version.negotiate",
             "Client::connect",
             [],
             200,
             "version",
-            Some(json!({"api_version": 1, "supported": [1], "service_version": "1.0.0", "deprecated": []})),
+            Some(json!({"api_version": 2, "supported": [1, 2], "service_version": "4.0.0", "deprecated": []})),
             |c| Client::connect(c.client.base_url())
         ),
         op!(
-            "iam.get",
-            "Client::iam",
+            "accounts.get",
+            "Client::accounts",
             [],
             200,
-            "iam",
+            "accounts",
             Some(
-                json!({"app_id": "extend", "iam_base_url": "https://iam.example", "iam_login_url": "https://auth.example/login",
-                        "api_base_url": "https://api.example", "website_url": "https://extend.example",
-                        "docs_url": "https://extend.example/docs", "repository_url": "https://github.com/x/y",
-                        "testing_environment": env_view()})
+                json!({"app_id": "extend", "accounts_url": "https://accounts.example", "api_base_url": "https://api.example",
+                        "website_url": "https://extend.example", "docs_url": "https://extend.example/docs",
+                        "repository_url": "https://github.com/x/y", "ting_enabled": false})
             ),
-            |c| c.client.iam()
+            |c| c.client.accounts()
         ),
         op!(
             "contracts.get",
@@ -513,44 +469,81 @@ fn ops() -> Vec<Op> {
             [],
             200,
             "contracts",
-            Some(json!({"versions": [{"api_version": 1, "state": "current"}]})),
+            Some(json!({"versions": [{"api_version": 2, "state": "current"}]})),
             |c| c.client.contracts()
         ),
         op!(
-            "auth.login",
-            "Client::login",
+            "auth.me",
+            "Authed::me",
             [],
             200,
-            "login",
-            Some(auth_session()),
-            |c| c.client.login(CARBON_SLT)
+            "me",
+            Some(
+                json!({"uuid": "aLiCe", "id": "c:alice", "type": "carbon", "display_name": "Alice",
+                        "pfp_url": "https://iris.example/p"})
+            ),
+            |c| c.carbon().me()
         ),
         op!(
-            "auth.refresh",
-            "Client::refresh",
-            ["refresh_token"],
+            "auth.me.options",
+            "Authed::me",
+            [],
             200,
-            "refresh",
-            Some(auth_session()),
-            |c| c.client.refresh(REFRESH_TOKEN, "sentinel-idempotency-key")
+            "me",
+            Some(json!({"uuid": SILICON_UUID, "id": SILICON_ID, "type": "silicon",
+                        "custodian": account("carbon", "c:alice", "aLiCe")})),
+            |c| c.options.authed(SILICON_TOKEN).me()
+        ),
+        op!("auth.sign_out", "Authed::sign_out", [], 204, "", None, |c| c
+            .carbon()
+            .sign_out(Some(SIGN_OUT_REFRESH_TOKEN))),
+        op!(
+            "accounts.lookup",
+            "Authed::lookup",
+            [],
+            200,
+            "account",
+            Some(account("silicon", SILICON_ID, SILICON_UUID)),
+            |c| c.carbon().lookup(SILICON_ID)
         ),
         op!(
-            "auth.logout",
-            "Client::logout",
-            ["refresh_token"],
+            "silicons.list",
+            "Authed::silicons",
+            [],
+            200,
+            "silicons",
+            Some(json!({"items": [silicon_summary()]})),
+            |c| c.carbon().silicons()
+        ),
+        op!(
+            "silicons.get",
+            "Authed::silicon",
+            [],
+            200,
+            "silicon",
+            Some(silicon_summary()),
+            |c| c.carbon().silicon(SILICON_ID)
+        ),
+        op!(
+            "silicons.grants",
+            "Authed::silicon_grants",
+            ["device"],
+            200,
+            "access",
+            Some(json!({"items": [{
+                "device_id": DEVICE_ID, "silicon_id": SILICON_ID, "silicon_uuid": SILICON_UUID, "granted_by": "c:alice",
+                "granted_by_uuid": "aLiCe", "granted_at": TS, "last_used_at": TS, "wake_muted": false,
+                "device_name": "Pixel", "device_os": "android", "owner": member("carbon", "c:alice")}]})),
+            |c| c.carbon().silicon_grants(SILICON_ID)
+        ),
+        op!(
+            "silicons.renounce",
+            "Authed::renounce",
+            ["device"],
             204,
-            "logout",
+            "",
             None,
-            |c| c.client.logout(REFRESH_TOKEN, Some(CARBON_TOKEN))
-        ),
-        op!(
-            "testing.environment",
-            "Client::testing_environment",
-            ["test_environment"],
-            200,
-            "testing_environment",
-            Some(env_view()),
-            |c| c.testing.testing_environment()
+            |c| c.carbon().renounce(SILICON_ID, DEVICE_ID)
         ),
         op!(
             "enrollments.create",
@@ -592,9 +585,9 @@ fn ops() -> Vec<Op> {
             200,
             "device_self",
             Some(
-                json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": member("carbon", "c:alice"), "team": TEAM,
+                json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": {"type": "carbon", "id": "c:alice"}, "team": "",
                         "os": "android", "in_use": {"silicon_id": SILICON_ID, "session_id": SESSION_ID, "since": TS},
-                        "takeover": takeover(), "setup": setup(), "environment": env_view(),
+                        "takeover": takeover(), "setup": setup(), "environment": null,
                         "instance_id": ENROLLMENT_ID, "hardware_salt": "sentinel-salt", "first_pair": true})
             ),
             |c| c.client.device_self(DEVICE_CREDENTIAL)
@@ -606,26 +599,13 @@ fn ops() -> Vec<Op> {
             200,
             "device_self",
             Some(
-                json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": member("carbon", "c:alice"), "team": TEAM,
+                json!({"device_id": DEVICE_ID, "name": "Pixel", "owner": {"type": "carbon", "id": "c:alice"}, "team": "",
                 "os": "android", "in_use": null, "takeover": null, "setup": setup(), "environment": null, "in_use_indicator": "hidden"})
             ),
             |c| c.client.update_device_self(
                 DEVICE_CREDENTIAL,
                 &DeviceSelfPatch::in_use_indicator(InUseIndicator::Hidden)
             )
-        ),
-        op!(
-            "devices.banner",
-            "Authed::set_in_use_indicator",
-            ["device"],
-            200,
-            "device",
-            Some({
-                let mut d = device();
-                d["in_use_indicator"] = json!("hidden");
-                d
-            }),
-            |c| c.carbon().set_in_use_indicator(DEVICE_ID, InUseIndicator::Hidden)
         ),
         op!("device.revoke", "Client::revoke_pair", ["device"], 204, "", None, |c| c
             .client
@@ -649,25 +629,17 @@ fn ops() -> Vec<Op> {
             )
         ),
         op!(
-            "auth.me",
-            "Authed::me",
-            [],
+            "devices.banner",
+            "Authed::set_in_use_indicator",
+            ["device"],
             200,
-            "me",
-            Some(
-                json!({"authenticated": true, "member": member("carbon", "c:alice"), "teams": [TEAM], "team": TEAM,
-                        "team_role": "member", "testing_environment": env_view()})
-            ),
-            |c| c.carbon().me()
-        ),
-        op!(
-            "auth.me.options",
-            "Authed::me",
-            [],
-            200,
-            "me",
-            Some(json!({"authenticated": true, "member": member("silicon", SILICON_ID), "teams": [TEAM]})),
-            |c| c.options.authed(SILICON_TOKEN, Some(TEAM)).me()
+            "device",
+            Some({
+                let mut d = device();
+                d["in_use_indicator"] = json!("hidden");
+                d
+            }),
+            |c| c.carbon().set_in_use_indicator(DEVICE_ID, InUseIndicator::Hidden)
         ),
         op!(
             "devices.list",
@@ -685,6 +657,20 @@ fn ops() -> Vec<Op> {
             })
         ),
         op!(
+            "devices.list.accessible",
+            "Authed::devices",
+            ["device"],
+            200,
+            "devices",
+            Some(page(device())),
+            |c| c.silicon().devices(DeviceQuery {
+                scope: Some("accessible".into()),
+                online: Some(true),
+                limit: Some(10),
+                ..Default::default()
+            })
+        ),
+        op!(
             "devices.list.including_removed",
             "Authed::devices_including_removed",
             ["device"],
@@ -696,28 +682,6 @@ fn ops() -> Vec<Op> {
                 limit: Some(10),
                 ..Default::default()
             })
-        ),
-        op!(
-            "devices.importable",
-            "Authed::importable_devices",
-            ["importable_device"],
-            200,
-            "devices",
-            Some(page(
-                json!({"device_id":DEVICE_ID,"name":"Pixel","os":"android","model":null,"host_device_id":null})
-            )),
-            |c| c.carbon().importable_devices(Some(10), None)
-        ),
-        op!(
-            "devices.import",
-            "Authed::import_device",
-            ["importable_device"],
-            200,
-            "device",
-            Some(device()),
-            |c| c
-                .carbon()
-                .import_device(DEVICE_ID, Visibility::Personal, PERMISSION_KEY)
         ),
         op!(
             "devices.get",
@@ -738,7 +702,7 @@ fn ops() -> Vec<Op> {
             |c| c.carbon().pair(&PairingClaim {
                 pairing_code: PAIRING_CODE.into(),
                 name: "Pixel".into(),
-                visibility: Some(Visibility::Team),
+                visibility: None,
                 pair_ttl_days: Some(14),
                 silicon_ids: vec![SILICON_ID.into()],
             })
@@ -755,7 +719,7 @@ fn ops() -> Vec<Op> {
                 &AttachmentCreate {
                     os: DeviceOs::Tvos,
                     name: "Living room".into(),
-                    visibility: Some(Visibility::Team),
+                    visibility: None,
                     pair_ttl_days: Some(7),
                     address: Some("192.168.1.20".into()),
                 }
@@ -773,7 +737,7 @@ fn ops() -> Vec<Op> {
                 Some(DEVICE_VERSION),
                 &DevicePatch {
                     name: Some("Studio phone".into()),
-                    visibility: Some(Visibility::Personal),
+                    visibility: None,
                     pair_ttl_days: Some(20),
                 }
             )
@@ -789,15 +753,6 @@ fn ops() -> Vec<Op> {
         ),
         op!(
             "devices.stop",
-            "Authed::stop_device",
-            ["session"],
-            200,
-            "session",
-            Some(session()),
-            |c| c.carbon().stop_device(DEVICE_ID)
-        ),
-        op!(
-            "devices.stop.outcome",
             "Authed::stop",
             ["session"],
             200,
@@ -813,29 +768,6 @@ fn ops() -> Vec<Op> {
             "device_stopped",
             Some(json!({"device_id": HOST_ID, "stopped_at": TS, "in_use_by_other": true})),
             |c| c.carbon().stop(HOST_ID)
-        ),
-        op!(
-            "team.silicons",
-            "Authed::team_silicons",
-            [],
-            200,
-            "team_silicons",
-            Some(json!({"items": [{"id": SILICON_ID, "display_name": "Chef"}]})),
-            |c| c.carbon().team_silicons()
-        ),
-        op!(
-            "team.silicons.all",
-            "Authed::team_silicons_all",
-            [],
-            200,
-            "team_silicons",
-            Some(json!({
-                "items": [{"id": SILICON_ID, "display_name": "Chef", "team": TEAM}],
-                "teams": [{"team": TEAM, "ok": true},
-                          {"team": "globex", "ok": false, "error": {"code": "not_a_team_member", "message": "Sign in to Extend for globex.",
-                                                                    "hint": "sentinel", "request_id": "req-sentinel"}}]
-            })),
-            |c| c.carbon().team_silicons_all()
         ),
         op!(
             "devices.setup",
@@ -878,22 +810,13 @@ fn ops() -> Vec<Op> {
             "Authed::grant",
             ["device"],
             200,
-            "access",
+            "access_grant",
             Some(grant()),
             |c| c.carbon().grant(DEVICE_ID, SILICON_ID)
         ),
         op!("access.revoke", "Authed::revoke", ["device"], 204, "", None, |c| c
             .carbon()
             .revoke(DEVICE_ID, SILICON_ID)),
-        op!(
-            "access.revoke.team",
-            "Authed::revoke_in_team",
-            ["device"],
-            204,
-            "",
-            None,
-            |c| c.carbon().revoke_in_team(DEVICE_ID, SILICON_ID, TEAM)
-        ),
         op!(
             "devices.activity",
             "Authed::activity",
@@ -903,7 +826,7 @@ fn ops() -> Vec<Op> {
             Some(page(
                 json!({"id": UPLOAD_ID, "at": TS, "actor": member("silicon", SILICON_ID), "action": "command",
                              "session_id": SESSION_ID, "command": "fill", "args": ["@e3", "[redacted 7 chars]"],
-                             "outcome": "ok", "files": [FILE_ID], "details": {"why": "sentinel"}, "team": TEAM})
+                             "outcome": "ok", "files": [FILE_ID], "details": {"why": "sentinel"}})
             )),
             |c| c.carbon().activity(
                 DEVICE_ID,
@@ -966,12 +889,10 @@ fn ops() -> Vec<Op> {
             ["device"],
             200,
             "wake_settings",
-            Some(
-                json!({"device_id": DEVICE_ID, "muted": false, "silicons_muted": [{"silicon_id": SILICON_ID, "team": TEAM}]})
-            ),
+            Some(json!({"device_id": DEVICE_ID, "muted": false, "silicons_muted": [{"silicon_id": SILICON_ID}]})),
             |c| c
                 .carbon()
-                .set_wake_settings(DEVICE_ID, &WakeSettings::new(true).silicon(SILICON_ID).team(TEAM))
+                .set_wake_settings(DEVICE_ID, &WakeSettings::new(true).silicon(SILICON_ID))
         ),
         op!(
             "ting.registration.get",
@@ -980,16 +901,7 @@ fn ops() -> Vec<Op> {
             200,
             "ting_registration",
             Some(ting_registration()),
-            |c| c.carbon().ting_registration(TEAM)
-        ),
-        op!(
-            "ting.registration.all",
-            "Authed::ting_registrations",
-            [],
-            200,
-            "ting_registrations",
-            Some(page(ting_registration())),
-            |c| c.carbon().ting_registrations()
+            |c| c.carbon().ting_registration()
         ),
         op!(
             "ting.registration.turn_on",
@@ -998,7 +910,7 @@ fn ops() -> Vec<Op> {
             200,
             "ting_registration",
             Some(ting_registration()),
-            |c| c.carbon().ting_turn_on(TEAM)
+            |c| c.carbon().ting_turn_on()
         ),
         op!(
             "devices.requests",
@@ -1041,6 +953,19 @@ fn ops() -> Vec<Op> {
             })
         ),
         op!(
+            "requests.list.silicon",
+            "Authed::requests",
+            ["session"],
+            200,
+            "requests",
+            Some(page(request_info())),
+            |c| c.carbon().requests(ListQuery {
+                silicon: Some(SILICON_ID.into()),
+                limit: Some(20),
+                ..Default::default()
+            })
+        ),
+        op!(
             "sessions.start",
             "Authed::start_session",
             ["device"],
@@ -1058,6 +983,20 @@ fn ops() -> Vec<Op> {
             Some(page(session())),
             |c| c.silicon().sessions(ListQuery {
                 device_id: Some(DEVICE_ID.into()),
+                state: Some("active".into()),
+                limit: Some(20),
+                ..Default::default()
+            })
+        ),
+        op!(
+            "sessions.list.silicon",
+            "Authed::sessions",
+            ["session"],
+            200,
+            "sessions",
+            Some(page(session())),
+            |c| c.carbon().sessions(ListQuery {
+                silicon: Some(SILICON_ID.into()),
                 state: Some("active".into()),
                 limit: Some(20),
                 ..Default::default()
@@ -1136,6 +1075,19 @@ fn ops() -> Vec<Op> {
                 ..Default::default()
             })
         ),
+        op!(
+            "files.list.silicon",
+            "Authed::files",
+            ["file"],
+            200,
+            "files",
+            Some(page(file())),
+            |c| c.carbon().files(ListQuery {
+                silicon: Some(SILICON_ID.into()),
+                limit: Some(20),
+                ..Default::default()
+            })
+        ),
         op!("files.get", "Authed::file", ["file"], 200, "file", Some(file()), |c| c
             .silicon()
             .file(FILE_ID)),
@@ -1205,6 +1157,26 @@ const NOT_API_CALLS: &[(&str, &str)] = &[
         "content",
         "FileDownload::content reads the answer to a file_download request already made",
     ),
+    (
+        "start_device",
+        "auth::SignIn talks to Silicon Accounts, not Extend (tests/sign_in.rs)",
+    ),
+    (
+        "poll_device",
+        "auth::SignIn talks to Silicon Accounts, not Extend (tests/sign_in.rs)",
+    ),
+    (
+        "wait_for_device",
+        "auth::SignIn talks to Silicon Accounts, not Extend (tests/sign_in.rs)",
+    ),
+    (
+        "exchange_slt",
+        "auth::SignIn talks to Silicon Accounts, not Extend (tests/sign_in.rs)",
+    ),
+    (
+        "refresh",
+        "auth::SignIn talks to Silicon Accounts, not Extend (tests/sign_in.rs)",
+    ),
 ];
 
 // ───────────── Required response fields, found by mutation ─────────────
@@ -1271,11 +1243,22 @@ fn mutate(v: &mut Value, path: &[Seg], remove: bool) {
 
 // ───────────── Building and checking fixtures ─────────────
 
-fn contracts_dir() -> PathBuf {
+/// `contracts/v{api}/client`.
+fn contracts_dir(api: u32) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../contracts")
-        .join(format!("v{API_VERSION}"))
+        .join(format!("v{api}"))
         .join("client")
+}
+
+/// The major a request's path names: the device wire (`/api/v1/…`) is 1; the account API and the
+/// unversioned version handshake are the account API's.
+fn api_of(target: &str) -> u32 {
+    if target.starts_with("/api/v1/") {
+        API_VERSION
+    } else {
+        ACCOUNT_API_VERSION
+    }
 }
 
 fn fixture(op: &Op, seen: &Seen, required: Vec<String>, non_null: Vec<String>) -> Value {
@@ -1312,7 +1295,7 @@ fn fixture(op: &Op, seen: &Seen, required: Vec<String>, non_null: Vec<String>) -
         "contract": 1,
         "consumer": "silicon-extend-client",
         "consumer_version": env!("CARGO_PKG_VERSION"),
-        "api_version": API_VERSION,
+        "api_version": api_of(&seen.target),
         "operation": op.operation,
         "call": op.call,
         "given": op.given,
@@ -1381,15 +1364,10 @@ async fn fixtures_match_what_the_client_sends() {
     stub.reply(
         200,
         "version",
-        Some(&json!({"api_version": 1, "supported": [1], "service_version": "1.0.0"})),
+        Some(&json!({"api_version": 2, "supported": [1, 2], "service_version": "4.0.0"})),
     );
     let ctx = Ctx {
         client: Client::connect(&base).await.unwrap(),
-        testing: Client::builder(&base)
-            .testing_secret(TESTING_SECRET)
-            .connect()
-            .await
-            .unwrap(),
         options: Client::builder(&base)
             .isi(Some(ISI.into()))
             .telemetry(false)
@@ -1397,62 +1375,73 @@ async fn fixtures_match_what_the_client_sends() {
             .await
             .unwrap(),
     };
-    let mut generated = BTreeMap::new();
+    // Fixtures by the major their path names.
+    let mut generated: BTreeMap<u32, BTreeMap<String, Value>> = BTreeMap::new();
     for op in ops() {
+        let f = record(&ctx, &stub, &op).await;
+        let api = f["api_version"].as_u64().unwrap() as u32;
         assert!(
             generated
-                .insert(op.operation.to_owned(), record(&ctx, &stub, &op).await)
+                .entry(api)
+                .or_default()
+                .insert(op.operation.to_owned(), f)
                 .is_none(),
             "operation {} is listed twice",
             op.operation
         );
     }
+    assert_eq!(
+        generated.keys().copied().collect::<Vec<_>>(),
+        vec![API_VERSION, ACCOUNT_API_VERSION],
+        "the client makes device-wire (v1) and account (v2) calls"
+    );
 
-    let dir = contracts_dir();
     let write = std::env::var("EXTEND_CONTRACTS_WRITE").is_ok_and(|v| v == "1");
-    let on_disk: BTreeSet<String> = std::fs::read_dir(&dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    if write {
-        std::fs::create_dir_all(&dir).unwrap();
-        for stale in on_disk.iter().filter(|n| !generated.contains_key(*n)) {
-            std::fs::remove_file(dir.join(format!("{stale}.json"))).unwrap();
-        }
-        for (name, f) in &generated {
-            let mut text = serde_json::to_string_pretty(f).unwrap();
-            text.push('\n');
-            std::fs::write(dir.join(format!("{name}.json")), text).unwrap();
-        }
-        return;
-    }
     let mut problems = Vec::new();
-    for (name, f) in &generated {
-        let path = dir.join(format!("{name}.json"));
-        match std::fs::read_to_string(&path) {
-            Err(_) => problems.push(format!("{name}: no fixture at {}", path.display())),
-            Ok(text) => {
-                let committed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                if &committed != f {
-                    problems.push(format!(
-                        "{name}: the client now sends or needs something else.\n  committed: {committed}\n  now:       {f}"
-                    ));
+    for (api, fixtures) in &generated {
+        let dir = contracts_dir(*api);
+        let on_disk: BTreeSet<String> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if write {
+            std::fs::create_dir_all(&dir).unwrap();
+            for stale in on_disk.iter().filter(|n| !fixtures.contains_key(*n)) {
+                std::fs::remove_file(dir.join(format!("{stale}.json"))).unwrap();
+            }
+            for (name, f) in fixtures {
+                let mut text = serde_json::to_string_pretty(f).unwrap();
+                text.push('\n');
+                std::fs::write(dir.join(format!("{name}.json")), text).unwrap();
+            }
+            continue;
+        }
+        for (name, f) in fixtures {
+            let path = dir.join(format!("{name}.json"));
+            match std::fs::read_to_string(&path) {
+                Err(_) => problems.push(format!("{name}: no fixture at {}", path.display())),
+                Ok(text) => {
+                    let committed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                    if &committed != f {
+                        problems.push(format!(
+                            "{name}: the client now sends or needs something else.\n  committed: {committed}\n  now:       {f}"
+                        ));
+                    }
                 }
             }
         }
-    }
-    for stale in on_disk.iter().filter(|n| !generated.contains_key(*n)) {
-        problems.push(format!("{stale}: fixture for a call the client no longer makes"));
+        for stale in on_disk.iter().filter(|n| !fixtures.contains_key(*n)) {
+            problems.push(format!("v{api}/{stale}: fixture for a call the client no longer makes"));
+        }
     }
     assert!(
         problems.is_empty(),
-        "The client's contract fixtures in {} are out of date:\n{}\n\nIf the change is intended, rewrite them with \
+        "The client's contract fixtures under contracts/v*/client are out of date:\n{}\n\nIf the change is intended, rewrite them with \
          `EXTEND_CONTRACTS_WRITE=1 cargo test -p silicon-extend-client --test contract_fixtures` and commit contracts/. \
          The service's `contracts` test then checks the service still accepts them.",
-        dir.display(),
         problems.join("\n")
     );
 }

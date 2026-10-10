@@ -67,9 +67,9 @@ fn serve(stream: TcpStream, tx: &mpsc::Sender<Value>) {
     let (status, reply) = match (method.as_str(), path.as_str()) {
         ("GET", "/api/version") => (
             200,
-            json!({"type": "version", "data": {"api_version": 1, "supported": [1], "service_version": "fake"}}),
+            json!({"type": "version", "data": {"api_version": 2, "supported": [1, 2], "service_version": "fake"}}),
         ),
-        ("POST", p) if p.starts_with("/api/v1/sessions/") && p.ends_with("/commands") => {
+        ("POST", p) if p.starts_with("/api/v2/sessions/") && p.ends_with("/commands") => {
             let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             let data = request["data"].clone();
             let _ = tx.send(data.clone());
@@ -109,8 +109,9 @@ impl Cli {
         std::fs::create_dir_all(home.join(".extend")).unwrap();
         let service = FakeService::start();
         let auth = json!({
-            "api_url": service.url, "access_token": "test-access", "refresh_token": "test-refresh", "expires_at": 4_102_444_800i64,
-            "member_id": "si:chef", "member_kind": "silicon", "teams": ["acme"], "team": "acme",
+            "format": 4, "accounts_url": service.url, "api_url": service.url, "app_id": "extend",
+            "access_token": "test-access", "refresh_token": "sar_test-refresh", "expires_at": 4_102_444_800i64,
+            "uuid": "cHeF1", "id": "si:chef", "kind": "silicon", "method": "slt", "signed_in_at": 1,
         });
         std::fs::write(home.join(".extend/auth.json"), auth.to_string()).unwrap();
         Self { home, service }
@@ -123,6 +124,7 @@ impl Cli {
             .current_dir(&self.home)
             .env("SILICON_HOME", &self.home)
             .env("EXTEND_API_URL", &self.service.url)
+            .env("ACCOUNTS_URL", &self.service.url)
             .env("EXTEND_SESSION", "a3f")
             .env("EXTEND_TELEMETRY", "off")
             .output()
@@ -285,7 +287,7 @@ fn install_and_push_refuse_inputs_that_are_not_local_files() {
         (
             &["install", "com.example.app", "0192f0c4-7b1a-7c3e-9a4d-2b6f1e8c5a70"][..],
             // Suggested to a Silicon, so it names the Team.
-            "extend --team acme file get 0192f0c4-7b1a-7c3e-9a4d-2b6f1e8c5a70 --out ./app.apk",
+            "extend file get 0192f0c4-7b1a-7c3e-9a4d-2b6f1e8c5a70 --out ./app.apk",
         ),
         (
             &["install", "com.example.app", "https://briefcase.example/f/abc"],

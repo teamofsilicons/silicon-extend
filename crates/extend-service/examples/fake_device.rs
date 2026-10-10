@@ -1,6 +1,6 @@
 //! A scripted Extend app for end-to-end tests of the CLI and website.
 //!
-//! `cargo run -p extend-service --example fake_device -- <api_url> <os> [test_app_secret]`
+//! `cargo run -p extend-service --example fake_device -- <api_url> <os>`
 //! prints `PAIRING_CODE <code>` on stdout, waits to be paired, prints `PAIRED <device_id>`, then
 //! answers every command: `screenshot` uploads a small PNG, `is` fails, everything else echoes.
 //!
@@ -14,7 +14,6 @@
 //!   connects that pair too, as a 1.1 app keeps one connection per pair.
 //! - `FAKE_FAILED_STEP=<key>`: its setup has that step failed. On `setup_retry` it reports the step
 //!   in progress, then done.
-//! - `FAKE_TEST_SECRET`: test app secret, as an alternative to the positional argument.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -110,10 +109,8 @@ async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let base = args.next().unwrap_or_else(|| "http://127.0.0.1:8480".into());
     let os: DeviceOs = serde_json::from_value(serde_json::json!(args.next().unwrap_or_else(|| "linux".into())))?;
-    let mut b = Client::builder(&base);
-    if let Some(s) = args.next().or_else(|| std::env::var("FAKE_TEST_SECRET").ok()) {
-        b = b.testing_secret(s);
-    }
+    // Extend 4 has no test environments; a third argument (a test app secret before 4.0) is ignored.
+    let b = Client::builder(&base);
     let opt = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let fake = Arc::new(Fake {
         client: b.connect().await?,

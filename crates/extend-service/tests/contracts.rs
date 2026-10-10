@@ -206,10 +206,13 @@ async fn the_default_matrix_serves_the_device_wire_on_1_and_accounts_on_2() {
         m["versions"][1]["compatible"],
         json!({"client_crate": ">=4.0.0, <5.0.0", "cli": ">=4.0.0, <5.0.0", "device_app_min": "1.0.0"})
     );
-    // A 3.x client still agrees 1 (the device wire); its account calls are told to update.
+    // The 4.0 client agrees 2 (the account API); its device-wire calls stay pinned to 1. (A 3.x
+    // client agrees 1, and its account calls are told to update: see the replay tests.)
     let client = Client::connect(&svc.base).await.unwrap();
-    assert_eq!(client.api_version(), 1);
+    assert_eq!(client.api_version(), 2);
     assert_eq!(client.contracts().await.unwrap()["supported"], json!([1, 2]));
+    let r = svc.negotiate("1").await;
+    assert_eq!(envelope(r).await.1["data"]["api_version"], 1);
 }
 
 #[tokio::test]
@@ -249,9 +252,11 @@ async fn the_matrix_is_built_from_state_and_configuration() {
     );
     client.enroll(&enroll("1.4.0")).await.unwrap();
 
-    // Requests are counted per major and day, and upkeep reads the count back into the matrix.
+    // Requests are counted per major and day, and upkeep reads the count back into the matrix: the
+    // two enrollments on the device wire (v1), the matrix read on v2.
     let today = OffsetDateTime::now_utc().date();
-    usage(&svc.pool, 1, today, 3).await;
+    usage(&svc.pool, 1, today, 2).await;
+    usage(&svc.pool, 2, today, 1).await;
     svc.versions.upkeep().await.unwrap();
     let m = client.contracts().await.unwrap();
     assert_eq!(m["versions"][0]["last_request_on"], today.to_string());
@@ -1502,11 +1507,12 @@ fn check_response(spec: &Value, body: &[u8], sent: Option<&Value>) -> Result<(),
     Ok(())
 }
 
-/// Whether a fixture's path is one 4.0 still serves as before: the device wire installed apps
-/// speak, and the version and contract routes.
+/// Whether a fixture's path is one 4.0 serves: the device wire installed apps speak, the version and
+/// contract routes, and the account API v2 (the 4.0 client's own fixtures).
 fn still_served(path: &str) -> bool {
     let p = path.split('?').next().unwrap_or(path);
     p == "/api/version"
+        || p.starts_with("/api/v2/")
         || p == "/api/v1/contracts"
         || p == "/api/v1/device"
         || p.starts_with("/api/v1/device/")

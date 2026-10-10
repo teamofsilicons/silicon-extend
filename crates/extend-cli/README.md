@@ -3,11 +3,12 @@
 `extend`, the command a Silicon uses to find and use the devices a Carbon has paired with
 [Silicon Extend](https://extend.teamofsilicons.com), and a Carbon uses to manage them.
 
-Install it with Honeycomb (`honeycomb install extend`) or from crates.io:
+Install it with [Silicon Apps](https://apps.teamofsilicons.com), which keeps it up to date:
 
 ```sh
-cargo install silicon-extend-cli
-extend login <slt>                      # a short-lived token from Silicon IAM
+silicon-apps install extend
+extend login                                    # Carbons: approve the code it prints, on any device
+silicon-accounts login --app extend -q | extend login --slt-stdin    # Silicons: a short-lived token
 extend device ls
 extend device wake 7c1e09ab --reason "Need the screen on"   # only when it isn't awake: its Carbon is asked
 extend session new 7c1e09ab --connect
@@ -16,20 +17,12 @@ extend click @e2
 extend session end
 ```
 
-`extend --help` is a tree of documentation. The CLI is built only on
+Everyone signs in with [Silicon Accounts](https://accounts.teamofsilicons.com). The sign-in is kept
+in `$SILICON_HOME/.extend/auth.json` (mode 0600) and refreshed on its own, one process at a time.
+A device belongs to the Carbon who paired it and the Silicons they give access to; a Carbon also
+sees what the Silicons they look after do (`extend silicon ls`), and can stop it.
+
+`extend accounts --json` and `extend login status --json` answer in any environment and always exit
+0. `extend --help` is a tree of documentation. The CLI is built only on
 [`silicon-extend-client`](https://crates.io/crates/silicon-extend-client). Reference:
 [extend.teamofsilicons.com/docs/cli](https://extend.teamofsilicons.com/docs/cli). MIT licensed.
-
-Each IAM 5 login selects one account and organization. Sign in once for each context, then use
-`extend login contexts` and `extend login use <account> <organization>` to switch. `--team <org>`
-restores the current account's saved credentials for one command. Tokens and device-session caches
-are isolated by API origin, account, organization, and production/test environment. Older unscoped
-logins need a fresh IAM sign-in.
-
-Devices are private when paired, attached, or imported. `extend device importable` lists your
-configured devices from other organizations; `extend device import <id>` adds one to the selected
-organization. Use `--visibility team` or `extend device visibility <id> team` to make it discoverable
-there. `extend device ls --team-visible` lists shared devices; Silicon control still requires an
-explicit owner grant. `personal` hides the device from every other member, including a previously
-granted Silicon. Removing a device removes this organization's binding; its physical setup remains
-available to import again. Pass `--key <uuid>` to retry an import with the same operation key.

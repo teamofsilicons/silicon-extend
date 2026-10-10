@@ -5,7 +5,6 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::capability::{Capability, DeviceKind, DeviceOs};
-use crate::error::ApiError;
 use crate::ids::{DeviceId, SessionId};
 
 pub type Timestamp = OffsetDateTime;
@@ -50,12 +49,16 @@ impl Member {
     }
 }
 
+/// Who can see a device. 2.0: every device is `personal`, private to the Carbon who paired it and
+/// the Silicons they give access to; an API v2 service refuses `team` (`422 invalid_input`) and
+/// always answers `personal`. `team` stays only so 1.x answers still decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
-    #[default]
+    /// 1.x only: shared with the members of a Team.
     Team,
-    /// Hidden from other members except Silicons explicitly granted access in this organization.
+    /// Private to the Carbon who paired it and the Silicons they give access to.
+    #[default]
     Personal,
 }
 
@@ -367,13 +370,6 @@ pub struct AttachmentCreate {
     /// Network address of a TV the host should reach (optional; the host discovers otherwise).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
-}
-
-/// Import a configured device owned by the current account into its selected organization.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct DeviceImport {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -755,7 +751,7 @@ pub struct ActivityEntry {
     pub team: Option<String>,
 }
 
-// ───────────── Auth, discovery, testing ─────────────
+// ───────────── Versions, reports and the device wire ─────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TestingEnvironment {
@@ -770,72 +766,6 @@ pub struct TestingEnvironment {
 
 fn default_limit() -> i64 {
     crate::TEST_DEVICE_LIMIT
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoginInput {
-    pub slt: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RefreshInput {
-    pub refresh_token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LogoutInput {
-    pub token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AuthSession {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub token_type: String,
-    pub expires_in: i64,
-    pub member: Member,
-    pub teams: Vec<String>,
-    #[serde(default)]
-    pub testing_environment: Option<TestingEnvironment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Me {
-    pub authenticated: bool,
-    pub member: Member,
-    pub teams: Vec<String>,
-    #[serde(default)]
-    pub team: Option<String>,
-    #[serde(default)]
-    pub team_role: Option<String>,
-    #[serde(default)]
-    pub testing_environment: Option<TestingEnvironment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct IamInfo {
-    pub app_id: String,
-    pub iam_base_url: String,
-    /// Where to send a Carbon to sign in: `{iam_login_url}?app_id=…&redirect_uri=…`; IAM appends `slt=…`.
-    #[serde(default)]
-    pub iam_login_url: Option<String>,
-    pub api_base_url: String,
-    pub website_url: String,
-    pub docs_url: String,
-    pub repository_url: String,
-    #[serde(default)]
-    pub testing_environment: Option<TestingEnvironment>,
-}
-
-/// A Silicon in the caller's team, for picking who gets access.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TeamSilicon {
-    pub id: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    /// 1.1: the Team it was listed from (`GET /api/v1/team/silicons?team=any`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1356,50 +1286,6 @@ impl DeviceStopped {
     }
 }
 
-/// Whether a Team's directory could be read, for lists across Teams.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TeamReach {
-    pub team: String,
-    pub ok: bool,
-    /// Why it couldn't, when `ok` is false.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ApiError>,
-}
-
-impl TeamReach {
-    pub fn reached(team: impl Into<String>) -> Self {
-        Self {
-            team: team.into(),
-            ok: true,
-            error: None,
-        }
-    }
-    pub fn failed(team: impl Into<String>, error: ApiError) -> Self {
-        Self {
-            team: team.into(),
-            ok: false,
-            error: Some(error),
-        }
-    }
-}
-
-/// `GET /api/v1/team/silicons?team=any`, envelope type `team_silicons`: the Silicons of every
-/// Team the Carbon's login reaches, each tagged with its Team, and how each Team's read went.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TeamSilicons {
-    pub items: Vec<TeamSilicon>,
-    #[serde(default)]
-    pub teams: Vec<TeamReach>,
-}
-
-impl TeamSilicons {
-    pub fn new(items: Vec<TeamSilicon>, teams: Vec<TeamReach>) -> Self {
-        Self { items, teams }
-    }
-}
-
 // ───────────── 1.1.0: setup retry ─────────────
 
 /// Body of `POST /api/v1/devices/{device_id}/setup/retry`: `{"step":"<key>"}`, or `{}` (or no
@@ -1503,7 +1389,6 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
-    use crate::error::ErrorCode;
 
     const WAKE: &str = "0192f3a4-0000-7000-8000-000000000001";
 
@@ -1776,27 +1661,6 @@ mod tests {
             &DeviceStopped::new("7c1e09ab".parse().unwrap(), datetime!(2026-09-27 10:10 UTC)),
             json!({"device_id":"7c1e09ab","stopped_at":"2026-09-27T10:10:00Z","in_use_by_other":true}),
         );
-        let err = ApiError::new(
-            ErrorCode::NotATeamMember,
-            "c:alice's Extend login doesn't reach globex.",
-        );
-        let reach = TeamSilicons::new(
-            vec![TeamSilicon {
-                id: "si:chef".into(),
-                display_name: Some("Chef".into()),
-                team: Some("labs".into()),
-            }],
-            vec![TeamReach::reached("labs"), TeamReach::failed("globex", err.clone())],
-        );
-        exact(
-            &reach,
-            json!({"items":[{"id":"si:chef","display_name":"Chef","team":"labs"}],
-                   "teams":[{"team":"labs","ok":true},{"team":"globex","ok":false,"error":serde_json::to_value(&err).unwrap()}]}),
-        );
-        // The 1.0 answer (no `teams`, no `team`) still decodes.
-        let old: TeamSilicons =
-            serde_json::from_value(json!({"items":[{"id":"si:chef","display_name":null}]})).unwrap();
-        assert_eq!((old.items[0].team.as_deref(), old.teams.len()), (None, 0));
     }
 
     #[test]
@@ -1931,10 +1795,6 @@ mod tests {
             serde_json::from_value::<FileInfo>(serde_json::to_value(&f).unwrap()).unwrap(),
             f
         );
-
-        let ts = json!({"id":"si:chef","display_name":"Chef"});
-        let t: TeamSilicon = serde_json::from_value(ts.clone()).unwrap();
-        assert_eq!(serde_json::to_value(&t).unwrap(), ts);
     }
 
     #[test]

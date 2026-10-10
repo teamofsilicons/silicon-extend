@@ -1,0 +1,704 @@
+# Contract file. Agents: propose changes to a Carbon and get approval before editing.
+# Extend 4 review copy (2026-10-10), proposed for the Carbon's approval; understanding/cli.yaml is unchanged. Everyone
+# signs in with Silicon Accounts (Carbons approve a code, Silicons hand over a short-lived token), there are no Teams and
+# no test environments, the account calls use API v2, and Silicon Apps installs and updates the CLI. Removed: --team,
+# --test, team, permission, env, config test, login contexts/use, device import/importable/visibility; each is refused
+# with exit 2 and what to do instead. Kept for the Silicon runtime for one release: `extend login <slt>` and a hidden
+# `extend iam --json` (the same answer as `extend accounts --json`).
+# Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Wire contract: api.yaml. Formats: TECHNICAL.md.
+# 1.1.0 draft (2026-09-27), for the Carbon's approval: devices belong to the Carbons who paired them (across Teams), several
+# Carbons per device, waking a device, Ting status per Team, setup retry, and the Carbon's decisions of 2026-09-27. No exit
+# code or error code is new; the 1.1 wording of some errors is below.
+#
+# How to read this file
+#   usage:   the exact grammar. <required>, [optional], ... repeats, a|b one of.
+#   who:     carbon, silicon, or both. Anything else gets exit 4 (forbidden) with the reason.
+#   needs:   login (signed in), session (a connected or --session session), capability (the device must have it).
+#   takes:   positional arguments and flags, with type and bounds.
+#   gives:   what is printed. "text" is the default; "json" is the single document printed with --json.
+#   api:     the endpoint in api.yaml it calls. The CLI has no feature the client crate does not.
+
+name: extend
+# Reconciled review copy, 2026-09-28: banner, stored display media, TV clicks and Ting semantics.
+summary: Let a Silicon use the devices a Carbon has paired, and let the Carbon manage them.
+install: silicon-apps install extend   # Silicon Apps keeps it up to date; `silicon-apps update extend` checks now
+links:
+  repository: https://github.com/teamofsilicons/silicon-extend
+  docs: https://extend.teamofsilicons.com/docs
+  website: https://extend.teamofsilicons.com
+  client_crate: https://crates.io/crates/silicon-extend-client
+  api: https://backend.extend.teamofsilicons.com
+
+grammar:
+  - Commands are a tree, noun then verb (`extend device ls`, `extend session end a3f`). Every node answers `--help`/`-h`
+    with what it is for, how it is usually used with other commands, its arguments and flags, and the child commands
+    under it.
+  - Every device engine command Extend exposes is also a top-level `extend` command (`extend snapshot`, `extend click @e2`)
+    and runs inside the selected session.
+  - Flags may come before or after positionals. `--` ends flag parsing; everything after it is positional. For a device
+    command the `--` is also sent to the device, so the device's own parser reads the rest as positional too
+    (`extend type -- -v`).
+  - 'Exception: `extend adb` takes a command line for the device. Everything from its first argument on is sent exactly as
+    typed, including -h, -v, --json and --out (`extend adb shell grep -v error /sdcard/app.log`). Extend''s own flags go
+    before that argument (`extend --json adb shell df -h`, `extend adb --timeout 60000 shell sleep 40`); a `--` directly
+    after `adb` ends them and is not sent. The one exception is where `adb pull` saves on this computer (see `adb` below).'
+  - Global flags work on every command.
+  - Each Extend command takes only the flags listed for it (plus the global flags). An unknown flag, a value given to a
+    flag that takes none, a missing value, or an extra argument is refused with exit 2, naming the command's valid flags
+    (and the closest one, for a typo). A token starting with `-` where a value goes is read as a flag; put such a value
+    after `--`. Device commands pass their arguments to the device (the device engine's parser decides), apart from
+    Extend's own --ttl, --keep and --out.
+  - The value of an Extend command's flag is taken as written, even when it looks like a global flag
+    (`extend request send 7c1e09ab --reason -h` sends the reason "-h").
+  - Destructive commands need `--yes`. Without it they print what would happen and exit 2.
+  - Errors say exactly what failed, why, and the command to run next. Never "something went wrong". Every usage error
+    (exit 2) has a hint.
+  - Commands Extend suggests (in a message, a hint or a Ting) are plain `extend ...`: there are no Teams to name.
+  - Commands and flags Extend 4 removed (--team, --test, team, permission, env, config test, login contexts|use, device
+    import|importable|visibility, --visibility, --team-visible, --all-teams, --only-team) are refused with exit 2, saying
+    why they are gone and what to run instead.
+
+global_flags:
+  - {flag: '--json', gives: 'One JSON document, the convention every Silicon Apps CLI follows. On success: the data itself on stdout, with no wrapper (`extend accounts --json` prints {"app_id": "extend", ...}). On failure: {"error": {code, message, hint, request_id, docs_url, details, exit_code}} on stderr, and nothing on stdout. The `output = json` setting makes it the default.'}
+  - {flag: '--session <session_id>', takes: '^[0-9a-f]{3,}$', gives: 'Uses this session instead of the connected one. Precedence: --session, then EXTEND_SESSION, then the connected session.'}
+  - {flag: '--timeout <ms>', takes: '1000–300000, default 30000; anything else is refused before sending (exit 2)', gives: 'Command deadline for session commands.'}
+  - {flag: '-h, --help', gives: 'Help for this node of the tree. While a session is connected, lists only the commands that work on its device, and a device command''s own help says "Not available on <device> (<os>) in session <id>: it needs <capability>, which the device doesn''t have (<when>). <capability>: <reason>" when it can''t run there. The list comes from the session as Extend last described it: read at `session connect`, and refreshed by `extend session status` and by every device command (read alongside the command, so it costs no time). It is forgotten when a result or `session status` says the session ended.'}
+  - {flag: '-V, --version', gives: 'The same as `extend version`.'}
+  - {flag: '-v, --verbose', gives: 'On stderr, one line per call to Extend: `[extend] <METHOD> <path>: ok in <ms> ms`, or for a failed call `[extend] <METHOD> <path>: <HTTP status> <code> in <ms> ms, request <request_id>`; then `[extend] finished in <ms> ms with exit code <n>`. Request ids are known only for failed calls (the client crate does not expose the x-request-id of a successful answer).'}
+
+environment:
+  SILICON_HOME: 'Base directory. State lives in $SILICON_HOME/.extend/. Default ~.'
+  ACCOUNTS_URL: 'The Silicon Accounts to sign in at (default https://accounts.teamofsilicons.com; https, or http for localhost, 127.0.0.1 or [::1]). Overrides the accounts_url setting. It must be the one the Extend service trusts.'
+  EXTEND_API_URL: 'The Extend service (default https://backend.extend.teamofsilicons.com; https, or http for this machine). Overrides the api_url setting.'
+  EXTEND_SESSION: 'Session id to use when --session is not given.'
+  EXTEND_TELEMETRY: 'on|off. Overrides the config value for this process.'
+  EXTEND_TEST_SECRET: 'Extend 3 only. Set, any command that would call Extend is refused (exit 2) and nothing is sent, so a script written for a test environment never reaches the real service.'
+  NO_COLOR: 'Set to anything but empty: no colour, when the color setting is auto (the default). color = always or never overrides it (no-color.org). Colour is used only on a terminal, and never with --json.'
+
+state_files:
+  - '{home}/.extend/auth.json        the sign-in: Extend''s Silicon Accounts tokens, the account (uuid, id, kind, custodian), the Silicon Accounts and Extend URLs it is for (0600, written atomically). An Extend 3 file is never used: sign in again, which replaces it.'
+  - '{home}/.extend/refresh.lock     held while the sign-in is refreshed, so one process refreshes at a time (refresh tokens rotate; presenting a used one ends the sign-in)'
+  - '{home}/.extend/config.toml      settings from `extend config`'
+  - '{home}/.extend/sessions/acct-<hex of the account uuid>/current  the connected session id'
+  - '{home}/.extend/sessions/acct-<hex of the account uuid>/<id>.json  the session''s device, capabilities, commands and missing capabilities, as last read'
+  - '{default home}/.extend/home     written by `extend config home <dir>`: the directory whose .extend/ holds the state'
+  - 'Extend 3 left contexts/, test/ and per-organization session caches; Extend 4 never reads them and deletes them at the next sign-in or sign-out.'
+
+exit_codes:
+  0: success
+  1: failed on the device (an assertion was false, a wait timed out on the device, a terminal command exited non-zero)
+  2: usage error (unknown command, bad argument, missing --yes)
+  3: not signed in, the sign-in ended, or a short-lived token or code was refused
+  4: forbidden (not the owner, no access, wrong kind of member)
+  5: not found (device, session, file, request)
+  6: conflict (device in use, session ended, already paired, stale version)
+  7: device offline
+  8: session paused for a takeover
+  9: timed out waiting for the device
+  10: not supported on this device (missing capability)
+  11: not used since Extend 4 (test environments)
+  12: rate limited
+  13: incompatible versions (API sunset, app or CLI too old; `silicon-apps update extend`)
+  14: service unavailable
+
+errors:
+  # code: exit code, meaning. Every error prints message + hint; codes are stable.
+  not_signed_in: [3, 'No saved sign-in (or an Extend 3 one, an unreadable one, or one for another Extend), or a code was denied or expired (details.reason device_denied | device_expired). Carbons: `extend login`; Silicons: `silicon-accounts login --app extend -q | extend login --slt-stdin`.']
+  token_expired: [3, 'The sign-in ended: Silicon Accounts refused the refresh (signed out, access removed, a used refresh token). The saved sign-in is deleted; sign in again.']
+  slt_invalid: [3, 'Silicon Accounts refused the short-lived token; details.reason says why (slt_already_used, slt_expired, slt_wrong_app, slt_unknown, slt_wrong_kind, slt_sign_in_ended, not_an_slt). Mint a fresh one with `silicon-accounts login --app extend -q`.']
+  not_a_team_member: [4, 'Extend 3 only: Extend 4 never answers it.']
+  carbon_only: [4, 'Only Carbons can do this (pairing and managing devices, retrying setup, answering wake requests).']
+  silicon_only: [4, 'Only Silicons can do this (sessions and requests).']
+  not_owner: [4, 'Only the Carbon who paired the device can do this.']
+  no_access: [4, 'This Silicon has no access to the device, or this Carbon doesn''t look after that Silicon. The Carbon who paired the device can grant it with `extend device access grant`.']
+  access_removed: [4, 'Access was removed during the session; the session has ended.']
+  not_session_owner: [4, 'The session belongs to another Silicon.']
+  device_not_found: [5, 'No device with that id is visible to you: a Carbon sees the devices they paired, a Silicon the ones it was given access to.']
+  session_not_found: [5, 'No session with that id.']
+  file_not_found: [5, 'The file does not exist or already self-destructed.']
+  pairing_code_invalid: [5, 'The code is wrong, expired or already used. Codes rotate every 5 minutes; use the one on screen now.']
+  unknown_command: [2, 'Not an Extend command. If the device engine has it, the message says why Extend leaves it out and what to use instead.']
+  invalid_input: [2, 'An argument is out of range or malformed; the message names it and the accepted form.']
+  confirmation_required: [2, 'Destructive; re-run with --yes.']
+  device_in_use: [6, 'Another Silicon is using the device; the hint is the `extend request send` command. The message names it and since when only when it is on your side (given access through the same Carbon''s pair, and with the same custodian); otherwise (1.1) it names no one: "Device 7c1e09ab (Living room TV) is in use. Only one Silicon can use a device at a time."']
+  device_not_in_use: [6, 'Nothing is running on the device.']
+  device_not_ready: [6, 'The device has not finished setup; the message lists the steps left.']
+  session_ended: [6, 'The session has ended; details.end_reason says why.']
+  no_session: [2, 'No session selected. Run `extend session new <device_id>` then `extend session connect <session_id>`, or pass --session.']
+  version_conflict: [6, 'The device changed since you read it. Read it again and retry.']
+  test_device_limit: [11, 'Extend 3 only: Extend 4 has no test environments.']
+  test_environment_limit: [11, 'Extend 3 only: Extend 4 has no test environments.']
+  test_only: [11, 'Extend 3 only: Extend 4 has no test environments.']
+  testing_secret_invalid: [11, 'Extend 3 only: Extend 4 has no test environments.']
+  testing_environment_not_ready: [11, 'Extend 3 only: Extend 4 has no test environments.']
+  device_offline: [7, 'The device is not connected to Extend; the message gives when it was last seen and the usual causes for its OS. When it was not awake when last seen, the wake hint follows (1.1): "Its Carbon can wake it: extend device wake <id> --reason \"...\"".']
+  session_paused: [8, 'A takeover is in progress; the Carbon has the device. See `extend takeover status`.']
+  command_timeout: [9, 'The device did not answer before the deadline. The command may still have run.']
+  unsupported_on_device: [10, 'The device lacks the capability; the message names it and why (OS, a permission not granted, or on a computer several Carbons paired the terminal of a pair other than the installer''s). When the device isn''t awake, the wake hint follows (1.1).']
+  rate_limited: [12, 'Too many attempts; the message says when to retry (1.1: asking to wake the same device again within 5 minutes; retrying setup within 5 seconds).']
+  api_version_unsupported: [13, 'No API version in common (an Extend 3 service, or an older CLI). Update with `silicon-apps update extend`.']
+  api_version_sunset: [13, 'This API version was retired; the hint is `silicon-apps update extend`.']
+  service_unavailable: [14, 'Extend or a service it depends on is down; the message names which.']
+  command_failed: [1, 'The device ran the command and it failed; the message is the device''s own error, with the wake hint when the device isn''t awake (1.1).']
+  unauthorized: [3, 'The credential was refused: a missing, malformed or revoked token, device credential or enrollment secret.']
+  request_not_found: [5, 'No request with that id is visible to you.']
+  enrollment_not_found: [5, 'The pairing attempt is gone: it expired, was used, or belongs to another environment. Open the app again for a new code.']
+  conflict: [6, 'The request clashes with the current state; the message says which. For example an Idempotency-Key reused with a different body, and in 1.1: you already paired this device; a device carried by a computer is in use and only the Carbon who paired it (or the computer''s own Stop) can stop it; the device is already awake; its Carbon turned wake requests off; nothing to retry in setup; no wake request is open.']
+  not_self_destructing: [6, 'The file is already permanent, so there is nothing to cancel.']
+  api_version_mismatch: [13, 'The API version in the header differs from the one in the path. Update the CLI or client.']
+  upgrade_required: [13, 'This Extend app is older than the oldest the service supports, or (1.1) older than what the action needs ("<name> runs Silicon Extend <version>, which can''t retry from here. Update it to 1.1, or tap Retry on the device."). Download the latest from extend.teamofsilicons.com.']
+  payload_too_large: [2, 'The upload or request body is over the limit the message names.']
+  internal: [14, 'Extend failed unexpectedly. Retry; if it keeps happening, run `extend report`.']
+commands:
+
+  # ───────────────────────────── Getting started ─────────────────────────────
+  - usage: extend login [--open] [--label <text>]
+    who: carbon
+    summary: 'Sign in with Silicon Accounts by approving a code (the device flow). Prints a link and a code; the Carbon opens the link on any device, checks it is Extend asking, and approves. Never asks for a password.'
+    takes:
+      --open: 'Open the approval page in the browser here.'
+      --label: 'Names this sign-in on the approval page and in the Carbon''s list of sign-ins (≤ 100 characters; default "extend CLI on <host>").'
+    behaviour: 'Before anything is sent: ACCOUNTS_URL and EXTEND_API_URL are checked (https, or http for this machine), the state directory must be writable, and the Extend service is asked which Silicon Accounts it trusts (GET /api/v2/accounts); a different one is refused (invalid_input, details.reason accounts_mismatch). Then it polls every interval seconds (5, plus 5 after each slow_down) until the code is approved, denied or expires (10 minutes). The tokens (Extend''s, aud extend) are saved to {home}/.extend/auth.json (0600) and checked with GET /api/v2/me. A state directory holds one sign-in: another account''s sign-in it replaces is revoked; the same account''s is left to lapse (revoking it would end the account''s running sessions).'
+    gives:
+      text: '(stderr) To sign in to Extend, open https://accounts.teamofsilicons.com/device and enter the code MVHB-KQAW … Then: "Signed in to Extend as c:ada (Ada Lovelace), a Carbon."'
+      json: 'One JSON object per line on stdout: {event: "device_code", user_code, verification_uri, verification_uri_complete, expires_in, expires_at, interval, accounts_url}; {event: "slow_down", interval}; {event: "retrying", message, retry_in}; then {event: "signed_in", authenticated: true, uuid, id, kind, display_name, custodian, method: "device", expires_at, refresh_expires_at, verified, accounts_url, api_url}.'
+    errors: 'not_signed_in (exit 3) with details.reason device_denied or device_expired; unauthorized (exit 3) with device_flow_off when Extend''s sign-in setup doesn''t allow it; service_unavailable (exit 14) when Silicon Accounts can''t be reached; rate_limited (exit 12).'
+    api: POST {ACCOUNTS}/v1/device/authorize, POST {ACCOUNTS}/v1/oauth/token (device-code grant, client_id extend), GET /api/v2/accounts, GET /api/v2/me
+
+  - usage: extend login --slt-stdin | extend login --slt <slt> | extend login <slt>
+    who: silicon (or a Carbon holding a short-lived token)
+    summary: 'Sign in with a short-lived token from Silicon Accounts: `silicon-accounts login --app extend -q | extend login --slt-stdin`. The CLI exchanges it itself, as a public client (client_id extend, no secret).'
+    takes:
+      slt: 'slt_…: single use, valid 2 minutes, for Extend only. --slt-stdin keeps it out of the process list; --slt and the positional form (which the Silicon runtime uses) work too. A value that isn''t slt_… is refused before anything is sent. The token is never printed or logged.'
+    behaviour: 'The same checks as the device flow come first, so a token is never spent on a sign-in that couldn''t be saved or wouldn''t work at this Extend.'
+    gives:
+      text: '"Signed in to Extend as si:scout, a Silicon looked after by c:ada."'
+      json: '{event: "signed_in", authenticated: true, uuid, id, kind, custodian, method: "slt", expires_at, refresh_expires_at, verified, accounts_url, api_url}'
+    errors: 'slt_invalid (exit 3) with details.reason: slt_already_used, slt_expired, slt_wrong_app, slt_unknown, slt_wrong_kind, slt_sign_in_ended, not_an_slt; the message is Silicon Accounts'' own reason and the hint says to mint a fresh one with `silicon-accounts login --app extend -q`. unauthorized (exit 3) with public_client_off when Extend''s sign-in setup doesn''t allow it.'
+    api: POST {ACCOUNTS}/v1/oauth/token (grant_type urn:silicon:params:oauth:grant-type:slt, client_id extend)
+
+  - usage: extend login status [--offline] [--json]
+    who: anyone
+    summary: Who is signed in, checked with Extend now (GET /api/v2/me, refreshing the sign-in when less than a minute is left), or with --offline from the saved sign-in only.
+    gives:
+      text: '"Signed in to Extend as si:scout, a Silicon looked after by c:ada (uuid aB3). checked with Extend just now · access token until … · sign-in until …" or "Not signed in to Extend." with how to sign in.'
+      json: '{authenticated: true, uuid, id, kind, display_name?, custodian?, expires_at, refresh_expires_at, verified, method, accounts_url, api_url, verify_error?}; signed out: {authenticated: false}, with a reason only when a saved sign-in exists but can''t be used (Extend 3''s, unreadable, for another Extend, or ended).'
+      exit: '--json: always 0. Without --json: 1 when signed out, 0 when signed in (as silicon-accounts login status does). verified is false when Extend couldn''t be asked (verify_error says why).'
+    api: GET /api/v2/me
+
+  - usage: extend logout
+    who: both
+    summary: 'Sign out and delete the saved sign-in. A Silicon signing out ends its running sessions. A Carbon signing out ends the running sessions of the Silicons that Carbon gave access to, on that Carbon''s own pairs; Silicons other Carbons gave access to keep theirs, and devices and grants stay.'
+    behaviour: 'Extend revokes the refresh token at Silicon Accounts (POST /api/v2/auth/logout); when Extend can''t do it, the CLI revokes it there directly (public client). The saved sign-in is deleted either way, with a warning when it couldn''t be revoked. Signed out already: says so and exits 0. An Extend 3 or unreadable file is deleted.'
+    gives: {text: 'Silicon: "Signed out si:chef. Ended session a3f." Carbon: "Signed out c:alice. Ended the sessions of the Silicons you gave access to: si:chef (a3f on Living room TV)."', json: '{signed_out: true, authenticated: false, revoked, via: extend|silicon-accounts, uuid, id, kind, ended_sessions}; signed out already: {signed_out: false, authenticated: false, reason}'}
+    api: POST /api/v2/auth/logout, POST {ACCOUNTS}/v1/oauth/revoke
+
+  - usage: extend accounts [--json]
+    who: anyone, no sign-in needed
+    summary: Where Extend's accounts come from and how to sign in, from this CLI's own settings. No network, no sign-in, always exit 0.
+    gives:
+      text: 'app_id extend, the Silicon Accounts and Extend URLs, the version, and the two ways to sign in.'
+      json: '{app_id: "extend", accounts_url, api_url, version, client_id: "extend", device_flow: true, public_client: true, sign_in: {carbon: "extend login", silicon: "silicon-accounts login --app extend -q | extend login --slt-stdin"}, status: "extend login status --json", website_url, docs_url, repository_url, package_url, install, update}'
+
+  - usage: extend silicon ls | extend silicon show <si:id> | extend silicon renounce <si:id> <device_id>
+    who: 'carbon (renounce: its custodian, or the Silicon itself)'
+    summary: 'The Silicons you look after (you are their custodian in Silicon Accounts) and the ones you gave access to. For one you look after, show lists every device it can use, whoever gave the access; renounce gives up its access to one device (its session there ends). A custodian sees what its Silicons do in Extend and can stop it; it never acts as them.'
+    gives:
+      text: |
+        SILICON   UUID  NAME   YOU LOOK AFTER IT  YOUR DEVICES  GRANTS  RUNNING
+        si:chef   aB3   Chef   yes                1             2       1
+        si:scout  Zz9   Scout  no                 1             —       —
+      json: 'ls: {items: [SiliconSummary]}; show: {silicon: SiliconSummary, grants: [AccessGrant] | null}; renounce: {silicon, device_id, renounced: true}'
+    api: GET /api/v2/silicons, GET /api/v2/silicons/{silicon}, GET /api/v2/silicons/{silicon}/grants, DELETE /api/v2/silicons/{silicon}/grants/{device_id}
+
+  - usage: extend config home <dir> [--use-existing]
+    who: both
+    summary: Move where Extend keeps its state to <dir>/.extend. Default {SILICON_HOME or ~}/.extend.
+    takes:
+      dir: 'An existing directory. Anything else fails with "not a directory: <dir>" and a hint (exit 2).'
+      --use-existing: 'Switch to the state already in <dir>/.extend (or start empty there) and leave the current state where it is.'
+    behaviour: 'Without --use-existing the state moves: the sign-in, settings and sessions are copied to <dir>/.extend (files 0600, directories 0700), later runs are pointed there, and the old copies are deleted (a copy that can''t be deleted is reported). If <dir>/.extend already holds Extend state it is refused (exit 2) and nothing changes; the hint names --use-existing, or removing that directory. Pointing back at the default home removes the pointer file.'
+    gives:
+      text: 'Moved the sign-in of si:chef, 2 setting(s) from /home/si/.extend to /data/si-chef/.extend. Extend state now lives there.'
+      json: '{state_dir, moved_from, moved: ["auth.json", "config.toml", ...], login}; with --use-existing {state_dir, moved: [], left_in, left}'
+
+  - usage: extend config ls | get <key> | set <key> <value> | unset <key>
+    who: both
+    summary: Read and change settings.
+    takes:
+      keys:
+        api_url: 'https://…, or http:// only for localhost, 127.0.0.1 or [::1] (default https://backend.extend.teamofsilicons.com); a trailing / is dropped. EXTEND_API_URL overrides it.'
+        accounts_url: 'The Silicon Accounts to sign in at: https://…, or http:// only for this machine (default https://accounts.teamofsilicons.com). ACCOUNTS_URL overrides it.'
+        telemetry: 'on|off (default on)'
+        output: 'text|json (default text); json makes --json the default'
+        screenshot_scale: 'a number from 0.01 to 1, default 1; applied to screenshot when --scale is not given'
+        self_destruct: 'default file self-destruct, e.g. 1d, 90m, 30d (1m–30d, default 1d)'
+        download_dir: 'an existing directory, saved as an absolute path: where `extend file get` saves without --out (default the current directory)'
+        color: 'auto|always|never (default auto: colour on a terminal unless NO_COLOR is set)'
+    behaviour: 'Every value is checked when set; an out-of-range value, or an unknown key in get, set or unset, is refused with exit 2 and a hint listing what is accepted. An Extend 3 team value is ignored; `extend config unset team` clears it.'
+    gives: {text: '`config get <key>` prints the value, or "<default> (default)"', json: 'get: {key, value, default, effective}; ls: {settings, state_dir, keys: [{key, about, default, value}]}'}
+
+  # ───────────────────────────── Devices (Carbon manages, Silicon lists) ─────────────────────────────
+  - usage: extend device ls [--online] [--os <os>] [--removed] [--json]
+    who: both
+    summary: 'Silicon: every device you have access to. Carbon: every device you paired; --removed also lists your removed devices, whose activity stays readable.'
+    behaviour: 'Reads every page (100 devices each, following next_cursor) so the list is complete; --online is sent to Extend, which filters before paging. After 100 pages, or if Extend returns a cursor it already returned, it stops and says the list is incomplete (json: next_cursor is where it stopped; null when complete). --team-visible was removed in Extend 4 (exit 2).'
+    gives:
+      text: |
+        Carbon:
+        ID        NAME                     OS          ONLINE  AWAKE                          IN USE                                      ACCESS  LAST USED  DAYS LEFT
+        7c1e09ab  Saket's Pixel            android     yes     yes                            si:chef (4m)                                2       4m ago     14
+        0d44e1f2  Living room TV (shared)  android_tv  yes     no (standby)                   yes (another Carbon's Silicon)              1       2d ago     9
+        5e0a11c2  Studio iPad              ipados      yes     yes                            a carried device (stop it at the computer)  3       1h ago     12
+        51ab93c0  Saket's iPhone           ios         no      — (offline; last seen asleep)  —                                           1       5d ago     2
+        Silicon:
+        ID        NAME             OS          ONLINE  AWAKE          IN USE
+        7c1e09ab  Saket's Pixel    android     yes     yes            si:sous
+        0d44e1f2  Living room TV   android_tv  yes     no (standby)   in use, asked
+        3a2b0c1d  Family TV        android_tv  yes     no (standby)   in use, (same device as 0d44e1f2)
+        AWAKE is yes, no (screen off | locked | asleep | standby | another account), "— (offline; last seen asleep)", or "—" when Extend can't tell.
+        IN USE names a Silicon only on your own side (Carbon: through your pair, with how long; Silicon: through the same Carbon's pair, with your custodian), and "you (<session>)" for your own session.
+        NAME ends in "(shared)" when another Carbon also paired it. ", asked": you have an open wake request on it.
+        (with --removed, ONLINE says "removed" for a removed device and a REMOVED column gives when and why)
+      json: '{items: [Device], next_cursor: null | "<cursor where it stopped>"}'
+    api: GET /api/v2/devices (include_removed=true with --removed)
+
+  - usage: extend device show <device_id> [--json]
+    who: both
+    summary: One device, and what a Silicon can do on it given its OS and the permissions it has. For a removed device (its Carbon only), when and why it was removed.
+    gives:
+      text: |
+        Name, OS, owner, online, who is using it, days left, then "You can:" with each capability and its commands, then
+        "Missing:" with each unavailable capability and why. 1.1 adds:
+        - "Awake: yes", "Awake: no (screen off since 10:02)" (the time for owners only), or "Awake: — (offline; last seen asleep)";
+        - "Waking: Extend can't tell when this iPhone wakes" when it can't (iPhone, iPad, apps older than 1.1);
+        - owners: "Also paired by another Carbon" when so; "Access:" with the Silicons given access; "Wake requests: on|off"; each open
+          wake request (Silicon, reason, expiry, whether the device showed it, the Ting's delivery); on a computer
+          several Carbons paired, the shared-computer note (only the installer's Silicons get the terminal there);
+        - a carried device refused as a duplicate, or waiting to be recognised: its setup step;
+        - Silicons: their own open wake request, and "Same device as 3a2b0c1d" when another Carbon's pair of it is theirs too.
+      json: '{...Device, capabilities: [..], missing: [{capability, reason}], commands: [..]}'
+    api: GET /api/v2/devices/{device_id}
+
+  - usage: extend device pair <pairing_code> --name <name> [--ttl-days <1-30>] [--access <si:id>]...
+    who: carbon
+    summary: 'Pair the device showing this code to your account. The code may come from a new device, or from "Pair with another Carbon" on a device another Carbon already paired: you get your own pair of it (your own id, name, access and lifetime). The device is private to you and the Silicons you give access to.'
+    takes:
+      pairing_code: '6 hexadecimal characters, any case (4F9C2A = 4f9c2a). Rotates every 5 minutes; works once.'
+      --name: 1–64 characters
+      --ttl-days: 'Days without activity before the pair ends. 1–30, default 14.'
+      --access: 'Silicons to give access now: any active Silicon, by its si: id or uuid; repeatable. Can be skipped and done later. An unknown id, a Carbon''s id or a Silicon whose custodian hasn''t accepted it yet refuses the whole pairing (invalid_input).'
+    gives:
+      text: 'Paired 7c1e09ab "Saket''s Pixel" (android). Next: finish the device''s own setup — watch it with `extend device setup 7c1e09ab --watch`. When another Carbon also paired it, "This device is also paired by another Carbon; your pair is separate (own name, access and lifetime)." comes before Next, with the shared-computer note for a computer.'
+      json: '{Device}'
+    errors: 'conflict (exit 6): you already paired this device, named by your own id for it. --visibility was removed in Extend 4 (exit 2).'
+    api: POST /api/v2/pairings
+  - usage: extend device attach <host_device_id> --os ios|ipados|tvos|samsung_tv|lg_tv --name <name>
+    who: carbon
+    summary: Pair an iPhone, iPad, Apple TV or Samsung/LG TV through a paired Mac or computer on the same network.
+    gives: {text: 'Created 51ab93c0 "Saket''s iPhone" through 2e7f00d1 (MacBook). Next: plug the iPhone into the Mac and tap Trust. Follow with: extend device setup 51ab93c0'}
+    api: POST /api/v2/devices/{device_id}/attachments
+
+  - usage: extend device setup <device_id> [--watch] [--retry [--step <key>]]
+    who: carbon
+    summary: The device's own setup steps (debugging, permissions) and which are left. --watch follows until complete. --retry (1.1) runs failed steps again now.
+    takes:
+      --retry: 'Ask the device to run its failed steps again (every failed step, or only --step). Then follows like --watch until those steps finish or fail again.'
+      --step: 'With --retry: the key of one failed step (shown in the listing and in --json).'
+    gives:
+      text: |
+        One line per step: ✓ done, … in progress, ! needs you (with where to find it on the device), ✗ failed (with its
+        plain-language error and "Retry: extend device setup 7c1e09ab --retry --step <key>").
+        With --retry: "Retrying Turn on wireless debugging on Saket's Pixel." then progress lines until done or failed.
+      json: '{Setup}; with --retry {retrying: [keys], setup: Setup} once they finish or fail'
+    errors: 'invalid_input (exit 2): no step with that key, listing the steps. conflict (exit 6): "Nothing to retry: no setup step has failed." device_offline (exit 7): "<name> is offline. Setup carries on when it reconnects." upgrade_required (exit 13): the device''s app can''t retry from here; tap Retry on the device. rate_limited (exit 12).'
+    api: GET /api/v2/devices/{device_id}/setup, POST /api/v2/devices/{device_id}/setup/retry
+
+  - usage: extend device setup-code <device_id> <code>
+    who: carbon
+    summary: Enter the 4-digit code an Apple TV shows during setup.
+    api: POST /api/v2/devices/{device_id}/setup/code
+
+  - usage: extend device rename <device_id> <name>
+    who: carbon (owner)
+    api: PATCH /api/v2/devices/{device_id}
+
+  - usage: extend device banner <device_id> on|off
+    who: carbon (owner)
+    summary: 'Show or hide the in-use banner, notification and desktop icon change. One choice applies to every Carbon''s pair of the physical device, including carried aliases.'
+    behaviour: 'On shows the banner for 10 seconds per session; off suppresses in-use announcements. Takeover prompts remain until answered and the app and website retain Stop. Android''s quiet running notification, Apple''s Automation Running banner and the test-environment label remain. Native desktop banners are movable and collapsible, with their position retained. Native offline choices are saved locally and synchronized when possible. A 1.0 device app may ignore the shared setting.'
+    gives: {text: 'Saved in-use banner off for Living room TV. This applies to every Carbon''s pair of this device. The device app, or the computer it pairs through, needs Silicon Extend 1.1 or later; offline devices apply it when they reconnect.', json: '{Device, including in_use_indicator: shown|hidden}'}
+    api: PATCH /api/v2/devices/{device_id}
+
+  - usage: extend device visibility <device_id> team|personal
+    who: carbon (owner)
+    summary: 'Removed in Extend 4 (exit 2): every device is private to the Carbon who paired it and the Silicons they give access to. Nothing is sent.'
+  - usage: extend device ttl <device_id> <days>
+    who: carbon (owner)
+    summary: Set how long the device stays paired without activity. 1–30 days.
+    gives: {text: 'Saket''s Pixel stays paired until 2026-10-10 unless used (14 days without activity).'}
+    api: PATCH /api/v2/devices/{device_id}
+
+  - usage: extend device stop <device_id>
+    who: carbon (owner)
+    summary: 'Stop the Silicon using the device right now. 1.1: any Carbon who paired the device can stop it, whichever Carbon gave that Silicon access; on a computer it also stops the devices it carries that you paired.'
+    gives: {text: '"Stopped si:chef (session a3f) on Saket''s Pixel." or, when another Carbon gave it access, "Stopped the Silicon using Living room TV (another Carbon gave it access)."'}
+    errors: 'device_not_in_use (exit 6). conflict (exit 6): "A device carried by Studio Mac is in use. It can be stopped by the Carbon who paired it, or from Studio Mac''s Extend app."'
+    api: POST /api/v2/devices/{device_id}/stop
+
+  - usage: extend device rm <device_id> --yes
+    who: carbon (owner)
+    summary: Remove the device from your account. Ends any session through your pair and every grant you gave on it, and unpairs your pair. Devices paired through it are removed too. Other Carbons' pairs of the same device are untouched (1.1).
+    gives: {text: 'Without --yes: what would be removed, then exit 2. With --yes: "Removed 7c1e09ab."'}
+    api: DELETE /api/v2/devices/{device_id}
+
+  - usage: extend device access ls <device_id>
+    who: carbon (owner)
+    summary: Every grant on your pair, with the Silicon's id and uuid.
+    gives: {text: 'SILICON  UUID  GRANTED  LAST USED  WAKE REQUESTS', json: '{items: [AccessGrant]}'}
+    api: GET /api/v2/devices/{device_id}/access
+  - usage: extend device access grant <device_id> <si:id>...
+    who: carbon (owner)
+    summary: 'Give one or more Silicons access: any active Silicon, by its si: id or uuid. It is your decision about your device, so the Silicon doesn''t accept it; the grant shows to that Silicon and its custodian. One grant per Silicon on your pair; granting again changes nothing.'
+    gives: {text: 'Granted si:scout access to 0d44e1f2. It can use it now (one Silicon at a time) and its custodian can see it. When Ting reported Extend''s notification types missing, stderr lists them with what they are for.', json: '{device_id, grant: [ids], grants: [AccessGrant], ting_missing_types}'}
+    errors: 'invalid_input (exit 2): no account has that id, it is a Carbon''s, or the Silicon''s custodian hasn''t accepted it yet.'
+    api: PUT /api/v2/devices/{device_id}/access/{silicon_id}, GET /api/v2/ting-registration
+  - usage: extend device access revoke <device_id> <si:id>...
+    who: carbon (owner)
+    summary: 'Take access away. A running session by that Silicon through your pair ends at once, and its open wake requests there are withdrawn.'
+    api: DELETE /api/v2/devices/{device_id}/access/{silicon_id}
+  - usage: extend device activity <device_id> [--silicon <id>] [--session <id>] [--since <time>] [--until <time>] [--limit <n>]
+    who: carbon (owner)
+    summary: Every action on the device, which Silicon did it, and when. Typed text is redacted.
+    takes: {--since/--until: 'RFC 3339, or relative like 2h, 3d'}
+    gives: {text: 'TIME  WHO  SESSION  ACTION  OUTCOME  FILES. Another Carbon''s actions appear only as "another Carbon paired this device" and "stopped by another Carbon who paired this device".', json: '{items: [ActivityEntry], next_cursor}'}
+    api: GET /api/v2/devices/{device_id}/activity
+
+  - usage: extend device requests <device_id>
+    who: carbon (owner)
+    summary: 'Requests for this device, with their reasons: the ones your Silicons sent, and (1.1) the ones sent to you because a Silicon you gave access to was using it ("to you", naming the Silicon that asked).'
+    gives: {text: 'TIME  FROM  TO  DEVICE  DELIVERY  REASON'}
+    api: GET /api/v2/devices/{device_id}/requests
+
+  - usage: extend device wake <device_id> --reason "<text>" | extend device wake <device_id> --cancel
+    who: silicon
+    summary: 'Ask the Carbon who gave you access to wake a device that isn''t awake (1.1). Where it can, the device shows a notification with your name and reason; the Carbon gets it through Ting. When the device is turned on or unlocked you get a Ting that it is awake, with the command to start. Extend never wakes a device itself. --cancel withdraws your open request.'
+    takes: {--reason: '1–300 characters, kept exactly as written; required unless --cancel'}
+    behaviour: 'Asking again after 5 minutes refreshes the request (sooner is refused, exit 12). A request expires 30 minutes after the last ask. While the Extend server sends no notifications through Ting, the request still shows on the website, in `extend device wake-requests ls` and on the device.'
+    gives:
+      text: |
+        Asked c:alice to wake Living room TV (0d44e1f2); the request expires at 10:32. Its Carbon was told through Ting.
+        Refresh: "Asked again (ask 2); the request now expires at 10:37."
+        Can't tell: "Extend can't tell when Saket's iPhone wakes; its Carbon will say so."
+        Delivery: "Its Carbon was told through Ting" / "Its Carbon will be told through Ting shortly" / "Ting couldn't tell
+        its Carbon." (with why: Ting is off on this server, or doesn't know Extend's wake notification type yet)
+        Carried device: "Studio Mac, which it pairs through, must be awake too."
+      json: '{WakeRequest}'
+    exit: '0 asked; 2 usage; 4 no access; 5 not found; 6 in use by another Silicon, already awake, or its Carbon turned wake requests off; 12 asked less than 5 minutes ago'
+    api: POST /api/v2/devices/{device_id}/wake-requests, DELETE /api/v2/devices/{device_id}/wake-requests/{wake_id}
+
+  - usage: extend device wake-requests ls <device_id> [--open] | answer <device_id> woken|declined [--wake-id <id>]... | mute <device_id> [--silicon <si:id>] | unmute <device_id> [--silicon <si:id>]
+    who: 'ls: both; answer, mute, unmute: carbon (owner)'
+    summary: 'Wake requests on a device (1.1). ls: yours (Silicon), or every one on your pair (Carbon). answer woken ("It''s awake") ends every open request on the device, whichever Carbon''s, and each asking Silicon is told; answer declined ends the ones on your pair (or the --wake-id ones). mute turns wake requests off for your pair of the device, or for one Silicon; unmute turns them on again. --only-team was removed in Extend 4 (exit 2).'
+    gives: {text: 'TIME  SILICON  STATE  EXPIRES  SHOWN  TING  REASON', json: 'ls: {items: [WakeRequest], next_cursor}; answer: {answer, ended}; mute/unmute: {device_id, muted, silicons_muted}'}
+    api: GET /api/v2/devices/{device_id}/wake-requests, POST /api/v2/devices/{device_id}/wake-requests/answer, PUT /api/v2/devices/{device_id}/wake-settings
+  - usage: extend ting status | extend ting on
+    who: both
+    summary: 'Whether Extend''s notifications reach you through Ting (one registration per account), and Extend''s notification types Ting reported missing. on registers you again and sends the notifications that waited. While the Extend server sends no notifications through Ting (delivery_enabled false), it says so: requests and wake requests still show on the website, in the CLI and on the device. --all-teams was removed in Extend 4 (exit 2).'
+    gives:
+      text: '"Extend''s notifications reach you through Ting." / "You turned Extend''s notifications off in Ting. Turn them on: extend ting on" / "Extend hasn''t registered you with Ting yet…" / "Notifications through Ting are off on this Extend server…", then any missing types with what each is for.'
+      json: '{TingRegistration}: {member, member_uuid, status, registered_at, refused_at, last_error, missing_types, delivery_enabled}'
+    api: GET /api/v2/ting-registration, PUT /api/v2/ting-registration
+  # ───────────────────────────── Sessions (Silicon) ─────────────────────────────
+  - usage: extend session new <device_id> [--connect]
+    who: silicon
+    summary: Start using a device. Prints the session id. --connect also connects to it.
+    gives:
+      text: |
+        a3f
+        (stderr) Started session a3f on 7c1e09ab. Next: extend session connect a3f. It ends after 5 minutes without a command; end it with `extend session end a3f`.
+        (stderr, 1.1, when the device isn't awake) note: Living room TV isn't awake (standby); commands that need its screen will fail until its Carbon turns it on. Ask: extend device wake 0d44e1f2 --reason "..."
+      json: '{Session}'
+    errors: [device_in_use, device_offline, device_not_ready, no_access]
+    api: POST /api/v2/sessions
+
+  - usage: extend session connect <session_id>
+    who: silicon
+    summary: Make this the session later commands run in, and load its device's commands into --help.
+    gives: {text: 'Connected to a3f on Saket''s Pixel (android). Try: extend snapshot -i'}
+    api: GET /api/v2/sessions/{session_id}
+
+  - usage: extend session disconnect
+    who: silicon
+    summary: Forget the connected session locally. Does not end it.
+
+  - usage: extend session status [<session_id>] [--json]
+    who: silicon
+    summary: State, device, started, last command, when it will end for inactivity.
+    gives: {text: 'a3f active on Saket''s Pixel since 10:00, 12 commands, idle end at 10:09:12', json: '{Session + device + capabilities}'}
+    api: GET /api/v2/sessions/{session_id}
+
+  - usage: extend session ls [--device <device_id>] [--state active|paused|ended] [--silicon <si:id>]
+    who: both
+    summary: 'Silicon: its sessions. Carbon: sessions through its devices, or with --silicon the sessions of a Silicon it looks after (its custodian; no_access otherwise), which it can end with `extend session end <session_id>`.'
+    api: GET /api/v2/sessions
+  - usage: extend session end [<session_id>]
+    who: silicon
+    summary: Finish and free the device for other Silicons. Defaults to the connected session.
+    gives: {text: 'Ended a3f after 14m (23 commands). Saket''s Pixel is free.'}
+    api: POST /api/v2/sessions/{session_id}/end
+
+  - usage: extend takeover --reason "<text>" | extend takeover status | extend takeover release
+    who: silicon
+    needs: [session, capability takeover]
+    summary: Hand the device to its Carbon (Face ID, a payment, an admin prompt). Commands are refused until the Carbon taps Done or you release. Up to 30 minutes.
+    takes: {--reason: '1–300 characters, shown on the device and website'}
+    api: POST|GET|DELETE /api/v2/sessions/{session_id}/takeover
+
+  # ───────────────────────────── Requests (Silicon) ─────────────────────────────
+  - usage: extend request send <device_id> --reason "<text>"
+    who: silicon
+    summary: 'Ask for a device another Silicon is using, with the reason exactly as written, delivered through Ting when it is on (and always shown on the website and in `extend request ls`). When that Silicon was given access through the same Carbon''s pair and has your custodian, it goes to that Silicon. Otherwise (1.1) it goes to the Carbon who gave that Silicon access, who sees your id and reason and can stop the session; you never see which Carbon or Silicon.'
+    takes: {--reason: '1–300 characters not counting the spaces and line breaks around it (at most 1,000 with them), sent exactly as written; required'}
+    gives: {text: '"Sent to si:sous (using 7c1e09ab in session a3f). Delivery: delivered." or "Sent to the Carbon who gave access to the Silicon using it; it''s in use by a Silicon you can''t see. Delivery: <delivered | pending, retried | …>." When delivery failed, the line keeps the error visible (Ting is off on this server, or doesn''t know Extend''s type).', json: '{Request}'}
+    errors: [device_not_in_use, no_access]
+    api: POST /api/v2/devices/{device_id}/requests
+
+  - usage: extend request ls [--sent|--received] [--device <device_id>] [--silicon <si:id>]
+    who: both
+    summary: 'Silicon: the requests it sent and received. Carbon: with --silicon, those of a Silicon it looks after.'
+    api: GET /api/v2/requests
+  # ───────────────────────────── Files ─────────────────────────────
+  - usage: extend file ls [--session <id>] [--device <id>] [--kind screenshot|recording|log|replay_script|diff] [--silicon <si:id>]
+    who: both
+    summary: 'Files made in your sessions (Silicon) or on your devices and by the Silicons you look after (Carbon; --silicon narrows to one), with Briefcase links and self-destruct times.'
+    api: GET /api/v2/files
+  - usage: extend file show <file_id>
+    who: both
+    api: GET /api/v2/files/{file_id}
+
+  - usage: extend file get <file_id> [--out <path>]
+    who: 'the Silicon that made the file, the Carbon whose device made it, and the Silicon''s custodian'
+    summary: 'Download a file through Extend, which reads it from Briefcase as the caller, so it works for Briefcase files. Prints the file''s line and Briefcase link first, then streams the bytes to disk (a partial download is never left behind).'
+    takes: {--out: 'A file path, or a directory (existing, or ending in /) to save under the file''s own name. Default: download_dir, else the current directory. The file''s name is reduced to its last path component.'}
+    gives: {text: '<file line with link>, then "Saved to <path> (<size>)"', json: '{file: File, saved_to, bytes}'}
+    errors: 'A refused download says which file failed and why, and the hint gives its Briefcase link.'
+    api: GET /api/v2/files/{file_id}, GET /api/v2/files/{file_id}/content
+
+  - usage: extend file keep <file_id>
+    who: silicon (that made it)
+    summary: Make a file permanent before it self-destructs.
+    api: POST /api/v2/files/{file_id}/keep
+
+  # ───────────────────────────── Help, versions, reports ─────────────────────────────
+  - usage: extend --help | extend <command> --help
+    summary: The documentation tree. Top level shows getting started, every branch with a one-line purpose, and links. While connected to a session, the device commands shown are only those that work on that device.
+
+  - usage: extend version [--json]
+    summary: CLI version, client crate version, API version negotiated, and whether this CLI is current, deprecated or sunset (from the compatibility matrix).
+    behaviour: 'Status is current (the API major is current and its cli range includes this CLI), deprecated (update before it is retired; says since when, the sunset rule and sunset_earliest_at), sunset (Extend answered api_version_sunset, or the matrix says so), unsupported (this CLI is outside the major''s cli range, or no API version in common), or unknown (Extend could not be asked, or the matrix does not list the major). Exits 0 in every case.'
+    gives:
+      text: "extend 4.0.0 (silicon-extend-client 4.0.0), API v2 at https://backend.extend.teamofsilicons.com (service 4.0.0)\nStatus: current. API v2 is current, and it works with CLI >=4.0.0, <5.0.0, which includes 4.0.0."
+      json: '{cli, client_crate, api_version, api_url, service_version, status, api_state, cli_range, deprecated_at, sunset_at, sunset_earliest_at, sunset_rule, message}'
+    api: GET /api/version, GET /api/v2/contracts
+
+  - usage: extend docs
+    summary: Print the repository, docs, website and crate links, where state is kept, and how to install (`silicon-apps install extend`); Silicon Apps keeps the CLI up to date.
+
+  - usage: extend report "<message>" [--pr <url>]
+    who: both
+    summary: Report a bug. Attach a PR if you already fixed it. Without --pr, prints the repository link and invites one.
+    gives: {text: 'Report 4e1b… sent to Extend''s maintainers. You can also open a PR at https://github.com/teamofsilicons/silicon-extend'}
+    api: POST /api/v2/reports
+
+# ───────────────────────────── Device commands (need a session) ─────────────────────────────
+# These are the device engine's commands, run through Extend on the session's device. Arguments and output are the engine's;
+# `command` + `args` (the tokens after the name) is what the client sends in POST /api/v2/sessions/{session_id}/commands. Each needs the listed capability
+# (TECHNICAL.md §5). Flags every one of them accepts: --session, --timeout, --json.
+# Commands that make files also accept --ttl <1m–30d> (default 1d), --keep (permanent), and --out <path> (also save locally).
+# Files are returned with their Briefcase link. For `adb`, all of these go before its first argument (see grammar).
+# Text output: the device's text, then one line per file with its Briefcase link, then one `warning: …` line on stderr per
+# entry in the result's warnings (a file Briefcase refused to store or share, and why; the exit code is unchanged), then,
+# with --out, each file is downloaded through GET /api/v2/files/{file_id}/content and "Saved <name> to <path>" is printed.
+# The links come first so they are there even if a download fails. --out is a file path or a directory (existing, or
+# ending in /); when a command makes several files and --out is a file path, the second is saved as <stem>-2.<ext>, etc.
+# --json: the CommandResult itself (with `warnings`), plus `saved_to: [paths]` when --out was given; if a download fails,
+# the error's details carry {result, saved_to, file}. A result or error saying session_ended disconnects the session.
+# Local files a command names (scripts, media, APKs, adb push sources) are read on the caller's machine and sent inside
+# the request: at most 8 files and 8 MiB in total, checked before any file is read. install, reinstall, adb push and
+# adb install take a local file only; a Briefcase link or file id is not accepted in its place yet. The CLI refuses a
+# missing path, a directory, a link or a file id there (invalid_input, exit 2) before sending anything, and says how
+# to download a Briefcase file first (`extend file get <file_id> --out <path>`).
+
+device_commands:
+
+  # See the screen
+  - usage: extend snapshot [-i] [--diff] [-d <depth>] [-s <scope>] [--raw] [--actions]
+    capability: screen.read
+    takes: {-i: 'interactive elements only', -d: 'depth limit', -s: 'text or @ref; subtree of the first match', --raw: full provider tree, --diff: compare with the previous snapshot}
+    gives: {text: 'Element tree with refs, e.g. @e2 button "Continue". Refs stay valid until the next snapshot.', json: '{nodes, refs, truncated}'}
+  - usage: extend get text|attrs <@ref|selector>
+    capability: screen.read
+    gives: {text: 'The element''s text, or its attributes'}
+  - usage: extend find <text> [click|fill <text>|list] | extend find label|role|text <value> <action>
+    capability: screen.read
+    summary: Find by meaning and act in one step.
+  - usage: extend is visible|hidden|exists|absent|editable|selected|focused|text <selector> [<value>]
+    capability: screen.read
+    gives: {text: 'pass or fail with the reason', exit: '0 pass, 1 fail'}
+  - usage: extend wait <ms> | wait text <text> [ms] | wait <@ref|selector> [ms] | wait absent <selector> [ms]
+    capability: screen.read
+    gives: {exit: '0 when met; 1 with reason wait_target_absent or wait_target_present when not'}
+  - usage: extend screenshot [<name>] [--scale <0.01-1>] [--overlay-refs] [--crop-on <selector>] [--fullscreen]
+    capability: screen.capture
+    behaviour: 'On a carried iPhone/iPad, the first plain screenshot attaches to the current screen with a bare open if needed; it launches no app or runner. Attachment, stale-session recovery and capture share one command deadline. Ref overlays or selector cropping may require the runner; lock state remains unknown.'
+    gives: {text: 'Briefcase link and size', json: '{files: [File], width, height}'}
+  - usage: extend diff screenshot --baseline <path> [<current>] [--overlay-refs]
+    capability: screen.capture
+    gives: {text: 'Changed pixels percentage and a Briefcase link to the diff image'}
+  - usage: extend record start [<name>] [--scope app|device] [--fps <n>] [--quality normal|high] | extend record stop
+    capability: screen.record
+    takes: {--quality: 'normal (the default) or high. The agent maps normal to medium export quality; Linux encodes normal at 8 Mbit/s and high at 20 Mbit/s.'}
+    gives: {text: 'On stop: Briefcase link to the video. Stops on its own at 30 minutes or 1 GiB.'}
+
+  # Act
+  - usage: extend click <@ref|selector> [--button primary|secondary]
+    capability: input.pointer or input.touch; Android TV app >=1.1 uses screen.read for a primary element click
+    behaviour: 'Android TV element clicks use accessibility without advertising pointer/touch. Apps older than 1.1, or of unknown version, keep the old gate. Coordinate, secondary, held and repeated clicks still need native injection support.'
+  - usage: extend press <x> <y> [--count <n>] [--hold-ms <ms>] [--interval-ms <ms>] | extend press <@ref|selector>
+    capability: input.touch or input.pointer
+  - usage: extend longpress <x> <y> [<ms>]
+    capability: input.touch
+  - usage: extend fill <@ref|selector> <text> [--delay-ms <ms>]
+    capability: input.text
+    summary: Clear the field, then type. Logged as [redacted N chars].
+  - usage: extend type <text> [--delay-ms <ms>]
+    capability: input.text
+    summary: Type into the focused field without clearing. Logged as [redacted N chars].
+  - usage: extend focus <@ref|selector>
+    capability: input.text
+  - usage: extend scroll up|down|left|right [<fraction>] [--pixels <n>]
+    capability: input.touch or input.pointer
+  - usage: extend swipe <x1> <y1> <x2> <y2> [--count <n>] [--pause-ms <ms>]
+    capability: input.touch
+  - usage: extend gesture pan|fling|drag|pinch|rotate|transform ...
+    capability: input.touch
+  - usage: extend hover <@ref|selector>
+    capability: input.pointer
+  - usage: extend back | extend home | extend app-switcher
+    capability: nav.system
+  - usage: extend tv-remote press|longpress <up|down|left|right|select|back|home|menu|play-pause|volume-up|volume-down|mute|power> [--duration-ms <ms>]
+    capability: input.remote
+  - usage: extend keyboard status|dismiss
+    capability: input.keyboard
+  - usage: extend clipboard read | extend clipboard write <text>
+    capability: clipboard
+    summary: Read output can contain secrets. Writes are logged as [redacted N chars].
+
+  # Apps
+  - usage: extend open <app|url> [<url>] [--surface app|frontmost-app|desktop|menubar]
+    capability: apps.launch (links for a URL)
+    summary: Open an app by name or id, or a link. --surface is for computers.
+  - usage: extend close [<app>]
+    capability: apps.launch
+  - usage: extend apps [--all]
+    capability: apps.list
+  - usage: extend appstate
+    capability: apps.launch
+  - usage: extend install <package> <path.apk> | extend reinstall <package> <path.apk>
+    capability: apps.install
+    summary: 'Install an Android .apk from a local path; its package must match <package>. The APK is sent with the
+      command, so it can be at most 8 MiB. Briefcase links, file ids and .aab bundles are not accepted yet: the CLI
+      refuses them before sending (for an .aab it gives the bundletool command that builds an APK). For a larger APK
+      the error explains how to push it in parts and install it with `extend adb shell pm install -r`.'
+
+  # Waiting for and handling pop-ups
+  - usage: extend alert [get|wait <ms>|accept|dismiss]
+    capability: alerts
+
+  # Evidence
+  - usage: extend logs start|stop|mark <label>|clear
+    capability: logs
+    gives: {text: 'On stop: Briefcase link to the saved log'}
+
+  # Replay
+  - usage: extend replay <script.ad> [--from <n> --plan-digest <sha256>] [--keep-session]
+    capability: replay
+    summary: Run saved steps again. The script is read locally and sent as an attachment; stored-file resolution is limited to display images/videos.
+  - usage: extend test <path|glob> [--retries <0-3>]
+    capability: replay
+    summary: Run several .ad scripts in order. (The device engine's `test`, not the --test flag.)
+  - usage: extend batch --steps '<json>' | --steps-file <path>
+    capability: replay
+    summary: Several commands in one request; stops at the first error.
+  - usage: extend close --save-script [<path>]
+    capability: replay
+    summary: Close the app and save the steps of this session as an .ad script, locally and in Briefcase.
+
+  # Extend additions (not in the device engine)
+  - usage: extend terminal run <command> [--cwd <dir>] [--env KEY=VALUE]...
+    capability: terminal
+    summary: 'Run a shell command on the computer as the signed-in user. Prints stdout and stderr; exits with the command''s exit code (non-zero → 1, with details.exit_code). It works while the computer is asleep or locked (1.1: awake is never a gate). Every process it starts ends with the session. On a computer several Carbons paired, only Silicons given access by the Carbon who installed Silicon Extend on it have the terminal; others get unsupported_on_device (exit 10) saying so.'
+    gives: {json: '{stdout, stderr, exit_code, duration_ms}'}
+  - usage: extend [<extend flags>] adb [<extend flags>] [--] <args>...
+    capability: adb
+    summary: 'Android debugging on the device itself, e.g. `extend adb shell dumpsys battery`, `extend adb logcat -d`. Files it produces go to Briefcase.'
+    takes:
+      args: 'Sent to the device exactly as typed from the first one on, including -h, -v, --json and --out (except the local path of `pull`, below). Extend''s flags (--json, --session, --timeout, --ttl, --keep, --out, ...) go before it; a leading `--` ends them and is not sent.'
+      push: 'push <local file> <device path>: one local file, sent with the command (8 MiB at most). adb push options, several files, a directory, a link or a file id are refused before sending.'
+      install: 'install [-r] <local .apk>: the local APK is sent with the command (8 MiB at most). Other adb install options are refused before sending; push the APK and run `extend adb shell pm install <options> <device path>` instead.'
+      pull: 'pull <device path> [<local path>]: the file goes to Briefcase; a local path, or --out <local path> before or after the device path, also saves it on this computer and is never sent to the device (real adb pull has no --out). Two local paths are refused.'
+  - usage: extend notifications [--json]
+    capability: notifications
+    summary: Read the Android device's current notifications.
+    gives: {json: '{items: [{app, title, text, posted_at}]}'}
+  - usage: extend display show --url <url> | --image <path|url|file_id> | --video <path|url|file_id> | --text <text>
+    capability: display
+    summary: 'Put something full screen on the TV. It stays until `extend display clear` or someone presses back. Apple TV: images and videos only.'
+    takes:
+      --image/--video: 'A local file, public media URL, file:<file_id>, bare Extend file UUID, or exact stored Extend/Briefcase link. The service resolves only the calling Silicon''s unexpired files, reads Briefcase as that Silicon and forwards an ordinary attachment. Local and stored inputs share the 8-file/8-MiB total. Arbitrary private Briefcase files and other Silicons'' files are refused.'
+    behaviour: 'Use a 1.1 service for stored media; an older service does not resolve the reference. Native Android TV image loading completes before success, with missing/unsupported/damaged images returning a failed command result. Stored media does not raise attachment size limits.'
+  - usage: extend display clear
+    capability: display
+
+not_exposed:
+  summary: 'Device engine commands for app developers, and ones Extend replaces. Sending one gives unknown_command naming the replacement.'
+  replaced: {devices: extend device ls, connect: extend session connect, disconnect: extend session disconnect, 'session list': extend session ls, help: extend --help}
+  left_out: [boot, shutdown, web, viewport, react-native, react-devtools, metro, cdp, perf, trace, 'network dump', 'debug symbols',
+    'audio probe', push, trigger-app-event, install-from-source, settings, fold, orientation, action-button, 'prepare ios-runner', mcp, doctor]
+
+examples:
+  silicon_first_use: |
+    extend login "$SLT"
+    extend device ls
+    extend device show 7c1e09ab
+    extend session new 7c1e09ab --connect
+    extend open com.whatsapp
+    extend snapshot -i
+    extend click @e4
+    extend fill @e7 "On my way"
+    extend screenshot --ttl 7d
+    extend session end
+  device_busy: |
+    extend session new 7c1e09ab
+    # exit 6: Device 7c1e09ab (Saket's Pixel) is being used by si:chef in session a3f since 09:58.
+    #   (a Silicon on another side: "Device 7c1e09ab (Saket's Pixel) is in use. Only one Silicon can use a device at a time.")
+    extend request send 7c1e09ab --reason "Need 2 minutes to check an OTP for the vendor portal"
+  device_asleep: |
+    extend session new 0d44e1f2
+    # stderr: Living room TV isn't awake (standby); commands that need its screen will fail until its Carbon turns it on.
+    extend device wake 0d44e1f2 --reason "I need the TV on to check the order screen"
+    # a Ting arrives when it is awake, with: extend session new 0d44e1f2
+  carbon_answers: |
+    extend device wake-requests ls 0d44e1f2 --open
+    extend device wake-requests answer 0d44e1f2 woken       # "It's awake": ends every request on the device
+    extend device setup 51ab93c0 --retry --step developer_mode
+  carbon_pairs_a_phone: |
+    extend login                       # approve the code it prints, on any device
+    extend device pair 4f9c2a --name "Saket's Pixel" --access si:chef
+    extend device setup 7c1e09ab --watch
+  custodian: |
+    extend silicon ls
+    extend silicon show si:chef
+    extend session ls --silicon si:chef --state active
+    extend session end a3f                 # stop what it is doing; a custodian never acts as its Silicon
