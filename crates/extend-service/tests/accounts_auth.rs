@@ -217,3 +217,26 @@ async fn the_account_routes_of_api_v1_are_retired_with_the_update_command() {
         .unwrap();
     assert_eq!(r.status(), 410);
 }
+
+#[tokio::test]
+async fn retired_uuid_tokens_cannot_recreate_the_old_account() {
+    let env = start().await;
+    let token = login(&env, "c:alice").await;
+    let old = uuid("c:alice");
+    sqlx::query(
+        "INSERT INTO extend.accounts_uuid128_map(old_uuid,new_uuid,kind,mapping_sha256) VALUES($1,$2,'carbon','test')",
+    )
+    .bind(&old)
+    .bind("a750a68a-1bc2-4b3f-888e-0349c9d7289a")
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    let (status, body) = me(&env, &token).await;
+    assert_eq!(status, 401, "{body}");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.accounts WHERE uuid=$1")
+        .bind(old)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

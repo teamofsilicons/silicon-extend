@@ -161,6 +161,17 @@ impl Directory {
     /// Records what a sign-in says (kind and current id) and makes sure a Silicon's custodian is
     /// known (looked up once, then kept current by webhooks and every [`PROFILE_MAX_AGE`]).
     pub async fn on_sign_in(&self, p: &Principal) -> AppResult<AccountRow> {
+        let retired: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM extend.accounts_uuid128_map WHERE old_uuid=$1)")
+                .bind(&p.uuid)
+                .fetch_one(&self.pool)
+                .await?;
+        if retired {
+            return Err(AppError::new(
+                ErrorCode::Unauthorized,
+                "This account identity was migrated. Sign in to Extend again.",
+            ));
+        }
         let cached = self.get(&p.uuid).await?;
         // A token's `id` claim is what the id was when it was issued: newer than what Extend has
         // only if the token was issued after an event or lookup last set the id.
@@ -275,7 +286,7 @@ impl Directory {
                     .hint("Check the id on accounts.teamofsilicons.com, or ask its owner for it."));
                 }
             }
-        } else if !given.is_empty() && given.len() <= 64 && given.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        } else if super::is_account_uuid(given) {
             self.fetch(given).await?.ok_or_else(|| {
                 AppError::invalid(format!("No {word} with uuid {given} is known to Silicon Accounts."))
                     .hint(format!("Name it by its id instead, like {}.", example(want)))

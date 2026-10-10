@@ -530,3 +530,7 @@ Every one is intentional:
 ## Recovery completion — Accounts rehearsal and Next.js website (2026-10-10)
 
 The inherited local Accounts stack scripts are completed and committed. Real Accounts/CLI/native-wire checks passed 31/31, including proof verification and restart/revocation. Next/Arc management pages replace Solid while preserving native API handlers and device download releases. TypeScript/lint, 45 frontend units and production build passed; generic/full browser suite passed 25/25 and the expanded populated session/file journey passed 2/2. See [web-verification.md](web-verification.md) for paths, exact coverage and remaining production gates. No production changes.
+
+## UUID128 compatibility and checked backfill — 10 October 2026
+
+Added canonical UUID acceptance, an explicit identity-column mapping consumer with transactional dry-run/apply/reapply and a retired-subject fence. Populated clone verification preserved resource IDs, provider paths, native credentials and signed bodies; 19 accounts and 6 encrypted proof grants migrated. See [uuid128.md](uuid128.md) for the cutover sequence and evidence. Production and original checkouts remain untouched.

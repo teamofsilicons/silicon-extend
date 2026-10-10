@@ -31,7 +31,6 @@ pub const SLT_TTL_S: i64 = 120;
 pub const ACCESS_TTL_S: i64 = 1800;
 /// The short-lived token grant of Silicon Accounts' token endpoint.
 pub const SLT_GRANT: &str = "urn:silicon:params:oauth:grant-type:slt";
-const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /// One account the stand-in knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,14 +130,15 @@ impl LocalAccounts {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The uuid the stand-in gives a new account with this id: 8 base62 characters derived from
-    /// the id, so tests can name accounts by id and still know their uuid.
+    /// A deterministic canonical 128-bit UUID for local fixtures. The version and variant
+    /// match Accounts UUIDv4 IDs while the fixture remains stable across test requests.
     pub fn uuid_for(id: &str) -> String {
         let digest = Sha256::digest(format!("extend-local:{}", id.trim().to_ascii_lowercase()).as_bytes());
-        digest[..8]
-            .iter()
-            .map(|b| BASE62[usize::from(*b) % BASE62.len()] as char)
-            .collect()
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        uuid::Uuid::from_bytes(bytes).to_string()
     }
 
     /// The key set Extend verifies the stand-in's tokens with.
@@ -553,6 +553,8 @@ fn display_name_of(id: &str) -> String {
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
         .unwrap_or_default()
 }
+
+const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 fn random_token(n: usize) -> String {
     let mut rng = rand::rng();

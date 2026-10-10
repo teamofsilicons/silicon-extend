@@ -323,3 +323,19 @@ fn principal_of(claims: &Claims, token: &str) -> AppResult<Principal> {
         scope: claims.scope.clone().filter(|s| !s.trim().is_empty()),
     })
 }
+
+/// Accept canonical UUIDs and the legacy Accounts keys during the identity backfill.
+pub fn is_account_uuid(value: &str) -> bool {
+    (!value.is_empty() && value.len() <= 64 && value.bytes().all(|b| b.is_ascii_alphanumeric()))
+        || (value.len() == 36 && uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value))
+}
+#[cfg(test)]
+mod uuid128_tests {
+    #[test]
+    fn accepts_current_and_legacy_accounts_ids() {
+        assert!(super::is_account_uuid("a750a68a-1bc2-4b3f-888e-0349c9d7289a"));
+        assert!(super::is_account_uuid("a8K"));
+        assert!(!super::is_account_uuid("c:ada"));
+        assert!(!super::is_account_uuid("not-an-account"));
+    }
+}

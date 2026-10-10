@@ -301,6 +301,7 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
     WORLD_3_0_ORGANIZATIONS,
     WORLD_3_1_VISIBLE_DEFAULT,
     crate::identity::WORLD_4_0_ACCOUNTS,
+    WORLD_UUID128,
 ];
 
 /// Schema version 6 (3.0): IAM feature approvals and OBO grants. Inert since 4.0 (Silicon
@@ -523,7 +524,7 @@ ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text 
 "#;
 
 /// The schema version this service brings the world to (4.0: Silicon Accounts, no Teams).
-pub const WORLD_VERSION: i32 = 9;
+pub const WORLD_VERSION: i32 = 10;
 
 /// Brings the global schema up to date, then the `extend` schema ([`ensure_world`]).
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {
@@ -667,3 +668,13 @@ pub async fn restore_rollback_grants(pool: &PgPool, world: &World) -> anyhow::Re
     tracing::info!(world = %world.schema, restored, "put back the grants a rollback to 1.0.0 had set aside");
     Ok(())
 }
+
+const WORLD_UUID128: &str = r#"
+-- Cutover ledger also fences tokens bearing an identity retired by the backfill.
+CREATE TABLE IF NOT EXISTS {s}.accounts_uuid128_map (
+ old_uuid text PRIMARY KEY, new_uuid text UNIQUE NOT NULL,
+ kind text NOT NULL CHECK (kind IN ('carbon','silicon')),
+ mapping_sha256 text NOT NULL,
+ applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+"#;

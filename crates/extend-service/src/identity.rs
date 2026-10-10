@@ -270,8 +270,8 @@ pub fn parse_mapping(text: &str) -> anyhow::Result<Vec<Link>> {
             // A line without a uuid says "no account": it stays unmapped.
             continue;
         };
-        if uuid.len() > 64 || !uuid.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            bail!("line {n}: {uuid:?} is not a Silicon Accounts uuid (letters and digits, like zQo)");
+        if !crate::accounts::is_account_uuid(&uuid) {
+            bail!("line {n}: {uuid:?} is not a Silicon Accounts UUID (canonical UUID or legacy key)");
         }
         if !seen.insert(public.clone()) {
             bail!("line {n}: {public} appears twice in the mapping file");

@@ -51,7 +51,7 @@ async fn an_empty_database_migrates_to_4_0() {
     let (_, pool) = database().await;
     db::migrate_global(&pool).await.unwrap();
     assert_eq!(version(&pool).await, db::WORLD_VERSION);
-    assert_eq!(db::WORLD_VERSION, 9);
+    assert_eq!(db::WORLD_VERSION, 10);
     for table in [
         "accounts",
         "accounts_events",
@@ -83,7 +83,7 @@ async fn an_empty_database_migrates_to_4_0() {
     assert_eq!(one::<String>(&pool, "SELECT team FROM extend.devices").await, "");
     // Running it again changes nothing.
     db::migrate_global(&pool).await.unwrap();
-    assert_eq!(version(&pool).await, 9);
+    assert_eq!(version(&pool).await, db::WORLD_VERSION);
 }
 
 /// A 3.1 database with Team-scoped rows, as origin/main writes them.
@@ -160,7 +160,7 @@ async fn a_3_1_database_upgrades_to_4_0_and_keeps_every_row() {
     let devices_before = rows(&pool, "devices", "device_id").await;
 
     db::migrate_global(&pool).await.unwrap();
-    assert_eq!(version(&pool).await, 9);
+    assert_eq!(version(&pool).await, db::WORLD_VERSION);
     for (t, n) in counts {
         assert_eq!(one::<i64>(&pool, &count(t)).await, n, "every row of extend.{t} stays");
     }
@@ -393,7 +393,7 @@ async fn identity_apply_refuses_a_mapping_that_would_merge_two_pairs() {
         ("iam_public_id,accounts_uuid\nalice,Abc\n", "not a c:/si: id"),
         (
             "iam_public_id,accounts_uuid\nc:alice,not a uuid\n",
-            "is not a Silicon Accounts uuid",
+            "is not a Silicon Accounts UUID",
         ),
         (
             "iam_public_id,accounts_uuid\nc:alice,Abc\nc:alice,Def\n",
