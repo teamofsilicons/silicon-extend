@@ -229,7 +229,9 @@ the CLI contract's review copy is [contracts/cli.yaml](contracts/cli.yaml).
 | `98513ee` | Regenerate third-party licences and describe the fixtures by major |
 | `dcdd0bf` | Say what replaced Extend 3's groupings without naming them as a concept |
 | `8597303` | Record the client and CLI stage |
-| (this) | Keep Silicon IAM, Honeycomb and Teams out of what the CLI prints and the crates' docs |
+| `9679ca2` | Keep Silicon IAM, Honeycomb and Teams out of what the CLI prints and the crates' docs |
+| `a4311cd` | Say exactly which hosts may use plain http in the client changelog |
+| (this) | List the client and CLI stage's last commits |
 
 ### Tests
 
