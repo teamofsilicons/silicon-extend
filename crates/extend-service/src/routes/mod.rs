@@ -140,6 +140,9 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         // ── Development stand-ins (refused in production) ──
         .route("/dev/files/{file_id}", get(files::local_file))
         .route("/dev/accounts/token", post(dev::token))
+        .route("/dev/accounts/slt", post(dev::slt))
+        .route("/dev/accounts/v1/oauth/token", post(dev::oauth_token))
+        .route("/dev/accounts/v1/oauth/revoke", post(dev::oauth_revoke))
         .route("/dev/accounts/.well-known/jwks.json", get(dev::jwks))
         .route("/dev/ting", get(dev::tings))
         .route("/dev/ting/missing", post(dev::ting_missing))

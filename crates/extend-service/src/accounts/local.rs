@@ -25,6 +25,12 @@ use super::api::AccountsApi;
 use crate::error::{AppError, AppResult};
 
 pub const LOCAL_KID: &str = "extend-local-1";
+/// How long the stand-in's short-lived tokens last, like Silicon Accounts' (120 s, single use).
+pub const SLT_TTL_S: i64 = 120;
+/// How long the access tokens of the stand-in's sign-ins last, like Silicon Accounts' (30 min).
+pub const ACCESS_TTL_S: i64 = 1800;
+/// The short-lived token grant of Silicon Accounts' token endpoint.
+pub const SLT_GRANT: &str = "urn:silicon:params:oauth:grant-type:slt";
 const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /// One account the stand-in knows.
@@ -64,6 +70,43 @@ struct Inner {
     proof_tokens: HashMap<String, String>,
     /// Every proof request, for tests: `{"kind", "receiving_app", "scopes", "user"}`.
     issued: Vec<Value>,
+    /// Short-lived tokens for Extend the stand-in minted (`slt_local_…`).
+    slts: HashMap<String, LocalSlt>,
+    /// Refresh tokens of the stand-in's sign-ins (`sar_local_…`).
+    refresh_tokens: HashMap<String, LocalRefresh>,
+}
+
+#[derive(Debug, Clone)]
+struct LocalSlt {
+    uuid: String,
+    expires_at: i64,
+    used: bool,
+}
+
+#[derive(Debug, Clone)]
+struct LocalRefresh {
+    uuid: String,
+    family: String,
+    used: bool,
+}
+
+/// A refusal of the stand-in's token endpoint, in the OAuth shape Silicon Accounts answers
+/// (`{"error", "error_description"}`), with the HTTP status it would use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthRefusal {
+    pub status: u16,
+    pub error: &'static str,
+    pub description: String,
+}
+
+impl OAuthRefusal {
+    fn grant(description: impl Into<String>) -> Self {
+        Self {
+            status: 400,
+            error: "invalid_grant",
+            description: description.into(),
+        }
+    }
 }
 
 pub struct LocalAccounts {
@@ -176,9 +219,21 @@ impl LocalAccounts {
 
     /// [`Self::mint`] with any audience, issuer and key id (tests of refused tokens).
     pub fn mint_with(&self, account: &LocalAccount, ttl_s: i64, aud: &str, iss: &str, kid: &str) -> String {
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let family = format!("fam_{}", random_token(16));
         self.lock().families.insert(family.clone(), account.uuid.clone());
+        self.mint_in_family(account, ttl_s, aud, iss, kid, &family)
+    }
+
+    fn mint_in_family(
+        &self,
+        account: &LocalAccount,
+        ttl_s: i64,
+        aud: &str,
+        iss: &str,
+        kid: &str,
+        family: &str,
+    ) -> String {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let claims = json!({
             "iss": iss, "sub": account.uuid, "aud": aud, "exp": now + ttl_s, "iat": now - 1, "nbf": now - 1,
             "jti": random_token(12), "kind": match account.kind { MemberKind::Carbon => "carbon", MemberKind::Silicon => "silicon" },
@@ -197,6 +252,175 @@ impl LocalAccounts {
         let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
         header.kid = Some(kid.to_owned());
         jsonwebtoken::encode(&header, claims, &jsonwebtoken::EncodingKey::from_ed_der(&der)).unwrap_or_default()
+    }
+
+    /// A short-lived token for Extend, as `silicon-accounts login --app extend -q` prints one: it
+    /// works once, within [`SLT_TTL_S`] seconds, at the token endpoint ([`Self::exchange_slt`]).
+    pub fn mint_slt(&self, account: &LocalAccount) -> String {
+        self.mint_slt_with_ttl(account, SLT_TTL_S)
+    }
+
+    /// [`Self::mint_slt`] with another lifetime (tests: negative is already expired).
+    pub fn mint_slt_with_ttl(&self, account: &LocalAccount, ttl_s: i64) -> String {
+        let token = format!("slt_local_{}", random_token(32));
+        let expires_at = time::OffsetDateTime::now_utc().unix_timestamp() + ttl_s;
+        self.lock().slts.insert(
+            token.clone(),
+            LocalSlt {
+                uuid: account.uuid.clone(),
+                expires_at,
+                used: false,
+            },
+        );
+        token
+    }
+
+    /// The token endpoint's short-lived token grant for Extend's public client (`client_id` alone):
+    /// a new sign-in with an access token and a rotating refresh token, answered in Silicon
+    /// Accounts' shape. A token works once, whether the exchange succeeds or not.
+    pub fn exchange_slt(&self, slt: &str, client_id: &str) -> Result<Value, OAuthRefusal> {
+        self.check_client(client_id)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let account = {
+            let mut inner = self.lock();
+            let Some(entry) = inner.slts.get_mut(slt.trim()) else {
+                return Err(OAuthRefusal::grant(
+                    "The short-lived token is not known: it is mistyped or was never issued.",
+                ));
+            };
+            if entry.used {
+                return Err(OAuthRefusal::grant(
+                    "The short-lived token was already used; each one works once.",
+                ));
+            }
+            entry.used = true;
+            if entry.expires_at < now {
+                return Err(OAuthRefusal::grant(format!(
+                    "The short-lived token expired at {} (they last {SLT_TTL_S} seconds).",
+                    rfc3339(entry.expires_at)
+                )));
+            }
+            let uuid = entry.uuid.clone();
+            inner.accounts.get(&uuid).filter(|a| a.status == "active").cloned()
+        };
+        let account = account.ok_or_else(|| {
+            OAuthRefusal::grant("The account the short-lived token was issued to is no longer active.")
+        })?;
+        let family = format!("fam_{}", random_token(16));
+        self.lock().families.insert(family.clone(), account.uuid.clone());
+        Ok(self.sign_in_answer(&account, &family))
+    }
+
+    /// The token endpoint's refresh grant for Extend's public client. The refresh token rotates on
+    /// every use; presenting a used one ends the whole sign-in (`refresh_token_reuse`), as Silicon
+    /// Accounts does.
+    pub fn refresh_grant(&self, refresh_token: &str, client_id: &str) -> Result<Value, OAuthRefusal> {
+        self.check_client(client_id)?;
+        let account = {
+            let mut inner = self.lock();
+            let Some(entry) = inner.refresh_tokens.get(refresh_token.trim()).cloned() else {
+                return Err(OAuthRefusal::grant(
+                    "The refresh token is not known: it is mistyped or was never issued.",
+                ));
+            };
+            if inner.revoked_families.contains(&entry.family) {
+                return Err(OAuthRefusal::grant(
+                    "The sign-in this refresh token belongs to was revoked.",
+                ));
+            }
+            if entry.used {
+                inner.revoked_families.push(entry.family.clone());
+                return Err(OAuthRefusal::grant(
+                    "The refresh token was already used, so its sign-in was ended (refresh_token_reuse).",
+                ));
+            }
+            if let Some(e) = inner.refresh_tokens.get_mut(refresh_token.trim()) {
+                e.used = true;
+            }
+            inner
+                .accounts
+                .get(&entry.uuid)
+                .filter(|a| a.status == "active")
+                .cloned()
+                .map(|a| (a, entry.family))
+        };
+        let (account, family) =
+            account.ok_or_else(|| OAuthRefusal::grant("The account this sign-in belongs to is no longer active."))?;
+        Ok(self.sign_in_answer(&account, &family))
+    }
+
+    /// Ends the sign-in behind a refresh token or an access token the stand-in issued; false when it
+    /// knows neither (the revoke endpoint answers 200 either way, like Silicon Accounts).
+    pub fn revoke_sign_in(&self, token: &str) -> bool {
+        let token = token.trim();
+        let family = self
+            .lock()
+            .refresh_tokens
+            .get(token)
+            .map(|r| r.family.clone())
+            .or_else(|| self.claims_of(token).and_then(|c| c["fid"].as_str().map(str::to_owned)));
+        match family {
+            Some(f) => {
+                self.lock().revoked_families.push(f);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn check_client(&self, client_id: &str) -> Result<(), OAuthRefusal> {
+        if client_id.trim() == self.app_id {
+            return Ok(());
+        }
+        Err(OAuthRefusal {
+            status: 401,
+            error: "invalid_client",
+            description: format!(
+                "client_id {client_id:?} isn't an app this Silicon Accounts stand-in signs in to; it serves {} only.",
+                self.app_id
+            ),
+        })
+    }
+
+    /// A token response for a sign-in (`family`): a fresh access token and refresh token, and the
+    /// account as Silicon Accounts shows it to the app.
+    fn sign_in_answer(&self, account: &LocalAccount, family: &str) -> Value {
+        let access = self.mint_in_family(account, ACCESS_TTL_S, &self.app_id, &self.issuer, LOCAL_KID, family);
+        let refresh = format!("sar_local_{}", random_token(32));
+        let mut inner = self.lock();
+        inner.refresh_tokens.insert(
+            refresh.clone(),
+            LocalRefresh {
+                uuid: account.uuid.clone(),
+                family: family.to_owned(),
+                used: false,
+            },
+        );
+        let custodian = account
+            .custodian
+            .as_ref()
+            .and_then(|c| inner.accounts.get(c))
+            .map(|c| json!({"uuid": c.uuid, "id": c.id, "kind": "carbon", "display_name": c.display_name}));
+        let membership = format!("{}:{}", self.app_id, account.uuid);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        json!({
+            "access_token": access,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TTL_S,
+            "refresh_token": refresh,
+            "refresh_token_expires_at": rfc3339(now + 900 * 86_400),
+            "scope": "profile",
+            "membership_id": membership,
+            "account": {
+                "uuid": account.uuid,
+                "membership_id": membership,
+                "kind": match account.kind { MemberKind::Carbon => "carbon", MemberKind::Silicon => "silicon" },
+                "id": account.id,
+                "display_name": account.display_name,
+                "pfp_url": format!("http://127.0.0.1/pfp/{}", account.uuid),
+                "custodian": custodian,
+            },
+        })
     }
 
     /// Every proof the stand-in issued, oldest first: `{"kind", "receiving_app", "scopes", "user"}`.
@@ -314,6 +538,14 @@ fn proof_answer(
     .unwrap_or_else(|e| panic!("local proof answer: {e}"))
 }
 
+/// A unix time as RFC 3339 with milliseconds, the way Silicon Accounts writes times.
+fn rfc3339(unix_s: i64) -> String {
+    time::OffsetDateTime::from_unix_timestamp(unix_s)
+        .ok()
+        .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_default()
+}
+
 fn display_name_of(id: &str) -> String {
     let handle = id.split_once(':').map_or(id, |(_, h)| h);
     let mut c = handle.chars();
@@ -371,9 +603,7 @@ impl AccountsApi for LocalAccounts {
     }
 
     async fn revoke_token(&self, token: &str) -> AppResult<()> {
-        if let Some(f) = self.claims_of(token).and_then(|c| c["fid"].as_str().map(str::to_owned)) {
-            self.lock().revoked_families.push(f);
-        }
+        self.revoke_sign_in(token);
         Ok(())
     }
 
