@@ -189,3 +189,117 @@ where the code needed an answer. Contract changes are proposed, not applied:
 34. The released 3.1.1 client's fixtures were frozen as `contracts/v1/client-3.1.1/` before the live
     `v1/client` fixtures were regenerated (the protocol made `team` optional); Honeycomb's lifecycle
     fixtures moved to `contracts/retired/honeycomb/`.
+
+# Client and CLI (stage 2, 2026-10-10)
+
+## Versions and shape
+
+35. **Client 4.0.0, CLI 4.0.0, protocol 2.0.0**: the identity change breaks every caller, and the
+    service's compatibility matrix already says client/CLI `>=4.0.0, <5.0.0` for API v2. Nothing is
+    published.
+36. **Signing in lives in the client crate** (`silicon_extend_client::auth::SignIn`), so the CLI is
+    still built only on the client crate (UNDERSTANDING). It uses `silicon-accounts-client` 0.4.0 for
+    the device flow and the public-client refresh; the short-lived token exchange and the revoke are
+    plain form posts to `/v1/oauth/token` and `/v1/oauth/revoke` with `client_id=extend`, because
+    0.4.0's helpers for those accept only Silicon Accounts' own client ids. No secret is ever in the
+    CLI.
+37. **One client, two majors.** The handshake offers only 2; each request pins the major its path
+    names (`/api/v1/…` → 1, the device wire installed apps speak; everything else → 2). A 3.x service
+    answers `api_version_unsupported`.
+38. **No `Authorization: Proof` in the client**: no route of the service accepts one (decision 9).
+    Errors keep the service's envelope (`code`, `message`, `hint`, `request_id`, `details`); sign-in
+    failures are `auth::AuthError` (`code`, `message`, `hint`, `status`, `request_id`, `transient`).
+39. **Protocol 2.0.0 drops the v1 account API's IAM and Team types** (`LoginInput`, `RefreshInput`,
+    `LogoutInput`, `AuthSession`, `Me`, `IamInfo`, `TeamSilicon(s)`, `TeamReach`, `DeviceImport`,
+    `TEAM_HEADER`) and `ting::register_command` (a `ting --org` command). `Visibility::default()` is
+    `Personal`. The device wire (frames, `DeviceSelf`, every enum) is unchanged.
+
+## The saved sign-in
+
+40. **`auth.json` (format 4) in the existing state dir**, 0600 in a 0700 directory, written
+    atomically: Extend's tokens, the account (uuid, id, kind, name, custodian), how it started
+    (`device`/`slt`), and the Silicon Accounts and Extend URLs it is for. It is used only for those
+    two URLs: a command aimed elsewhere doesn't send it (it says so), and `logout` revokes it where
+    it was made.
+41. **Single-flight refresh with an OS file lock** (`std::fs::File::try_lock` on `refresh.lock`,
+    released if the process dies): re-read the file after taking the lock; use another process's
+    fresh tokens when it refreshed first; refresh when less than 60 s are left; save the new pair
+    before using it. A process waits up to 60 s for the lock and then fails ("run it again") rather
+    than refreshing without it, since a second refresh of one token revokes the sign-in. If Silicon
+    Accounts can't be reached but the access token still works, it is used. A refused refresh means
+    the sign-in is over: the file is deleted, exit 3 (`token_expired`, `details.reason
+    sign_in_ended`). If something replaced the file while a refresh was out, the newer file wins and
+    the refreshed tokens are revoked.
+42. **Device-session caches are keyed by the account's uuid**, in `sessions/acct-<hex of the uuid>`:
+    uuids are case-sensitive and some file systems are not.
+43. **Extend 3's files are never used and never crash a command.** A legacy `auth.json` reads as not
+    signed in, with "sign in again"; the next `login` or `logout` replaces it and deletes Extend 3's
+    `contexts/`, `test/`, `auth-context.lock` and per-organization session caches (they held only
+    Silicon IAM tokens, which nothing accepts any more). An unreadable file says why.
+
+## Signing in and out
+
+44. **Checks before a token is spent or a code shown**: both URLs (https, or http only for this
+    machine), a writable state directory, and the Extend service's own `GET /api/v2/accounts`: a
+    service that trusts another Silicon Accounts is refused (`invalid_input`, `details.reason
+    accounts_mismatch`), because the sign-in would be useless there; a service that can't be asked
+    gets a warning and the sign-in goes on.
+45. **Device flow output**: the link and code on stderr in text mode (stdout stays for results); with
+    `--json` one JSON line per event on stdout. No browser opens unless `--open`. The default label
+    is "extend CLI on <host>".
+46. **Refusals use the existing error codes** with the exact reason in `details.reason`: a refused
+    short-lived token is `slt_invalid` (exit 3) with `slt_already_used`, `slt_expired`,
+    `slt_wrong_app`, `slt_unknown`, `slt_wrong_kind`, `slt_sign_in_ended` or `not_an_slt`; a denied or
+    expired code is `not_signed_in` with `device_denied`/`device_expired`. `ErrorCode` stays closed
+    because installed apps decode it strictly.
+47. **Replacing a sign-in**: another account's sign-in is revoked (that account signs out of this
+    machine); the same account's is left to lapse unrevoked, because revoking it reaches Extend as a
+    sign-out that ends the account's running sessions (decision 8) — re-running `extend login` (the
+    Silicon runtime does at every connect) must not stop a Silicon's work.
+48. **`logout`** calls the service's `POST /api/v2/auth/logout` with the refresh token (Extend ends
+    what the sign-in runs and revokes it); if that fails, the CLI revokes at Silicon Accounts itself
+    (the webhook then ends the sessions). The file is deleted either way, with a warning naming
+    `silicon-accounts apps remove extend` when nothing could be revoked. Signed out already: exit 0,
+    `signed_out: false`.
+49. **`login status --json`** is exactly `{"authenticated":false}` when there is no sign-in, with a
+    `reason` only when a saved sign-in exists but can't be used (Extend 3's, unreadable, for another
+    Extend, ended). Signed in, it checks with `GET /api/v2/me` (refreshing first if needed); when
+    Extend can't be asked it still says `authenticated: true` from the file, with `verified: false`
+    and `verify_error`. Without `--json` it exits 1 when signed out.
+50. **`accounts --json`** is answered from the CLI's own settings with no network: `app_id`,
+    `accounts_url`, `api_url`, `version`, `client_id`, `device_flow`, `public_client`, `sign_in`,
+    `status`, links, `install`, `update`. The hidden `iam --json` prints the same object for one
+    minor release (the Silicon runtime runs it); it is in no help or doc.
+
+## Removed spellings and Teams
+
+51. **Removed commands and flags answer exit 2 with what replaced them** (`--team`, `--test`, `team`,
+    `permission`, `env`, `config test`, `login contexts|use`, `device import|importable|visibility`,
+    `--visibility`, `--team-visible`, `--all-teams`, `--only-team`), so a Silicon with old habits
+    learns the new way at once. `EXTEND_TEST_SECRET` still refuses every command that would call
+    Extend: a script written for a test environment must not reach the real service. An old `team`
+    setting is ignored; `extend config unset team` clears it.
+52. **The custodian rule in the CLI**: `extend silicon ls|show|renounce` and `--silicon <si:id>` on
+    `session ls`, `file ls` and `request ls` (the service's `?silicon=`). `session end` and `device
+    wake --cancel` already work for a custodian through the service. There is no command that acts as
+    a Silicon.
+53. **Ting**: one registration per account (`ting status|on`, no Team); missing types are listed with
+    what each is for and "registered in Ting for the app extend, once, by whoever runs Extend" (no
+    `ting --org` command); while the server has Ting off, every Ting message says so.
+54. **URLs**: https, or plain http only for `localhost`, `*.localhost`, `127.0.0.0/8` and `[::1]`.
+    `10.0.2.2` (the Android emulator's host) is no longer accepted: the CLI and client don't run in
+    the emulator, and the string-prefix check that allowed it also let `http://localhost.evil.com`
+    through.
+
+## Contracts and docs
+
+55. **Fixtures by major**: the 4.0 client's account calls are recorded in `contracts/v2/client`, its
+    device-wire calls in `contracts/v1/client` (the 3.x account fixtures left that live directory;
+    their frozen copies stay in `client-3.1.1` and still get the 410). The service's replay now
+    treats `/api/v2/…` fixtures as served, and its matrix tests expect the 4.0 client to agree 2.
+56. **The CLI contract review copy** is `docs/migration/contracts/cli.yaml` (the original
+    `understanding/cli.yaml` is the Carbon's); the help test reads the copy. `docs/cli.md`,
+    `docs/client.md` and both crate READMEs describe Extend 4 only; UNDERSTANDING edits are in
+    `understanding-proposal.md` §8.
+57. **Telemetry** is unchanged (Space Station through Extend's `/api/v2/telemetry`, opt-out, command
+    and step names only); it never refreshes a sign-in just to send an event.

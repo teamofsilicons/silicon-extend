@@ -70,3 +70,25 @@ After the switch: remove the IAM webhook registration (`/webhook/` answers 410).
 `device_organizations`, `membership_checks`, `ting_recipients`/`ting_type_status`, `iam_*` tables,
 the `extend_test_*` schemas and `extend_global.test_environments` are no longer read; drop them
 only with a Carbon's approval, after a backup.
+
+## From the client and CLI stage, 2026-10-10
+
+- **Release together with the service**, in this order: crates `silicon-extend-protocol` 2.0.0,
+  `silicon-extend-client` 4.0.0, `silicon-extend-cli` 4.0.0 (each depends on the one before), and
+  the Silicon Apps release of `extend` 4.0.0 (the ship stage packs it). Silicon Apps' updater moves
+  installed CLIs to 4.0.0 within a minute of the release; a 3.x CLI left behind gets `410
+  api_version_sunset` with `silicon-apps update extend` on every account command.
+- **Silicon Accounts setup** (already in the service stage's list): `device_flow: true` (Carbons'
+  `extend login`) and `public_client: true` (Silicons' short-lived tokens, refresh and revoke from the
+  CLI, with `client_id` alone). Without them the CLI says `device_flow_off` / `public_client_off`.
+  The CLI signs in at `https://accounts.teamofsilicons.com` by default; nothing to configure.
+- **Everyone signs in again.** A 3.x `auth.json` (Silicon IAM tokens, Teams) is never used: the
+  CLI says "sign in again" and the next `extend login` replaces it and deletes Extend 3's
+  `contexts/` and `test/`. Carbons: `extend login`. Silicons: `silicon-accounts login --app extend -q
+  | extend login --slt-stdin`.
+- **The Silicon runtime** (stemcell `silicon connect`) keeps working unchanged: `extend login <SLT>`
+  (positional) is supported, and `extend iam --json` is a hidden alias of `extend accounts --json`
+  for one minor release. Move the runtime to `--slt-stdin` and `accounts --json`, then drop the alias
+  in 4.1.
+- Old scripts that set `EXTEND_TEST_SECRET` or pass `--test`/`--team` are refused with exit 2 before
+  anything is sent.

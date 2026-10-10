@@ -179,3 +179,177 @@ first pass's code is commit `cd94147` exactly as it was tested; the second pass'
 - `mint.mts app-signin --app extend` must use the seeded redirect `http://127.0.0.1:9593/extend/callback`.
 - No process from this stage is left running (`.mig/pids` empty, nothing on 4220-4239); every database it
   created on 5460 was dropped.
+
+## 2026-10-10 — Stage 2: client crate and CLI
+
+`silicon-extend-client` 4.0.0, the `extend` CLI 4.0.0 and `silicon-extend-protocol` 2.0.0 speak
+Silicon Accounts only, follow the Silicon Apps CLI contract, and work against the migrated service
+(API v2). Decisions 35–57 are in [decisions.md](decisions.md#client-and-cli-stage-2-2026-10-10); the
+production steps are in [cutover.md](cutover.md) ("From the client and CLI stage"); the
+UNDERSTANDING edits for the CLI are §8 of [understanding-proposal.md](understanding-proposal.md);
+the CLI contract's review copy is [contracts/cli.yaml](contracts/cli.yaml).
+
+### What changed
+
+- **Client** (`crates/silicon-extend-client`): `auth::SignIn` — device flow (`start_device`,
+  `poll_device`, `wait_for_device` honouring `interval`/`slow_down`, 10-minute expiry), short-lived
+  token exchange with `client_id=extend` and no secret (every `invalid_grant` reason mapped:
+  `slt_already_used`, `slt_expired`, `slt_wrong_app`, `slt_unknown`, `slt_wrong_kind`,
+  `slt_sign_in_ended`; non-`slt_` values never sent), rotating `refresh`, `revoke`; typed
+  `AuthError`; `Secret` tokens. `Client::authed(token)` on `/api/v2` (no Team header), `accounts()`,
+  `me()`, `sign_out()`, `lookup()`, `silicons()`/`silicon()`/`silicon_grants()`/`renounce()`,
+  `ListQuery::silicon`, Ting without a Team. The handshake offers 2; each request pins the major its
+  path names (device-side calls stay on v1). IAM/test-environment/Team/permission/import calls
+  removed. `src/lib.rs` split into `lib.rs` (client, device side), `authed.rs` (account API) and
+  `auth.rs` (sign-in).
+- **CLI** (`crates/extend-cli`): `login` (device flow, `--open`, `--label`, `--json` event lines),
+  `login --slt|--slt-stdin|<slt>`, `login status [--offline] [--json]`, `logout` (service sign-out,
+  falling back to a direct public revoke), offline `accounts --json`, hidden `iam --json`, `silicon
+  ls|show|renounce`, `--silicon` on `session ls`/`file ls`/`request ls`; `signin.rs` (auth.json
+  format 4, 0600/0700, atomic, OS file lock, single-flight refresh, Extend 3 detection);
+  `retired.rs` (removed spellings → exit 2 with the replacement); `store.rs` without test
+  environments or per-organization contexts, sessions keyed by account uuid; `accounts_url` setting;
+  help tree and update hints rewritten (`silicon-apps install|update extend`).
+- **Protocol**: the v1 account API's IAM/Team types and `ting::register_command` removed;
+  `Visibility::default()` is `Personal`; CHANGELOG 2.0.0 written (it covers the service stage's
+  additions too). The device wire is unchanged (protocol compat suite green).
+- **Contracts**: 57 fixtures in `contracts/v2/client` (account calls), 8 in `contracts/v1/client`
+  (device side); the service's replay treats `/api/v2` as served (`still_served`), and its two
+  matrix tests now expect the 4.0 client to agree 2. `fake_device` no longer takes a test secret.
+- **Docs**: `docs/cli.md`, `docs/client.md`, both crate READMEs, `contracts/README.md`,
+  `docs/migration/contracts/cli.yaml` (review copy of `understanding/cli.yaml`, which the help test
+  now reads), THIRD_PARTY_LICENSES.txt regenerated.
+
+### Commits
+
+| commit | subject |
+|---|---|
+| `33c7784` | Sign the client and CLI in with Silicon Accounts and drop Teams and test environments |
+| `f344676` | Document the CLI and client on Silicon Accounts |
+| `98513ee` | Regenerate third-party licences and describe the fixtures by major |
+| `dcdd0bf` | Say what replaced Extend 3's groupings without naming them as a concept |
+| (this) | Record the client and CLI stage |
+
+### Tests
+
+All with `CARGO_TARGET_DIR=$PWD/target/mig CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3`.
+
+| Command | Result |
+|---|---|
+| `EXTEND_TEST_ADMIN_URL=postgres://postgres@127.0.0.1:5460/postgres cargo test --workspace --locked --exclude extend-agent --no-fail-fast` | **394 passed, 0 failed, 5 ignored** (service 125 integration + 37 lib, hosted 82, protocol 32 + 5, CLI 34 unit + 15 `cli_accounts` + 28 `cli_behaviour` + 8 `device_args` + 2 `json_consumers` + 1 `build_scripts`, client 9 unit + 3 `contract_fixtures` + 8 `sign_in` + 1 + 1, doc tests 3) |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` (agent included) | clean |
+| `cargo fmt --all -- --check` | clean |
+| `EXTEND_TEST_ADMIN_URL=… cargo test -p extend-service --test contracts` | 16 passed: the 57 v2 client fixtures replay against a real service; 3.1.1 and older client fixtures still get the 410; device fixtures replay |
+| `EXTEND_CONTRACTS_WRITE=1 cargo test -p silicon-extend-client --test contract_fixtures`, then without it | fixtures written, then 3 passed |
+| `cargo package --list --allow-dirty --offline -p silicon-extend-{protocol,client,cli}` | lists as expected (sources, README, CHANGELOG, tests) |
+| `cargo about generate about.hbs -o THIRD_PARTY_LICENSES.txt` | only the client and CLI versions change |
+| `ruby -ryaml -e 'YAML.load_file("docs/migration/contracts/cli.yaml")'` | parses: 45 commands, 38 device commands |
+
+New coverage. `crates/silicon-extend-client/tests/sign_in.rs` (axum stand-in for Silicon Accounts):
+device flow pending → slow_down (interval 1 → 6 s) → tokens; denied; expired (server and local
+deadline); SLT ok with `client_id` alone and no Authorization header; each refusal reason with the
+token never echoed; non-SLT values never sent; refresh rotation and a reused refresh token
+(`sign_in_ended`); revoke form; unreachable Accounts (transient); URL rules.
+`crates/extend-cli/tests/cli_accounts.rs` (the real binary against a fake that is both Extend and
+Silicon Accounts): discovery in an empty `env -i` home (golden `accounts --json`, `iam --json` the
+same, `login status --json` = `{"authenticated":false}` exit 0, text exit 1, `--help` without
+IAM/Honeycomb/Team words, no file written); the device flow with `--json` lines, the label, the
+saved file's 0600/0700 modes; denied/expired codes; SLT on stdin, `--slt` and positional, never in
+a file; every refusal's `details.reason`; mismatch and unwritable home refused before the token is
+spent; four concurrent commands → one refresh; a refused access token refreshed and the call
+repeated; a refused refresh deletes the sign-in; `--offline`; logout through Extend and the fallback
+revoke (form: token, hint, client_id); Extend 3 and unreadable files; origin isolation; replacing
+another account's sign-in revokes it; a refresh never overwrites a newer file.
+`crates/extend-cli/tests/cli_behaviour.rs` was rewritten on the shared harness
+(`tests/common/mod.rs`) for API v2: every behaviour of 3.x that still exists, plus removed spellings,
+access by id, Ting without Teams and the custodian commands. Unit tests: `signin.rs` (round trip,
+legacy/corrupt files, Debug redaction, refresh keeps the account), `retired.rs`, `args.rs` (login
+grammar, retired global flags), settings.
+
+### Live: the shared Accounts stack and the migrated service
+
+Scripts: `<scratch>/extend-cli/real_run.py` and `real_run2.py` (they start `extend-service serve` on
+127.0.0.1:4221 in SDK mode against `http://localhost:9590` / `http://127.0.0.1:9589` with Extend's dev
+secret and a fresh database on 5460, plus `fake_device`, and stop and drop everything at the end).
+Every CLI call ran as `env PATH=/usr/bin:/bin HOME=$H SILICON_HOME=$H EXTEND_API_URL=http://127.0.0.1:4221
+ACCOUNTS_URL=http://localhost:9590 target/mig/debug/extend …` with a fresh `$H` per identity; tokens
+appear only as SHA-256 prefixes. Run 1603606:
+
+1. **Discovery, empty home** (`env -i HOME=$E SILICON_HOME=$E`): `--help` exit 0 (82 lines);
+   `accounts --json` exit 0 →
+   `{"accounts_url":"https://accounts.teamofsilicons.com","api_url":"https://backend.extend.teamofsilicons.com","app_id":"extend","client_id":"extend","device_flow":true,"docs_url":"https://extend.teamofsilicons.com/docs","install":"silicon-apps install extend","package_url":"https://crates.io/crates/silicon-extend-client","public_client":true,"repository_url":"https://github.com/teamofsilicons/silicon-extend","sign_in":{"carbon":"extend login","silicon":"silicon-accounts login --app extend -q | extend login --slt-stdin"},"status":"extend login status --json","update":"silicon-apps update extend","version":"4.0.0","website_url":"https://extend.teamofsilicons.com"}`;
+   `login status --json` exit 0 → `{"authenticated":false}`; `iam --json` the same object; files
+   written: 0.
+2. **Silicon** (`mint.mts silicon` → `si:extend-cli-s-1603606` = `X9R`, custodian
+   `c:extend-cli-c-1603606` = `lP8`; `mint.mts slt --app extend`): `printf %s "$SLT" | extend login
+   --slt-stdin` exit 0 → "Signed in to Extend as si:extend-cli-s-1603606 (…), a Silicon looked after
+   by c:extend-cli-c-1603606."; `login status --json` →
+   `{"authenticated":true,"custodian":{"id":"c:extend-cli-c-1603606","uuid":"lP8"},"id":"si:extend-cli-s-1603606","kind":"silicon","method":"slt","uuid":"X9R","verified":true,…}`;
+   auth.json `0o600`, no `slt_` in it. The same SLT again → exit 3 `slt_invalid`/`slt_already_used`
+   ("…already used; each one works once."); an SLT minted for remind → `slt_wrong_app` ("…issued
+   for the app 'remind', not for 'extend'…"); `slt_not-a-real-token-at-all` → `slt_unknown`; still
+   signed in afterwards; an SLT used after 125 s → `slt_expired` ("…expired at … (they last 120
+   seconds)…"). The token never appeared in any output.
+3. **Carbon** (device flow): `extend login --json` in the background printed
+   `{"event":"device_code","user_code":"84CX-7XAY","verification_uri":"http://localhost:9590/device","expires_in":600,"interval":5}`;
+   `mint.mts approve --email extend-cli-c-1603606@example.test --code 84CX-7XAY` → 204; the CLI
+   ended with `{"event":"signed_in","authenticated":true,"uuid":"lP8","id":"c:extend-cli-c-1603606","kind":"carbon","method":"device","verified":true}`, exit 0.
+4. **Real commands**: the Carbon paired `fake_device` with `extend device pair <code> --name "CLI
+   stage box" --access si:extend-cli-s-1603606` → `7e5a030a`. The Silicon: `device ls` (the box,
+   online), `session new 7e5a030a --connect` → session `531`, `snapshot -i` → "snapshot -i → ok on
+   the fake device", `session status` (active, 25 commands work there). The Carbon as custodian:
+   `silicon ls` (yes / 1 / 1 / 1), `silicon show` (every device it can use), `session ls --silicon …
+   --state active` (531), `device show 7e5a030a` ("Access: si:extend-cli-s-1603606"). The Silicon
+   ended its session.
+5. **Refresh with the real Silicon Accounts**: with 20 s left on the Carbon's access token, `device
+   ls` refreshed (refresh token `f9ffb2d2c363` → `101f4ed11f78`); again with three `device ls` at
+   once: all exit 0, one rotation (`101f4ed11f78` → `7a8210a43096`), and `login status` then
+   verified — a second refresh of one token would have revoked the sign-in.
+6. **Runtime forms**: `extend login "$SLT"` (positional) exit 0; `extend iam --json` → app_id extend.
+7. **Sign-out**: `logout --json` for the Silicon, the Carbon and the runtime home →
+   `{"signed_out":true,"revoked":true,"via":"extend",…}`; `login status --json` →
+   `{"authenticated":false}`; each old refresh token at Silicon Accounts → 400 "The sign-in this
+   refresh token belongs to was revoked at … (app_revoked)".
+8. **Extend down** (`real_run2.py`, run 1603795): a Silicon signed in, the service was stopped,
+   `logout --json` → `{"signed_out":true,"revoked":true,"via":"silicon-accounts"}`, auth.json gone,
+   the refresh token revoked at Silicon Accounts.
+9. **Revoked elsewhere**: a Silicon signed in, its refresh token revoked directly at Silicon
+   Accounts, the access token expired by hand: `extend device ls` → exit 3 "Your sign-in to Extend
+   has ended: The sign-in this refresh token belongs to was revoked at … (app_revoked); sign in
+   again." with the sign-in hint; auth.json deleted; `login status --json` → `{"authenticated":false}`.
+
+No webhook was registered for `extend` on the stack (the service stage removed its own), so these
+runs didn't depend on deliveries. Every process started was stopped (`.mig/pids` empty, nothing on
+4220–4239) and both databases were dropped; the service suites' throwaway databases were dropped
+with `e2e/clean-test-dbs.sh`.
+
+### Blocked on
+
+- Nothing new. (Briefcase's proof support and Ting's Accounts support, from stage 1, still gate the
+  production cutover; the CLI only reports what the service answers.)
+
+### Left for later stages
+
+- **e2e**: `e2e/cli-e2e.sh`, `e2e/run-all.sh` and `e2e/released-*` still drive the 3.x flow (test
+  environments, member-id logins, the Honeycomb lifecycle); they need Accounts logins (the device
+  flow can be approved with `mint.mts approve`, Silicons with `mint.mts slt`). `e2e/real-iam` is still
+  there (the json_consumers test lists it as a known lane; drop it from that list when it goes).
+- **Ship**: `apps.yaml` and `scripts/package-apps.sh` (the three discovery commands already answer in
+  an empty `env -i` home), `release.yml` (still "Honeycomb release archive"), THIRD_PARTY_NOTICES'
+  "Honeycomb archive" row, `honeycomb.yaml`, moving IAM-era docs to `docs/history/`.
+- **Web**: the Next.js BFF should read `docs/migration/contracts/cli.yaml` for its CLI reference
+  (`web/scripts/gen-docs.mjs` still reads `understanding/cli.yaml`), and sign out through `POST
+  /api/v2/auth/logout`.
+- **Runtime**: move stemcell to `extend login --slt-stdin` and `extend accounts --json`, then drop
+  the hidden `iam` alias (4.1).
+
+### Gotchas
+
+- `crates/silicon-extend-client/tests/contract_fixtures.rs` decides a fixture's directory from the
+  request path; a new account call must use `/api/v2/…` or it lands in `v1/client`.
+- `store::write_private` chmods the parent to 0700, so a 0500 state directory owned by the user is
+  still writable; the unwritable-home test uses a home without `.extend` instead.
+- macOS (APFS) is case-insensitive: session caches use the hex of the uuid, never the uuid itself.
+- The shared stack's issuer is `http://localhost:9590`: the CLI's `ACCOUNTS_URL` must be exactly
+  that, or the service's discovery check refuses the sign-in as `accounts_mismatch` (by design).
+- `HOSTNAME` is often not exported; the device-flow label falls back to "extend CLI".
