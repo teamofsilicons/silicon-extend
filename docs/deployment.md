@@ -18,27 +18,30 @@ disclosed coverage gaps are in [the release notes](releases/1.1.0.md).
   [operations.md](operations.md)). Whatever terminates HTTPS in front of it (a load balancer, or
   Caddy on the host as in `deploy/aws/`) needs a WebSocket idle timeout ≥ 60 s (the service pings
   every 15 s), and its address in `EXTEND_TRUSTED_PROXY_CIDRS`.
-- PostgreSQL 17 (CI runs 17.9). Each test environment gets its own schema (`extend_test_<uuid>`), created on
-  Honeycomb's `prepare` and dropped on `purge`.
+- PostgreSQL 17 (CI runs 17.9). Extend's data is in the `extend` schema (and `extend_global`). Since
+  4.0 there are no test environments; the `extend_test_<uuid>` schemas older versions made stay until
+  a manual cleanup drops them.
 - A persistent volume for `EXTEND_DATA_DIR` isn't needed in production (uploads are staged there for
   seconds before going to Briefcase), but it must be writable.
 
-Required environment in production (`EXTEND_ENVIRONMENT=production` refuses local stand-ins,
-member-id logins and plain-http public URLs):
+Required environment in production (`EXTEND_ENVIRONMENT=production` refuses the local stand-ins and
+plain-http URLs; `crates/extend-service/.env.example` lists every variable):
 
 | Variable | Value |
 |---|---|
 | `EXTEND_ENVIRONMENT` | `production`. Required everywhere: an unset value refuses to start rather than guess (`development` and `test` run with the local stand-ins). The Docker image sets it. |
 | `EXTEND_DATABASE_URL` | PostgreSQL URL |
 | `EXTEND_PUBLIC_URL` | `https://backend.extend.teamofsilicons.com` |
-| `EXTEND_IAM_APP_ID`, `EXTEND_IAM_APP_SECRET` | Extend's Silicon IAM application |
-| `EXTEND_IAM_WEBHOOK_SECRET`, `EXTEND_IAM_WEBHOOK_SECRET_VERSION` | IAM webhook signing secret for `/webhook/` (and `…_PREVIOUS_…` during rotation). Production refuses to start without it. |
-| `EXTEND_IAM_LOGIN_URL` | IAM sign-in page (default `https://auth.iam.teamofsilicons.com/login`) |
+| `ACCOUNTS_URL` | `https://accounts.teamofsilicons.com`: the Silicon Accounts public origin, every access token's `iss` |
+| `ACCOUNTS_API_URL` | Optional: how the service reaches Silicon Accounts server to server (defaults to `ACCOUNTS_URL`) |
+| `EXTEND_APP_ID`, `EXTEND_APP_SECRET` | Extend's app in Silicon Apps (`extend`) and its app secret, for introspection, lookups and proofs |
+| `EXTEND_ACCOUNTS_WEBHOOK_SECRET` | The signing secret of Extend's webhook in Silicon Accounts (`POST /webhooks/accounts`; `EXTEND_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET` during a rotation). Production refuses to start without it. |
+| `EXTEND_DELEGATION_ENCRYPTION_KEY` | 32 random bytes, unpadded base64url: seals the Briefcase proof refresh tokens Extend keeps. Production refuses to start without it. |
 | `EXTEND_BRIEFCASE_URL`, `EXTEND_BRIEFCASE_WEB_URL` | Briefcase API and web origins |
-| `EXTEND_TING_URL` | Ting API |
-| `EXTEND_HONEYCOMB_SERVICE_TOKEN` | Honeycomb's lifecycle credential |
+| `EXTEND_TING_URL` | Optional: Ting's API. Unset, notifications through Ting are off (requests and wake requests stay on the website, in the CLI and on the device). |
 | `EXTEND_POSTMARK_SERVER_TOKEN` | For `extend report` emails. Production refuses to start without it. |
-| `EXTEND_WEBSITE_URL`, `EXTEND_DOCS_URL` | Public links returned by `/api/v1/iam` |
+| `EXTEND_WEBSITE_URL`, `EXTEND_DOCS_URL` | Public links returned by `/api/v2/accounts` |
+| `EXTEND_CORS_ORIGINS` | Optional: origins allowed to call the API from a page directly (the website calls it from its own server) |
 | `EXTEND_TRUSTED_PROXY_CIDRS` | The proxy or load balancer addresses (comma-separated CIDRs) whose `X-Forwarded-For` Extend believes, so the per-address enrollment limit counts clients, not the proxy |
 
 Optional, for API versioning (TECHNICAL.md section 10): `EXTEND_DEPRECATED_API_VERSIONS` (a comma
@@ -46,46 +49,44 @@ list of majors to deprecate, applied at start; never the newest one this build s
 `EXTEND_API_V{n}_CLIENT_CRATE` and `EXTEND_API_V{n}_CLI` (the compatible version ranges the matrix
 reports; API v1 defaults to `>=1.0.0, <4.0.0` for ordinary operations), and
 `EXTEND_DEVICE_APP_MIN_VERSION` (default `1.0.0`).
-`EXTEND_REPORT_RECIPIENTS` overrides where bug reports go. Optional since 1.1: `EXTEND_MAX_PAIRS_PER_DEVICE`,
-`EXTEND_MEMBERSHIP_SWEEP_HOURS`, `EXTEND_OWNER_CHECK_CACHE_S`, `EXTEND_OWNER_CHECK_AT_USE` and
-`EXTEND_TEST_LINK_WINDOW_S` ([operations.md](operations.md#settings-added-in-11)); the defaults are
-the ones the Carbon accepted.
+`EXTEND_REPORT_RECIPIENTS` overrides where bug reports go, and `EXTEND_MAX_PAIRS_PER_DEVICE` (default 8)
+limits Carbons per device. Variables of 3.x (`EXTEND_IAM_*`, `EXTEND_HONEYCOMB_SERVICE_TOKEN`,
+`EXTEND_LOCAL_MEMBERS`, the membership-sweep and owner-check settings, `EXTEND_TEST_LINK_WINDOW_S`) are
+ignored, and the service logs each one it finds at start.
 
-Extend is registered through Honeycomb: `honeycomb apps create application.json` creates the IAM
-application (app id `extend`, team `tos`) and returns the app secret once. `application.json`
-declares:
+Extend is the app `extend` in Silicon Apps and Silicon Accounts (its app secret goes in
+`EXTEND_APP_SECRET`). In Silicon Accounts it has:
 
-- the webhook `https://backend.extend.teamofsilicons.com/webhook/` and its signing secret, which
-  also goes in `EXTEND_IAM_WEBHOOK_SECRET`. The destination then needs a Carbon's step-up approval:
-  `honeycomb apps webhook approve`;
-- the IAM scopes `self.identity.read`, `self.profile.read`, `self.organizations.read`,
-  `self.membership.read`, `directory.silicons.read`, `directory.carbons.read`,
-  `directory.memberships.read` and `directory.profiles.read`;
-- the external OBO endpoints Extend calls: Briefcase `briefcase.uploads.reserve`,
-  `briefcase.uploads.commit`, `briefcase.uploads.status`, `briefcase.invitations.create`,
-  `briefcase.entries.trash` and `briefcase.files.read`, plus Ting `tings.send` and
-  `subscriptions.register`. Each feature needs its own approved OBO grant after login.
-  `briefcase.uploads.cancel` is supported for explicit cleanup; the normal store flow does
-  not call it. The retired raw `briefcase.files.create` endpoint is not used. See the
-  [OBO cutover guide](OBO_CUTOVER.md#exact-provider-endpoints) for the full contract.
+- its sign-in setup: the website's callback (`https://extend.teamofsilicons.com/auth/callback`) and
+  the CLI as a public client (device flow, and short-lived tokens from Silicons);
+- the webhook `https://backend.extend.teamofsilicons.com/webhooks/accounts` with the events
+  `account.id_changed`, `account.updated`, `account.deleted`, `membership.signed_out`,
+  `membership.access_removed` and `silicon.custodian_changed`; its signing secret goes in
+  `EXTEND_ACCOUNTS_WEBHOOK_SECRET`.
 
-Ting 0.1.9 resolves types by context and application, across delivery Teams. A manager of the
-app's owning Team (`tos` for production Extend) registers all four once in production and in each
-used test context, and again after a clean removes them. Delivery Teams do not duplicate them:
+Briefcase accepts User verification proofs from `extend` for `briefcase.uploads.reserve`,
+`briefcase.uploads.commit`, `briefcase.uploads.status`, `briefcase.uploads.cancel`,
+`briefcase.files.read`, `briefcase.invitations.create` and `briefcase.entries.trash` (Briefcase's
+allow-list). When Ting delivery is turned on (`EXTEND_TING_URL`), Ting accepts App verification
+proofs from `extend` for `tings.send` and User verification proofs for `tings.subscribe`, and its
+four types are registered in Ting (`extend.device.requested`, `extend.device.wake_requested`,
+`extend.device.woken`, `extend.device.wake_declined`).
 
-```sh
-ting --org <app-owning-team> types register --type extend.device.requested --description 'A Silicon asks to use a device another Silicon is using'
-ting --org <app-owning-team> types register --type extend.device.wake_requested --description 'A Silicon asks its Carbon to wake a device'
-ting --org <app-owning-team> types register --type extend.device.woken --description 'A device a Silicon asked to wake is awake'
-ting --org <app-owning-team> types register --type extend.device.wake_declined --description 'A Carbon turned down a request to wake a device'
-```
+### Moving a 3.x deployment to Extend 4
 
-All four types are now registered in the production app-owning Team, `tos`; no notification was
-sent during registration. The runbook for new
-Teams and for finding missing types is in [operations.md](operations.md#extends-ting-types).
-`e2e/real-iam/realiam.py --briefcase --ting` seeds this catalog against local services and is the
-reference for it; it verifies delivery across Teams and genuine missing-type failures. The current
-Ting OBO catalog has no `types.register` endpoint, so registration uses the manager CLI.
+1. Snapshot the database. Schema 9 is additive but a 3.x service can't run on it, so rolling back
+   is restoring this snapshot (`deploy/rollback/1.1-to-1.0.sql` applies only to schemas up to 8).
+2. Deploy the 4.0 image with the variables above; it migrates at start (or run
+   `extend-service migrate`). Old rows keep their IAM ids and are inert until step 3: nobody can
+   use or see them.
+3. `extend-service identity suggest --out mapping.csv` asks Silicon Accounts which account has each
+   old public id today. Review every line (an id can belong to someone else now; leave a line's
+   uuid empty to keep it unmapped), then `extend-service identity apply --file mapping.csv --dry-run`
+   and read the report (rows per column, ids left unmapped). Apply it without `--dry-run`. A
+   mapping that would merge two pairs of one device is refused whole. Applying again with a
+   corrected file re-derives everything from the originals.
+4. Point the website and the CLI release at API v2. Older CLIs and websites get `410` with
+   `silicon-apps update extend`; installed device apps keep working unchanged.
 
 ## Website (`extend.teamofsilicons.com`)
 
