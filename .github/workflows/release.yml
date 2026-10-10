@@ -1,9 +1,23 @@
-name: Honeycomb release archive
+name: Release
+# The extend CLI: each of its six targets is built on the runner that built it for Honeycomb before
+# (Linux natively on Ubuntu 24.04, so its glibc floor is 2.39), checked where it was built (the
+# native format, the glibc ceiling on Linux, and the three discovery commands Silicon Apps runs:
+# `extend --help`, `extend accounts --json`, `extend login status --json`, signed out in an empty
+# home, wherever the runner can run the binary), then one Linux job packs one Silicon Apps archive
+# per target with scripts/package-apps.sh (`silicon-apps validate` + `silicon-apps pack`) and
+# uploads them with SHA256SUMS as the workflow artifact `extend-silicon-apps-release`. The desktop
+# jobs build and verify the Linux and Windows desktop apps. Nothing is published from here:
+# uploading to Silicon Apps, publishing the crates and the GitHub release are separate, reviewed
+# steps (docs/deployment.md).
+#
+# Tags: `cli-v<version>` releases the CLI alone (it must equal crates/extend-cli/Cargo.toml);
+# `v<version>` releases the whole product (it must equal the workspace version, the desktop apps'),
+# and packs the CLI at its own version too.
 on:
   workflow_dispatch:
     inputs:
       cli_only:
-        description: Build only the six CLI candidates; leave desktop releases unchanged
+        description: Build only the six CLI targets and their Silicon Apps archives; leave desktop releases unchanged
         type: boolean
         default: false
       windows_only:
@@ -28,19 +42,56 @@ on:
     tags: ['v*', 'cli-v*']
 permissions:
   contents: read
+env:
+  SILICON_APPS_CLI_VERSION: 0.2.0
 jobs:
-  binaries:
+  version:
+    name: Read the CLI version and check the tag
     if: ${{ inputs.windows_only != true && inputs.desktop_only != true }}
+    runs-on: ubuntu-24.04
+    outputs:
+      cli: ${{ steps.version.outputs.cli }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check the tag against the CLI and workspace versions
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+          workspace = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          cli = tomllib.loads(Path('crates/extend-cli/Cargo.toml').read_text())['package']['version']
+          if not isinstance(cli, str):
+              raise SystemExit('crates/extend-cli/Cargo.toml must carry its own version (the Silicon Apps release version)')
+          if os.environ['REF_TYPE'] == 'tag':
+              name = os.environ['REF_NAME']
+              expected = f'cli-v{cli}' if name.startswith('cli-v') else f'v{workspace}'
+              if name != expected:
+                  raise SystemExit(f'::error::The tag {name} must be {expected}: cli-v tags carry the CLI version '
+                                   f'({cli}), v tags the workspace (desktop) version ({workspace}).')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'cli={cli}\n')
+          print(f'extend CLI {cli} (workspace {workspace})')
+          PY
+  binaries:
+    name: Build extend for ${{ matrix.package }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:
+        # discovery: `require` where the runner runs the binary natively; `auto` where it is
+        # cross-built (an ARM64 Windows binary on x64, an Intel Mac binary on Apple silicon without
+        # Rosetta), and Silicon Apps' validation worker for that target runs the commands at upload.
         include:
-          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: extend}
-          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: extend}
-          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: extend.exe}
-          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: extend.exe}
-          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: extend}
-          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: extend}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: extend, discovery: require}
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: extend, discovery: require}
+          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: extend.exe, discovery: require}
+          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: extend.exe, discovery: auto}
+          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: extend, discovery: auto}
+          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: extend, discovery: require}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -52,43 +103,61 @@ jobs:
           cargo clippy --locked -p silicon-extend-cli -p silicon-extend-client --all-targets -- -D warnings
           cargo test --locked -p silicon-extend-cli -p silicon-extend-client --all-targets
       - run: cargo build --locked --release -p silicon-extend-cli --target ${{ matrix.target }}
+      - name: Check the binary on the runner that built it
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.cli }}
+        run: >-
+          bash scripts/package-apps.sh "$VERSION" ${{ matrix.package }}
+          target/${{ matrix.target }}/release/${{ matrix.binary }}
+          --check-only --discovery ${{ matrix.discovery }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
           if-no-files-found: error
-  pack:
-    needs: binaries
+  package:
+    name: Pack the Silicon Apps archives
+    needs: [version, binaries]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      - name: Verify release tag
-        shell: bash
+          path: release-binaries
+      - name: Install the Silicon Apps packer
+        run: cargo install --locked silicon-apps-cli --version "$SILICON_APPS_CLI_VERSION"
+      - name: Packager tests (with the real packer)
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Validate and pack one archive per target
+        env:
+          VERSION: ${{ needs.version.outputs.cli }}
         run: |
-          python3 - <<'PY'
-          import os, tomllib
-          from pathlib import Path
-          workspace_version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
-          cli_version = tomllib.loads(Path('crates/extend-cli/Cargo.toml').read_text())['package']['version']
-          version = cli_version if isinstance(cli_version, str) else workspace_version
-          if os.environ['GITHUB_REF_TYPE'] == 'tag':
-              prefix = 'cli-v' if os.environ['GITHUB_REF_NAME'].startswith('cli-v') else 'v'
-              expected = version if prefix == 'cli-v' else workspace_version
-              assert os.environ['GITHUB_REF_NAME'] == f'{prefix}{expected}', 'Release tag and app version differ'
-          PY
-      - name: Install Honeycomb packager
-        run: cargo install silicon-honeycomb-cli --locked --version 0.5.0
-      - name: Validate and pack every platform
-        run: python3 scripts/package-cli.py --artifacts artifacts --output dist
+          set -euo pipefail
+          for target in linux-x86_64 linux-aarch64 windows-x86_64 windows-aarch64 macos-x86_64 macos-aarch64; do
+            binary=extend
+            case "$target" in windows-*) binary=extend.exe ;; esac
+            scripts/package-apps.sh "$VERSION" "$target" "release-binaries/$target/$binary"
+          done
+          cd dist/apps
+          sha256sum extend-*.tar.gz > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          {
+            echo "### extend $VERSION Silicon Apps archives"
+            echo
+            echo "Upload the Linux archives now; macOS and Windows wait until Silicon Apps has their validation workers."
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: extend-honeycomb-release
+          name: extend-silicon-apps-release
           path: |
-            dist/*.tar.gz
-            dist/*.tar.gz.sha256
+            dist/apps/*.tar.gz
+            dist/apps/*.tar.gz.sha256
+            dist/apps/SHA256SUMS
           if-no-files-found: error
   # Build and verify Linux/Windows desktop apps: no secrets, nothing published from here.
   desktop-linux:

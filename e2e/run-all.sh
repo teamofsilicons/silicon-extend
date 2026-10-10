@@ -59,13 +59,12 @@ fi
 
 if command -v npx >/dev/null; then
   run contract-lint npx -y @redocly/cli@2.49.0 lint understanding/api.yaml --skip-rule no-path-trailing-slash
+  # The Extend 4 review copy, until a Carbon approves it into understanding/.
+  run contract-lint-review npx -y @redocly/cli@2.49.0 lint docs/migration/contracts/api.yaml --skip-rule no-path-trailing-slash
 fi
 
-if command -v honeycomb >/dev/null; then
-  run cli-release-archive python3 -m unittest discover -s scripts -p 'test_*.py'
-else
-  skip cli-release-archive "honeycomb not installed"
-fi
+# The Silicon Apps packager; its full pack runs only where silicon-apps 0.2 is installed.
+run apps-packaging python3 -m unittest discover -s scripts -p 'test_*.py'
 
 echo; echo "Summary:"; printf '  %s\n' "${SUMMARY[@]}"
 printf '%s\n' "${SUMMARY[@]}" | grep -q '^✗' && exit 1 || exit 0

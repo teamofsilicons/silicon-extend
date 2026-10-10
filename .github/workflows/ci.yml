@@ -28,10 +28,14 @@ jobs:
       - run: cargo fmt --check
       - name: Deployment environment renderer
         run: python3 deploy/aws/test_render_env.py
+      # The Silicon Apps packager's refusals and discovery checks (the full pack with the real
+      # packer runs in release.yml, which installs silicon-apps).
+      - name: Silicon Apps packager
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # Consumer-driven contracts (TECHNICAL.md section 10, contracts/README.md): the client crate's
       # recorded fixtures must match what it sends, and a real service must still accept every
-      # fixture of every API major it serves (client, device apps, Honeycomb). The workspace step
+      # fixture of every API major it serves (the client and the device apps). The workspace step
       # below runs both again; this step names a broken contract on its own.
       - name: Consumer contracts
         run: |
