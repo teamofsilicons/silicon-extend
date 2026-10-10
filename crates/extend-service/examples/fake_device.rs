@@ -150,6 +150,12 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+    if opt("FAKE_RECONNECT").is_some_and(|v| v != "0") {
+        loop {
+            let _ = serve(&fake, &credential).await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+    }
     serve(&fake, &credential).await
 }
 
