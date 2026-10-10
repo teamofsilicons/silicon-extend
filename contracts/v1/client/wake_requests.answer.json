@@ -63,7 +63,6 @@
       "/ended/*/last_asked_at",
       "/ended/*/reason",
       "/ended/*/state",
-      "/ended/*/team",
       "/ended/*/to",
       "/ended/*/wake_detectable",
       "/ended/*/wake_id"

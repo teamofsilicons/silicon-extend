@@ -1,0 +1,63 @@
+{
+  "api_version": 1,
+  "call": "Authed::wake_requests",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "3.1.1",
+  "contract": 1,
+  "given": [
+    "wake_request"
+  ],
+  "operation": "wake_requests.list",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "GET",
+    "path": "/api/v1/devices/{device_id}/wake-requests?state=open&limit=20"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/asks",
+      "/items/*/created_at",
+      "/items/*/device_id",
+      "/items/*/device_notice",
+      "/items/*/expires_at",
+      "/items/*/from",
+      "/items/*/host/device_id",
+      "/items/*/host/name",
+      "/items/*/host/online",
+      "/items/*/last_asked_at",
+      "/items/*/reason",
+      "/items/*/state",
+      "/items/*/team",
+      "/items/*/to",
+      "/items/*/wake_detectable",
+      "/items/*/wake_id"
+    ],
+    "required": [
+      "/items",
+      "/items/*/asks",
+      "/items/*/created_at",
+      "/items/*/device_id",
+      "/items/*/device_notice",
+      "/items/*/expires_at",
+      "/items/*/from",
+      "/items/*/host/device_id",
+      "/items/*/host/name",
+      "/items/*/host/online",
+      "/items/*/last_asked_at",
+      "/items/*/reason",
+      "/items/*/state",
+      "/items/*/team",
+      "/items/*/to",
+      "/items/*/wake_detectable",
+      "/items/*/wake_id"
+    ],
+    "status": "2xx",
+    "type": "wake_requests"
+  }
+}

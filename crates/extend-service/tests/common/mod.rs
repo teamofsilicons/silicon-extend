@@ -1,11 +1,17 @@
-//! Shared harness for the 1.1 service tests: a real PostgreSQL (databases created per test,
+//! Shared harness for the service tests: a real PostgreSQL (databases created per test,
 //! `EXTEND_TEST_ADMIN_URL`, default `postgres://extend:extend@127.0.0.1:5440/postgres`), the real
-//! HTTP and WebSocket stack, the local IAM and Ting stand-ins, and scripted Extend apps.
+//! HTTP and WebSocket stack, the local Silicon Accounts, Briefcase and Ting stand-ins, and
+//! scripted Extend apps.
 //!
-//! Members (test_plan): c:alice in acme and globex, c:bob in acme, c:carol in globex, si:chef in
-//! acme and globex, si:sous in acme, si:scout in globex.
+//! Accounts (personal; no Teams): Carbons c:alice, c:bob, c:carol and c:dave; Silicons si:chef,
+//! si:sous and si:line (custodian c:alice), si:scout (custodian c:carol) and si:rover (custodian
+//! c:bob). So chef, sous, line and alice are one custodian circle; scout and carol another; rover
+//! and bob another.
 
 #![allow(dead_code)]
+
+#[path = "v2.rs"]
+pub mod v2;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -16,7 +22,8 @@ use std::time::{Duration, Instant};
 use extend_protocol::DeviceOs;
 use extend_protocol::frames::{DeviceFrame, Hello};
 use extend_protocol::model::{EnrollmentCreate, EnrollmentState, Setup, SetupState};
-use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode, Tuning};
+use extend_service::accounts::local::LocalAccounts;
+use extend_service::config::{AccountsMode, Config, Environment, FilesMode, TingMode, Tuning};
 use extend_service::state::Shared;
 use futures::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
@@ -30,23 +37,50 @@ use uuid::Uuid;
 pub struct Env {
     pub base: String,
     pub pool: sqlx::PgPool,
+    /// The 3.x client: the device wire (enrollments, a device's own calls) is unchanged.
     pub client: Client,
     pub state: Shared,
 }
 
-fn contexts() -> &'static Mutex<std::collections::HashMap<String, String>> {
-    static CONTEXTS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
-    CONTEXTS.get_or_init(Default::default)
+impl Env {
+    /// Account API v2 calls as `token`.
+    pub fn v2<'a>(&'a self, token: &'a str) -> v2::V2<'a> {
+        v2::V2::new(&self.base, token)
+    }
+    /// The local Silicon Accounts stand-in.
+    pub fn accounts(&self) -> &LocalAccounts {
+        self.state
+            .accounts
+            .local
+            .as_deref()
+            .expect("tests run with the local Silicon Accounts")
+    }
 }
 
-pub const MEMBERS: &[(&str, &[&str])] = &[
-    ("c:alice", &["acme", "globex"]),
-    ("c:bob", &["acme"]),
-    ("c:carol", &["globex"]),
-    ("si:chef", &["acme", "globex"]),
-    ("si:sous", &["acme"]),
-    ("si:scout", &["globex"]),
+/// The signing secret of the test webhook.
+pub const WEBHOOK_SECRET: &str = "whsec_extend_tests_0123456789";
+
+/// The test accounts and their custodians.
+pub const ACCOUNTS: &[(&str, Option<&str>)] = &[
+    ("c:alice", None),
+    ("c:bob", None),
+    ("c:carol", None),
+    ("c:dave", None),
+    ("si:chef", Some("c:alice")),
+    ("si:sous", Some("c:alice")),
+    ("si:scout", Some("c:carol")),
+    ("si:rover", Some("c:bob")),
+    ("si:line", Some("c:alice")),
 ];
+
+pub fn custodian_of(who: &str) -> Option<&'static str> {
+    ACCOUNTS.iter().find(|(id, _)| *id == who).and_then(|(_, c)| *c)
+}
+
+/// The Silicon Accounts uuid the stand-in gives an account.
+pub fn uuid(who: &str) -> String {
+    LocalAccounts::uuid_for(who)
+}
 
 pub async fn database(prefix: &str) -> (String, PathBuf) {
     let admin = std::env::var("EXTEND_TEST_ADMIN_URL")
@@ -70,29 +104,29 @@ pub fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf, tuning:
         bind,
         database_url,
         public_url: base.clone(),
-        website_url: "http://localhost:5173".into(),
-        docs_url: "http://localhost:5173/docs".into(),
+        website_url: "http://localhost:4220".into(),
+        docs_url: "http://localhost:4220/docs".into(),
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
         data_dir,
-        iam: IamMode::Local,
-        delegation_key: None,
-        iam_public_url: format!("{base}/dev/iam"),
-        iam_login_url: format!("{base}/dev/iam/login"),
-        webhook_secret: None,
+        accounts_url: format!("{base}/dev/accounts"),
+        accounts_api_url: format!("{base}/dev/accounts"),
+        app_id: "extend".into(),
+        accounts: AccountsMode::Local,
+        webhook_secret: Some(WEBHOOK_SECRET.into()),
         webhook_previous_secret: None,
+        delegation_key: Some(
+            extend_service::proofs::GrantKey::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+        ),
         files: FilesMode::Local,
         ting: TingMode::Local,
-        honeycomb_service_token: Some("hck_test".into()),
         postmark_token: None,
         report_recipients: vec!["bugs@example.test".into()],
         device_app_min_version: "1.0.0".into(),
-        local_members: MEMBERS
-            .iter()
-            .map(|(id, teams)| ((*id).to_owned(), teams.iter().map(|t| (*t).to_owned()).collect()))
-            .collect(),
         web_dir: None,
         trusted_proxies: vec![],
+        cors_origins: vec![],
         tuning,
+        obsolete: vec![],
     }
 }
 
@@ -101,11 +135,19 @@ pub async fn start() -> Env {
 }
 
 pub async fn start_with(tuning: Tuning) -> Env {
+    start_config(|c| c.tuning = tuning).await
+}
+
+/// Starts a service whose configuration `change` adjusts first.
+pub async fn start_config(change: impl FnOnce(&mut Config)) -> Env {
     let (url, data) = database("v11").await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");
-    let state = extend_service::build(config(url, addr, data, tuning)).await.unwrap();
+    let mut cfg = config(url, addr, data, Tuning::default());
+    change(&mut cfg);
+    let state = extend_service::build(cfg).await.unwrap();
+    seed_accounts(&state);
     let pool = state.pool.clone();
     tokio::spawn(extend_service::serve_on(listener, state.clone()));
     let client = Client::connect(&base).await.unwrap();
@@ -120,41 +162,38 @@ pub async fn start_with(tuning: Tuning) -> Env {
 /// The state alone, without serving (no scheduler): for driving passes by hand.
 pub async fn state_only() -> Shared {
     let (url, data) = database("v11s").await;
-    extend_service::build(config(url, "127.0.0.1:9".parse().unwrap(), data, Tuning::default()))
+    let state = extend_service::build(config(url, "127.0.0.1:9".parse().unwrap(), data, Tuning::default()))
         .await
-        .unwrap()
+        .unwrap();
+    seed_accounts(&state);
+    state
 }
 
+/// Every test account exists in the local Silicon Accounts from the start (Silicon Accounts knows
+/// them before they ever use Extend).
+pub fn seed_accounts(state: &Shared) {
+    if let Some(local) = state.accounts.local.as_deref() {
+        for (id, custodian) in ACCOUNTS {
+            local.ensure(id, *custodian).expect("a test account");
+        }
+    }
+}
+
+/// An access token for a test account, signed by the local Silicon Accounts (the account and its
+/// custodian are created on first use).
 pub async fn login(env: &Env, who: &str) -> String {
-    let session = env.client.login(who).await.unwrap();
-    // Older behavioral fixtures exercise several contexts with the local IAM double.
-    // Retain their first explicit context rather than issuing unscoped resource calls.
-    contexts()
-        .lock()
-        .unwrap()
-        .insert(session.access_token.clone(), session.teams[0].clone());
-    session.access_token
+    let account = env.accounts().ensure(who, custodian_of(who)).expect("a test account");
+    env.accounts().mint(&account, 1800)
 }
 
 /// A raw API call: the status and the parsed body.
-pub async fn api(
-    env: &Env,
-    method: &str,
-    path: &str,
-    token: &str,
-    team: Option<&str>,
-    body: Option<Value>,
-) -> (u16, Value) {
+pub async fn api(env: &Env, method: &str, path: &str, token: &str, body: Option<Value>) -> (u16, Value) {
     let mut r = reqwest::Client::new()
         .request(
             reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
             format!("{}{path}", env.base),
         )
         .header("authorization", format!("Bearer {token}"));
-    let retained = contexts().lock().unwrap().get(token).cloned();
-    if let Some(t) = team.or(retained.as_deref()) {
-        r = r.header("x-org-id", t);
-    }
     if let Some(b) = body {
         r = r.json(&b);
     }
@@ -178,6 +217,32 @@ pub async fn device_api(env: &Env, method: &str, path: &str, credential: &str) -
     (status, resp.json().await.unwrap_or(Value::Null))
 }
 
+/// Delivers a Silicon Accounts webhook event, signed with [`WEBHOOK_SECRET`]. Returns the status.
+pub async fn deliver(env: &Env, event_type: &str, data: Value) -> u16 {
+    deliver_raw(env, &Uuid::now_v7().to_string(), event_type, data).await
+}
+
+/// [`deliver`] with a given event id (retries reuse it).
+pub async fn deliver_raw(env: &Env, event_id: &str, event_type: &str, data: Value) -> u16 {
+    let body = json!({"event_id": event_id, "type": event_type, "occurred_at": time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339).unwrap(), "app_id": "extend", "data": data})
+    .to_string();
+    let ts = time::OffsetDateTime::now_utc().unix_timestamp();
+    let sig = silicon_accounts_client::sign_webhook(WEBHOOK_SECRET, ts, body.as_bytes());
+    let resp = reqwest::Client::new()
+        .post(format!("{}/webhooks/accounts", env.base))
+        .header("content-type", "application/json")
+        .header("x-accounts-timestamp", ts.to_string())
+        .header("x-accounts-signature", sig)
+        .header("x-accounts-event-id", event_id)
+        .header("x-accounts-event-type", event_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    resp.status().as_u16()
+}
+
 pub fn hello(os: DeviceOs, app_version: &str) -> Value {
     hello_with(os, app_version, Setup::complete())
 }
@@ -198,16 +263,9 @@ pub fn hello_with(os: DeviceOs, app_version: &str, setup: Setup) -> Value {
     .unwrap()
 }
 
-/// Pairs a new device as the apps do: an enrollment, a Carbon's claim (with `team` as X-Org-ID
-/// when given), and the credential from the enrollment. Returns (device id, credential).
-pub async fn pair(
-    env: &Env,
-    carbon_token: &str,
-    team: Option<&str>,
-    os: DeviceOs,
-    name: &str,
-    silicons: &[&str],
-) -> (String, String) {
+/// Pairs a new device as the apps do: an enrollment, a Carbon's claim, and the credential from the
+/// enrollment. Returns (device id, credential).
+pub async fn pair(env: &Env, carbon_token: &str, os: DeviceOs, name: &str, silicons: &[&str]) -> (String, String) {
     let e = env
         .client
         .enroll(&EnrollmentCreate {
@@ -222,11 +280,10 @@ pub async fn pair(
     let (status, d) = api(
         env,
         "POST",
-        "/api/v1/pairings",
+        "/api/v2/pairings",
         carbon_token,
-        team,
         Some(
-            json!({"type": "pairing", "data": {"pairing_code": e.pairing_code, "name": name, "visibility": "team", "silicon_ids": silicons}}),
+            json!({"type": "pairing", "data": {"pairing_code": e.pairing_code, "name": name, "silicon_ids": silicons}}),
         ),
     )
     .await;
@@ -248,7 +305,6 @@ pub async fn pair_another_raw(
     env: &Env,
     credential: &str,
     carbon_token: &str,
-    team: Option<&str>,
     silicons: &[&str],
 ) -> (u16, Value, Option<String>) {
     let (status, e) = device_api(env, "POST", "/api/v1/device/enrollments", credential).await;
@@ -257,10 +313,9 @@ pub async fn pair_another_raw(
     let (status, d) = api(
         env,
         "POST",
-        "/api/v1/pairings",
+        "/api/v2/pairings",
         carbon_token,
-        team,
-        Some(json!({"type": "pairing", "data": {"pairing_code": e["pairing_code"], "name": "Their name", "visibility": "team", "silicon_ids": silicons}})),
+        Some(json!({"type": "pairing", "data": {"pairing_code": e["pairing_code"], "name": "Their name", "silicon_ids": silicons}})),
     )
     .await;
     if status != 201 {
@@ -271,14 +326,8 @@ pub async fn pair_another_raw(
     (status, d, Some(cred))
 }
 
-pub async fn pair_another(
-    env: &Env,
-    credential: &str,
-    carbon_token: &str,
-    team: Option<&str>,
-    silicons: &[&str],
-) -> (String, String) {
-    let (status, d, cred) = pair_another_raw(env, credential, carbon_token, team, silicons).await;
+pub async fn pair_another(env: &Env, credential: &str, carbon_token: &str, silicons: &[&str]) -> (String, String) {
+    let (status, d, cred) = pair_another_raw(env, credential, carbon_token, silicons).await;
     assert_eq!(status, 201, "pair with another Carbon: {d}");
     (d["data"]["device_id"].as_str().unwrap().to_owned(), cred.unwrap())
 }
@@ -305,7 +354,8 @@ impl App {
         let DeviceFrame::Hello(expected) = serde_json::from_value(hello.clone()).expect("fixture Hello") else {
             panic!("App::connect needs a Hello frame")
         };
-        let (world, id) = extend_service::state::device_by_credential(&env.state, credential)
+        let world = extend_service::db::World::production();
+        let id = extend_service::state::device_by_credential(&env.state, credential)
             .await
             .unwrap()
             .expect("paired fixture device");
@@ -471,10 +521,10 @@ where
     }
 }
 
-/// The activity rows of a pair, oldest first: (action, actor, details, team, session_id).
-pub async fn activity(env: &Env, device_id: &str) -> Vec<(String, String, Value, Option<String>, Option<String>)> {
+/// The activity rows of a pair, oldest first: (action, actor uuid, details, session_id).
+pub async fn activity(env: &Env, device_id: &str) -> Vec<(String, String, Value, Option<String>)> {
     sqlx::query_as(
-        "SELECT action, actor_id, COALESCE(details, 'null'::jsonb), team, session_id FROM extend.activity WHERE device_id = $1 ORDER BY id",
+        "SELECT action, actor_id, COALESCE(details, 'null'::jsonb), session_id FROM extend.activity WHERE device_id = $1 ORDER BY id",
     )
     .bind(device_id)
     .fetch_all(&env.pool)
@@ -490,64 +540,37 @@ pub async fn instance_of(env: &Env, device_id: &str) -> Uuid {
         .unwrap()
 }
 
-/// Starts a session as a Silicon (raw), returning its id.
-pub async fn session(env: &Env, token: &str, team: &str, device_id: &str) -> (u16, Value) {
+/// Starts a session as a Silicon (raw).
+pub async fn session(env: &Env, token: &str, device_id: &str) -> (u16, Value) {
     api(
         env,
         "POST",
-        "/api/v1/sessions",
+        "/api/v2/sessions",
         token,
-        Some(team),
         Some(json!({"type": "session", "data": {"device_id": device_id}})),
     )
     .await
 }
 
-pub async fn grant(env: &Env, carbon_token: &str, device_id: &str, silicon: &str, team: &str) {
-    // Sharing in a second organization first imports the owner's configured device.
-    let r = reqwest::Client::new()
-        .post(format!("{}/api/v1/devices/{device_id}/import", env.base))
-        .bearer_auth(carbon_token)
-        .header("x-org-id", team)
-        .header("idempotency-key", Uuid::new_v4().to_string())
-        .json(&json!({"type":"device_import","data":{"visibility":"team"}}))
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        r.status().is_success(),
-        "import before grant: {}",
-        r.text().await.unwrap()
-    );
-    let (status, shared) = api(
-        env,
-        "PATCH",
-        &format!("/api/v1/devices/{device_id}"),
-        carbon_token,
-        Some(team),
-        Some(json!({"type":"device","data":{"visibility":"team"}})),
-    )
-    .await;
-    assert_eq!(status, 200, "sharing before grant: {shared}");
+/// Gives a Silicon (by `si:` id) access through a Carbon's pair.
+pub async fn grant(env: &Env, carbon_token: &str, device_id: &str, silicon: &str) {
     let (status, g) = api(
         env,
         "PUT",
-        &format!("/api/v1/devices/{device_id}/access/{silicon}"),
+        &format!("/api/v2/devices/{device_id}/access/{silicon}"),
         carbon_token,
-        Some(team),
         None,
     )
     .await;
-    assert_eq!(status, 200, "granting {silicon} in {team}: {g}");
+    assert_eq!(status, 200, "granting {silicon}: {g}");
 }
 
-pub async fn wake(env: &Env, token: &str, team: &str, device_id: &str, reason: &str) -> (u16, Value) {
+pub async fn wake(env: &Env, token: &str, device_id: &str, reason: &str) -> (u16, Value) {
     api(
         env,
         "POST",
-        &format!("/api/v1/devices/{device_id}/wake-requests"),
+        &format!("/api/v2/devices/{device_id}/wake-requests"),
         token,
-        Some(team),
         Some(json!({"type": "wake_request", "data": {"reason": reason}})),
     )
     .await
@@ -562,166 +585,4 @@ pub fn awake_frame(awake: bool, sleep: Option<&str>, input_seen: Option<bool>, r
         v["input_seen"] = json!(i);
     }
     v
-}
-
-// ───────────── Test environments ─────────────
-
-/// Prepares a test environment through Honeycomb's instruction, opens its test application in the
-/// local IAM, and selects it once so it is ready. Returns (environment id, app secret).
-pub async fn open_test_env(env: &Env) -> (Uuid, String) {
-    let envid = Uuid::new_v4();
-    let op = Uuid::new_v4();
-    let r = reqwest::Client::new()
-        .put(format!(
-            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{op}",
-            env.base
-        ))
-        .bearer_auth("hck_test")
-        .json(
-            &json!({"operation_id": op, "environment_id": envid, "org_id": "acme", "app_id": "extend",
-            "environment_revision": 1, "generation": 1, "key_version": 1, "action": "prepare",
-            "testing_key": "abcdefghijklmnopqrstuvwxyz012345", "name": "v11-env"}),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert!(r.status().is_success(), "prepare: {}", r.status());
-    let secret = extend_protocol::ids::new_secret("ask_");
-    let r = reqwest::Client::new()
-        .post(format!("{}/dev/iam/test-apps", env.base))
-        .json(&json!({"type": "test_app", "data": {"secret": secret, "environment_id": envid}}))
-        .send()
-        .await
-        .unwrap();
-    assert!(r.status().is_success());
-    let c = Client::builder(&env.base)
-        .testing_secret(&secret)
-        .connect()
-        .await
-        .unwrap();
-    c.testing_environment().await.unwrap();
-    (envid, secret)
-}
-
-/// Sends a Honeycomb lifecycle instruction for a test environment.
-pub async fn lifecycle(env: &Env, envid: Uuid, action: &str, revision: i64, generation: i64) {
-    let op = Uuid::new_v4();
-    let r = reqwest::Client::new()
-        .put(format!(
-            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{op}",
-            env.base
-        ))
-        .bearer_auth("hck_test")
-        .json(
-            &json!({"operation_id": op, "environment_id": envid, "org_id": "acme", "app_id": "extend",
-            "environment_revision": revision, "generation": generation, "key_version": 1, "action": action,
-            "testing_key": "abcdefghijklmnopqrstuvwxyz012345", "name": "v11-env"}),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert!(r.status().is_success(), "{action}: {}", r.status());
-}
-
-/// A raw call in a test environment.
-pub async fn api_in(
-    env: &Env,
-    secret: &str,
-    method: &str,
-    path: &str,
-    token: Option<&str>,
-    team: Option<&str>,
-    body: Option<Value>,
-) -> (u16, Value) {
-    let mut r = reqwest::Client::new()
-        .request(
-            reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
-            format!("{}{path}", env.base),
-        )
-        .header("x-testing-application-secret", secret);
-    if let Some(t) = token {
-        r = r.header("authorization", t);
-    }
-    let retained = token.and_then(|t| contexts().lock().unwrap().get(t.trim_start_matches("Bearer ")).cloned());
-    if let Some(t) = team.or(retained.as_deref()) {
-        r = r.header("x-org-id", t);
-    }
-    if let Some(b) = body {
-        r = r.json(&b);
-    }
-    let resp = r.send().await.unwrap();
-    let status = resp.status().as_u16();
-    (status, resp.json().await.unwrap_or(Value::Null))
-}
-
-/// A member's access token in a test environment (the member id works as the login there).
-pub async fn login_in(env: &Env, secret: &str, who: &str) -> String {
-    let (s, v) = api_in(
-        env,
-        secret,
-        "POST",
-        "/api/v1/auth/login",
-        None,
-        None,
-        Some(json!({"type": "login", "data": {"slt": who}})),
-    )
-    .await;
-    assert_eq!(s, 200, "{v}");
-    let token = v["data"]["access_token"].as_str().unwrap();
-    contexts()
-        .lock()
-        .unwrap()
-        .insert(token.to_owned(), v["data"]["teams"][0].as_str().unwrap().to_owned());
-    format!("Bearer {token}")
-}
-
-/// Pairs a device into a test environment. Returns (device id, credential), or the claim's error.
-pub async fn pair_in(
-    env: &Env,
-    secret: &str,
-    carbon: &str,
-    os: DeviceOs,
-    name: &str,
-) -> Result<(String, String), (u16, Value)> {
-    let (s, e) = api_in(
-        env,
-        secret,
-        "POST",
-        "/api/v1/enrollments",
-        None,
-        None,
-        Some(json!({"type": "enrollment", "data": {"os": os, "app_version": "1.1.0"}})),
-    )
-    .await;
-    assert_eq!(s, 201, "{e}");
-    let (s, d) = api_in(
-        env,
-        secret,
-        "POST",
-        "/api/v1/pairings",
-        Some(carbon),
-        Some("acme"),
-        Some(json!({"type": "pairing", "data": {"pairing_code": e["data"]["pairing_code"], "name": name, "visibility": "team"}})),
-    )
-    .await;
-    if s != 201 {
-        return Err((s, d));
-    }
-    let (_, st) = api_in(
-        env,
-        secret,
-        "GET",
-        &format!("/api/v1/enrollments/{}", e["data"]["enrollment_id"].as_str().unwrap()),
-        Some(&format!(
-            "Extend-Enrollment {}",
-            e["data"]["enrollment_secret"].as_str().unwrap()
-        )),
-        None,
-        None,
-    )
-    .await;
-    Ok((
-        d["data"]["device_id"].as_str().unwrap().to_owned(),
-        st["data"]["device_credential"].as_str().unwrap().to_owned(),
-    ))
 }

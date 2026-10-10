@@ -11,9 +11,8 @@ async fn attach(env: &Env, token: &str, host: &str, name: &str) -> String {
     let (status, body) = api(
         env,
         "POST",
-        &format!("/api/v1/devices/{host}/attachments"),
+        &format!("/api/v2/devices/{host}/attachments"),
         token,
-        None,
         Some(json!({"type": "attachment", "data": {"os": "tvos", "name": name}})),
     )
     .await;
@@ -32,9 +31,9 @@ async fn removal_is_reconciled(app_version: &str) {
     let alice = login(&env, "c:alice").await;
     let bob = login(&env, "c:bob").await;
     let sous = login(&env, "si:sous").await;
-    let (host, credential) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Mac", &[]).await;
+    let (host, credential) = pair(&env, &alice, DeviceOs::Macos, "Mac", &[]).await;
     let app = App::connect(&env, &credential, hello(DeviceOs::Macos, "1.1.0")).await;
-    let (other_host, other_credential) = pair_another(&env, &credential, &bob, Some("acme"), &[]).await;
+    let (other_host, other_credential) = pair_another(&env, &credential, &bob, &[]).await;
     let other_app = App::connect(&env, &other_credential, hello(DeviceOs::Macos, "1.1.0")).await;
 
     let removed = attach(&env, &alice, &host, "Alice's removed TV").await;
@@ -57,8 +56,8 @@ async fn removal_is_reconciled(app_version: &str) {
         instance_of(&env, &removed).await == instance_of(&env, &alias).await
     })
     .await;
-    grant(&env, &bob, &alias, "si:sous", "acme").await;
-    let (status, started) = session(&env, &sous, "acme", &alias).await;
+    grant(&env, &bob, &alias, "si:sous").await;
+    let (status, started) = session(&env, &sous, &alias).await;
     assert_eq!(status, 201, "{started}");
     let sid = started["data"]["session_id"].as_str().unwrap();
     other_app.wait("session_started", |f| f["session_id"] == sid).await;
@@ -70,8 +69,7 @@ async fn removal_is_reconciled(app_version: &str) {
     .await;
     for (id, token) in [(&removed, &alice), (&private_removed, &bob)] {
         // Physical revocation (native/scheduler path) still reconciles carried tombstones.
-        // Removing an organization binding deliberately leaves hardware configuration intact.
-        let actor = env.state.iam.authorize(token, Some("acme"), None).await.unwrap().member;
+        let actor = env.state.accounts.authenticate(token).await.unwrap().actor();
         extend_service::domain::unpair(
             &env.state,
             &extend_service::db::World::production(),
@@ -115,9 +113,8 @@ async fn removal_is_reconciled(app_version: &str) {
     let (status, body) = api(
         &env,
         "POST",
-        &format!("/api/v1/sessions/{sid}/commands"),
+        &format!("/api/v2/sessions/{sid}/commands"),
         &sous,
-        Some("acme"),
         Some(json!({"type": "command", "data": {"command": "home", "args": []}})),
     )
     .await;
@@ -129,15 +126,7 @@ async fn removal_is_reconciled(app_version: &str) {
     );
     assert!(other_app.of("session_ended").is_empty());
     assert!(!other_app.is_closed());
-    let (status, body) = api(
-        &env,
-        "GET",
-        &format!("/api/v1/sessions/{sid}"),
-        &sous,
-        Some("acme"),
-        None,
-    )
-    .await;
+    let (status, body) = api(&env, "GET", &format!("/api/v2/sessions/{sid}"), &sous, None).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["data"]["state"], "active", "{body}");
 }

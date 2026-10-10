@@ -13,26 +13,25 @@ async fn carried_online_requires_a_report_from_the_current_host_connection() {
     let alice = login(&env, "c:alice").await;
     let chef = login(&env, "si:chef").await;
     for version in ["1.0.0", "1.1.0"] {
-        let (host, credential) = pair(&env, &alice, Some("acme"), DeviceOs::Macos, "Host", &[]).await;
+        let (host, credential) = pair(&env, &alice, DeviceOs::Macos, "Host", &[]).await;
         let old = App::connect(&env, &credential, hello(DeviceOs::Macos, version)).await;
         let (status, created) = api(
             &env,
             "POST",
-            &format!("/api/v1/devices/{host}/attachments"),
+            &format!("/api/v2/devices/{host}/attachments"),
             &alice,
-            Some("acme"),
             Some(json!({"type":"attachment", "data":{"os":"tvos", "name":"Carried TV"}})),
         )
         .await;
         assert_eq!(status, 201, "{created}");
         let child = created["data"]["device_id"].as_str().unwrap();
-        grant(&env, &alice, child, "si:chef", "acme").await;
+        grant(&env, &alice, child, "si:chef").await;
         let report = json!({"type":"attached", "device_id":child, "online":true,
             "capabilities":["input.remote", "nav.system"], "missing":[],
             "setup":{"state":"complete", "steps":[]}});
         old.send(report.clone());
         eventually("initial carried report online and ready", || async {
-            let (_, view) = api(&env, "GET", &format!("/api/v1/devices/{child}"), &alice, None, None).await;
+            let (_, view) = api(&env, "GET", &format!("/api/v2/devices/{child}"), &alice, None).await;
             view["data"]["online"] == true && view["data"]["state"] == "ready"
         })
         .await;
@@ -40,7 +39,7 @@ async fn carried_online_requires_a_report_from_the_current_host_connection() {
         // The helper fences the replacement Hello with a WebSocket Pong. No carried report is
         // sent by that connection until after the assertions below.
         let current = App::connect(&env, &credential, hello(DeviceOs::Macos, version)).await;
-        let (status, view) = api(&env, "GET", &format!("/api/v1/devices/{child}"), &alice, None, None).await;
+        let (status, view) = api(&env, "GET", &format!("/api/v2/devices/{child}"), &alice, None).await;
         assert_eq!(status, 200, "{view}");
         assert_eq!(
             view["data"]["online"], false,
@@ -49,9 +48,8 @@ async fn carried_online_requires_a_report_from_the_current_host_connection() {
         let (status, refused) = api(
             &env,
             "POST",
-            "/api/v1/sessions",
+            "/api/v2/sessions",
             &chef,
-            Some("acme"),
             Some(json!({"type":"session", "data":{"device_id":child}})),
         )
         .await;
@@ -60,16 +58,15 @@ async fn carried_online_requires_a_report_from_the_current_host_connection() {
 
         current.send(report);
         eventually("fresh carried report online", || async {
-            let (_, view) = api(&env, "GET", &format!("/api/v1/devices/{child}"), &alice, None, None).await;
+            let (_, view) = api(&env, "GET", &format!("/api/v2/devices/{child}"), &alice, None).await;
             view["data"]["online"] == true
         })
         .await;
         let (status, session) = api(
             &env,
             "POST",
-            "/api/v1/sessions",
+            "/api/v2/sessions",
             &chef,
-            Some("acme"),
             Some(json!({"type":"session", "data":{"device_id":child}})),
         )
         .await;
@@ -78,7 +75,7 @@ async fn carried_online_requires_a_report_from_the_current_host_connection() {
         drop(old);
         drop(current);
         eventually("host disconnect clears carried online state", || async {
-            let (_, view) = api(&env, "GET", &format!("/api/v1/devices/{child}"), &alice, None, None).await;
+            let (_, view) = api(&env, "GET", &format!("/api/v2/devices/{child}"), &alice, None).await;
             view["data"]["online"] == false
         })
         .await;

@@ -37,8 +37,7 @@
     "required": [
       "/device_id",
       "/muted",
-      "/silicons_muted/*/silicon_id",
-      "/silicons_muted/*/team"
+      "/silicons_muted/*/silicon_id"
     ],
     "status": "2xx",
     "type": "wake_settings"

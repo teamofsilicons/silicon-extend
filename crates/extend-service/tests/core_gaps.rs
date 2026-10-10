@@ -1,39 +1,39 @@
 //! Service behaviour closed in round 2 (service core): a command in flight holds the idle timer
 //! and hears at once when its session ends (device removed, pair revoked, access removed, Stop);
-//! logging out or leaving the team ends sessions without an IAM webhook; Ting registration and
-//! request retries without a running session; self-destruct that keeps a file's record until it is
-//! really gone; storage warnings in command results; the file download route; request reasons.
+//! signing out ends sessions; Ting enrolment and request retries without a running session;
+//! self-destruct that keeps a file's record until it is really gone; storage warnings in command
+//! results; the file download route; request reasons.
 //!
-//! Same harness as tests/e2e.rs: a real PostgreSQL the tests can create databases on
-//! (`EXTEND_TEST_ADMIN_URL`, default `postgres://extend:extend@127.0.0.1:5440/postgres`), the real
-//! HTTP and WebSocket stack, the official client crate, and scripted fake devices.
+//! A real PostgreSQL the tests can create databases on (`EXTEND_TEST_ADMIN_URL`, default
+//! `postgres://extend:extend@127.0.0.1:5440/postgres`), the real HTTP and WebSocket stack, the
+//! local Silicon Accounts stand-in, and scripted fake devices.
 
+mod common;
 #[path = "common/readiness.rs"]
 mod readiness;
 
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::Engine as _;
+use common::{Env, deliver, login, uuid};
 use extend_protocol::frames::{
     CommandFrame, CommandOutcome, DeviceFrame, EnrollmentFrame, Hello, ProducedFile, ServiceFrame,
 };
 use extend_protocol::model::*;
 use extend_protocol::{DeviceOs, ErrorCode};
-use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode};
+use extend_service::accounts::Principal;
+use extend_service::config::{Config, Tuning};
 use extend_service::db::World;
 use extend_service::error::{AppError, AppResult};
 use extend_service::files::{DynFiles, FileStore, LocalFiles, NewFile, Stored};
-use extend_service::iam::{Principal, TestingSelection};
-use extend_service::routes::sessions::LOGOUT_GRACE;
 use extend_service::scheduler::{self, Backoff};
 use extend_service::state::Shared;
 use futures::{SinkExt as _, StreamExt as _};
 use silicon_extend_client::{Client, ListQuery};
-use sqlx::Connection as _;
 use time::OffsetDateTime;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -46,75 +46,19 @@ type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 // ───────────────────────────── Harness ─────────────────────────────
 
-struct Env {
-    base: String,
-    pool: sqlx::PgPool,
-    client: Client,
-    state: Shared,
-}
-
-/// A fresh database and data directory.
-async fn database() -> (String, PathBuf) {
-    let admin = std::env::var("EXTEND_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://extend:extend@127.0.0.1:5440/postgres".into());
-    let db = format!("extend_core_{}", Uuid::new_v4().simple());
-    let mut conn = sqlx::PgConnection::connect(&admin)
-        .await
-        .expect("PostgreSQL for tests (set EXTEND_TEST_ADMIN_URL)");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    let url = format!("{}/{db}", admin.rsplit_once('/').unwrap().0);
-    (url, std::env::temp_dir().join(&db))
-}
-
-fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf) -> Config {
-    let base = format!("http://{bind}");
-    Config {
-        environment: Environment::Test,
-        bind,
-        database_url,
-        public_url: base.clone(),
-        website_url: "http://localhost:5173".into(),
-        docs_url: "http://localhost:5173/docs".into(),
-        repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
-        data_dir,
-        iam: IamMode::Local,
-        delegation_key: None,
-        iam_public_url: format!("{base}/dev/iam"),
-        iam_login_url: format!("{base}/dev/iam/login"),
-        webhook_secret: None,
-        webhook_previous_secret: None,
-        files: FilesMode::Local,
-        ting: TingMode::Local,
-        honeycomb_service_token: Some("hck_test".into()),
-        postmark_token: None,
-        report_recipients: vec!["bugs@example.test".into()],
-        device_app_min_version: "1.0.0".into(),
-        local_members: vec![
-            ("c:alice".into(), vec!["acme".into()]),
-            ("si:chef".into(), vec!["acme".into()]),
-            ("si:sous".into(), vec!["acme".into()]),
-            ("si:line".into(), vec!["acme".into()]),
-        ],
-        web_dir: None,
-        trusted_proxies: vec![],
-        tuning: Default::default(),
-    }
-}
-
 /// Builds the service's state; `files` may swap in another file store.
 async fn build(cfg: Config, files: Option<DynFiles>) -> Shared {
     let state = extend_service::build(cfg).await.unwrap();
-    match files {
+    let state = match files {
         None => state,
         Some(files) => {
             let mut inner = Arc::try_unwrap(state).ok().expect("nothing else holds the state yet");
             inner.files = files;
             Arc::new(inner)
         }
-    }
+    };
+    common::seed_accounts(&state);
+    state
 }
 
 async fn start() -> Env {
@@ -123,12 +67,12 @@ async fn start() -> Env {
 
 /// Serves on a free port. `files` gets the public URL and data directory and may return a store.
 async fn start_with(files: impl FnOnce(&str, &Path) -> Option<DynFiles>) -> Env {
-    let (url, data) = database().await;
+    let (url, data) = common::database("core").await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");
     let store = files(&base, &data);
-    let state = build(config(url, addr, data), store).await;
+    let state = build(common::config(url, addr, data, Tuning::default()), store).await;
     let pool = state.pool.clone();
     tokio::spawn(extend_service::serve_on(listener, state.clone()));
     let client = Client::connect(&base).await.unwrap();
@@ -143,13 +87,13 @@ async fn start_with(files: impl FnOnce(&str, &Path) -> Option<DynFiles>) -> Env 
 /// The state alone, without serving (so no background scheduler runs): for driving scheduler
 /// passes by hand.
 async fn state_only(files: impl FnOnce(&Path) -> Option<DynFiles>) -> Shared {
-    let (url, data) = database().await;
+    let (url, data) = common::database("core").await;
     let store = files(&data);
-    build(config(url, "127.0.0.1:9".parse().unwrap(), data), store).await
-}
-
-async fn login(c: &Client, who: &str) -> String {
-    c.login(who).await.unwrap().access_token
+    build(
+        common::config(url, "127.0.0.1:9".parse().unwrap(), data, Tuning::default()),
+        store,
+    )
+    .await
 }
 
 fn cmd(name: &str, args: &[&str]) -> CommandRequest {
@@ -163,15 +107,15 @@ fn cmd(name: &str, args: &[&str]) -> CommandRequest {
     }
 }
 
-/// Runs a command in the background, as `token` in team acme.
+/// Runs a command in the background, as `token`.
 fn run_in_background(
     env: &Env,
     token: &str,
     session_id: &str,
     req: CommandRequest,
 ) -> tokio::task::JoinHandle<Result<CommandResult, silicon_extend_client::Error>> {
-    let (client, token, sid) = (env.client.clone(), token.to_owned(), session_id.to_owned());
-    tokio::spawn(async move { client.authed(&token, Some("acme")).run(&sid, &req).await })
+    let (base, token, sid) = (env.base.clone(), token.to_owned(), session_id.to_owned());
+    tokio::spawn(async move { common::v2::V2::new(&base, &token).run(&sid, &req).await })
 }
 
 /// Waits (at most 20 s) for a background command's answer.
@@ -211,7 +155,8 @@ struct Device {
 }
 
 impl Device {
-    /// Enrolls, lets `carbon` pair it (with access for `silicons`), connects and says hello.
+    /// Enrolls, lets the Carbon `carbon` (an id) pair it (with access for `silicons`), connects and
+    /// says hello.
     async fn pair(env: &Env, carbon: &str, os: DeviceOs, silicons: &[&str]) -> Device {
         let client = env.client.clone();
         let e = client
@@ -233,15 +178,15 @@ impl Device {
         let EnrollmentFrame::Code { pairing_code, .. } = first else {
             panic!("expected code")
         };
-        let token = client.login(carbon).await.unwrap().access_token;
+        let token = login(env, carbon).await;
         let claim = PairingClaim {
             pairing_code: pairing_code.to_lowercase(),
             name: format!("{} device", os.as_str()),
-            visibility: Some(extend_protocol::model::Visibility::Team),
+            visibility: None,
             pair_ttl_days: None,
             silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
         };
-        client.authed(&token, Some("acme")).pair(&claim).await.unwrap();
+        env.v2(&token).pair(&claim).await.unwrap();
         let (id, credential) = loop {
             let f: EnrollmentFrame = serde_json::from_str(&next_text(&mut ews).await).unwrap();
             if let EnrollmentFrame::Paired {
@@ -272,7 +217,7 @@ impl Device {
         ws.send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
             .await
             .unwrap();
-        readiness::ready(&client.authed(&token, Some("acme")), &id).await;
+        readiness::ready(&env.base, &token, &id).await;
         Device { id, credential, ws }
     }
 
@@ -449,14 +394,13 @@ struct InFlight {
 
 async fn command_in_flight() -> InFlight {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let chef = login(&env.client, "si:chef").await;
+    let alice = login(&env, "c:alice").await;
+    let chef = login(&env, "si:chef").await;
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
     let session_id = env
-        .client
-        .authed(&chef, Some("acme"))
+        .v2(&chef)
         .start_session(&device.id.parse().unwrap())
         .await
         .unwrap()
@@ -507,8 +451,8 @@ fn assert_ended_mid_command(
 #[tokio::test]
 async fn a_running_command_holds_the_idle_timer() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -560,42 +504,47 @@ async fn a_running_command_holds_the_idle_timer() {
 #[tokio::test]
 async fn removing_the_device_mid_command_ends_the_session_and_answers_at_once() {
     let t = command_in_flight().await;
-    let a = t.env.client.authed(&t.alice, Some("acme"));
+    let a = t.env.v2(&t.alice);
     a.remove_device(&t.device.id, None).await.unwrap();
     assert_ended_mid_command(
         answer(t.run).await,
         t.started,
-        "access_removed",
-        "access to the device was removed",
+        "device_removed",
+        "the device was removed",
     );
     assert_eq!(
         session_row(&t.env.pool, &t.session_id).await,
-        ("ended".into(), Some("access_removed".into()))
+        ("ended".into(), Some("device_removed".into()))
     );
-    t.device
-        .wait_for("organization access ending", |f| {
-            matches!(
-                f,
-                ServiceFrame::SessionEnded {
-                    reason: EndReason::AccessRemoved,
-                    ..
-                }
-            )
-        })
-        .await;
-    assert!(
-        !t.device
-            .frames()
-            .iter()
-            .any(|f| matches!(f, ServiceFrame::Unpaired { .. }))
-    );
-    assert!(t.env.client.device_self(&t.device.credential).await.is_ok());
+    // Removing a device unpairs it: the session ends first, then the app is told.
+    let (pool, credential, client) = (t.env.pool.clone(), t.device.credential.clone(), t.env.client.clone());
+    let session_id = t.session_id.clone();
+    let frames = t.device.finished().await;
+    let ended = position(&frames, |f| {
+        matches!(
+            f,
+            ServiceFrame::SessionEnded {
+                reason: EndReason::DeviceRemoved,
+                ..
+            }
+        )
+    });
+    let unpaired = position(&frames, |f| {
+        matches!(
+            f,
+            ServiceFrame::Unpaired {
+                reason: EndReason::DeviceRemoved
+            }
+        )
+    });
+    assert!(ended < unpaired, "{frames:?}");
+    assert!(client.device_self(&credential).await.is_err());
     // The command is in the activity log with an unknown outcome: it may have run.
     let (outcome, error): (String, Option<String>) = sqlx::query_as(
         "SELECT outcome, details->>'error' FROM extend.activity WHERE action = 'command' AND session_id = $1",
     )
-    .bind(&t.session_id)
-    .fetch_one(&t.env.pool)
+    .bind(&session_id)
+    .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!((outcome.as_str(), error.as_deref()), ("unknown", Some("session_ended")));
@@ -641,7 +590,7 @@ async fn revoking_the_pair_on_the_device_mid_command_ends_the_session_and_answer
 #[tokio::test]
 async fn removing_the_silicons_access_mid_command_ends_the_session_and_cancels_the_command() {
     let t = command_in_flight().await;
-    let a = t.env.client.authed(&t.alice, Some("acme"));
+    let a = t.env.v2(&t.alice);
     a.revoke(&t.device.id, "si:chef").await.unwrap();
     let command_id = assert_ended_mid_command(
         answer(t.run).await,
@@ -682,8 +631,8 @@ async fn removing_the_silicons_access_mid_command_ends_the_session_and_cancels_t
 #[tokio::test]
 async fn stop_on_the_device_by_frame_and_by_endpoint() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -742,8 +691,8 @@ async fn stop_on_the_device_by_frame_and_by_endpoint() {
 #[tokio::test]
 async fn a_command_queued_behind_one_whose_session_ended_is_refused_not_relayed() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -776,14 +725,14 @@ async fn a_command_queued_behind_one_whose_session_ended_is_refused_not_relayed(
     assert_eq!(relayed, 1, "the queued command reached the device of an ended session");
 }
 
-// ───────────────────────────── Authorization ending mid-session ─────────────────────────────
+// ───────────────────────────── Sign-ins ending mid-session ─────────────────────────────
 
 #[tokio::test]
-async fn leaving_the_team_ends_the_silicons_sessions_without_a_webhook() {
+async fn signing_out_without_a_webhook_stops_commands_and_the_event_ends_the_session() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -793,39 +742,39 @@ async fn leaving_the_team_ends_the_silicons_sessions_without_a_webhook() {
         .unwrap()
         .session_id
         .to_string();
+    assert!(c.run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
 
-    // Naming a team the Silicon was never in is refused and ends nothing.
-    let wrong = env.client.authed(&chef, Some("labs")).session(&sid).await.unwrap_err();
-    assert_eq!(wrong.code(), ErrorCode::NotATeamMember);
+    // si:chef signs out in Silicon Accounts; the event hasn't reached Extend. Once the cached
+    // answer is gone (Extend asks Silicon Accounts again after at most 30 s), commands are refused.
+    let chef_uuid = uuid("si:chef");
+    env.state.accounts.local.as_deref().unwrap().sign_out(&chef_uuid);
+    env.state.accounts.forget(&chef_uuid).await;
+    let e = c.run(&sid, &cmd("snapshot", &[])).await.unwrap_err();
+    assert_eq!(e.code(), ErrorCode::TokenExpired, "{e}");
+    assert!(e.api().unwrap().message.contains("no longer active"), "{e}");
+    // The session itself waits for the event (or its idle timeout).
     assert_eq!(session_row(&env.pool, &sid).await.0, "active");
 
-    // IAM removes si:chef from acme; no webhook reaches Extend. Once the cached answer is gone
-    // (IAM answers are cached for 30 s), the next call ends the session.
-    let iam = env.state.local_iam.as_ref().unwrap();
-    iam.set_member("si:chef", Some(vec!["labs".into()])).await;
-    env.state.auth_cache.forget(&["si:chef".to_owned()]).await;
-    let e = c.run(&sid, &cmd("snapshot", &[])).await.unwrap_err();
-    assert_eq!(e.code(), ErrorCode::NotATeamMember);
-    assert!(
-        e.api()
-            .unwrap()
-            .message
-            .contains(&format!("session {sid} in acme ended (left_team)")),
-        "{}",
-        e.api().unwrap().message
-    );
+    // The event ends it at once, and the device is told.
+    let status = deliver(
+        &env,
+        "membership.signed_out",
+        serde_json::json!({"uuid": chef_uuid, "membership_id": "m-chef", "reason": "session_revoked"}),
+    )
+    .await;
+    assert_eq!(status, 204);
     assert_eq!(
         session_row(&env.pool, &sid).await,
-        ("ended".into(), Some("left_team".into()))
+        ("ended".into(), Some("silicon_logged_out".into()))
     );
-    let seen = env.client.authed(&alice, Some("acme")).session(&sid).await.unwrap();
-    assert_eq!(seen.end_reason, Some(EndReason::LeftTeam));
+    let seen = env.v2(&alice).session(&sid).await.unwrap();
+    assert_eq!(seen.end_reason, Some(EndReason::SiliconLoggedOut));
     device
         .wait_for("session_ended", |f| {
             matches!(
                 f,
                 ServiceFrame::SessionEnded {
-                    reason: EndReason::LeftTeam,
+                    reason: EndReason::SiliconLoggedOut,
                     ..
                 }
             )
@@ -834,10 +783,10 @@ async fn leaving_the_team_ends_the_silicons_sessions_without_a_webhook() {
 }
 
 #[tokio::test]
-async fn logging_out_elsewhere_ends_the_silicons_sessions_without_a_webhook() {
+async fn removing_extends_access_in_silicon_accounts_ends_the_silicons_sessions() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -847,15 +796,13 @@ async fn logging_out_elsewhere_ends_the_silicons_sessions_without_a_webhook() {
         .unwrap()
         .session_id
         .to_string();
-
-    // The Silicon logs out in IAM (every login revoked); no webhook reaches Extend.
-    env.state.local_iam.as_ref().unwrap().revoke_member("si:chef").await;
-    env.state.auth_cache.forget(&["si:chef".to_owned()]).await;
-    assert_eq!(c.session(&sid).await.unwrap_err().code(), ErrorCode::TokenExpired);
-    // Not at once: an expired token is refreshed and retried within seconds.
-    assert_eq!(session_row(&env.pool, &sid).await.0, "active");
-    // No live login comes back, so the session ends.
-    tokio::time::sleep(LOGOUT_GRACE + Duration::from_secs(3)).await;
+    let status = deliver(
+        &env,
+        "membership.access_removed",
+        serde_json::json!({"uuid": uuid("si:chef")}),
+    )
+    .await;
+    assert_eq!(status, 204);
     assert_eq!(
         session_row(&env.pool, &sid).await,
         ("ended".into(), Some("silicon_logged_out".into()))
@@ -871,13 +818,18 @@ async fn logging_out_elsewhere_ends_the_silicons_sessions_without_a_webhook() {
             )
         })
         .await;
+    // Its earlier tokens are refused; the grant stays, so a new sign-in can start again.
+    assert_eq!(c.session(&sid).await.unwrap_err().code(), ErrorCode::TokenExpired);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let again = login(&env, "si:chef").await;
+    assert!(env.v2(&again).start_session(&device.id.parse().unwrap()).await.is_ok());
 }
 
 #[tokio::test]
-async fn an_expired_token_that_is_refreshed_keeps_the_session() {
+async fn an_expired_token_followed_by_a_fresh_one_keeps_the_session() {
     let env = start().await;
-    let first = env.client.login("si:chef").await.unwrap();
-    let c = env.client.authed(&first.access_token, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -888,19 +840,20 @@ async fn an_expired_token_that_is_refreshed_keeps_the_session() {
         .session_id
         .to_string();
 
-    // Only this access token stops working, as when it expires.
-    env.state.iam.logout(&first.access_token, None).await.unwrap();
-    env.state.auth_cache.forget_token(&first.access_token).await;
-    assert_eq!(c.session(&sid).await.unwrap_err().code(), ErrorCode::TokenExpired);
-    // The CLI refreshes and retries.
-    let fresh = env
-        .client
-        .refresh(&first.refresh_token, "refresh-core-gaps-1")
-        .await
-        .unwrap();
-    let c2 = env.client.authed(&fresh.access_token, Some("acme"));
-    assert!(c2.run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
-    tokio::time::sleep(LOGOUT_GRACE + Duration::from_secs(3)).await;
+    // An access token past its expiry is refused; nothing else changes.
+    let local = env.state.accounts.local.as_deref().unwrap();
+    let account = local.ensure("si:chef", Some("c:alice")).unwrap();
+    let expired = local.mint(&account, -120);
+    let e = env.v2(&expired).session(&sid).await.unwrap_err();
+    assert_eq!(e.code(), ErrorCode::TokenExpired);
+    assert!(
+        e.api().unwrap().hint.as_deref().unwrap_or("").contains("refresh"),
+        "{e}"
+    );
+    // The CLI refreshes and retries with a fresh access token.
+    let fresh = local.mint(&account, 1800);
+    assert!(env.v2(&fresh).run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
+    tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(session_row(&env.pool, &sid).await, ("active".into(), None));
     assert!(
         !device
@@ -913,11 +866,11 @@ async fn an_expired_token_that_is_refreshed_keeps_the_session() {
 #[tokio::test]
 async fn a_silicon_that_turned_telemetry_off_leaves_no_command_events() {
     let env = start().await;
-    let token = login(&env.client, "si:chef").await;
+    let token = login(&env, "si:chef").await;
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
-    let on = env.client.authed(&token, Some("acme"));
+    let on = env.v2(&token);
     let sid = on
         .start_session(&device.id.parse().unwrap())
         .await
@@ -932,70 +885,72 @@ async fn a_silicon_that_turned_telemetry_off_leaves_no_command_events() {
     };
     assert!(on.run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
     assert_eq!(count().await, 1, "telemetry on: the command is recorded");
-    let quiet = Client::builder(&env.base).telemetry(false).connect().await.unwrap();
-    assert!(
-        quiet
-            .authed(&token, Some("acme"))
-            .run(&sid, &cmd("snapshot", &[]))
-            .await
-            .unwrap()
-            .ok
-    );
+    let quiet = reqwest::Client::new()
+        .post(format!("{}/api/v2/sessions/{sid}/commands", env.base))
+        .bearer_auth(&token)
+        .header("x-extend-telemetry", "off")
+        .json(&serde_json::json!({"type": "command", "data": cmd("snapshot", &[])}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(quiet.status(), 200);
     assert_eq!(count().await, 1, "telemetry off: nothing more is recorded");
 }
 
 // ───────────────────────────── Ting ─────────────────────────────
 
 #[tokio::test]
-async fn starting_a_session_registers_the_silicon_with_ting() {
+async fn starting_a_session_enrols_the_silicon_with_ting() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
+    let chef = login(&env, "si:chef").await;
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
     let ting = env.state.local_ting.clone().unwrap();
-    // (Pairing registers the Carbon in the Team they paired in; the Silicon comes at its session.)
-    assert!(!ting.registered.lock().await.iter().any(|(_, _, m)| m == "si:chef"));
-    env.client
-        .authed(&chef, Some("acme"))
-        .start_session(&device.id.parse().unwrap())
-        .await
-        .unwrap();
+    let chef_uuid = uuid("si:chef");
+    // (Pairing enrols the Carbon; the Silicon comes at its session.)
+    assert!(!ting.registered.lock().await.contains(&chef_uuid));
+    env.v2(&chef).start_session(&device.id.parse().unwrap()).await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if ting
-            .registered
-            .lock()
-            .await
-            .contains(&(None, "acme".to_owned(), "si:chef".to_owned()))
-        {
-            break;
-        }
-        assert!(Instant::now() < deadline, "si:chef was never registered with Ting");
+    while !ting.registered.lock().await.contains(&chef_uuid) {
+        assert!(Instant::now() < deadline, "si:chef was never enrolled with Ting");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
 async fn insert_device(state: &Shared, id: &str) {
     sqlx::query(
-        "INSERT INTO extend.devices (device_id, team, owner_id, name, os, state) VALUES ($1, 'acme', 'c:alice', 'Pixel', 'android', 'ready')",
+        "INSERT INTO extend.devices (device_id, owner_id, name, os, state) VALUES ($1, $2, 'Pixel', 'android', 'ready')",
     )
     .bind(id)
+    .bind(uuid("c:alice"))
     .execute(&state.pool)
     .await
     .unwrap();
 }
 
+/// A request as Extend 4 records it: from `from` to si:chef (the holder), with its frozen Ting
+/// body, after one failed attempt.
 async fn insert_request(state: &Shared, device_id: &str, from: &str, reason: &str) -> Uuid {
     let id = Uuid::now_v7();
+    let body = extend_service::ting::body(
+        "extend",
+        extend_service::ting::DEVICE_REQUESTED,
+        &uuid("si:chef"),
+        "si:chef",
+        &id.to_string(),
+        serde_json::json!({"request_id": id, "from": from, "reason": reason, "routed_to": "holder"}),
+    );
     sqlx::query(
-        "INSERT INTO extend.requests (request_id, device_id, team, from_id, to_id, session_id, reason, attempts, last_error)
-         VALUES ($1, $2, 'acme', $3, 'si:chef', 'a3f', $4, 1, 'Ting is unavailable right now.')",
+        "INSERT INTO extend.requests (request_id, device_id, from_id, to_id, session_id, reason, attempts, last_error, routed_to, ting_body)
+         VALUES ($1, $2, $3, $4, 'a3f', $5, 1, 'Ting is unavailable right now.', 'holder', $6)",
     )
     .bind(id)
     .bind(device_id)
-    .bind(from)
+    .bind(uuid(from))
+    .bind(uuid("si:chef"))
     .bind(reason)
+    .bind(&body)
     .execute(&state.pool)
     .await
     .unwrap();
@@ -1015,16 +970,8 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
     let state = state_only(|_| None).await;
     let world = World::production();
     insert_device(&state, "0a1b2c3d").await;
-    // Extend saw si:sous (the requester) and si:chef (the recipient) sign in; neither has a
-    // running session.
-    for who in ["si:sous", "si:chef"] {
-        let s = state.iam.login(who, "core-gaps-login", None).await.unwrap();
-        state.authorize(&s.access_token, Some("acme"), None).await.unwrap();
-    }
+    // Extend sends as itself: neither Silicon needs to be signed in or using Extend.
     let known = insert_request(&state, "0a1b2c3d", "si:sous", "Need it for an OTP").await;
-    // A requester Extend holds no login for.
-    let unknown = insert_request(&state, "0a1b2c3d", "si:ghost", "Quick check").await;
-
     scheduler::retry_requests(&state, &world).await.unwrap();
     assert_eq!(request_row(&state, known).await, ("delivered".into(), 2, None));
     let ting = state.local_ting.clone().unwrap();
@@ -1033,19 +980,21 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
             .lock()
             .await
             .iter()
-            .any(|t| t["data"]["request_id"] == known.to_string() && t["data"]["reason"] == "Need it for an OTP")
+            .any(|t| t["data"]["request_id"] == known.to_string()
+                && t["data"]["reason"] == "Need it for an OTP"
+                && t["for"] == uuid("si:chef").as_str())
     );
-    // The recipient was registered with its own login on the way.
-    assert!(
-        ting.registered
-            .lock()
-            .await
-            .contains(&(None, "acme".to_owned(), "si:chef".to_owned()))
-    );
-    // With no login for any sender, the attempt doesn't count: it waits for the member's next call.
+
+    // A recipient that never enrolled with Ting: the attempt counts, and the request waits for
+    // the enrolment instead of being retried.
+    ting.require_registration.store(true, Ordering::Relaxed);
+    let unknown = insert_request(&state, "0a1b2c3d", "si:sous", "Quick check").await;
+    scheduler::retry_requests(&state, &world).await.unwrap();
     let (delivery, attempts, error) = request_row(&state, unknown).await;
-    assert_eq!((delivery.as_str(), attempts), ("pending", 1));
-    assert!(error.unwrap().contains("holds no login for si:ghost"));
+    assert_eq!((delivery.as_str(), attempts), ("pending", 2));
+    assert!(error.unwrap().contains("has not enrolled"));
+    scheduler::retry_requests(&state, &world).await.unwrap();
+    assert_eq!(request_row(&state, unknown).await.1, 2, "it waits for the enrolment");
     // After 24 hours it gives up anyway.
     sqlx::query("UPDATE extend.requests SET created_at = now() - interval '25 hours' WHERE request_id = $1")
         .bind(unknown)
@@ -1057,9 +1006,10 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
     assert_eq!(delivery, "failed");
     let error = error.unwrap();
     assert!(
-        error.contains("holds no login for si:ghost") && error.contains("24 hours"),
+        error.contains("has not enrolled") && error.contains("24 hours"),
         "{error}"
     );
+    ting.require_registration.store(false, Ordering::Relaxed);
 
     // Counted attempts (Ting unreachable) back off, and give up after 6.
     let flaky = insert_request(&state, "0a1b2c3d", "si:sous", "Another reason").await;
@@ -1093,11 +1043,12 @@ async fn pending_requests_are_retried_without_a_running_session_and_fail_with_a_
 // ───────────────────────────── Files ─────────────────────────────
 
 /// Local files, except that a name starting `refused` can't be stored, a name starting `unshared`
-/// is stored but not shared, and deleting needs a login (as with Briefcase). Records every
-/// deletion try as (member, had a login).
+/// is stored but not shared, and deleting needs a proof Extend holds for the Silicon that made
+/// the file (as with Briefcase). Records every deletion try as (creator, had a proof).
 struct GatedFiles {
     local: LocalFiles,
     destroys: Mutex<Vec<(String, bool)>>,
+    proof_held: AtomicBool,
     read_gate: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
@@ -1106,6 +1057,7 @@ impl GatedFiles {
         Arc::new(Self {
             local: LocalFiles::new(&data.join("gated"), base).unwrap(),
             destroys: Mutex::default(),
+            proof_held: AtomicBool::new(false),
             read_gate: Mutex::default(),
         })
     }
@@ -1113,53 +1065,46 @@ impl GatedFiles {
 
 #[async_trait]
 impl FileStore for GatedFiles {
-    async fn store(&self, silicon: &Principal, file: NewFile<'_>, sel: Option<&TestingSelection>) -> AppResult<Stored> {
+    async fn store(&self, silicon: &Principal, file: NewFile<'_>) -> AppResult<Stored> {
         if file.name.starts_with("refused") {
             return Err(AppError::new(
                 ErrorCode::NoAccess,
                 format!(
-                    "Briefcase refused to store {} for {} (briefcase.files.create answered 403 forbidden).",
+                    "Briefcase refused to store {} for {} (/api/v1/obo/uploads/reserve answered 403 forbidden).",
                     file.name,
-                    silicon.id()
+                    silicon.public_id()
                 ),
             )
-            .hint("A Team admin can check Extend's Briefcase approval in Honeycomb."));
+            .hint("Briefcase decides which apps may act for an account and where; ask a Briefcase Carbon to allow Extend's scopes."));
         }
         let unshared = file.name.starts_with("unshared");
-        let mut stored = self.local.store(silicon, file, sel).await?;
+        let mut stored = self.local.store(silicon, file).await?;
         if unshared {
             stored.shared_with = None;
-            stored.share_error =
-                Some("Briefcase does not know the recipient as a current member of the Team yet.".into());
+            stored.share_error = Some("Briefcase does not know the recipient yet.".into());
         }
         Ok(stored)
     }
-    async fn destroy(&self, silicon: &Principal, file_id: Uuid, sel: Option<&TestingSelection>) -> AppResult<()> {
-        self.destroys
-            .lock()
-            .unwrap()
-            .push((silicon.id().to_owned(), !silicon.token.is_empty()));
-        if silicon.token.is_empty() {
+    async fn destroy(&self, creator: &str, file_id: Uuid) -> AppResult<()> {
+        let held = self.proof_held.load(Ordering::SeqCst);
+        self.destroys.lock().unwrap().push((creator.to_owned(), held));
+        if !held {
             return Err(AppError::new(
-                ErrorCode::NotSignedIn,
-                format!("Extend holds no signed-in session for {} to act with.", silicon.id()),
+                ErrorCode::ServiceUnavailable,
+                format!(
+                    "Extend holds no Briefcase proof for the Silicon that made file {file_id}, so it can't trash it yet."
+                ),
             ));
         }
-        self.local.destroy(silicon, file_id, sel).await
+        self.local.destroy(creator, file_id).await
     }
-    async fn read_bounded(
-        &self,
-        member: &Principal,
-        file_id: Uuid,
-        sel: Option<&TestingSelection>,
-        max_bytes: usize,
-    ) -> AppResult<(Vec<u8>, String)> {
+    async fn read_bounded(&self, member: &Principal, file_id: Uuid, max_bytes: usize) -> AppResult<(Vec<u8>, String)> {
         let gate = self.read_gate.lock().unwrap().clone();
         if let Some((entered, resume)) = gate {
             entered.notify_one();
             resume.notified().await;
         }
-        self.local.read_bounded(member, file_id, sel, max_bytes).await
+        self.local.read_bounded(member, file_id, max_bytes).await
     }
     async fn read_local(&self, file_id: Uuid) -> Option<(Vec<u8>, String)> {
         self.local.read_local(file_id).await
@@ -1169,12 +1114,13 @@ impl FileStore for GatedFiles {
 async fn insert_file(state: &Shared, due: bool) -> Uuid {
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO extend.files (file_id, team, device_id, created_by, name, kind, content_type, size_bytes, url, self_destruct_at)
-         VALUES ($1, 'acme', '0a1b2c3d', 'si:chef', 'shot.png', 'screenshot', 'image/png', 4, 'http://files.test/x',
+        "INSERT INTO extend.files (file_id, device_id, created_by, name, kind, content_type, size_bytes, url, self_destruct_at)
+         VALUES ($1, '0a1b2c3d', $3, 'shot.png', 'screenshot', 'image/png', 4, 'http://files.test/x',
                  now() + CASE WHEN $2 THEN interval '-1 minute' ELSE interval '1 day' END)",
     )
     .bind(id)
     .bind(due)
+    .bind(uuid("si:chef"))
     .execute(&state.pool)
     .await
     .unwrap();
@@ -1204,12 +1150,13 @@ async fn self_destruct_keeps_the_record_until_the_file_is_gone_and_needs_no_sess
     insert_device(&state, "0a1b2c3d").await;
     let due = insert_file(&state, true).await;
     let later = insert_file(&state, false).await;
+    let chef = uuid("si:chef");
 
-    // Extend holds no login for si:chef: the file can't be deleted yet, so its record stays.
+    // Extend holds no proof for si:chef: the file can't be deleted yet, so its record stays.
     let mut now = Backoff::new(Duration::ZERO, Duration::ZERO);
     assert_eq!(scheduler::self_destruct(&state, &world, &mut now).await.unwrap(), 0);
     assert!(file_exists(&state, due).await);
-    assert_eq!(*gated.destroys.lock().unwrap(), vec![("si:chef".to_owned(), false)]);
+    assert_eq!(*gated.destroys.lock().unwrap(), vec![(chef.clone(), false)]);
     // Still hidden from the Silicon while it waits.
     let listed: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM extend.files WHERE file_id = $1 AND (self_destruct_at IS NULL OR self_destruct_at > now())",
@@ -1228,23 +1175,20 @@ async fn self_destruct_keeps_the_record_until_the_file_is_gone_and_needs_no_sess
     assert_eq!(gated.destroys.lock().unwrap().len(), 2);
     assert_eq!(paced.tries(&world, due), 1);
 
-    // si:chef signs in again (no session): the file goes with that login, and so does its record.
-    let s = state.iam.login("si:chef", "core-gaps-login", None).await.unwrap();
-    state.authorize(&s.access_token, Some("acme"), None).await.unwrap();
+    // si:chef uses Extend again (no session needed): Extend holds a proof, and the file goes, and
+    // so does its record.
+    gated.proof_held.store(true, Ordering::SeqCst);
     assert_eq!(scheduler::self_destruct(&state, &world, &mut now).await.unwrap(), 1);
     assert!(!file_exists(&state, due).await);
-    assert_eq!(
-        gated.destroys.lock().unwrap().last().cloned(),
-        Some(("si:chef".to_owned(), true))
-    );
+    assert_eq!(gated.destroys.lock().unwrap().last().cloned(), Some((chef, true)));
     assert!(file_exists(&state, later).await);
 }
 
 #[tokio::test]
 async fn files_that_cant_be_stored_or_shared_are_reported_as_warnings() {
     let env = start_with(|base, data| Some(GatedFiles::new(data, base) as DynFiles)).await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -1287,7 +1231,7 @@ async fn files_that_cant_be_stored_or_shared_are_reported_as_warnings() {
     let refused = warning("refused.png");
     assert!(
         refused.contains("was not stored: Briefcase refused")
-            && refused.contains("Honeycomb")
+            && refused.contains("Briefcase Carbon")
             && refused.contains("Run the command again"),
         "{refused}"
     );
@@ -1320,10 +1264,10 @@ fn command_results_from_older_services_have_no_warnings() {
 #[tokio::test]
 async fn file_content_is_served_to_its_silicon_and_owner_with_ranges() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let chef = login(&env.client, "si:chef").await;
-    let sous = login(&env.client, "si:sous").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let chef = login(&env, "si:chef").await;
+    let sous = login(&env, "si:sous").await;
+    let c = env.v2(&chef);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -1344,53 +1288,30 @@ async fn file_content_is_served_to_its_silicon_and_owner_with_ranges() {
     assert_eq!(whole.name.as_deref(), Some("shot.png"));
     assert_eq!(whole.range, None);
     let total = expected.len() as u64;
-    let part = c
-        .file_download(&id, Some((2, Some(5))))
-        .await
-        .unwrap()
-        .content()
-        .await
-        .unwrap();
+    let part = c.file_range(&id, Some((2, Some(5)))).await.unwrap();
     assert_eq!(part.bytes, expected[2..=5].to_vec());
     assert_eq!(part.range, Some((2, 5, total)));
-    let mut rest = c.file_download(&id, Some((10, None))).await.unwrap();
-    assert_eq!(rest.length, Some(total - 10));
-    let mut got = Vec::new();
-    while let Some(chunk) = rest.chunk().await.unwrap() {
-        got.extend(chunk);
-    }
-    assert_eq!(got, expected[10..].to_vec());
+    let rest = c.file_range(&id, Some((10, None))).await.unwrap();
+    assert_eq!(rest.bytes, expected[10..].to_vec());
+    assert_eq!(rest.range, Some((10, total - 1, total)));
 
-    // The Carbon who owns the device reads it; another Silicon can't see it.
+    // The Carbon who owns the device reads it, and so does the Silicon's custodian (alice too);
+    // another Silicon can't see it, nor can a Carbon with nothing to do with it.
+    assert_eq!(env.v2(&alice).file_content(&id).await.unwrap().bytes, expected);
     assert_eq!(
-        env.client
-            .authed(&alice, Some("acme"))
-            .file_content(&id)
-            .await
-            .unwrap()
-            .bytes,
-        expected
+        env.v2(&sous).file_content(&id).await.unwrap_err().code(),
+        ErrorCode::FileNotFound
     );
+    let bob = login(&env, "c:bob").await;
     assert_eq!(
-        env.client
-            .authed(&sous, Some("acme"))
-            .file_content(&id)
-            .await
-            .unwrap_err()
-            .code(),
+        env.v2(&bob).file_content(&id).await.unwrap_err().code(),
         ErrorCode::FileNotFound
     );
 
     // Headers, and a range past the end.
     let http = reqwest::Client::new();
-    let url = format!("{}/api/v1/files/{id}/content", env.base);
-    let resp = http
-        .get(&url)
-        .bearer_auth(&chef)
-        .header("X-Org-ID", "acme")
-        .send()
-        .await
-        .unwrap();
+    let url = format!("{}/api/v2/files/{id}/content", env.base);
+    let resp = http.get(&url).bearer_auth(&chef).send().await.unwrap();
     assert_eq!(resp.status(), 200);
     let h = |n: &str| resp.headers().get(n).unwrap().to_str().unwrap().to_owned();
     assert_eq!(h("content-length"), total.to_string());
@@ -1403,7 +1324,6 @@ async fn file_content_is_served_to_its_silicon_and_owner_with_ranges() {
     let resp = http
         .get(&url)
         .bearer_auth(&chef)
-        .header("X-Org-ID", "acme")
         .header("Range", format!("bytes={}-", total + 5))
         .send()
         .await
@@ -1429,8 +1349,8 @@ async fn file_content_is_served_to_its_silicon_and_owner_with_ranges() {
 #[tokio::test]
 async fn display_resolves_own_stored_files_into_compatible_device_attachments() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let source = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
         .await
         .run(&env.base);
@@ -1460,7 +1380,7 @@ async fn display_resolves_own_stored_files_into_compatible_device_attachments() 
         format!("file:{}", f.file_id),
         f.file_id.to_string(),
         f.url,
-        format!("{}/api/v1/files/{}/content", env.base, f.file_id),
+        format!("{}/api/v2/files/{}/content", env.base, f.file_id),
     ] {
         let result = c
             .run(&sid, &cmd("display", &["show", &format!("--image={value}")]))
@@ -1491,10 +1411,7 @@ async fn display_resolves_own_stored_files_into_compatible_device_attachments() 
         );
     }
     // A public URL is passed through unchanged, without fetching it from the service.
-    let private_url = format!(
-        "https://briefcase.example/org/acme/apps/extend/private/si:chef/{}.png",
-        f.file_id
-    );
+    let private_url = format!("https://briefcase.example/si:chef/apps/extend/shot-{}.png", f.file_id);
     sqlx::query("UPDATE extend.files SET url = $2 WHERE file_id = $1")
         .bind(f.file_id)
         .bind(&private_url)
@@ -1527,11 +1444,11 @@ async fn display_resolves_own_stored_files_into_compatible_device_attachments() 
 }
 
 #[tokio::test]
-async fn display_files_enforce_owner_team_expiry_type_and_attachment_limits_before_relay() {
+async fn display_files_enforce_owner_expiry_type_and_attachment_limits_before_relay() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let sous = login(&env.client, "si:sous").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let sous = login(&env, "si:sous").await;
+    let c = env.v2(&chef);
     let tv = Device::pair(&env, "c:alice", DeviceOs::AndroidTv, &["si:chef", "si:sous"])
         .await
         .run(&env.base);
@@ -1543,10 +1460,7 @@ async fn display_files_enforce_owner_team_expiry_type_and_attachment_limits_befo
         .to_string();
     let f = c.run(&sid, &cmd("screenshot", &[])).await.unwrap().files.remove(0);
     let display = cmd("display", &["show", "--image", &format!("file:{}", f.file_id)]);
-    let private_url = format!(
-        "https://briefcase.example/org/acme/apps/extend/private/si:chef/{}.png",
-        f.file_id
-    );
+    let private_url = format!("https://briefcase.example/si:chef/apps/extend/shot-{}.png", f.file_id);
     sqlx::query("UPDATE extend.files SET url = $2 WHERE file_id = $1")
         .bind(f.file_id)
         .bind(&private_url)
@@ -1554,7 +1468,7 @@ async fn display_files_enforce_owner_team_expiry_type_and_attachment_limits_befo
         .await
         .unwrap();
     c.end_session(&sid).await.unwrap();
-    let other = env.client.authed(&sous, Some("acme"));
+    let other = env.v2(&sous);
     let other_sid = other
         .start_session(&tv.id.parse().unwrap())
         .await
@@ -1592,19 +1506,11 @@ async fn display_files_enforce_owner_team_expiry_type_and_attachment_limits_befo
         .unwrap()
         .session_id
         .to_string();
-    sqlx::query("UPDATE extend.files SET team = 'another-team' WHERE file_id = $1")
+    sqlx::query("UPDATE extend.files SET self_destruct_at = now() - interval '1 second' WHERE file_id = $1")
         .bind(f.file_id)
         .execute(&env.pool)
         .await
         .unwrap();
-    assert_eq!(c.run(&sid, &display).await.unwrap_err().code(), ErrorCode::FileNotFound);
-    sqlx::query(
-        "UPDATE extend.files SET team = 'acme', self_destruct_at = now() - interval '1 second' WHERE file_id = $1",
-    )
-    .bind(f.file_id)
-    .execute(&env.pool)
-    .await
-    .unwrap();
     assert_eq!(c.run(&sid, &display).await.unwrap_err().code(), ErrorCode::FileNotFound);
     sqlx::query("UPDATE extend.files SET self_destruct_at = NULL, content_type = 'text/plain' WHERE file_id = $1")
         .bind(f.file_id)
@@ -1649,22 +1555,21 @@ async fn display_files_enforce_owner_team_expiry_type_and_attachment_limits_befo
 }
 
 #[tokio::test]
-async fn briefcase_display_reads_are_delegated_and_bounded_even_without_content_length() {
+async fn briefcase_reads_carry_a_proof_and_are_bounded_even_without_content_length() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let principal = env.state.authorize(&chef, Some("acme"), None).await.unwrap();
+    let chef = login(&env, "si:chef").await;
+    let principal = env.state.accounts.authenticate(&chef).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let app = axum::Router::new().route(
         "/api/v1/obo/files/read",
         axum::routing::post(
             |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| async move {
-                assert_eq!(
-                    headers["X-IAM-OBO-Access-Token"],
-                    "obo_local:briefcase:briefcase.files.read:si:chef"
-                );
-                assert!(!headers.contains_key("X-IAM-OBO-Access-Proof"));
-                assert_eq!(headers["X-Org-ID"], "acme");
+                let auth = headers["authorization"].to_str().unwrap().to_owned();
+                assert!(auth.starts_with("Proof sap_"), "{auth}");
+                for gone in ["x-iam-obo-access-token", "x-iam-obo-access-proof", "x-org-id"] {
+                    assert!(!headers.contains_key(gone), "{gone}");
+                }
                 assert!(body["entry_id"].as_str().unwrap().parse::<Uuid>().is_ok());
                 let chunks = futures::stream::iter([Ok::<_, std::io::Error>("123"), Ok("456")]);
                 ([("Content-Type", "image/png")], axum::body::Body::from_stream(chunks))
@@ -1672,19 +1577,36 @@ async fn briefcase_display_reads_are_delegated_and_bounded_even_without_content_
         ),
     );
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let files =
-        extend_service::files::BriefcaseFiles::new(base, "https://briefcase.example".into(), env.state.iam.clone());
+    let files = extend_service::files::BriefcaseFiles::new(
+        base,
+        "https://briefcase.example".into(),
+        "extend".into(),
+        env.state.proofs.clone(),
+    );
+    use extend_service::files::FileStore as _;
     assert_eq!(
-        files.read_bounded(&principal, Uuid::new_v4(), None, 6).await.unwrap(),
+        files.read_bounded(&principal, Uuid::new_v4(), 6).await.unwrap(),
         (b"123456".to_vec(), "image/png".into())
     );
     assert_eq!(
         files
-            .read_bounded(&principal, Uuid::new_v4(), None, 5)
+            .read_bounded(&principal, Uuid::new_v4(), 5)
             .await
             .unwrap_err()
             .code(),
         ErrorCode::InvalidInput
+    );
+    // A User verification proof for Briefcase, as si:chef, to read only; reused, not reissued.
+    let issued = env.state.accounts.local.as_deref().unwrap().issued_proofs();
+    let reads: Vec<_> = issued.iter().filter(|p| p["receiving_app"] == "briefcase").collect();
+    assert_eq!(reads.len(), 1, "{issued:?}");
+    assert_eq!(
+        (reads[0]["kind"].as_str(), reads[0]["user"].as_str()),
+        (Some("user_verification"), Some(uuid("si:chef").as_str()))
+    );
+    assert_eq!(
+        reads[0]["scopes"],
+        serde_json::json!(extend_service::proofs::BRIEFCASE_READ_SCOPES)
     );
     server.abort();
 }
@@ -1699,8 +1621,8 @@ async fn display_file_read_respects_timeout_and_stop_before_relay() {
     })
     .await;
     let files = files.unwrap();
-    let chef = login(&env.client, "si:chef").await;
-    let c = env.client.authed(&chef, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let c = env.v2(&chef);
     let tv = Device::pair(&env, "c:alice", DeviceOs::AndroidTv, &["si:chef"])
         .await
         .run(&env.base);
@@ -1756,16 +1678,15 @@ async fn sent_reasons(ting: &extend_service::ting::LocalNotifier) -> Vec<serde_j
 #[tokio::test]
 async fn each_new_reason_is_delivered_exactly_as_sent() {
     let env = start().await;
-    let chef = login(&env.client, "si:chef").await;
-    let sous = login(&env.client, "si:sous").await;
-    let s = env.client.authed(&sous, Some("acme"));
+    let chef = login(&env, "si:chef").await;
+    let sous = login(&env, "si:sous").await;
+    let s = env.v2(&sous);
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef", "si:sous", "si:line"])
         .await
         .run(&env.base);
     let id = device.id.clone();
     let chef_session = env
-        .client
-        .authed(&chef, Some("acme"))
+        .v2(&chef)
         .start_session(&id.parse().unwrap())
         .await
         .unwrap()
@@ -1811,9 +1732,8 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
     // An Idempotency-Key replays its own request and refuses another body.
     let post = |key: &str, reason: &str| {
         reqwest::Client::new()
-            .post(format!("{}/api/v1/devices/{id}/requests", env.base))
+            .post(format!("{}/api/v2/devices/{id}/requests", env.base))
             .bearer_auth(&sous)
-            .header("X-Org-ID", "acme")
             .header("Idempotency-Key", key)
             .json(&serde_json::json!({"type": "request", "data": {"reason": reason}}))
             .send()
@@ -1857,11 +1777,7 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
     assert!(mine.items.iter().all(|r| r.last_error.is_none()));
 
     // Someone else is using the device now: the same reason goes to them.
-    env.client
-        .authed(&chef, Some("acme"))
-        .end_session(&chef_session)
-        .await
-        .unwrap();
+    env.v2(&chef).end_session(&chef_session).await.unwrap();
     // Completing the original holder's session must not erase a successful keyed response.
     let r = post("core-gaps-key-1", "Keyed reason").await.unwrap();
     assert_eq!(r.status(), 201);
@@ -1871,13 +1787,8 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
         s.send_request(&id, "Nobody is using it").await.unwrap_err().code(),
         ErrorCode::DeviceNotInUse
     );
-    let line = login(&env.client, "si:line").await;
-    let line_session = env
-        .client
-        .authed(&line, Some("acme"))
-        .start_session(&id.parse().unwrap())
-        .await
-        .unwrap();
+    let line = login(&env, "si:line").await;
+    let line_session = env.v2(&line).start_session(&id.parse().unwrap()).await.unwrap();
     let to_line = s.send_request(&id, raw).await.unwrap();
     assert_ne!(to_line.request_id, first.request_id);
     assert_eq!(
@@ -1888,8 +1799,7 @@ async fn each_new_reason_is_delivered_exactly_as_sent() {
     assert_eq!(r.status(), 201);
     assert_eq!(r.headers()["idempotency-replayed"], "true");
     assert_eq!(r.json::<serde_json::Value>().await.unwrap(), keyed);
-    env.client
-        .authed(&line, Some("acme"))
+    env.v2(&line)
         .end_session(line_session.session_id.as_ref())
         .await
         .unwrap();

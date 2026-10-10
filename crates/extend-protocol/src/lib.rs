@@ -9,6 +9,7 @@
 #[macro_use]
 mod macros;
 
+pub mod account;
 pub mod capability;
 pub mod envelope;
 pub mod error;
@@ -22,15 +23,22 @@ pub use envelope::Envelope;
 pub use error::{ApiError, ErrorCode};
 pub use ids::{DeviceCredential, DeviceId, PairingCode, SessionId};
 
-/// The API major this build speaks.
+/// The API major of the device wire (`/api/v1/device…`, `/api/v1/enrollments…`, the WebSocket
+/// frames). Installed device apps speak it; it doesn't change with the account API.
 pub const API_VERSION: u32 = 1;
+/// 2.0: the API major of every account-facing route (`/api/v2/…`): Silicon Accounts access
+/// tokens as `Authorization: Bearer`, no Teams. `/api/v1` account routes answer 410.
+pub const ACCOUNT_API_VERSION: u32 = 2;
+/// 2.0: the app id Extend has in Silicon Accounts and Silicon Apps.
+pub const APP_ID: &str = "extend";
 /// Request header listing the majors a client supports.
 pub const SUPPORTED_VERSIONS_HEADER: &str = "Silicon-Extend-Supported-API-Versions";
 /// Response and request header carrying the agreed major.
 pub const API_VERSION_HEADER: &str = "Silicon-Extend-API-Version";
-/// Header selecting a test environment by its test application secret.
+/// 1.x only: the header that selected a Honeycomb test environment. A 2.0 service has no test
+/// environments and refuses a request that sends it.
 pub const TESTING_SECRET_HEADER: &str = "X-Testing-Application-Secret";
-/// IAM's wire name for the Team handle.
+/// 1.x only: the header that named a Team. A 2.0 service has no Teams and ignores it.
 pub const TEAM_HEADER: &str = "X-Org-ID";
 /// Seconds a pairing code stays valid.
 pub const PAIRING_CODE_TTL_S: i64 = 300;

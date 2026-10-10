@@ -64,8 +64,9 @@ use time::{Date, OffsetDateTime};
 
 use crate::error::AppError;
 
-/// Every API major whose routes this build mounts, oldest first.
-pub const SERVED: &[u32] = &[extend_protocol::API_VERSION];
+/// Every API major whose routes this build mounts, oldest first: 1 is the device wire installed
+/// apps speak (its account routes answer 410 since 4.0), 2 the account API (Silicon Accounts).
+pub const SERVED: &[u32] = &[extend_protocol::API_VERSION, extend_protocol::ACCOUNT_API_VERSION];
 /// Consecutive days without a request after which a deprecated major is sunset.
 pub const SUNSET_QUIET_DAYS: i64 = 7;
 /// The rule, as the compatibility matrix states it.
@@ -107,12 +108,11 @@ pub struct Compat {
 
 impl Compat {
     fn default_for(major: u32) -> Self {
-        // Client/CLI 2 removed model selection and 3 separates delegated permissions.
-        // Both retain API v1 for ordinary device and session requests.
-        let range = if major == 1 {
-            ">=1.0.0, <4.0.0".to_owned()
-        } else {
-            format!(">={major}.0.0, <{}.0.0", major + 1)
+        // Client/CLI 1–3 spoke API v1 (Silicon IAM sign-in); 4 speaks API v2 (Silicon Accounts).
+        let range = match major {
+            1 => ">=1.0.0, <4.0.0".to_owned(),
+            2 => ">=4.0.0, <5.0.0".to_owned(),
+            _ => format!(">={major}.0.0, <{}.0.0", major + 1),
         };
         Self {
             client_crate: range.clone(),
@@ -597,7 +597,7 @@ impl Registry {
             ),
         )
         .hint(format!(
-            "Update: `honeycomb install 'extend'` for the CLI, a newer silicon-extend-client for Rust code, or the \
+            "Update: `silicon-apps update extend` for the CLI, a newer silicon-extend-client for Rust code, or the \
              latest Extend app on the device.{}",
             if newer.is_empty() {
                 String::new()
@@ -701,6 +701,9 @@ mod tests {
         assert_eq!(p.served, vec![1]);
         assert_eq!(p.compat[&1].client_crate, ">=1.0.0, <4.0.0");
         assert_eq!(p.compat[&1].cli, ">=1.0.0, <4.0.0");
+        let both = Policy::parse(SERVED, env(&[])).unwrap();
+        assert_eq!(both.served, vec![1, 2]);
+        assert_eq!(both.compat[&2].client_crate, ">=4.0.0, <5.0.0");
         let p = Policy::parse(
             &[1, 2],
             env(&[
@@ -711,7 +714,7 @@ mod tests {
         .unwrap();
         assert_eq!(p.deprecated, BTreeSet::from([1]));
         assert_eq!(p.compat[&2].cli, ">=2.1.0, <3.0.0");
-        assert_eq!(p.compat[&2].client_crate, ">=2.0.0, <3.0.0");
+        assert_eq!(p.compat[&2].client_crate, ">=4.0.0, <5.0.0");
     }
 
     #[test]

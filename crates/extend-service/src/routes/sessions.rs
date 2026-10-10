@@ -2,8 +2,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{FromRequestParts, Path, Query, State};
-use axum::http::request::Parts;
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use base64::Engine as _;
@@ -14,7 +13,7 @@ use extend_protocol::model::{
 };
 use extend_protocol::{
     COMMAND_TIMEOUT_DEFAULT_MS, COMMAND_TIMEOUT_MAX_MS, COMMAND_TIMEOUT_MIN_MS, ErrorCode, SELF_DESTRUCT_DEFAULT_MIN,
-    SELF_DESTRUCT_MAX_MIN, SESSION_IDLE_S, SessionId, TAKEOVER_MAX_S, TEAM_HEADER,
+    SELF_DESTRUCT_MAX_MIN, SESSION_IDLE_S, SessionId, TAKEOVER_MAX_S,
 };
 use rand::Rng as _;
 use serde::Deserialize;
@@ -25,286 +24,24 @@ use super::{Body, decode_cursor, encode_cursor, hash_json, idempotent, limit, no
 use crate::db::World;
 use crate::domain::{self, Access, SESSION_COLUMNS, SessionRow};
 use crate::error::{AppError, AppResult};
-use crate::files::NewFile;
+use crate::files::{NewFile, Recipient};
 use crate::hub::SendError;
-use crate::iam::{Principal, TestingSelection};
-use crate::state::{AppState, Auth, Sel, Shared};
+use crate::state::{AppState, Auth, Shared};
 
-/// How long a Silicon whose access token IAM refused has to come back with a live login before
-/// its running sessions end as `silicon_logged_out`. An expired token is refreshed and retried by
-/// the CLI within seconds; a revoked one (a logout anywhere) never comes back.
-pub const LOGOUT_GRACE: Duration = Duration::from_secs(15);
-
-/// [`Auth`] for the session routes. When IAM refuses a Silicon that has running sessions, its
-/// sessions end too, so logging out or leaving the team ends access even when no IAM webhook
-/// arrives (TECHNICAL.md section 9):
-/// - an active login that no longer reaches the session's team (`not_a_team_member`), once IAM
-///   confirms the Silicon is no longer an active member, ends those sessions at once as
-///   `left_team`;
-/// - a login IAM no longer accepts (`token_expired`) ends every running session of that Silicon as
-///   `silicon_logged_out` after [`LOGOUT_GRACE`], unless the Silicon has used a live login since.
-pub struct SessionAuth(pub Auth);
-
-impl FromRequestParts<Shared> for SessionAuth {
-    type Rejection = AppError;
-    async fn from_request_parts(parts: &mut Parts, state: &Shared) -> AppResult<Self> {
-        match Auth::from_request_parts(parts, state).await {
-            Ok(auth) => Ok(Self(auth)),
-            Err(e) => Err(on_refused(state, parts, e).await),
-        }
-    }
-}
-
-fn bearer_token(parts: &Parts) -> Option<String> {
-    parts
-        .headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
-        .filter(|t| !t.is_empty())
-        .map(str::to_owned)
-}
-
-/// The Silicon a token belonged to, from the logins Extend saw it use in this world.
-async fn silicon_of(state: &AppState, world: &World, token: &str) -> Option<Principal> {
-    let from_sessions = state
-        .session_principals
-        .read()
-        .await
-        .iter()
-        .find(|((schema, _), (p, _))| schema == &world.schema && p.is_silicon() && p.token == token)
-        .map(|(_, (p, _))| p.clone());
-    match from_sessions {
-        Some(p) => Some(p),
-        None => {
-            state
-                .auth_cache
-                .latest(world.environment_id, |p| p.is_silicon() && p.token == token)
-                .await
-        }
-    }
-}
-
-async fn running_sessions(state: &AppState, world: &World, silicon: &str, team: Option<&str>) -> Vec<String> {
-    sqlx::query_as::<_, (String,)>(sql!(
-        "SELECT session_id FROM {} WHERE silicon_id = $1 AND ($2::text IS NULL OR team = $2) AND state <> 'ended' ORDER BY started_at",
-        world.t("sessions")
-    ))
-    .bind(silicon)
-    .bind(team)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .map(|(s,)| s)
-    .collect()
-}
-
-/// Ends a refused Silicon's sessions as [`SessionAuth`] describes, and returns the refusal
-/// (naming the sessions it ended).
-async fn on_refused(state: &Shared, parts: &mut Parts, err: AppError) -> AppError {
-    if !matches!(err.code(), ErrorCode::TokenExpired | ErrorCode::NotATeamMember) {
-        return err;
-    }
-    let Some(token) = bearer_token(parts) else {
-        return err;
+/// The `device_in_use` refusal a Silicon gets. The holder is named, as in 1.0, only when it is the
+/// caller itself, or runs through the same pair (the same Carbon gave both access) and is in the
+/// caller's custodian circle; otherwise nothing about it is said.
+pub async fn in_use_error(state: &AppState, d: &domain::DeviceRow, me: &str) -> AppError {
+    let named = match &d.in_use_silicon {
+        Some(h) if h == me => true,
+        Some(h) if d.held_here() && d.held_by_side() => state.accounts.directory.same_circle(me, h).await,
+        _ => false,
     };
-    // The world was selected before IAM refused, so this is answered from the selection cache.
-    let Ok(Sel { world, sel }) = Sel::from_request_parts(parts, state).await else {
-        return err;
-    };
-    let Some(silicon) = silicon_of(state, &world, &token).await else {
-        return err;
-    };
-    if err.code() == ErrorCode::NotATeamMember {
-        let Some(team) = parts
-            .headers
-            .get(TEAM_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(str::to_owned)
-        else {
-            return err;
-        };
-        left_team(state, &world, sel.as_ref(), silicon.id(), &team, err).await
-    } else {
-        if let Some(org) = silicon.team {
-            logged_out_later(state, world, sel, silicon.member.id, token, org).await;
-        }
-        err
-    }
-}
-
-/// IAM still accepts the Silicon's login but it no longer reaches `team`. Its sessions there end
-/// only when IAM definitely says it left; a missing reader or unclear answer ends nothing. Its
-/// grants are deleted only once a second reader confirms (crate::membership). A login approved
-/// for another Team still gets its original refusal, without ending an existing session.
-async fn left_team(
-    state: &Shared,
-    world: &World,
-    sel: Option<&TestingSelection>,
-    silicon: &str,
-    team: &str,
-    mut err: AppError,
-) -> AppError {
-    let running = running_sessions(state, world, silicon, Some(team)).await;
-    if running.is_empty() {
-        return err;
-    }
-    // IAM answers directory questions only for a signed-in member of the team.
-    let reader = crate::scheduler::latest_principal(state, world, None, team, |p| p.id() != silicon).await;
-    let answer = state
-        .iam
-        .membership(team, silicon, reader.as_ref().map(|(p, _)| p), sel)
-        .await;
-    if answer != crate::iam::Membership::Gone {
-        // A login's Team reach is not proof of membership loss. Active and unknown answers keep
-        // existing sessions and grants; the refused call itself remains refused.
-        return err;
-    }
-    if let Some((r, _)) = &reader {
-        let (st, world, silicon, team, first) = (
-            state.clone(),
-            world.clone(),
-            silicon.to_owned(),
-            team.to_owned(),
-            r.id().to_owned(),
-        );
-        tokio::spawn(async move {
-            let Some(_fence) = st.world_open(&world).await else {
-                return;
-            };
-            crate::membership::confirm_gone(&st, &world, &silicon, &team, &first).await;
-        });
-    }
-    let mut ended = Vec::new();
-    for sid in running {
-        match domain::end_session(state, world, &sid, EndReason::LeftTeam, &domain::system_member()).await {
-            Ok(Some(_)) => ended.push(sid),
-            Ok(None) => {}
-            Err(e) => {
-                tracing::error!(session_id = sid, error = %e, "ending a session after IAM refused its Silicon failed")
-            }
-        }
-    }
-    if !ended.is_empty() {
-        tracing::info!(world = %world.schema, silicon, team, sessions = ?ended, "IAM no longer lets the Silicon into the team; its sessions ended");
-        err.0.message.push_str(&format!(
-            " Its running session{} {} in {team} ended (left_team).",
-            if ended.len() == 1 { "" } else { "s" },
-            ended.join(", ")
-        ));
-    }
-    err
-}
-
-/// IAM refused the Silicon's access token. Checks back after [`LOGOUT_GRACE`]: if the Silicon has
-/// not used a live login since (a refresh after an ordinary expiry would have), it logged out, and
-/// its running sessions end.
-async fn logged_out_later(
-    state: &Shared,
-    world: World,
-    sel: Option<TestingSelection>,
-    silicon: String,
-    token: String,
-    org: String,
-) {
-    if running_sessions(state, &world, &silicon, Some(&org)).await.is_empty() {
-        return;
-    }
-    // One pending check per Silicon and world.
-    let key = format!("logout-check:{}:{silicon}:{org}", world.schema);
-    if state.rate_limit(key, 1, LOGOUT_GRACE, "logout checks").await.is_err() {
-        return;
-    }
-    let state = state.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(LOGOUT_GRACE).await;
-        match has_live_login(&state, &world, sel.as_ref(), &silicon, &token, &org).await {
-            Some(false) => {}
-            Some(true) => return,
-            None => {
-                tracing::warn!(world = %world.schema, silicon, "IAM could not say whether the Silicon still has a live login; its sessions are left running");
-                return;
-            }
-        }
-        for sid in running_sessions(&state, &world, &silicon, Some(&org)).await {
-            match domain::end_session(
-                &state,
-                &world,
-                &sid,
-                EndReason::SiliconLoggedOut,
-                &domain::system_member(),
-            )
-            .await
-            {
-                Ok(Some(_)) => {
-                    tracing::info!(world = %world.schema, silicon, session_id = sid, "IAM no longer accepts the Silicon's login; session ended")
-                }
-                Ok(None) => {}
-                Err(e) => tracing::error!(session_id = sid, error = %e, "ending a logged-out Silicon's session failed"),
-            }
-        }
-    });
-}
-
-/// Whether IAM accepts any login Extend has seen `silicon` use in this world, other than `refused`
-/// (`None` when IAM could not answer).
-async fn has_live_login(
-    state: &AppState,
-    world: &World,
-    sel: Option<&TestingSelection>,
-    silicon: &str,
-    refused: &str,
-    org: &str,
-) -> Option<bool> {
-    let mut tokens: Vec<String> = Vec::new();
-    if let Some(p) = state
-        .auth_cache
-        .latest(world.environment_id, |p| {
-            p.id() == silicon && p.team.as_deref() == Some(org) && p.token != refused
-        })
-        .await
-    {
-        tokens.push(p.token);
-    }
-    for ((schema, _), (p, _)) in state.session_principals.read().await.iter() {
-        if schema == &world.schema
-            && p.id() == silicon
-            && p.team.as_deref() == Some(org)
-            && p.token != refused
-            && !tokens.contains(&p.token)
-        {
-            tokens.push(p.token.clone());
-        }
-    }
-    let mut unsure = false;
-    for token in tokens {
-        match state.iam.authorize(&token, Some(org), sel).await {
-            Ok(_) => return Some(true),
-            Err(e)
-                if matches!(
-                    e.code(),
-                    ErrorCode::TokenExpired | ErrorCode::NotATeamMember | ErrorCode::Unauthorized
-                ) => {}
-            Err(_) => unsure = true,
-        }
-    }
-    (!unsure).then_some(false)
-}
-
-/// The `device_in_use` refusal a Silicon acting in `team` gets. The holder is named, as in 1.0,
-/// only when it is on the caller's side (same Team, given access through the same pair) or is the
-/// caller itself; otherwise nothing about it is said.
-pub fn in_use_error(d: &domain::DeviceRow, team: &str, me: &str) -> AppError {
-    let same_side = d.in_use_team.as_deref() == Some(team)
-        && (d.in_use_silicon.as_deref() == Some(me) || (d.held_here() && d.held_by_side(team)));
     let hint = format!(
-        "Ask for it with: extend --team {team} request send {} --reason \"<why, up to 300 characters>\"",
+        "Ask for it with: extend request send {} --reason \"<why, up to 300 characters>\"",
         d.device_id
     );
-    if !same_side {
+    if !named {
         return AppError::new(
             ErrorCode::DeviceInUse,
             format!(
@@ -322,23 +59,26 @@ pub fn in_use_error(d: &domain::DeviceRow, team: &str, me: &str) -> AppError {
                 .unwrap_or_default()
         })
         .unwrap_or_default();
+    let holder = match &d.in_use_silicon {
+        Some(h) => state.accounts.directory.public_id(h).await,
+        None => String::new(),
+    };
     AppError::new(
         ErrorCode::DeviceInUse,
         format!(
-            "Device {} ({}) is being used by {} in session {} since {since}. Only one Silicon can use a device at a time.",
+            "Device {} ({}) is being used by {holder} in session {} since {since}. Only one Silicon can use a device at a time.",
             d.device_id,
             d.name,
-            d.in_use_silicon.clone().unwrap_or_default(),
             d.in_use_session.clone().unwrap_or_default()
         ),
     )
     .hint(hint)
-    .details(serde_json::json!({"in_use": {"silicon_id": d.in_use_silicon, "session_id": d.in_use_session, "since": since}}))
+    .details(serde_json::json!({"in_use": {"silicon_id": holder, "silicon_uuid": d.in_use_silicon, "session_id": d.in_use_session, "since": since}}))
 }
 
 /// Another member of the device's lock group (its computer, or a device the computer carries) is
 /// in use by another side.
-pub fn group_in_use_error(d: &domain::DeviceRow, team: &str) -> AppError {
+pub fn group_in_use_error(d: &domain::DeviceRow) -> AppError {
     let message = match (&d.host_device_id, &d.host_name) {
         (Some(_), Some(host)) => format!(
             "{} pairs through {host}, and something on that computer is in use.",
@@ -348,7 +88,7 @@ pub fn group_in_use_error(d: &domain::DeviceRow, team: &str) -> AppError {
     };
     AppError::new(ErrorCode::DeviceInUse, message)
         .hint(format!(
-            "A computer and the devices it carries are used by one side at a time. Ask for it with: extend --team {team} request send {} --reason \"...\"",
+            "A computer and the devices it carries are used by one side at a time. Ask for it with: extend request send {} --reason \"...\"",
             d.device_id
         ))
         .details(serde_json::json!({"in_use": {"hidden": true}}))
@@ -422,223 +162,227 @@ async fn allocate_session_id(
 
 pub async fn start(
     State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
+    auth: Auth,
     headers: HeaderMap,
     Body(input): Body<SessionCreate>,
 ) -> AppResult<Response> {
     auth.require_silicon()?;
-    let team = auth.team()?.to_owned();
     let device_id = input.device_id.to_string();
     let d = domain::load_device(&state, &auth.world, &device_id)
         .await?
-        .ok_or_else(|| domain::device_not_found_in(&device_id, &team))?;
+        .ok_or_else(|| domain::device_not_found(&device_id))?;
     if domain::access_of(&state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
-        return Err(domain::device_not_found_in(&device_id, &team));
+        return Err(domain::device_not_found(&device_id));
     }
-    crate::membership::owner_active(
-        &state,
-        &auth.world,
-        &team,
-        &d.owner_id,
-        &d.name,
-        &auth.p,
-        auth.sel.as_ref(),
-    )
-    .await?;
+    auth.live(&state).await?;
     let hash = hash_json(&input);
     let world = auth.world.clone();
     let st = state.clone();
     let p = auth.p.clone();
-    let sel = auth.sel.clone();
     let isi = auth.isi.clone();
-    idempotent(&state, &auth.world, auth.p.id(), &format!("sessions:{team}"), &headers, &hash, || async move {
-        // Replay an already-created session before checking state changed by that creation.
-        let online = domain::is_online(&st, &world, &d).await;
-        if !online {
-            let seen = d
-                .last_seen_at
-                .map(|t| format!(" It was last seen {t}."))
-                .unwrap_or_default();
-            return Err(AppError::new(
-                ErrorCode::DeviceOffline,
-                format!("{} is offline, so it can't be used right now.{seen}", d.name),
-            )
-            .hint(offline_hint(&d, &team)));
-        }
-        if !d.is_ready() {
-            let left: Vec<String> = domain::setup_of(&st, &world, &d)
-                .await
-                .steps
-                .into_iter()
-                .filter(|s| s.status != extend_protocol::model::StepStatus::Done)
-                .map(|s| match s.error {
-                    Some(e) => format!("{} ({e})", s.title),
-                    None => s.title,
-                })
-                .collect();
-            return Err(AppError::new(
-                ErrorCode::DeviceNotReady,
-                format!("{} hasn't finished setup. Steps left: {}.", d.name, left.join("; ")),
-            )
-            .hint(format!(
-                "{} can finish them on the device; watch with `extend --team {team} device setup {device_id}`.",
-                d.owner_id
-            )));
-        }
-        if d.in_use_session.is_some() {
-            return Err(in_use_error(&d, &team, p.id()));
-        }
-        let mut tx = st.pool.begin().await?;
-        // The lock order: the whole lock group's instances first, so a revoke (which takes the
-        // instance first too) either sees this session or this start sees no grant.
-        let group = domain::lock_group(&mut *tx, &world, d.instance_id).await?;
-        domain::lock_instances(&mut tx, &world, &group.members).await?;
-        let granted: Option<(i32,)> = sqlx::query_as(sql!(
-            "SELECT 1 FROM {} a JOIN {} o ON o.device_id = a.device_id AND o.org_id = a.team
-             WHERE a.device_id = $1 AND a.team = $2 AND a.silicon_id = $3 AND o.removed_at IS NULL",
-            world.t("device_access"), world.t("device_organizations")
-        ))
-        .bind(&device_id)
-        .bind(&team)
-        .bind(p.id())
-        .fetch_optional(&mut *tx)
-        .await?;
-        let owner_gone: Option<(i32,)> = sqlx::query_as(sql!(
-            "SELECT 1 FROM {} WHERE member_id = $1 AND team = $2 AND state = 'gone'",
-            world.t("membership_checks")
-        ))
-        .bind(&d.owner_id)
-        .bind(&team)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if owner_gone.is_some() {
-            return Err(crate::membership::owner_gone(&d.owner_id, &d.name, &team));
-        }
-        if granted.is_none() {
-            return Err(AppError::new(
-                ErrorCode::NoAccess,
-                format!("{} has no access to {} ({device_id}) in {team}.", p.id(), d.name),
-            ));
-        }
-        // One side at a time across the lock group.
-        let holders: Vec<(Uuid, String, String)> = sqlx::query_as(sql!(
-            "SELECT l.instance_id, s.team, o.owner_id FROM {} l JOIN {} s ON s.session_id = l.session_id
+    idempotent(
+        &state,
+        &auth.world,
+        auth.p.uuid(),
+        "sessions",
+        &headers,
+        &hash,
+        || async move {
+            // Replay an already-created session before checking state changed by that creation.
+            let online = domain::is_online(&st, &world, &d).await;
+            if !online {
+                let seen = d
+                    .last_seen_at
+                    .map(|t| format!(" It was last seen {t}."))
+                    .unwrap_or_default();
+                return Err(AppError::new(
+                    ErrorCode::DeviceOffline,
+                    format!("{} is offline, so it can't be used right now.{seen}", d.name),
+                )
+                .hint(offline_hint(&d)));
+            }
+            if !d.is_ready() {
+                let left: Vec<String> = domain::setup_of(&st, &world, &d)
+                    .await
+                    .steps
+                    .into_iter()
+                    .filter(|s| s.status != extend_protocol::model::StepStatus::Done)
+                    .map(|s| match s.error {
+                        Some(e) => format!("{} ({e})", s.title),
+                        None => s.title,
+                    })
+                    .collect();
+                let owner = st.accounts.directory.public_id(&d.owner_id).await;
+                return Err(AppError::new(
+                    ErrorCode::DeviceNotReady,
+                    format!("{} hasn't finished setup. Steps left: {}.", d.name, left.join("; ")),
+                )
+                .hint(format!(
+                    "{owner} can finish them on the device; watch with `extend device setup {device_id}`."
+                )));
+            }
+            if d.in_use_session.is_some() {
+                return Err(in_use_error(&st, &d, p.uuid()).await);
+            }
+            let mut tx = st.pool.begin().await?;
+            // The lock order: the whole lock group's instances first, so a revoke (which takes the
+            // instance first too) either sees this session or this start sees no grant.
+            let group = domain::lock_group(&mut *tx, &world, d.instance_id).await?;
+            domain::lock_instances(&mut tx, &world, &group.members).await?;
+            let granted: Option<(i32,)> = sqlx::query_as(sql!(
+                "SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2",
+                world.t("device_access")
+            ))
+            .bind(&device_id)
+            .bind(p.uuid())
+            .fetch_optional(&mut *tx)
+            .await?;
+            if granted.is_none() {
+                return Err(AppError::new(
+                    ErrorCode::NoAccess,
+                    format!("{} has no access to {} ({device_id}).", p.public_id(), d.name),
+                ));
+            }
+            // One side at a time across the lock group.
+            let holders: Vec<(Uuid, String)> = sqlx::query_as(sql!(
+                "SELECT l.instance_id, o.owner_id FROM {} l JOIN {} s ON s.session_id = l.session_id
                JOIN {} o ON o.device_id = s.device_id WHERE l.instance_id = ANY($1)",
-            world.t("device_locks"),
-            world.t("sessions"),
-            world.t("devices")
-        ))
-        .bind(&group.members)
-        .fetch_all(&mut *tx)
-        .await?;
-        for (instance, h_team, h_carbon) in &holders {
-            if *instance == d.instance_id {
-                drop(tx);
-                let now = domain::load_device(&st, &world, &device_id).await?.ok_or_else(|| domain::device_not_found(&device_id))?;
-                return Err(in_use_error(&now, &team, p.id()));
+                world.t("device_locks"),
+                world.t("sessions"),
+                world.t("devices")
+            ))
+            .bind(&group.members)
+            .fetch_all(&mut *tx)
+            .await?;
+            for (instance, h_carbon) in &holders {
+                if *instance == d.instance_id {
+                    drop(tx);
+                    let now = domain::load_device(&st, &world, &device_id)
+                        .await?
+                        .ok_or_else(|| domain::device_not_found(&device_id))?;
+                    return Err(in_use_error(&st, &now, p.uuid()).await);
+                }
+                if *h_carbon != d.owner_id {
+                    drop(tx);
+                    return Err(group_in_use_error(&d));
+                }
             }
-            if *h_team != team || *h_carbon != d.owner_id {
-                drop(tx);
-                return Err(group_in_use_error(&d, &team));
-            }
-        }
-        let sid = allocate_session_id(&st, &world, &mut tx).await?;
-        let idle = OffsetDateTime::now_utc() + time::Duration::seconds(SESSION_IDLE_S);
-        sqlx::query(sql!(
-            "INSERT INTO {} (session_id, device_id, silicon_id, team, state, idle_ends_at) VALUES ($1, $2, $3, $4, 'active', $5)",
+            let sid = allocate_session_id(&st, &world, &mut tx).await?;
+            let idle = OffsetDateTime::now_utc() + time::Duration::seconds(SESSION_IDLE_S);
+            sqlx::query(sql!(
+            "INSERT INTO {} (session_id, device_id, silicon_id, state, idle_ends_at) VALUES ($1, $2, $3, 'active', $4)",
             world.t("sessions")
         ))
         .bind(&sid)
         .bind(&device_id)
-        .bind(p.id())
-        .bind(&team)
+        .bind(p.uuid())
         .bind(idle)
         .execute(&mut *tx)
         .await?;
-        let locked = sqlx::query(sql!(
-            "INSERT INTO {} (device_id, session_id, instance_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-            world.t("device_locks")
-        ))
-        .bind(&device_id)
-        .bind(&sid)
-        .bind(d.instance_id)
-        .execute(&mut *tx)
-        .await?;
-        if locked.rows_affected() == 0 {
-            drop(tx);
-            let now = domain::load_device(&st, &world, &device_id).await?.ok_or_else(|| domain::device_not_found(&device_id))?;
-            return Err(in_use_error(&now, &team, p.id()));
-        }
-        // A pair lasts while the physical device has activity, through any pair.
-        domain::bump_activity(&mut *tx, &world, d.instance_id).await?;
-        sqlx::query(sql!("UPDATE {} SET last_used_at = now() WHERE device_id = $1", world.t("devices")))
+            let locked = sqlx::query(sql!(
+                "INSERT INTO {} (device_id, session_id, instance_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                world.t("device_locks")
+            ))
+            .bind(&device_id)
+            .bind(&sid)
+            .bind(d.instance_id)
+            .execute(&mut *tx)
+            .await?;
+            if locked.rows_affected() == 0 {
+                drop(tx);
+                let now = domain::load_device(&st, &world, &device_id)
+                    .await?
+                    .ok_or_else(|| domain::device_not_found(&device_id))?;
+                return Err(in_use_error(&st, &now, p.uuid()).await);
+            }
+            // A pair lasts while the physical device has activity, through any pair.
+            domain::bump_activity(&mut *tx, &world, d.instance_id).await?;
+            sqlx::query(sql!(
+                "UPDATE {} SET last_used_at = now() WHERE device_id = $1",
+                world.t("devices")
+            ))
             .bind(&device_id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query(sql!(
-            "UPDATE {} SET last_used_at = now() WHERE device_id = $1 AND team = $2 AND silicon_id = $3",
-            world.t("device_access")
-        ))
-        .bind(&device_id)
-        .bind(&team)
-        .bind(p.id())
-        .execute(&mut *tx)
-        .await?;
-        let awake: Option<Option<bool>> = sqlx::query_scalar(sql!(
-            "SELECT awake FROM {} WHERE instance_id = $1",
-            world.t("device_instances")
-        ))
-        .bind(d.instance_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        st.session_principals.write().await.insert((world.schema.clone(), sid.clone()), (p.clone(), sel.clone()));
-        register_for_requests(&st, &world, &p, sel.as_ref());
-        // A Silicon that starts on a device whose awake state is unknown got what it asked for; on
-        // one known not to be awake, its wake request stays open (and "woken" still comes).
-        if awake.flatten().is_none() {
-            crate::wake::withdraw(
+            sqlx::query(sql!(
+                "UPDATE {} SET last_used_at = now() WHERE device_id = $1 AND silicon_id = $2",
+                world.t("device_access")
+            ))
+            .bind(&device_id)
+            .bind(p.uuid())
+            .execute(&mut *tx)
+            .await?;
+            let awake: Option<Option<bool>> = sqlx::query_scalar(sql!(
+                "SELECT awake FROM {} WHERE instance_id = $1",
+                world.t("device_instances")
+            ))
+            .bind(d.instance_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            st.session_principals
+                .write()
+                .await
+                .insert((world.schema.clone(), sid.clone()), p.clone());
+            // Ting delivers other Silicons' requests for this device to the Silicon now using it once
+            // it is enrolled (in the background; requests stay pending meanwhile).
+            crate::delivery::register_silicon(&st, &world, &p);
+            // A Silicon that starts on a device whose awake state is unknown got what it asked for; on
+            // one known not to be awake, its wake request stays open (and "woken" still comes).
+            if awake.flatten().is_none() {
+                crate::wake::withdraw(
+                    &st,
+                    &world,
+                    crate::wake::Withdraw::Session {
+                        instance: d.instance_id,
+                        silicon_id: p.uuid(),
+                    },
+                    extend_protocol::model::WakeEndReason::SessionStarted,
+                )
+                .await;
+            }
+            let row = domain::load_session(&st, &world, &sid)
+                .await?
+                .ok_or_else(|| AppError::internal("session vanished"))?;
+            let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
+            let side = domain::side_of(&st, &world, &d).await.ok();
+            st.hub
+                .send(
+                    &d.route(&world),
+                    ServiceFrame::SessionStarted {
+                        target,
+                        session_id: sid.parse().map_err(AppError::internal)?,
+                        silicon_id: p.public_id().to_owned(),
+                        since: row.started_at,
+                        side,
+                    },
+                )
+                .await;
+            // What devices in the group show of other sides' wake requests follows the new holder.
+            crate::wake::resend_group(&st, &world, d.instance_id).await;
+            domain::log(
                 &st,
                 &world,
-                crate::wake::Withdraw::Session { instance: d.instance_id, silicon_id: p.id(), team: &team },
-                extend_protocol::model::WakeEndReason::SessionStarted,
+                &device_id,
+                &p.actor(),
+                "session_started",
+                Some(&sid),
+                serde_json::json!({"isi": isi}),
             )
             .await;
-        }
-        let row = domain::load_session(&st, &world, &sid).await?.ok_or_else(|| AppError::internal("session vanished"))?;
-        let target = d.host_device_id.as_ref().and_then(|_| d.device_id.parse().ok());
-        let side = domain::side_of(&st, &world, &d, &team).await.ok();
-        st.hub
-            .send(
-                &d.route(&world),
-                ServiceFrame::SessionStarted {
-                    target,
-                    session_id: sid.parse().map_err(AppError::internal)?,
-                    silicon_id: p.id().to_owned(),
-                    since: row.started_at,
-                    side,
-                },
-            )
-            .await;
-        // What devices in the group show of other sides' wake requests follows the new holder.
-        crate::wake::resend_group(&st, &world, d.instance_id).await;
-        domain::log_in(&st, &world, &device_id, &p.member, "session_started", Some(&sid), Some(&team), serde_json::json!({"isi": isi})).await;
-        tracing::info!(world = %world.schema, session_id = %sid, device_id, silicon = p.id(), "session started");
-        Ok((StatusCode::CREATED, "session", serde_json::to_value(row.view()).map_err(AppError::internal)?))
-    })
+            tracing::info!(session_id = %sid, device_id, silicon = p.uuid(), "session started");
+            Ok((
+                StatusCode::CREATED,
+                "session",
+                serde_json::to_value(row.view_for(&st).await).map_err(AppError::internal)?,
+            ))
+        },
+    )
     .await
 }
 
-/// Lets Ting deliver other Silicons' requests for this device to the Silicon now using it. Ting
-/// only delivers an app's notifications to recipients that registered the app with their own
-/// login, and a session start is where Extend holds that login. Runs in the background: a failure
-/// is logged and the session goes on (requests stay pending and are retried).
-fn register_for_requests(state: &Shared, world: &World, silicon: &Principal, sel: Option<&TestingSelection>) {
-    crate::delivery::register_silicon(state, world, silicon, sel);
-}
-
 /// Why a device may be offline, and, when it last reported itself not awake, the wake hint.
-fn offline_hint(d: &domain::DeviceRow, team: &str) -> String {
+fn offline_hint(d: &domain::DeviceRow) -> String {
     let base = match d.os() {
         extend_protocol::DeviceOs::Android => "Usual causes: no Wi-Fi, the Extend app was stopped, or battery optimisation paused it. Ask the device's Carbon to open the Extend app.".to_owned(),
         extend_protocol::DeviceOs::AndroidTv => "Usual causes: the TV is off or asleep, or not on the network. Ask the device's Carbon to open Silicon Extend TV.".to_owned(),
@@ -647,7 +391,7 @@ fn offline_hint(d: &domain::DeviceRow, team: &str) -> String {
         }
         _ => "It pairs through a computer: that computer must be online and on the same network as this device.".to_owned(),
     };
-    match crate::wake::hint(d, false, team) {
+    match crate::wake::hint(d, false) {
         Some(h) => format!("{base} {h}"),
         None => base,
     }
@@ -659,30 +403,33 @@ pub struct ListQuery {
     state: Option<String>,
     limit: Option<i64>,
     cursor: Option<String>,
+    /// A Carbon's view of a Silicon they look after (`si:` id or uuid).
+    silicon: Option<String>,
 }
 
-pub async fn list(
-    State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
-    Query(q): Query<ListQuery>,
-) -> AppResult<Response> {
-    // A Silicon sees its own sessions in the Team it acts in; a Carbon, the sessions through
-    // their pairs in every Team.
-    let team = Some(auth.team()?.to_owned());
+pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
+    // A Silicon sees its own sessions; a Carbon, the sessions through their pairs, or, with
+    // ?silicon=, those of a Silicon they look after.
     let lim = limit(q.limit)?;
     let before = q.cursor.as_deref().map(decode_cursor).transpose()?;
-    let who = if auth.p.is_silicon() {
-        format!(
-            "s.silicon_id = $2 AND EXISTS (SELECT 1 FROM {} o JOIN {} a ON a.device_id=o.device_id AND a.team=o.org_id WHERE o.device_id=s.device_id AND o.org_id=$1 AND o.removed_at IS NULL AND a.silicon_id=$2)",
-            auth.world.t("device_organizations"),
-            auth.world.t("device_access")
-        )
-    } else {
-        format!(
-            "EXISTS (SELECT 1 FROM {} d JOIN {} o ON o.device_id = d.device_id WHERE d.device_id = s.device_id AND d.owner_id = $2 AND o.org_id = $1 AND o.removed_at IS NULL)",
-            auth.world.t("devices"),
-            auth.world.t("device_organizations")
-        )
+    let (who, subject) = match (&q.silicon, auth.p.is_silicon()) {
+        (None, true) => ("s.silicon_id = $1".to_owned(), auth.p.uuid().to_owned()),
+        (None, false) => (
+            format!(
+                "EXISTS (SELECT 1 FROM {} d WHERE d.device_id = s.device_id AND d.owner_id = $1)",
+                auth.world.t("devices")
+            ),
+            auth.p.uuid().to_owned(),
+        ),
+        (Some(silicon), false) => (
+            "s.silicon_id = $1".to_owned(),
+            super::silicons::looked_after(&state, &auth, silicon).await?.uuid,
+        ),
+        (Some(_), true) => {
+            return Err(AppError::invalid(
+                "A Silicon lists its own sessions; leave out ?silicon=.",
+            ));
+        }
     };
     let state_filter = match q.state.as_deref() {
         None => None,
@@ -694,16 +441,15 @@ pub async fn list(
         }
     };
     let rows: Vec<SessionRow> = sqlx::query_as(sql!(
-        "SELECT {} FROM {} s WHERE ($1::text IS NULL OR s.team = $1) AND {who}
-           AND ($3::text IS NULL OR s.device_id = $3) AND ($4::text IS NULL OR s.state = $4)
-           AND ($5::text IS NULL OR (s.started_at, s.session_id) < ((SELECT started_at FROM {} WHERE session_id = $5), $5))
-         ORDER BY s.started_at DESC, s.session_id DESC LIMIT $6",
+        "SELECT {} FROM {} s WHERE {who}
+           AND ($2::text IS NULL OR s.device_id = $2) AND ($3::text IS NULL OR s.state = $3)
+           AND ($4::text IS NULL OR (s.started_at, s.session_id) < ((SELECT started_at FROM {} WHERE session_id = $4), $4))
+         ORDER BY s.started_at DESC, s.session_id DESC LIMIT $5",
         SESSION_COLUMNS.split(", ").map(|c| format!("s.{c}")).collect::<Vec<_>>().join(", "),
         auth.world.t("sessions"),
         auth.world.t("sessions"),
     ))
-    .bind(&team)
-    .bind(auth.p.id())
+    .bind(&subject)
     .bind(&q.device_id)
     .bind(&state_filter)
     .bind(&before)
@@ -711,17 +457,32 @@ pub async fn list(
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > lim;
-    let items: Vec<_> = rows.iter().take(lim as usize).map(SessionRow::view).collect();
+    let mut items = Vec::new();
+    for r in rows.iter().take(lim as usize) {
+        items.push(r.view_for(&state).await);
+    }
     let next = more.then(|| encode_cursor(&items.last().map(|s| s.session_id.to_string()).unwrap_or_default()));
     Ok(ok("sessions", serde_json::json!({"items": items, "next_cursor": next})))
 }
 
-/// Loads a session the caller may see: its Silicon, or the Carbon who owns its device.
+/// Who may see a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seer {
+    /// Its Silicon.
+    Silicon,
+    /// The Carbon who paired the device it runs on.
+    Owner,
+    /// The custodian of its Silicon (sees it and can end it; never acts as the Silicon).
+    Custodian,
+}
+
+/// Loads a session the caller may see: its Silicon (while it has access), the Carbon who owns
+/// its device, or its Silicon's custodian.
 async fn visible_session(
     state: &AppState,
     auth: &Auth,
     session_id: &str,
-) -> AppResult<(SessionRow, domain::DeviceRow)> {
+) -> AppResult<(SessionRow, domain::DeviceRow, Seer)> {
     if session_id.parse::<SessionId>().is_err() {
         return Err(AppError::invalid(format!(
             "{session_id:?} is not a session id; session ids are 3 or more lowercase hexadecimal characters, like a3f."
@@ -742,68 +503,77 @@ async fn visible_session(
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(not_found)?;
-    // Its Silicon or configuring Carbon, always within the session's organization.
-    let mine = auth.p.is_silicon() && s.silicon_id == auth.p.id() && auth.p.team.as_deref() == Some(s.team.as_str());
-    let owner = d.is_owner(&auth.p) && auth.p.team.as_deref() == Some(s.team.as_str());
-    let allowed = if owner {
-        // An owner keeps the same organization's historical activity/session links after unbinding.
-        crate::organizations::visibility(state, &auth.world, &d.device_id, &s.team, true)
-            .await?
-            .is_some()
+    let seer = if d.is_owner(&auth.p) {
+        Some(Seer::Owner)
+    } else if auth.p.is_silicon() && s.silicon_id == auth.p.uuid() {
+        (domain::access_of(state, &auth.world, &d, &auth.p).await? == Some(Access::Silicon)).then_some(Seer::Silicon)
+    } else if auth.p.is_carbon()
+        && state
+            .accounts
+            .directory
+            .is_custodian(auth.p.uuid(), &s.silicon_id)
+            .await
+    {
+        Some(Seer::Custodian)
     } else {
-        mine && domain::access_of(state, &auth.world, &d, &auth.p).await? == Some(Access::Silicon)
+        None
     };
-    if !allowed {
-        return Err(not_found());
-    }
-    Ok((s, d))
+    let seer = seer.ok_or_else(not_found)?;
+    Ok((s, d, seer))
 }
 
-pub async fn get(
-    State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
-    Path(session_id): Path<String>,
-) -> AppResult<Response> {
-    let (s, d) = visible_session(&state, &auth, &session_id).await?;
-    let access = if d.is_owner(&auth.p) {
-        Access::Owner
-    } else {
-        Access::Silicon
+fn not_session_owner(s: &SessionRow, shown: &str) -> AppError {
+    AppError::new(
+        ErrorCode::NotSessionOwner,
+        format!("Session {} belongs to {shown}.", s.session_id),
+    )
+    .hint("The device's Carbon stops a session with `extend device stop <device_id>`.")
+}
+
+pub async fn get(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>) -> AppResult<Response> {
+    let (s, d, seer) = visible_session(&state, &auth, &session_id).await?;
+    let mut view = s.view_for(&state).await;
+    let access = match seer {
+        Seer::Owner => Some(Access::Owner),
+        Seer::Silicon => Some(Access::Silicon),
+        Seer::Custodian => None,
     };
-    let device = domain::device_view(&state, &auth.world, &d, domain::Viewer::of(access, &auth.p), true).await;
-    let mut view = s.view();
-    view.capabilities = device.capabilities.clone();
-    view.commands = device.commands.clone();
-    view.device = Some(Box::new(device));
+    if let Some(access) = access {
+        let device = domain::device_view(&state, &auth.world, &d, domain::Viewer::of(access, &auth.p), true).await;
+        view.capabilities = device.capabilities.clone();
+        view.commands = device.commands.clone();
+        view.device = Some(Box::new(device));
+    }
     Ok(ok("session", view))
 }
 
-pub async fn end(
-    State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
-    Path(session_id): Path<String>,
-) -> AppResult<Response> {
-    let (s, _) = visible_session(&state, &auth, &session_id).await?;
-    if s.silicon_id != auth.p.id() {
-        return Err(AppError::new(
-            ErrorCode::NotSessionOwner,
-            format!("Session {session_id} belongs to {}.", s.silicon_id),
-        )
-        .hint("The device's Carbon stops a session with `extend device stop <device_id>`."));
-    }
-    let row = match domain::end_session(
-        &state,
-        &auth.world,
-        &session_id,
-        EndReason::EndedBySilicon,
-        &auth.p.member,
-    )
-    .await?
-    {
+/// Ends a session: its Silicon ends its own, and a Silicon's custodian can end it for them.
+pub async fn end(State(state): State<Shared>, auth: Auth, Path(session_id): Path<String>) -> AppResult<Response> {
+    let (s, _, seer) = visible_session(&state, &auth, &session_id).await?;
+    // The device's Carbon who is also the Silicon's custodian ends it as its custodian.
+    let custodian = seer == Seer::Custodian
+        || (seer == Seer::Owner
+            && state
+                .accounts
+                .directory
+                .is_custodian(auth.p.uuid(), &s.silicon_id)
+                .await);
+    let (reason, extra) = match seer {
+        Seer::Silicon => (EndReason::EndedBySilicon, serde_json::Value::Null),
+        _ if custodian => (
+            EndReason::StoppedByCarbon,
+            serde_json::json!({"stopped_by": "custodian"}),
+        ),
+        _ => {
+            let shown = state.accounts.directory.public_id(&s.silicon_id).await;
+            return Err(not_session_owner(&s, &shown));
+        }
+    };
+    let row = match domain::end_session_with(&state, &auth.world, &session_id, reason, &auth.p.actor(), extra).await? {
         Some(r) => r,
         None => s,
     };
-    Ok(ok("session", row.view()))
+    Ok(ok("session", row.view_for(&state).await))
 }
 
 fn takeover_of(s: &SessionRow) -> Option<Takeover> {
@@ -812,17 +582,16 @@ fn takeover_of(s: &SessionRow) -> Option<Takeover> {
 
 pub async fn takeover_start(
     State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
+    auth: Auth,
     Path(session_id): Path<String>,
     Body(input): Body<TakeoverCreate>,
 ) -> AppResult<Response> {
-    let (s, d) = visible_session(&state, &auth, &session_id).await?;
-    if s.silicon_id != auth.p.id() {
-        return Err(AppError::new(
-            ErrorCode::NotSessionOwner,
-            format!("Session {session_id} belongs to {}.", s.silicon_id),
-        ));
+    let (s, d, seer) = visible_session(&state, &auth, &session_id).await?;
+    if seer != Seer::Silicon {
+        let shown = state.accounts.directory.public_id(&s.silicon_id).await;
+        return Err(not_session_owner(&s, &shown));
     }
+    auth.live(&state).await?;
     match s.state.as_str() {
         "ended" => return Err(session_ended(&s)),
         "paused" => {
@@ -875,7 +644,7 @@ pub async fn takeover_start(
         &state,
         &auth.world,
         &d.device_id,
-        &auth.p.member,
+        &auth.p.actor(),
         "takeover_started",
         Some(&session_id),
         serde_json::json!({"reason": reason}),
@@ -886,10 +655,10 @@ pub async fn takeover_start(
 
 pub async fn takeover_get(
     State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
+    auth: Auth,
     Path(session_id): Path<String>,
 ) -> AppResult<Response> {
-    let (s, _) = visible_session(&state, &auth, &session_id).await?;
+    let (s, _, _) = visible_session(&state, &auth, &session_id).await?;
     Ok(ok("takeover", if s.state == "paused" { takeover_of(&s) } else { None }))
 }
 
@@ -940,17 +709,15 @@ pub async fn release(
 
 pub async fn takeover_release(
     State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
+    auth: Auth,
     Path(session_id): Path<String>,
 ) -> AppResult<Response> {
-    let (s, d) = visible_session(&state, &auth, &session_id).await?;
-    if s.silicon_id != auth.p.id() && !d.is_owner(&auth.p) {
-        return Err(AppError::new(
-            ErrorCode::NotSessionOwner,
-            format!("Session {session_id} belongs to {}.", s.silicon_id),
-        ));
+    let (s, _, seer) = visible_session(&state, &auth, &session_id).await?;
+    if seer == Seer::Custodian {
+        let shown = state.accounts.directory.public_id(&s.silicon_id).await;
+        return Err(not_session_owner(&s, &shown));
     }
-    if !release(&state, &auth.world, &session_id, &auth.p.member).await? {
+    if !release(&state, &auth.world, &session_id, &auth.p.actor()).await? {
         return Err(AppError::new(
             ErrorCode::Conflict,
             "No takeover is in progress in this session.",
@@ -1033,14 +800,15 @@ fn check_args(req: &CommandRequest) -> AppResult<&'static capability::CommandSpe
 }
 
 /// Refuses a command in a session that ended or is paused for a takeover.
-fn refuse_unless_active(s: &SessionRow, d: &domain::DeviceRow) -> AppResult<()> {
+async fn refuse_unless_active(state: &AppState, s: &SessionRow, d: &domain::DeviceRow) -> AppResult<()> {
     match s.state.as_str() {
         "ended" => Err(session_ended(s)),
         "paused" => {
             let reason = takeover_of(s).map(|t| t.reason).unwrap_or_default();
+            let owner = state.accounts.directory.public_id(&d.owner_id).await;
             Err(AppError::new(
                 ErrorCode::SessionPaused,
-                format!("The session is paused while {} uses the device: {reason}", d.owner_id),
+                format!("The session is paused while {owner} uses the device: {reason}"),
             )
             .hint("Wait for them to tap Done, or run `extend takeover release` if you started it and no longer need them."))
         }
@@ -1048,23 +816,22 @@ fn refuse_unless_active(s: &SessionRow, d: &domain::DeviceRow) -> AppResult<()> 
     }
 }
 
-/// Checks current grant, membership and session ownership before a device command.
+/// Checks the sign-in, the current grant and session ownership before a device command.
 async fn authorized_session(
     state: &Shared,
     auth: &Auth,
     session_id: &str,
 ) -> AppResult<(SessionRow, domain::DeviceRow)> {
     auth.require_silicon()?;
-    let (s, d) = visible_session(state, auth, session_id).await?;
-    if s.silicon_id != auth.p.id() {
-        return Err(AppError::new(
-            ErrorCode::NotSessionOwner,
-            format!("Session {session_id} belongs to {}.", s.silicon_id),
-        ));
+    let (s, d, seer) = visible_session(state, auth, session_id).await?;
+    if seer != Seer::Silicon {
+        let shown = state.accounts.directory.public_id(&s.silicon_id).await;
+        return Err(not_session_owner(&s, &shown));
     }
-    refuse_unless_active(&s, &d)?;
-    // Access is re-checked on every command, not only at session start: the grant on the
-    // session's pair in the session's Team, and that the Carbon who gave it is still in that Team.
+    refuse_unless_active(state, &s, &d).await?;
+    // A sign-out anywhere ends access at once, even in the middle of a session.
+    auth.live(state).await?;
+    // Access is re-checked on every command, not only at session start.
     if domain::access_of(state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
         domain::end_session(
             state,
@@ -1079,23 +846,12 @@ async fn authorized_session(
             format!("Your access to {} was removed; session {session_id} has ended.", d.name),
         ));
     }
-    // When the Carbon who gave access left the Team, the refusal comes after the session ended.
-    crate::membership::owner_active(
-        state,
-        &auth.world,
-        &s.team,
-        &d.owner_id,
-        &d.name,
-        &auth.p,
-        auth.sel.as_ref(),
-    )
-    .await?;
     Ok((s, d))
 }
 
 pub async fn command(
     State(state): State<Shared>,
-    SessionAuth(auth): SessionAuth,
+    auth: Auth,
     Path(session_id): Path<String>,
     headers: HeaderMap,
     Body(req): Body<CommandRequest>,
@@ -1105,11 +861,10 @@ pub async fn command(
     let online = domain::is_online(&state, &auth.world, &d).await;
     if !online {
         return Err(
-            AppError::new(ErrorCode::DeviceOffline, format!("{} is offline right now.", d.name))
-                .hint(offline_hint(&d, &s.team)),
+            AppError::new(ErrorCode::DeviceOffline, format!("{} is offline right now.", d.name)).hint(offline_hint(&d)),
         );
     }
-    let wake_hint = crate::wake::hint(&d, online, &s.team);
+    let wake_hint = crate::wake::hint(&d, online);
     let caps = d.capabilities();
     let required = d.command_requirements(spec);
     if !required.iter().any(|c| caps.contains(c)) {
@@ -1124,8 +879,8 @@ pub async fn command(
             })
             .collect();
         let mut hint = format!(
-            "See what works with `extend --team {} device show {}` or `extend --help` while connected.",
-            s.team, d.device_id
+            "See what works with `extend device show {}` or `extend --help` while connected.",
+            d.device_id
         );
         if let Some(w) = &wake_hint {
             hint = format!("{w} {hint}");
@@ -1179,7 +934,7 @@ pub async fn command(
     let now = domain::load_session(&state, &auth.world, &session_id)
         .await?
         .unwrap_or_else(|| s.clone());
-    refuse_unless_active(&now, &d)?;
+    refuse_unless_active(&state, &now, &d).await?;
     let mut device_req = req.clone();
     let resolving_at = std::time::Instant::now();
     tokio::time::timeout(
@@ -1205,12 +960,13 @@ pub async fn command(
         let current = domain::load_session(&state, &auth.world, &session_id)
             .await?
             .unwrap_or_else(|| now.clone());
-        refuse_unless_active(&current, &d)?;
+        refuse_unless_active(&state, &current, &d).await?;
     }
-    state.session_principals.write().await.insert(
-        (auth.world.schema.clone(), session_id.clone()),
-        (auth.p.clone(), auth.sel.clone()),
-    );
+    state
+        .session_principals
+        .write()
+        .await
+        .insert((auth.world.schema.clone(), session_id.clone()), auth.p.clone());
 
     let command_id = Uuid::now_v7();
     let upload_ids: Vec<Uuid> = (0..4).map(|_| Uuid::now_v7()).collect();
@@ -1273,11 +1029,10 @@ pub async fn command(
         let world = auth.world.clone();
         let device_id = d.device_id.clone();
         let sid = session_id.clone();
-        let who = auth.p.member.clone();
+        let who = auth.p.actor();
         let args = redacted.clone();
         let cmd = spec.name.to_owned();
         let isi = auth.isi.clone();
-        let team = s.team.clone();
         let instance = d.instance_id;
         async move {
             let mut details = serde_json::json!({"duration_ms": duration_ms, "error": error, "isi": isi});
@@ -1285,8 +1040,8 @@ pub async fn command(
                 details["warnings"] = serde_json::json!(warnings);
             }
             let _ = sqlx::query(sql!(
-                "INSERT INTO {} (id, device_id, actor_kind, actor_id, action, session_id, command, args, outcome, files, details, team)
-                 VALUES ($1, $2, 'silicon', $3, 'command', $4, $5, $6, $7, $8, $9, $10)",
+                "INSERT INTO {} (id, device_id, actor_kind, actor_id, action, session_id, command, args, outcome, files, details)
+                 VALUES ($1, $2, 'silicon', $3, 'command', $4, $5, $6, $7, $8, $9)",
                 world.t("activity")
             ))
             .bind(command_id)
@@ -1298,7 +1053,6 @@ pub async fn command(
             .bind(outcome_word)
             .bind(serde_json::to_value(&files).unwrap_or_default())
             .bind(details)
-            .bind(&team)
             .execute(&st.pool)
             .await;
             let idle = OffsetDateTime::now_utc() + time::Duration::seconds(SESSION_IDLE_S);
@@ -1368,7 +1122,7 @@ pub async fn command(
                             d.name, spec.name
                         ),
                     )
-                    .hint(offline_hint(&d, &s.team)));
+                    .hint(offline_hint(&d)));
                 }
             }
         }
@@ -1378,6 +1132,11 @@ pub async fn command(
     // stored (or shared with the device's Carbon) is reported in `warnings`, never dropped quietly.
     let mut files = Vec::new();
     let mut warnings = Vec::new();
+    let owner_id = if outcome.files.is_empty() {
+        String::new()
+    } else {
+        state.accounts.directory.public_id(&d.owner_id).await
+    };
     for f in &outcome.files {
         if !upload_ids.contains(&f.upload_id) {
             tracing::warn!(upload_id = %f.upload_id, name = f.name, "device reported a file under an upload id this command did not issue");
@@ -1409,9 +1168,11 @@ pub async fn command(
                     name: &f.name,
                     content_type: &f.content_type,
                     bytes,
-                    owner_carbon: &d.owner_id,
+                    owner_carbon: Recipient {
+                        uuid: &d.owner_id,
+                        id: &owner_id,
+                    },
                 },
-                auth.sel.as_ref(),
             )
             .await;
         let stored = match stored {
@@ -1429,23 +1190,22 @@ pub async fn command(
         };
         if let Some(why) = &stored.share_error {
             warnings.push(format!(
-                "{} is stored, but not shared with {}, so they can't open it in Briefcase yet: {why}",
-                f.name, d.owner_id
+                "{} is stored, but not shared with {owner_id}, so they can't open it in Briefcase yet: {why}",
+                f.name
             ));
         }
         let self_destruct_at =
             (!req.permanent).then(|| OffsetDateTime::now_utc() + time::Duration::minutes(i64::from(self_destruct)));
         let recorded = sqlx::query(sql!(
-            "INSERT INTO {} (file_id, team, device_id, session_id, command_id, created_by, shared_with, name, kind, content_type, size_bytes, url, self_destruct_at, permanent)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO {} (file_id, device_id, session_id, command_id, created_by, shared_with, name, kind, content_type, size_bytes, url, self_destruct_at, permanent)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
             auth.world.t("files")
         ))
         .bind(stored.file_id)
-        .bind(&s.team)
         .bind(&d.device_id)
         .bind(&session_id)
         .bind(command_id)
-        .bind(auth.p.id())
+        .bind(auth.p.uuid())
         .bind(&stored.shared_with)
         .bind(&f.name)
         .bind(f.kind.as_str())
@@ -1477,10 +1237,12 @@ pub async fn command(
             session_id: s.session_id.parse().ok(),
             device_id: d.device_id.parse().ok(),
             command_id: Some(command_id),
-            created_by: Some(auth.p.id().to_owned()),
-            shared_with: stored.shared_with,
+            created_by: Some(auth.p.public_id().to_owned()),
+            shared_with: stored.shared_with.as_ref().map(|_| owner_id.clone()),
             created_at: Some(OffsetDateTime::now_utc()),
-            team: Some(s.team.clone()),
+            team: None,
+            created_by_uuid: Some(auth.p.uuid().to_owned()),
+            shared_with_uuid: stored.shared_with.clone(),
         });
     }
     let _ = FileKind::Other;
@@ -1495,7 +1257,7 @@ pub async fn command(
         crate::telemetry::record(
             &state,
             &auth.world,
-            Some(auth.p.id()),
+            Some(auth.p.uuid()),
             serde_json::json!({
                 "source": "service", "event": "command", "step": "session.command.relay", "success": outcome.ok,
                 "duration_ms": duration_ms, "command": spec.name, "device_os": d.os().as_str(),
@@ -1578,7 +1340,7 @@ fn ended_mid_command(
     let reason = ended.and_then(|s| s.end_reason.as_deref()).and_then(EndReason::parse);
     let why = match (ended, reason) {
         (_, Some(r)) => r.explain(),
-        (None, None) => "its test environment was cleaned or removed",
+        (None, None) => "its record is gone",
         (Some(_), None) => "unknown reason",
     };
     let device_id = &d.device_id;
@@ -1587,23 +1349,20 @@ fn ended_mid_command(
             "{} is no longer paired. See the devices you can use with `extend device ls`.",
             d.name
         ),
-        Some(EndReason::LeftTeam) => format!(
-            "You, or {} who owns the device, are no longer an active member of the team in Silicon IAM. \
-             A Team admin can add the member back; then sign in again with `extend login <slt>`.",
-            d.owner_id
-        ),
-        Some(EndReason::AccessRemoved) => format!(
-            "{} took your access away, or signed out of Extend (which ends the sessions of the Silicons they gave access to). \
-             See whether you still have access with `extend device ls`; if not, ask them to grant it again.",
-            d.owner_id
-        ),
+        Some(EndReason::AccessRemoved) => {
+            "The Carbon who paired the device took your access away, or signed out of Extend \
+             (which ends the sessions of the Silicons they gave access to). See whether you still have access with \
+             `extend device ls`; if not, ask them to grant it again."
+                .to_owned()
+        }
         // Any Carbon who paired the device can stop it; the one who did isn't named.
         Some(EndReason::StoppedByCarbon) => format!(
             "A Carbon who paired {} stopped it. Start a new session with `extend session new {device_id}` when they are done.",
             d.name
         ),
         Some(EndReason::SiliconLoggedOut) => {
-            "Your login ended. Get a new short-lived token from Silicon IAM and run `extend login <slt>`.".to_owned()
+            "Your sign-in ended. Sign in again: `silicon-accounts login --app extend -q | extend login --slt-stdin`."
+                .to_owned()
         }
         Some(EndReason::DeviceOffline) => {
             format!("Start a new session with `extend session new {device_id}` once it is back online.")

@@ -1,6 +1,5 @@
 [workspace]
 resolver = "3"
-exclude = ["vendor/silicon-iam-client", "vendor/briefcase-client"]
 members = [
     "crates/extend-protocol",
     "crates/silicon-extend-client",
@@ -19,7 +18,7 @@ license = "MIT"
 repository = "https://github.com/teamofsilicons/silicon-extend"
 
 [workspace.dependencies]
-extend-protocol = { package = "silicon-extend-protocol", path = "crates/extend-protocol", version = "1.1.2" }
+extend-protocol = { package = "silicon-extend-protocol", path = "crates/extend-protocol", version = "2.0.0" }
 extend-driver = { path = "crates/extend-driver" }
 extend-hosted = { path = "crates/extend-hosted" }
 silicon-extend-client = { path = "crates/silicon-extend-client", version = "3.1.1" }
@@ -34,6 +33,7 @@ hex = "0.4.3"
 hmac = "0.12.1"
 http = "1.3.1"
 rand = "0.9"
+silicon-accounts-client = "0.4.0"
 regex = "1.12.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "http2", "json", "rustls", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }

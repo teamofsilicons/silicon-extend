@@ -1,158 +1,85 @@
-//! Development-only routes that stand in for Silicon IAM and Ting when `EXTEND_IAM_MODE=local`.
-//! Every handler refuses unless the local IAM is active, which production configuration forbids.
+//! Development-only routes that stand in for Silicon Accounts and Ting when
+//! `EXTEND_ACCOUNTS_MODE=local` (and `EXTEND_TING_MODE=local`). Every handler refuses unless the
+//! local stand-in is active, which production configuration forbids.
+//!
+//! `POST /dev/accounts/token {"type":"dev_token","data":{"id":"si:scout","custodian":"c:ada"}}`
+//! creates the account if it is new and answers `{access_token, account}`: an EdDSA access token
+//! for Extend, signed by the stand-in, verified like a real one.
 
-use std::collections::HashMap;
-
-use axum::Form;
-use axum::extract::{Query, State};
-use axum::response::{Html, IntoResponse, Redirect, Response};
-use extend_protocol::{ErrorCode, ids};
+use axum::extract::State;
+use axum::response::Response;
+use extend_protocol::ErrorCode;
 use serde::Deserialize;
-use uuid::Uuid;
 
 use super::{Body, no_content, ok};
-use crate::db::World;
+use crate::accounts::local::LocalAccounts;
 use crate::error::{AppError, AppResult};
-use crate::iam::{IamEvent, LocalIam};
-use crate::revocation;
 use crate::state::{AppState, Shared};
 
-fn local(state: &AppState) -> AppResult<&LocalIam> {
-    state.local_iam.as_deref().ok_or_else(|| {
+fn local(state: &AppState) -> AppResult<&LocalAccounts> {
+    state.accounts.local.as_deref().ok_or_else(|| {
         AppError::new(
             ErrorCode::UnknownCommand,
-            "Development routes exist only with EXTEND_IAM_MODE=local.",
+            "Development routes exist only with EXTEND_ACCOUNTS_MODE=local.",
         )
     })
 }
 
 #[derive(Deserialize)]
-pub struct MemberChange {
+pub struct TokenRequest {
+    /// `c:…` or `si:…`.
     id: String,
-    /// New teams; `null` removes the member from IAM entirely.
-    teams: Option<Vec<String>>,
-    /// Revoke every token the member holds (a logout).
+    /// A Silicon's custodian (`c:…`); created too if new.
     #[serde(default)]
-    revoke: bool,
+    custodian: Option<String>,
+    /// Lifetime in seconds (default 1800, like Silicon Accounts).
     #[serde(default)]
-    environment_id: Option<Uuid>,
+    ttl_s: Option<i64>,
 }
 
-pub async fn member(State(state): State<Shared>, Body(input): Body<MemberChange>) -> AppResult<Response> {
-    let iam = local(&state)?;
-    if ids::member_kind(&input.id).is_none() {
-        return Err(AppError::invalid("id must be a member id like c:alice or si:chef"));
-    }
-    let event_type = if input.revoke {
-        "session.revoked.v1"
-    } else {
-        "organization.member.removed.v1"
-    };
-    iam.set_member(&input.id, input.teams.clone()).await;
-    if input.revoke {
-        iam.revoke_member(&input.id).await;
-    }
-    let world = input.environment_id.map_or_else(World::production, World::test);
-    let event = IamEvent {
-        event_id: Uuid::now_v7().to_string(),
-        event_type: event_type.into(),
-        members: vec![input.id.clone()],
-        teams: input.teams.clone().unwrap_or_default(),
-        removed: vec![],
-        testing_environment_id: input.environment_id,
-    };
-    revocation::apply(&state, &world, &event).await?;
-    Ok(no_content())
-}
-
-#[derive(Deserialize)]
-pub struct TestApp {
-    secret: String,
-    environment_id: Uuid,
-}
-
-pub async fn test_app(State(state): State<Shared>, Body(input): Body<TestApp>) -> AppResult<Response> {
-    local(&state)?;
-    if !ids::is_secret(ids::APP_SECRET_PREFIX, &input.secret) {
-        return Err(AppError::invalid(
-            "secret must be ask_ followed by 43 base64url characters",
-        ));
-    }
-    sqlx::query(
-        "INSERT INTO extend_global.local_test_apps (secret_digest, environment_id) VALUES ($1, $2)
-         ON CONFLICT (secret_digest) DO UPDATE SET environment_id = EXCLUDED.environment_id",
-    )
-    .bind(ids::secret_digest(&input.secret))
-    .bind(input.environment_id)
-    .execute(&state.pool)
-    .await?;
-    state.selections.write().await.clear();
-    Ok(no_content())
-}
-
-/// A stand-in for IAM's consent screen: pick a member, get sent back with a short-lived token.
-pub async fn authorize_page(
-    State(state): State<Shared>,
-    Query(q): Query<HashMap<String, String>>,
-) -> AppResult<Response> {
-    local(&state)?;
-    let hidden: String = q
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                r#"<input type="hidden" name="{}" value="{}">"#,
-                html_escape(k),
-                html_escape(v)
-            )
-        })
-        .collect();
-    Ok(Html(format!(
-        r#"<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Local Silicon IAM</title>
-<style>body{{font:16px system-ui;max-width:420px;margin:48px auto;padding:0 16px}}input,button{{font:inherit;padding:8px;width:100%;margin:6px 0;box-sizing:border-box}}</style>
-<h1>Local Silicon IAM</h1><p>Development only. Sign in to Silicon Extend as:</p>
-<form method="post">{hidden}<input name="member" placeholder="c:alice" autofocus required><button>Approve</button></form>"#
+pub async fn token(State(state): State<Shared>, Body(input): Body<TokenRequest>) -> AppResult<Response> {
+    let accounts = local(&state)?;
+    let account = accounts.ensure(&input.id, input.custodian.as_deref())?;
+    let ttl = input.ttl_s.unwrap_or(1800).clamp(-3600, 86_400);
+    let token = accounts.mint(&account, ttl);
+    Ok(ok(
+        "dev_token",
+        serde_json::json!({
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": ttl,
+            "account": {
+                "uuid": account.uuid,
+                "id": account.id,
+                "kind": match account.kind { extend_protocol::model::MemberKind::Carbon => "carbon", extend_protocol::model::MemberKind::Silicon => "silicon" },
+                "display_name": account.display_name,
+                "custodian": account.custodian,
+            },
+        }),
     ))
-    .into_response())
 }
 
-pub async fn authorize_submit(
-    State(state): State<Shared>,
-    Form(mut form): Form<HashMap<String, String>>,
-) -> AppResult<Response> {
-    local(&state)?;
-    let member = form.remove("member").unwrap_or_default();
-    if ids::member_kind(member.trim()).is_none() {
-        return Err(AppError::invalid("Enter a member id like c:alice."));
-    }
-    let redirect = form
-        .remove("redirect_uri")
-        .or_else(|| form.remove("return_to"))
-        .ok_or_else(|| AppError::invalid("redirect_uri is required"))?;
-    let mut url = url::Url::parse(&redirect).map_err(|_| AppError::invalid("redirect_uri must be an absolute URL"))?;
-    {
-        // Like IAM: append `slt` to redirect_uri and keep its existing query.
-        let mut pairs = url.query_pairs_mut();
-        pairs.append_pair("slt", member.trim());
-        if let Some(s) = form.get("state") {
-            pairs.append_pair("state", s);
-        }
-    }
-    Ok(Redirect::to(url.as_str()).into_response())
+pub async fn jwks(State(state): State<Shared>) -> AppResult<Response> {
+    use axum::response::IntoResponse as _;
+    let accounts = local(&state)?;
+    Ok(axum::Json(accounts.jwks_value()).into_response())
 }
 
 pub async fn tings(State(state): State<Shared>) -> AppResult<Response> {
-    local(&state)?;
     let sent = match &state.local_ting {
         Some(t) => t.sent.lock().await.clone(),
-        None => vec![],
+        None => {
+            return Err(AppError::new(
+                ErrorCode::UnknownCommand,
+                "This service doesn't use the local Ting stand-in (EXTEND_TING_MODE=local).",
+            ));
+        }
     };
     Ok(ok("tings", sent))
 }
 
 #[derive(Deserialize)]
 pub struct MissingType {
-    team: String,
     /// The type's event (`device.wake_requested`) or full name.
     event: String,
     #[serde(default = "yes")]
@@ -163,14 +90,12 @@ fn yes() -> bool {
     true
 }
 
-/// Injects a missing-type refusal on a Team's send in the local stand-in (or removes the injection
-/// with `missing: false`). Real Ting resolves types app-wide; this limits a test failure's scope.
+/// Injects a missing-type refusal in the local stand-in (or removes it with `missing: false`).
 pub async fn ting_missing(State(state): State<Shared>, Body(input): Body<MissingType>) -> AppResult<Response> {
-    local(&state)?;
     let Some(ting) = &state.local_ting else {
         return Err(AppError::new(
             ErrorCode::UnknownCommand,
-            "This service sends Tings through the real Ting, not the local stand-in.",
+            "This service doesn't use the local Ting stand-in (EXTEND_TING_MODE=local).",
         ));
     };
     let Some(ty) = extend_protocol::ting::find(&input.event) else {
@@ -179,13 +104,6 @@ pub async fn ting_missing(State(state): State<Shared>, Body(input): Body<Missing
             input.event
         )));
     };
-    ting.set_missing(&input.team, ty.event, input.missing);
+    ting.set_missing(ty.event, input.missing);
     Ok(no_content())
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }

@@ -1,94 +1,30 @@
-//! Service tests for device reads after removal, the test-environment device limit under
-//! concurrency, hosted devices end to end, and device-list paging with the online filter.
+//! Service tests for device reads after removal, hosted devices end to end, and device-list
+//! paging with the online filter.
 //!
-//! Real PostgreSQL, the real HTTP and WebSocket stack, the official client crate, and scripted
-//! fake devices speaking docs/device-protocol.md. Needs a PostgreSQL the tests can create databases
-//! on: `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
+//! Real PostgreSQL, the real HTTP and WebSocket stack, the local Silicon Accounts stand-in, and
+//! scripted fake devices speaking docs/device-protocol.md. Needs a PostgreSQL the tests can create
+//! databases on: `EXTEND_TEST_ADMIN_URL` (default `postgres://extend:extend@127.0.0.1:5440/postgres`).
+//!
+//! (The test-environment device limit tests went with test environments in 4.0.)
 
+mod common;
 #[path = "common/readiness.rs"]
 mod readiness;
 
-use std::net::SocketAddr;
 use std::time::Duration;
 
+use common::{Env, login, start};
 use extend_protocol::frames::{AttachedStatus, CommandOutcome, DeviceFrame, EnrollmentFrame, Hello, ServiceFrame};
 use extend_protocol::model::*;
-use extend_protocol::{Capability, DeviceOs, ErrorCode, TEST_DEVICE_LIMIT_MESSAGE};
-use extend_service::config::{Config, Environment, FilesMode, IamMode, TingMode};
+use extend_protocol::{Capability, DeviceOs, ErrorCode};
 use futures::{SinkExt as _, StreamExt as _};
-use silicon_extend_client::{ActivityQuery, Client, DeviceQuery, ListQuery};
-use sqlx::Connection as _;
+use silicon_extend_client::{ActivityQuery, DeviceQuery, ListQuery};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use uuid::Uuid;
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-struct Env {
-    base: String,
-    client: Client,
-    /// The service's database, for checking what its connections are doing.
-    db: String,
-}
-
-async fn start() -> Env {
-    let admin = std::env::var("EXTEND_TEST_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://extend:extend@127.0.0.1:5440/postgres".into());
-    let db = format!("extend_gaps_{}", Uuid::new_v4().simple());
-    let mut conn = sqlx::PgConnection::connect(&admin)
-        .await
-        .expect("PostgreSQL for tests (set EXTEND_TEST_ADMIN_URL)");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}")))
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    let url = format!("{}/{db}", admin.rsplit_once('/').unwrap().0);
-    let data = std::env::temp_dir().join(&db);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-    let base = format!("http://{addr}");
-    let cfg = Config {
-        environment: Environment::Test,
-        bind: addr,
-        database_url: url.clone(),
-        public_url: base.clone(),
-        website_url: "http://localhost:5173".into(),
-        docs_url: "http://localhost:5173/docs".into(),
-        repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),
-        data_dir: data,
-        iam: IamMode::Local,
-        delegation_key: None,
-        iam_public_url: format!("{base}/dev/iam"),
-        iam_login_url: format!("{base}/dev/iam/login"),
-        webhook_secret: None,
-        webhook_previous_secret: None,
-        files: FilesMode::Local,
-        ting: TingMode::Local,
-        honeycomb_service_token: Some("hck_test".into()),
-        postmark_token: None,
-        report_recipients: vec!["bugs@example.test".into()],
-        device_app_min_version: "1.0.0".into(),
-        local_members: vec![
-            ("c:alice".into(), vec!["acme".into()]),
-            ("c:bob".into(), vec!["acme".into()]),
-            ("si:chef".into(), vec!["acme".into()]),
-            ("si:sous".into(), vec!["acme".into()]),
-        ],
-        web_dir: None,
-        trusted_proxies: vec![],
-        tuning: Default::default(),
-    };
-    let state = extend_service::build(cfg).await.unwrap();
-    tokio::spawn(extend_service::serve_on(listener, state));
-    let client = Client::connect(&base).await.unwrap();
-    Env { base, client, db: url }
-}
-
-async fn login(c: &Client, who: &str) -> String {
-    c.login(who).await.unwrap().access_token
-}
 
 async fn ws_connect(url: &str, auth: &str) -> Ws {
     let mut req = url.into_client_request().unwrap();
@@ -123,17 +59,16 @@ fn claim(code: &str, name: &str, silicons: &[&str]) -> PairingClaim {
     PairingClaim {
         pairing_code: code.to_owned(),
         name: name.to_owned(),
-        visibility: Some(extend_protocol::model::Visibility::Team),
+        visibility: None,
         pair_ttl_days: None,
         silicon_ids: silicons.iter().map(|s| (*s).to_owned()).collect(),
     }
 }
 
 /// Pairs a device that never connects (so it stays offline). Returns its id.
-async fn pair_offline(client: &Client, token: &str, os: DeviceOs, name: &str) -> String {
-    let e = client.enroll(&enrollment(os)).await.unwrap();
-    client
-        .authed(token, Some("acme"))
+async fn pair_offline(env: &Env, token: &str, os: DeviceOs, name: &str) -> String {
+    let e = env.client.enroll(&enrollment(os)).await.unwrap();
+    env.v2(token)
         .pair(&claim(&e.pairing_code, name, &[]))
         .await
         .unwrap()
@@ -148,8 +83,10 @@ struct FakeDevice {
 }
 
 impl FakeDevice {
-    /// Enrolls, lets `carbon` pair it (with access for `silicons`), connects and says hello.
-    async fn pair(client: &Client, carbon: &str, os: DeviceOs, name: &str, silicons: &[&str]) -> FakeDevice {
+    /// Enrolls, lets the Carbon signed in as `carbon` pair it (with access for `silicons`),
+    /// connects and says hello.
+    async fn pair(env: &Env, carbon: &str, os: DeviceOs, name: &str, silicons: &[&str]) -> FakeDevice {
+        let client = &env.client;
         let e = client.enroll(&enrollment(os)).await.unwrap();
         let mut ews = ws_connect(
             &client.ws_url(&format!("/api/v1/enrollments/{}/connect", e.enrollment_id)),
@@ -160,9 +97,7 @@ impl FakeDevice {
         let EnrollmentFrame::Code { pairing_code, .. } = first else {
             panic!("expected code")
         };
-        let token = client.login(carbon).await.unwrap().access_token;
-        client
-            .authed(&token, Some("acme"))
+        env.v2(carbon)
             .pair(&claim(&pairing_code, name, silicons))
             .await
             .unwrap();
@@ -197,7 +132,7 @@ impl FakeDevice {
             features: vec![],
         }))
         .await;
-        readiness::ready(&client.authed(&token, Some("acme")), &d.id).await;
+        readiness::ready(&env.base, carbon, &d.id).await;
         d
     }
 
@@ -285,17 +220,17 @@ fn api_err<T: std::fmt::Debug>(r: Result<T, silicon_extend_client::Error>) -> ex
 #[tokio::test]
 async fn removed_device_stays_readable_to_its_owner() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let bob = login(&env.client, "c:bob").await;
-    let chef = login(&env.client, "si:chef").await;
-    let a = env.client.authed(&alice, Some("acme"));
-    let b = env.client.authed(&bob, Some("acme"));
-    let c = env.client.authed(&chef, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let bob = login(&env, "c:bob").await;
+    let chef = login(&env, "si:chef").await;
+    let a = env.v2(&alice);
+    let b = env.v2(&bob);
+    let c = env.v2(&chef);
 
-    let phone = FakeDevice::pair(&env.client, "c:alice", DeviceOs::Android, "Alice's Pixel", &["si:chef"]).await;
+    let phone = FakeDevice::pair(&env, &alice, DeviceOs::Android, "Alice's Pixel", &["si:chef"]).await;
     let id = phone.id.clone();
     let frames = phone.serve();
-    let kept = pair_offline(&env.client, &alice, DeviceOs::Linux, "Alice's desk").await;
+    let kept = pair_offline(&env, &alice, DeviceOs::Linux, "Alice's desk").await;
 
     // A session with a command, then removal while the session is still running.
     let sid = c
@@ -309,9 +244,22 @@ async fn removed_device_stays_readable_to_its_owner() {
     assert_eq!(api_err(c.session(&sid).await).code, ErrorCode::SessionNotFound);
     let ended = a.session(&sid).await.unwrap();
     assert_eq!(ended.state, SessionState::Ended);
-    assert_eq!(ended.end_reason, Some(EndReason::AccessRemoved));
-    // The physical connection stays configured; the organization binding alone was removed.
-    assert!(!frames.is_finished());
+    assert_eq!(ended.end_reason, Some(EndReason::DeviceRemoved));
+    // Removing a device unpairs it: the app is told, and its connection ends.
+    let seen = tokio::time::timeout(Duration::from_secs(10), frames)
+        .await
+        .expect("the app is told")
+        .unwrap();
+    assert!(
+        matches!(
+            seen.last(),
+            Some(ServiceFrame::Unpaired {
+                reason: EndReason::DeviceRemoved
+            })
+        ),
+        "{:?}",
+        seen.last()
+    );
 
     // The default list leaves it out; include_removed brings it back, flagged.
     let live = a.devices(DeviceQuery::default()).await.unwrap();
@@ -347,16 +295,10 @@ async fn removed_device_stays_readable_to_its_owner() {
     assert_eq!(d.commands.as_deref(), Some(&[][..]));
     let log = a.activity(&id, ActivityQuery::default()).await.unwrap();
     let actions: Vec<&str> = log.items.iter().map(|e| e.action.as_str()).collect();
-    for want in [
-        "paired",
-        "session_started",
-        "command",
-        "session_ended",
-        "organization_removed",
-    ] {
+    for want in ["paired", "session_started", "command", "session_ended", "removed"] {
         assert!(actions.contains(&want), "{want} missing from {actions:?}");
     }
-    assert_eq!(log.items[0].action, "organization_removed", "newest first");
+    assert_eq!(log.items[0].action, "removed", "newest first");
     assert!(
         a.device_requests(&id, ListQuery::default())
             .await
@@ -397,7 +339,7 @@ async fn removed_device_stays_readable_to_its_owner() {
             &AttachmentCreate {
                 os: DeviceOs::Tvos,
                 name: "TV".into(),
-                visibility: Some(extend_protocol::model::Visibility::Team),
+                visibility: None,
                 pair_ttl_days: None,
                 address: None,
             },
@@ -427,19 +369,17 @@ async fn removed_device_stays_readable_to_its_owner() {
     // include_removed is for the Carbon's own devices only.
     let e = api_err(
         a.devices_including_removed(DeviceQuery {
-            scope: Some("team".into()),
+            scope: Some("accessible".into()),
             ..Default::default()
         })
         .await,
     );
     assert_eq!(e.code, ErrorCode::InvalidInput);
-    assert!(e.message.contains("scope=mine"), "{}", e.message);
     let e = api_err(c.devices_including_removed(DeviceQuery::default()).await);
     assert_eq!(e.code, ErrorCode::InvalidInput);
     let raw = reqwest::Client::new()
-        .get(format!("{}/api/v1/devices?include_removed=maybe", env.base))
+        .get(format!("{}/api/v2/devices?include_removed=maybe", env.base))
         .bearer_auth(&alice)
-        .header(extend_protocol::TEAM_HEADER, "acme")
         .send()
         .await
         .unwrap();
@@ -450,425 +390,6 @@ async fn removed_device_stays_readable_to_its_owner() {
         body["data"]["message"].as_str().unwrap().contains("include_removed"),
         "{body}"
     );
-    frames.abort();
-}
-
-async fn test_environment(env: &Env) -> Client {
-    test_environment_with_id(env).await.0
-}
-
-/// A test environment, a client that selects it, and its id.
-async fn test_environment_with_id(env: &Env) -> (Client, Uuid) {
-    let envid = Uuid::new_v4();
-    let secret = extend_protocol::ids::new_secret("ask_");
-    let op = Uuid::new_v4();
-    let r = reqwest::Client::new()
-        .put(format!(
-            "{}/internal/honeycomb/organizations/acme/testing-environments/{envid}/operations/{op}",
-            env.base
-        ))
-        .bearer_auth("hck_test")
-        .json(&serde_json::json!({
-            "operation_id": op, "environment_id": envid, "org_id": "acme", "app_id": "extend",
-            "environment_revision": 1, "generation": 1, "key_version": 1, "action": "prepare",
-            "testing_key": "abcdefghijklmnopqrstuvwxyz012345", "name": format!("limit-race {envid}")
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 200, "{}", r.text().await.unwrap_or_default());
-    let r = reqwest::Client::new()
-        .post(format!("{}/dev/iam/test-apps", env.base))
-        .json(&serde_json::json!({"type":"test_app","data":{"secret": secret, "environment_id": envid}}))
-        .send()
-        .await
-        .unwrap();
-    assert!(r.status().is_success());
-    let client = Client::builder(&env.base)
-        .testing_secret(&secret)
-        .connect()
-        .await
-        .unwrap();
-    (client, envid)
-}
-
-/// Retrying the successful fifth pairing must replay it before checking the new-device limit.
-#[tokio::test]
-async fn pairing_retry_replays_success_after_filling_the_test_environment() {
-    let env = start().await;
-    let t = test_environment(&env).await;
-    let alice = login(&t, "c:alice").await;
-    for i in 0..4 {
-        pair_offline(&t, &alice, DeviceOs::Linux, &format!("existing {i}")).await;
-    }
-    let code = t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code;
-    let body = serde_json::json!({"type": "pairing", "data": claim(&code, "fifth", &[])});
-    let http = reqwest::Client::new();
-    let send = |body: serde_json::Value| {
-        http.post(format!("{}/api/v1/pairings", env.base))
-            .bearer_auth(&alice)
-            .header("x-org-id", "acme")
-            .header(extend_protocol::TESTING_SECRET_HEADER, t.testing_secret().unwrap())
-            .header("idempotency-key", "pairing-fifth-device")
-            .json(&body)
-            .send()
-    };
-    let first = send(body.clone()).await.unwrap();
-    assert_eq!(first.status(), 201);
-    let first = first.json::<serde_json::Value>().await.unwrap();
-    let retry = send(body.clone()).await.unwrap();
-    assert_eq!(retry.status(), 201, "{}", retry.text().await.unwrap_or_default());
-    assert_eq!(retry.headers()["idempotency-replayed"], "true");
-    assert_eq!(retry.json::<serde_json::Value>().await.unwrap(), first);
-    let mut changed = body;
-    changed["data"]["name"] = "different body".into();
-    let conflict = send(changed).await.unwrap();
-    assert_eq!(conflict.status(), 409);
-    let conflict = conflict.json::<serde_json::Value>().await.unwrap();
-    assert_eq!(conflict["data"]["code"], "conflict");
-    assert!(
-        conflict["data"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("Idempotency-Key")
-    );
-    let fresh = t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap();
-    let full = t
-        .authed(&alice, Some("acme"))
-        .pair(&claim(&fresh.pairing_code, "sixth", &[]))
-        .await
-        .unwrap_err();
-    assert_eq!(full.api().unwrap().code, ErrorCode::TestDeviceLimit);
-    assert_eq!(
-        t.authed(&alice, Some("acme"))
-            .devices(DeviceQuery::default())
-            .await
-            .unwrap()
-            .items
-            .len(),
-        5
-    );
-}
-
-#[tokio::test]
-async fn attachment_retry_replays_success_after_filling_the_test_environment() {
-    let env = start().await;
-    let t = test_environment(&env).await;
-    let alice = login(&t, "c:alice").await;
-    let host = FakeDevice::pair(&t, "c:alice", DeviceOs::Macos, "host", &[]).await;
-    for i in 0..3 {
-        pair_offline(&t, &alice, DeviceOs::Linux, &format!("existing {i}")).await;
-    }
-    let body = serde_json::json!({"type": "attachment", "data": {
-        "os": "tvos", "name": "fifth", "address": "192.0.2.1"
-    }});
-    let http = reqwest::Client::new();
-    let send = |key: &str, body: serde_json::Value| {
-        http.post(format!("{}/api/v1/devices/{}/attachments", env.base, host.id))
-            .bearer_auth(&alice)
-            .header("x-org-id", "acme")
-            .header(extend_protocol::TESTING_SECRET_HEADER, t.testing_secret().unwrap())
-            .header("idempotency-key", key)
-            .json(&body)
-            .send()
-    };
-    let first = send("attachment-fifth", body.clone()).await.unwrap();
-    assert_eq!(first.status(), 201);
-    let first = first.json::<serde_json::Value>().await.unwrap();
-    let replay = send("attachment-fifth", body.clone()).await.unwrap();
-    assert_eq!(replay.status(), 201, "{}", replay.text().await.unwrap_or_default());
-    assert_eq!(replay.headers()["idempotency-replayed"], "true");
-    assert_eq!(replay.json::<serde_json::Value>().await.unwrap(), first);
-    let mut changed = body.clone();
-    changed["data"]["name"] = "different body".into();
-    let conflict = send("attachment-fifth", changed).await.unwrap();
-    assert_eq!(conflict.status(), 409);
-    assert_eq!(
-        conflict.json::<serde_json::Value>().await.unwrap()["data"]["code"],
-        "conflict"
-    );
-    let full = send("attachment-sixth", body).await.unwrap();
-    assert_eq!(full.status(), 409);
-    assert_eq!(
-        full.json::<serde_json::Value>().await.unwrap()["data"]["code"],
-        "test_device_limit"
-    );
-    assert_eq!(
-        t.authed(&alice, Some("acme"))
-            .devices(DeviceQuery::default())
-            .await
-            .unwrap()
-            .items
-            .len(),
-        5
-    );
-}
-
-/// Eight devices added at once to a test environment that has three: exactly two get in, whether
-/// they arrive by pairing code or through a host computer.
-#[tokio::test]
-async fn test_device_limit_holds_under_concurrent_adds() {
-    let env = start().await;
-    let t = test_environment(&env).await;
-    let alice = login(&t, "c:alice").await;
-    let a = t.authed(&alice, Some("acme"));
-
-    // Three devices: a connected Mac that can carry others, and two that never connect.
-    let host = FakeDevice::pair(&t, "c:alice", DeviceOs::Macos, "Test Mac", &[]).await;
-    pair_offline(&t, &alice, DeviceOs::Linux, "one").await;
-    pair_offline(&t, &alice, DeviceOs::Android, "two").await;
-    assert_eq!(a.devices(DeviceQuery::default()).await.unwrap().items.len(), 3);
-
-    let mut codes = Vec::new();
-    for _ in 0..4 {
-        codes.push(t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code);
-    }
-    let claims = codes.iter().enumerate().map(|(i, code)| {
-        let c = claim(code, &format!("claim {i}"), &[]);
-        async move { a.pair(&c).await.map(|_| ()) }
-    });
-    let attaches = (0..4).map(|i| {
-        let host = host.id.clone();
-        async move {
-            a.attach(
-                &host,
-                &AttachmentCreate {
-                    os: DeviceOs::Tvos,
-                    name: format!("attach {i}"),
-                    visibility: Some(extend_protocol::model::Visibility::Team),
-                    pair_ttl_days: None,
-                    address: None,
-                },
-            )
-            .await
-            .map(|_| ())
-        }
-    });
-    let (claimed, attached) = futures::join!(futures::future::join_all(claims), futures::future::join_all(attaches));
-    let results: Vec<_> = claimed.into_iter().chain(attached).collect();
-    let ok = results.iter().filter(|r| r.is_ok()).count();
-    assert_eq!(ok, 2, "{results:?}");
-    for r in results.into_iter().filter_map(Result::err) {
-        let e = r.api().expect("an API error");
-        assert_eq!(e.code, ErrorCode::TestDeviceLimit, "{e:?}");
-        assert_eq!(e.message, TEST_DEVICE_LIMIT_MESSAGE);
-        assert!(
-            e.hint
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Revoke an unused physical pairing")
-        );
-    }
-    assert_eq!(a.devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
-    drop(host);
-}
-
-/// A burst of claims into one test environment, more than the service has database connections
-/// (32), takes turns without holding connections while it waits: the burst ends in well under a
-/// second or two, nobody gets a 5xx, the limit holds, and production reads during the burst stay
-/// fast. (Waiting on the lock with a pooled connection in hand, while the turn's holder needed a
-/// second connection, stalled the whole service for the 30 s pool timeout.)
-#[tokio::test]
-async fn test_device_limit_burst_keeps_the_service_responsive() {
-    const CLAIMS: usize = 54; // + 3 below stays under the 60 enrollments an address may start an hour
-    let env = start().await;
-    let t = test_environment(&env).await;
-    let alice = login(&t, "c:alice").await;
-    let a = t.authed(&alice, Some("acme"));
-    for i in 0..3 {
-        pair_offline(&t, &alice, DeviceOs::Linux, &format!("before {i}")).await;
-    }
-    let mut codes = Vec::new();
-    for _ in 0..CLAIMS {
-        codes.push(t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code);
-    }
-    // A production Carbon with a device, reading their list while the burst runs.
-    let bob = login(&env.client, "c:bob").await;
-    let b = env.client.authed(&bob, Some("acme"));
-    pair_offline(&env.client, &bob, DeviceOs::Android, "bob's phone").await;
-
-    let done = std::sync::atomic::AtomicBool::new(false);
-    let burst = async {
-        let started = std::time::Instant::now();
-        let results = futures::future::join_all(codes.iter().enumerate().map(|(i, code)| {
-            let c = claim(code, &format!("burst {i}"), &[]);
-            async move { a.pair(&c).await.map(|_| ()) }
-        }))
-        .await;
-        done.store(true, std::sync::atomic::Ordering::SeqCst);
-        (results, started.elapsed())
-    };
-    let production_reads = async {
-        let mut slowest = Duration::ZERO;
-        let mut reads = 0;
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        loop {
-            let started = std::time::Instant::now();
-            let list = b
-                .devices(DeviceQuery::default())
-                .await
-                .expect("production read during the burst");
-            assert_eq!(list.items.len(), 1);
-            slowest = slowest.max(started.elapsed());
-            reads += 1;
-            if done.load(std::sync::atomic::Ordering::SeqCst) {
-                return (reads, slowest);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    };
-    let ((results, took), (reads, slowest)) = futures::join!(burst, production_reads);
-
-    let ok = results.iter().filter(|r| r.is_ok()).count();
-    assert_eq!(ok, 2, "{results:?}");
-    for r in results.iter().filter_map(|r| r.as_ref().err()) {
-        let e = r.api().unwrap_or_else(|| panic!("an API error, got {r:?}"));
-        assert_eq!(e.code, ErrorCode::TestDeviceLimit, "no 5xx or other refusal: {e:?}");
-        assert_eq!(e.message, TEST_DEVICE_LIMIT_MESSAGE);
-    }
-    assert!(took < Duration::from_secs(5), "{CLAIMS} claims took {took:?}");
-    assert!(
-        slowest < Duration::from_secs(2),
-        "a production read took {slowest:?} during the burst ({reads} reads)"
-    );
-    assert_eq!(a.devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
-    // A second burst into the full environment is refused up front, just as fast.
-    let e = api_err(a.pair(&claim("ABCDEF", "late", &[])).await);
-    assert_eq!(e.code, ErrorCode::TestDeviceLimit);
-    eprintln!("{CLAIMS} claims in {took:?}; slowest of {reads} production reads {slowest:?}");
-}
-
-/// The advisory lock another Extend process would hold while it adds a device to `envid`.
-async fn hold_add_lock(env: &Env, envid: Uuid) -> sqlx::PgConnection {
-    let mut conn = sqlx::PgConnection::connect(&env.db).await.unwrap();
-    sqlx::query("BEGIN").execute(&mut conn).await.unwrap();
-    sqlx::query("SELECT pg_advisory_xact_lock(7342010, hashtext($1))")
-        .bind(format!("extend_test_{}", envid.simple()))
-        .execute(&mut conn)
-        .await
-        .unwrap();
-    conn
-}
-
-/// Service connections waiting on an advisory lock right now.
-async fn advisory_waiters(env: &Env) -> i64 {
-    let mut conn = sqlx::PgConnection::connect(&env.db).await.unwrap();
-    sqlx::query_scalar(
-        "SELECT count(*) FROM pg_stat_activity
-         WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = 'advisory'",
-    )
-    .fetch_one(&mut conn)
-    .await
-    .unwrap()
-}
-
-/// While another process holds an environment's add lock, forty claims into it wait in memory:
-/// one database connection waits on the lock, not forty, and production keeps its connections.
-/// When the lock goes, they finish, and the limit holds.
-#[tokio::test]
-async fn test_environment_adds_wait_in_memory_not_on_connections() {
-    let env = start().await;
-    let (t, envid) = test_environment_with_id(&env).await;
-    let alice = login(&t, "c:alice").await;
-    let a = t.authed(&alice, Some("acme"));
-    let mut codes = Vec::new();
-    for _ in 0..40 {
-        codes.push(t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code);
-    }
-    let bob = login(&env.client, "c:bob").await;
-    let b = env.client.authed(&bob, Some("acme"));
-
-    let other_process = hold_add_lock(&env, envid).await;
-    let claims = futures::future::join_all(codes.iter().enumerate().map(|(i, code)| {
-        let c = claim(code, &format!("waiting {i}"), &[]);
-        async move { a.pair(&c).await.map(|_| ()) }
-    }));
-    let watch = async {
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
-        let waiting = advisory_waiters(&env).await;
-        let started = std::time::Instant::now();
-        let list = b
-            .devices(DeviceQuery::default())
-            .await
-            .expect("production read while claims wait");
-        let read = started.elapsed();
-        drop(other_process); // the other process's transaction ends
-        (waiting, read, list.items.len())
-    };
-    let (results, (waiting, read, listed)) = futures::join!(claims, watch);
-    assert_eq!(
-        waiting, 1,
-        "only the turn's holder may wait on the lock with a connection"
-    );
-    assert!(
-        read < Duration::from_secs(1),
-        "a production read took {read:?} while claims waited"
-    );
-    assert_eq!(listed, 0);
-    let ok = results.iter().filter(|r| r.is_ok()).count();
-    assert_eq!(ok, 5, "{results:?}");
-    for e in results.iter().filter_map(|r| r.as_ref().err()) {
-        assert_eq!(e.api().expect("an API error").code, ErrorCode::TestDeviceLimit, "{e:?}");
-    }
-    assert_eq!(a.devices(DeviceQuery::default()).await.unwrap().items.len(), 5);
-}
-
-/// A claim that can't get its turn (another process kept the environment's add lock) is refused
-/// with rate_limited, saying what happened, why and what to do, instead of hanging; once the lock
-/// goes, claims succeed again. Waiting in memory is bounded too (10 s) for the ones queued behind.
-#[tokio::test]
-async fn test_environment_add_without_a_turn_is_refused_as_busy() {
-    let env = start().await;
-    let (t, envid) = test_environment_with_id(&env).await;
-    let alice = login(&t, "c:alice").await;
-    let a = t.authed(&alice, Some("acme"));
-    let mut codes = Vec::new();
-    for _ in 0..5 {
-        codes.push(t.enroll(&enrollment(DeviceOs::Linux)).await.unwrap().pairing_code);
-    }
-    let other_process = hold_add_lock(&env, envid).await;
-    let started = std::time::Instant::now();
-    // Four at once: the first waits on the lock (5 s), the next gets the turn after it (5 s more),
-    // and the ones behind give up waiting for the turn after 10 s.
-    let results = futures::future::join_all(codes[..4].iter().enumerate().map(|(i, code)| {
-        let c = claim(code, &format!("busy {i}"), &[]);
-        async move {
-            let r = a.pair(&c).await.map(|_| ());
-            (r, started.elapsed())
-        }
-    }))
-    .await;
-    let took = started.elapsed();
-    let mut waits: Vec<Duration> = Vec::new();
-    for (r, at) in results {
-        let e = api_err(r);
-        assert_eq!(e.code, ErrorCode::RateLimited, "{e:?}");
-        assert!(e.message.contains("busy adding other devices"), "{}", e.message);
-        assert!(e.message.contains("one at a time"), "{}", e.message);
-        assert_eq!(e.hint.as_deref(), Some("Try again in a few seconds."));
-        assert_eq!(e.details["retry_after_s"], 2);
-        waits.push(at);
-    }
-    waits.sort();
-    // The turn's holder gives up on the lock after 5 s; the one after it at 10 s; the ones queued
-    // behind give up waiting for the turn at 10 s (one of them may just get the turn instead and
-    // give up on the lock at 15 s).
-    assert!(
-        waits[0] >= Duration::from_millis(4_900) && waits[0] < Duration::from_secs(7),
-        "{waits:?}"
-    );
-    assert!(
-        waits[2] >= Duration::from_millis(9_900) && waits[2] < Duration::from_secs(12),
-        "{waits:?}"
-    );
-    assert!(took < Duration::from_secs(17), "four claims took {took:?}");
-    drop(other_process);
-    // The lock is gone: the next claim gets straight in.
-    let d = a
-        .pair(&claim(&codes[4], "after", &[]))
-        .await
-        .expect("a claim once the lock is free");
-    assert_eq!(d.name, "after");
 }
 
 /// Attach → the host hears about it → setup code relayed → the host reports the device → a session
@@ -876,22 +397,22 @@ async fn test_environment_add_without_a_turn_is_refused_as_busy() {
 #[tokio::test]
 async fn hosted_device_end_to_end() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let chef = login(&env.client, "si:chef").await;
-    let sous = login(&env.client, "si:sous").await;
-    let a = env.client.authed(&alice, Some("acme"));
-    let c = env.client.authed(&chef, Some("acme"));
-    let s = env.client.authed(&sous, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let chef = login(&env, "si:chef").await;
+    let sous = login(&env, "si:sous").await;
+    let a = env.v2(&alice);
+    let c = env.v2(&chef);
+    let s = env.v2(&sous);
 
-    let mut host = FakeDevice::pair(&env.client, "c:alice", DeviceOs::Macos, "Studio Mac", &["si:sous"]).await;
+    let mut host = FakeDevice::pair(&env, &alice, DeviceOs::Macos, "Studio Mac", &["si:sous"]).await;
     let host_id = host.id.clone();
-    let linux = pair_offline(&env.client, &alice, DeviceOs::Linux, "Linux box").await;
+    let linux = pair_offline(&env, &alice, DeviceOs::Linux, "Linux box").await;
 
     // Refusals: a device that runs the app itself, the wrong host OS, an offline host, a Silicon.
     let tv = |os| AttachmentCreate {
         os,
         name: "Living room TV".into(),
-        visibility: Some(extend_protocol::model::Visibility::Team),
+        visibility: None,
         pair_ttl_days: None,
         address: Some("192.168.1.40".into()),
     };
@@ -981,7 +502,7 @@ async fn hosted_device_end_to_end() {
         hardware_key: None,
     }))
     .await;
-    let seen = readiness::ready(&c, &atv_id).await;
+    let seen = readiness::ready(&env.base, &chef, &atv_id).await;
     assert!(seen.online);
     assert_eq!(seen.state, DeviceState::Ready);
     assert_eq!(seen.os_version.as_deref(), Some("18.2"));
@@ -1062,9 +583,7 @@ async fn hosted_device_end_to_end() {
         let chef = chef.clone();
         let sid = tv_sid_s.clone();
         async move {
-            let client = Client::connect(&base).await.unwrap();
-            client
-                .authed(&chef, Some("acme"))
+            common::v2::V2::new(&base, &chef)
                 .run(&sid, &cmd("tv-remote", &["select"]))
                 .await
         }
@@ -1130,7 +649,7 @@ async fn hosted_device_end_to_end() {
     assert!(a.device(&host_id).await.unwrap().in_use.is_some());
     assert!(a.device(&atv_id).await.unwrap().in_use.is_none());
 
-    // Removing this organization binding preserves the configured attachment and host.
+    // Removing the carried device unpairs it alone: the host and its session stay.
     a.remove_device(&atv_id, None).await.unwrap();
     assert!(a.device(&atv_id).await.unwrap().removed_at.is_some());
     assert!(a.device(&host_id).await.unwrap().removed_at.is_none());
@@ -1147,12 +666,12 @@ async fn hosted_device_end_to_end() {
     assert_eq!(gone.removed_reason, Some(EndReason::DeviceRemoved));
     assert_eq!(
         a.session(mac_sid.as_str()).await.unwrap().end_reason,
-        Some(EndReason::AccessRemoved)
+        Some(EndReason::DeviceRemoved)
     );
 }
 
 /// Collects every page of a device list, checking that each page but the last is full.
-async fn all_pages(a: silicon_extend_client::Authed<'_>, online: Option<bool>, limit: u32) -> Vec<Device> {
+async fn all_pages(a: &common::v2::V2<'_>, online: Option<bool>, limit: u32) -> Vec<Device> {
     let mut out = Vec::new();
     let mut cursor = None;
     for _ in 0..50 {
@@ -1187,15 +706,15 @@ async fn all_pages(a: silicon_extend_client::Authed<'_>, online: Option<bool>, l
 #[tokio::test]
 async fn device_list_online_filter_pages_fully() {
     let env = start().await;
-    let alice = login(&env.client, "c:alice").await;
-    let a = env.client.authed(&alice, Some("acme"));
+    let alice = login(&env, "c:alice").await;
+    let a = &env.v2(&alice);
     let mut online = Vec::new();
     for i in 0..2 {
-        online.push(FakeDevice::pair(&env.client, "c:alice", DeviceOs::Linux, &format!("online {i}"), &[]).await);
+        online.push(FakeDevice::pair(&env, &alice, DeviceOs::Linux, &format!("online {i}"), &[]).await);
     }
     let mut offline = Vec::new();
     for i in 0..7 {
-        offline.push(pair_offline(&env.client, &alice, DeviceOs::Linux, &format!("offline {i}")).await);
+        offline.push(pair_offline(&env, &alice, DeviceOs::Linux, &format!("offline {i}")).await);
     }
 
     let on = all_pages(a, Some(true), 1).await;
@@ -1227,7 +746,7 @@ async fn device_list_online_filter_pages_fully() {
     assert_eq!(every.len(), 9);
 
     // A Silicon's list pages the same way.
-    let chef = login(&env.client, "si:chef").await;
+    let chef = login(&env, "si:chef").await;
     for id in online
         .iter()
         .map(|d| d.id.clone())
@@ -1235,7 +754,7 @@ async fn device_list_online_filter_pages_fully() {
     {
         a.grant(&id, "si:chef").await.unwrap();
     }
-    let c = env.client.authed(&chef, Some("acme"));
+    let c = &env.v2(&chef);
     assert_eq!(all_pages(c, Some(true), 1).await.len(), 2);
     assert_eq!(all_pages(c, Some(false), 1).await.len(), 3);
     drop(online);

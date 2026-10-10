@@ -91,7 +91,6 @@
       "/items/*/device/wake_requests/*/last_asked_at",
       "/items/*/device/wake_requests/*/reason",
       "/items/*/device/wake_requests/*/state",
-      "/items/*/device/wake_requests/*/team",
       "/items/*/device/wake_requests/*/to",
       "/items/*/device/wake_requests/*/wake_detectable",
       "/items/*/device/wake_requests/*/wake_id",

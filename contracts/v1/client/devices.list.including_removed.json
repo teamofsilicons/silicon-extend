@@ -85,7 +85,6 @@
       "/items/*/wake_requests/*/last_asked_at",
       "/items/*/wake_requests/*/reason",
       "/items/*/wake_requests/*/state",
-      "/items/*/wake_requests/*/team",
       "/items/*/wake_requests/*/to",
       "/items/*/wake_requests/*/wake_detectable",
       "/items/*/wake_requests/*/wake_id"

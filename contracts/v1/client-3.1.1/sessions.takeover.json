@@ -1,0 +1,45 @@
+{
+  "api_version": 1,
+  "call": "Authed::takeover",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "3.1.1",
+  "contract": 1,
+  "given": [
+    "session"
+  ],
+  "operation": "sessions.takeover",
+  "request": {
+    "body": {
+      "data": {
+        "reason": "Please approve Face ID"
+      },
+      "type": "takeover"
+    },
+    "headers": {
+      "authorization": "Bearer {silicon_token}",
+      "content-type": "application/json",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "POST",
+    "path": "/api/v1/sessions/{session_id}/takeover"
+  },
+  "response": {
+    "non_null": [
+      "/expires_at",
+      "/reason",
+      "/session_id",
+      "/started_at",
+      "/takeover_id"
+    ],
+    "required": [
+      "/expires_at",
+      "/reason",
+      "/session_id",
+      "/started_at",
+      "/takeover_id"
+    ],
+    "status": "2xx",
+    "type": "takeover"
+  }
+}

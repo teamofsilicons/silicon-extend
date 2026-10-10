@@ -5568,6 +5568,8 @@ mod tests {
             shared_with: None,
             created_at: None,
             team: None,
+            created_by_uuid: None,
+            shared_with_uuid: None,
         };
         assert_eq!(safe_name(&f("shot.png")), "shot.png");
         assert_eq!(safe_name(&f("../../etc/passwd")), "passwd");

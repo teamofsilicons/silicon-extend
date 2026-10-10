@@ -1,0 +1,28 @@
+{
+  "api_version": 1,
+  "call": "Authed::remove_device",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "3.1.1",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "devices.remove",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "if-match": "\"{device_version}\"",
+      "silicon-extend-api-version": "1",
+      "x-org-id": "{team}"
+    },
+    "method": "DELETE",
+    "path": "/api/v1/devices/{device_id}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

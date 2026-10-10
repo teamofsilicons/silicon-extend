@@ -29,8 +29,7 @@
     ],
     "required": [
       "/member",
-      "/status",
-      "/team"
+      "/status"
     ],
     "status": "2xx",
     "type": "ting_registration"

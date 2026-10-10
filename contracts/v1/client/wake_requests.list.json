@@ -52,7 +52,6 @@
       "/items/*/last_asked_at",
       "/items/*/reason",
       "/items/*/state",
-      "/items/*/team",
       "/items/*/to",
       "/items/*/wake_detectable",
       "/items/*/wake_id"

@@ -18,7 +18,6 @@ use crate::state::{Auth, Shared};
 #[derive(sqlx::FromRow)]
 struct FileRow {
     file_id: Uuid,
-    team: String,
     device_id: String,
     session_id: Option<String>,
     command_id: Option<Uuid>,
@@ -35,7 +34,12 @@ struct FileRow {
 }
 
 impl FileRow {
-    fn view(self) -> FileInfo {
+    async fn view(self, state: &crate::state::AppState) -> FileInfo {
+        let directory = &state.accounts.directory;
+        let shared_with = match &self.shared_with {
+            Some(u) => Some(directory.public_id(u).await),
+            None => None,
+        };
         FileInfo {
             file_id: self.file_id,
             name: self.name,
@@ -48,49 +52,49 @@ impl FileRow {
             session_id: self.session_id.and_then(|s| s.parse().ok()),
             device_id: self.device_id.parse().ok(),
             command_id: self.command_id,
-            created_by: Some(self.created_by),
-            shared_with: self.shared_with,
+            created_by: Some(directory.public_id(&self.created_by).await),
+            shared_with,
             created_at: Some(self.created_at),
-            team: Some(self.team),
+            team: None,
+            created_by_uuid: Some(self.created_by),
+            shared_with_uuid: self.shared_with,
         }
     }
 }
 
-const COLS: &str = "f.file_id, f.team, f.device_id, f.session_id, f.command_id, f.created_by, f.shared_with, f.name, f.kind, f.content_type, f.size_bytes, f.url, f.self_destruct_at, f.permanent, f.created_at";
+const COLS: &str = "f.file_id, f.device_id, f.session_id, f.command_id, f.created_by, f.shared_with, f.name, f.kind, f.content_type, f.size_bytes, f.url, f.self_destruct_at, f.permanent, f.created_at";
 
 #[derive(Deserialize)]
 pub struct ListQuery {
     session_id: Option<String>,
     device_id: Option<String>,
     kind: Option<String>,
+    /// A Silicon the caller looks after (`si:` id or uuid): only the files it made.
+    silicon: Option<String>,
     limit: Option<i64>,
     cursor: Option<String>,
 }
 
-/// A Silicon sees the files it made in the Team it acts in; a Carbon, the files made on their pairs
-/// in every Team (`$1`, the Team, is still mentioned so PostgreSQL can type it).
+/// Who sees a file (`$1` is the caller's uuid): the Silicon that made it, while it has access to
+/// the device; the Carbon who paired the device it was made on; the custodian of the Silicon that
+/// made it.
 fn who(auth: &Auth) -> String {
-    let member = if auth.p.is_silicon() {
+    if auth.p.is_silicon() {
         format!(
-            "f.created_by = $2 AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id=d.device_id AND a.team=$1 AND a.silicon_id=$2)",
+            "f.created_by = $1 AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id = f.device_id AND a.silicon_id = $1)",
             auth.world.t("device_access")
         )
     } else {
-        "d.owner_id = $2".to_owned()
-    };
-    format!(
-        "f.team = $1 AND EXISTS (SELECT 1 FROM {} d JOIN {} o ON o.device_id = d.device_id WHERE d.device_id = f.device_id AND o.org_id = $1 AND o.removed_at IS NULL AND {member})",
-        auth.world.t("devices"),
-        auth.world.t("device_organizations")
-    )
-}
-
-fn team_of(auth: &Auth) -> AppResult<Option<String>> {
-    Ok(Some(auth.team()?.to_owned()))
+        format!(
+            "(EXISTS (SELECT 1 FROM {} d WHERE d.device_id = f.device_id AND d.owner_id = $1)
+              OR EXISTS (SELECT 1 FROM {} a WHERE a.uuid = f.created_by AND a.custodian_uuid = $1))",
+            auth.world.t("devices"),
+            auth.world.t("accounts")
+        )
+    }
 }
 
 pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
-    let team = team_of(&auth)?;
     let lim = limit(q.limit)?;
     let before: Option<Uuid> = q
         .cursor
@@ -98,39 +102,45 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
         .map(decode_cursor)
         .transpose()?
         .and_then(|c| c.parse().ok());
+    let creator = match &q.silicon {
+        Some(s) if auth.p.is_carbon() => Some(super::silicons::looked_after(&state, &auth, s).await?.uuid),
+        Some(_) => return Err(AppError::invalid("A Silicon lists its own files; leave out ?silicon=.")),
+        None => None,
+    };
     let rows: Vec<FileRow> = sqlx::query_as(sql!(
         "SELECT {COLS} FROM {} f WHERE {}
            AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())
-           AND ($3::text IS NULL OR f.session_id = $3) AND ($4::text IS NULL OR f.device_id = $4) AND ($5::text IS NULL OR f.kind = $5)
-           AND ($6::uuid IS NULL OR f.file_id < $6)
-         ORDER BY f.file_id DESC LIMIT $7",
+           AND ($2::text IS NULL OR f.session_id = $2) AND ($3::text IS NULL OR f.device_id = $3) AND ($4::text IS NULL OR f.kind = $4)
+           AND ($5::uuid IS NULL OR f.file_id < $5) AND ($7::text IS NULL OR f.created_by = $7)
+         ORDER BY f.file_id DESC LIMIT $6",
         auth.world.t("files"),
         who(&auth)
     ))
-    .bind(&team)
-    .bind(auth.p.id())
+    .bind(auth.p.uuid())
     .bind(&q.session_id)
     .bind(&q.device_id)
     .bind(&q.kind)
     .bind(before)
     .bind(lim + 1)
+    .bind(&creator)
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > lim;
-    let items: Vec<FileInfo> = rows.into_iter().take(lim as usize).map(FileRow::view).collect();
+    let mut items: Vec<FileInfo> = Vec::new();
+    for r in rows.into_iter().take(lim as usize) {
+        items.push(r.view(&state).await);
+    }
     let next = more.then(|| encode_cursor(&items.last().map(|f| f.file_id.to_string()).unwrap_or_default()));
     Ok(ok("files", serde_json::json!({"items": items, "next_cursor": next})))
 }
 
 async fn visible(state: &Shared, auth: &Auth, file_id: Uuid) -> AppResult<FileRow> {
-    let team = team_of(auth)?;
     sqlx::query_as(sql!(
-        "SELECT {COLS} FROM {} f WHERE f.file_id = $3 AND {} AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())",
+        "SELECT {COLS} FROM {} f WHERE f.file_id = $2 AND {} AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())",
         auth.world.t("files"),
         who(auth)
     ))
-    .bind(&team)
-    .bind(auth.p.id())
+    .bind(auth.p.uuid())
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?
@@ -167,7 +177,8 @@ pub(crate) async fn display_attachment(
         if same_origin(&state.cfg.public_url)
             && let Some(id) = url
                 .path()
-                .strip_prefix("/api/v1/files/")
+                .strip_prefix("/api/v2/files/")
+                .or_else(|| url.path().strip_prefix("/api/v1/files/"))
                 .and_then(|s| s.strip_suffix("/content"))
                 .or_else(|| url.path().strip_prefix("/dev/files/"))
         {
@@ -209,10 +220,7 @@ pub(crate) async fn display_attachment(
     if f.size_bytes < 0 || f.size_bytes as u64 > max_bytes as u64 {
         return Err(crate::files::too_large(max_bytes));
     }
-    let (bytes, _) = state
-        .files
-        .read_bounded(&auth.p, f.file_id, auth.sel.as_ref(), max_bytes)
-        .await?;
+    let (bytes, _) = state.files.read_bounded(&auth.p, f.file_id, max_bytes).await?;
     // Expiry can pass during a slow read. Never forward a file that self-destructed meanwhile.
     visible(state, auth, f.file_id).await?;
     Ok(Some(extend_protocol::model::Attachment {
@@ -223,18 +231,23 @@ pub(crate) async fn display_attachment(
 }
 
 pub async fn get(State(state): State<Shared>, auth: Auth, Path(file_id): Path<Uuid>) -> AppResult<Response> {
-    Ok(ok("file", visible(&state, &auth, file_id).await?.view()))
+    Ok(ok("file", visible(&state, &auth, file_id).await?.view(&state).await))
 }
 
+/// Cancels a file's self-destruct: the Silicon that made it, or its custodian.
 pub async fn keep(State(state): State<Shared>, auth: Auth, Path(file_id): Path<Uuid>) -> AppResult<Response> {
     let f = visible(&state, &auth, file_id).await?;
-    if f.created_by != auth.p.id() {
+    let custodian = auth.p.is_carbon()
+        && state
+            .accounts
+            .directory
+            .is_custodian(auth.p.uuid(), &f.created_by)
+            .await;
+    if f.created_by != auth.p.uuid() && !custodian {
+        let maker = state.accounts.directory.public_id(&f.created_by).await;
         return Err(AppError::new(
             ErrorCode::NotSessionOwner,
-            format!(
-                "Only {} (the Silicon that made it) can make this file permanent.",
-                f.created_by
-            ),
+            format!("Only {maker} (the Silicon that made it) or its custodian can make this file permanent."),
         ));
     }
     if f.permanent {
@@ -250,7 +263,7 @@ pub async fn keep(State(state): State<Shared>, auth: Auth, Path(file_id): Path<U
     .bind(file_id)
     .execute(&state.pool)
     .await?;
-    Ok(ok("file", visible(&state, &auth, file_id).await?.view()))
+    Ok(ok("file", visible(&state, &auth, file_id).await?.view(&state).await))
 }
 
 /// Which bytes of a file a `Range` header asks for.
@@ -326,8 +339,8 @@ pub fn content_disposition(name: &str) -> String {
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
 }
 
-/// A file's bytes (`GET /api/v1/files/{file_id}/content`), for the Silicon that made it and the
-/// Carbon who owns its device. They are read from Briefcase as the caller, so Briefcase's own
+/// A file's bytes (`GET /api/v2/files/{file_id}/content`), for the Silicon that made it, the
+/// Carbon who owns its device, and the Silicon's custodian. They are read from Briefcase as the caller, so Briefcase's own
 /// sharing applies too. One `Range: bytes=` range is honoured (206, or 416 past the end).
 pub async fn content(
     State(state): State<Shared>,
@@ -336,35 +349,19 @@ pub async fn content(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let f = visible(&state, &auth, file_id).await?;
-    // Read through Briefcase as the caller, in the file's Team: a Carbon's login must reach it.
-    let mut reader = auth.p.clone();
-    if auth.p.is_carbon() && auth.p.team.as_deref() != Some(f.team.as_str()) {
-        let sign_in = || {
-            AppError::new(
-                ErrorCode::NotATeamMember,
-                format!("{}'s Extend login doesn't reach {}.", auth.p.id(), f.team),
-            )
-            .hint(format!("Sign in to Extend for {} to open files made there.", f.team))
-        };
-        if !auth.p.teams.contains(&f.team) {
-            return Err(sign_in());
-        }
-        reader = state
-            .authorize(&auth.p.token, Some(&f.team), auth.sel.as_ref())
-            .await
-            .map_err(|_| sign_in())?;
-        reader.team = Some(f.team.clone());
-    }
-    let (bytes, stored_type) = match state.files.read(&reader, file_id, auth.sel.as_ref()).await {
+    auth.live(&state).await?;
+    // Read through Briefcase as the caller, so Briefcase's own sharing applies too.
+    let (bytes, stored_type) = match state.files.read(&auth.p, file_id).await {
         Ok(found) => found,
         Err(e)
             if auth.p.is_carbon()
                 && f.shared_with.is_none()
                 && matches!(e.code(), ErrorCode::NoAccess | ErrorCode::FileNotFound) =>
         {
+            let maker = state.accounts.directory.public_id(&f.created_by).await;
             return Err(e.hint(format!(
-                "Sharing {} with you failed when it was made, so Briefcase won't let you read it. Ask {} to share it with you in Briefcase.",
-                f.name, f.created_by
+                "Sharing {} with you failed when it was made, so Briefcase won't let you read it. Ask {maker} to share it with you in Briefcase.",
+                f.name
             )));
         }
         Err(e) => return Err(e),

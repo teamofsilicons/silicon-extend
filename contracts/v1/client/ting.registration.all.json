@@ -27,8 +27,7 @@
     "required": [
       "/items",
       "/items/*/member",
-      "/items/*/status",
-      "/items/*/team"
+      "/items/*/status"
     ],
     "status": "2xx",
     "type": "ting_registrations"

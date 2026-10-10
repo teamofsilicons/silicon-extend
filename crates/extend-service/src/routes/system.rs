@@ -1,4 +1,4 @@
-//! Health, version negotiation, contract discovery and public IAM details.
+//! Health, version negotiation, contract discovery, and where Extend's accounts come from.
 
 use std::sync::Arc;
 
@@ -6,8 +6,9 @@ use axum::Extension;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use extend_protocol::model::{IamInfo, TestingEnvironment, VersionInfo};
-use extend_protocol::{API_VERSION_HEADER, ErrorCode, SUPPORTED_VERSIONS_HEADER, TESTING_SECRET_HEADER};
+use extend_protocol::account::AccountsInfo;
+use extend_protocol::model::VersionInfo;
+use extend_protocol::{API_VERSION_HEADER, ErrorCode, SUPPORTED_VERSIONS_HEADER};
 
 use super::ok;
 use crate::error::{AppError, AppResult};
@@ -59,7 +60,7 @@ pub async fn negotiate(Extension(versions): Extension<Arc<Registry>>, headers: H
             ErrorCode::ApiVersionUnsupported,
             format!("No API version in common: the client supports {theirs:?}, Extend supports {ours:?}."),
         )
-        .hint("Update the CLI with `honeycomb install 'extend'`.")
+        .hint("Update the CLI with `silicon-apps update extend` (install it with `silicon-apps install extend`).")
         .details(serde_json::json!({"client": theirs, "service": ours})));
     };
     let mut resp = ok(
@@ -95,26 +96,18 @@ pub async fn contracts(
     )
 }
 
-pub async fn iam(State(state): State<Shared>, headers: HeaderMap) -> AppResult<Response> {
-    let secret = headers.get(TESTING_SECRET_HEADER).and_then(|v| v.to_str().ok());
-    let (_, sel) = state.select_world(secret).await?;
-    Ok(ok(
-        "iam",
-        IamInfo {
-            app_id: state.iam.app_id().to_owned(),
-            iam_base_url: state.cfg.iam_public_url.clone(),
-            iam_login_url: Some(state.cfg.iam_login_url.clone()),
-            api_base_url: state.cfg.public_url.clone(),
-            website_url: state.cfg.website_url.clone(),
-            docs_url: state.cfg.docs_url.clone(),
-            repository_url: state.cfg.repository_url.clone(),
-            testing_environment: sel.map(|s| TestingEnvironment {
-                environment_id: s.environment_id,
-                name: s.name,
-                state: "ready".into(),
-                paired_devices: 0,
-                device_limit: extend_protocol::TEST_DEVICE_LIMIT,
-            }),
-        },
-    ))
+/// `GET /api/v2/accounts` (no sign-in): Extend's app id and where to sign in.
+pub async fn accounts(State(state): State<Shared>) -> Response {
+    ok(
+        "accounts",
+        AccountsInfo::new(
+            state.cfg.app_id.clone(),
+            state.cfg.accounts_url.clone(),
+            state.cfg.public_url.clone(),
+            state.cfg.website_url.clone(),
+            state.cfg.docs_url.clone(),
+            state.cfg.repository_url.clone(),
+            state.notifier.enabled(),
+        ),
+    )
 }

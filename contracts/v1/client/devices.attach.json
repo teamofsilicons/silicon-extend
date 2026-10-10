@@ -94,7 +94,6 @@
       "/wake_requests/*/last_asked_at",
       "/wake_requests/*/reason",
       "/wake_requests/*/state",
-      "/wake_requests/*/team",
       "/wake_requests/*/to",
       "/wake_requests/*/wake_detectable",
       "/wake_requests/*/wake_id"
