@@ -470,7 +470,7 @@ mod tests {
                 "EXTEND_DELEGATION_ENCRYPTION_KEY",
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             ),
-            ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
+            ("EXTEND_PUBLIC_URL", "https://api.extend.teamofsilicons.com"),
             ("ACCOUNTS_URL", "https://accounts.teamofsilicons.com"),
             ("EXTEND_APP_SECRET", "sa_app_extend_x"),
             ("EXTEND_POSTMARK_SERVER_TOKEN", "pm_x"),
@@ -511,7 +511,7 @@ mod tests {
         let err = cfg(&[
             DB,
             ("EXTEND_ENVIRONMENT", "production"),
-            ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
+            ("EXTEND_PUBLIC_URL", "https://api.extend.teamofsilicons.com"),
             ("ACCOUNTS_URL", "https://accounts.teamofsilicons.com"),
         ])
         .unwrap_err()
@@ -520,7 +520,7 @@ mod tests {
         let err = cfg(&[
             DB,
             ("EXTEND_ENVIRONMENT", "production"),
-            ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
+            ("EXTEND_PUBLIC_URL", "https://api.extend.teamofsilicons.com"),
             ("EXTEND_APP_SECRET", "sa_app_extend_x"),
         ])
         .unwrap_err()
@@ -550,7 +550,7 @@ mod tests {
                 "EXTEND_DELEGATION_ENCRYPTION_KEY",
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             ),
-            ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
+            ("EXTEND_PUBLIC_URL", "https://api.extend.teamofsilicons.com"),
             ("ACCOUNTS_URL", "https://accounts.teamofsilicons.com"),
             ("EXTEND_APP_SECRET", "sa_app_extend_x"),
             WEBHOOK,
@@ -564,7 +564,7 @@ mod tests {
         let err = cfg(&[
             DB,
             ("EXTEND_ENVIRONMENT", "production"),
-            ("EXTEND_PUBLIC_URL", "https://backend.extend.teamofsilicons.com"),
+            ("EXTEND_PUBLIC_URL", "https://api.extend.teamofsilicons.com"),
             ("ACCOUNTS_URL", "https://accounts.teamofsilicons.com"),
             ("EXTEND_APP_SECRET", "sa_app_extend_x"),
             ("EXTEND_POSTMARK_SERVER_TOKEN", "pm_x"),

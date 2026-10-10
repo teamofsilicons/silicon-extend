@@ -79,7 +79,7 @@ fn discovery_answers_in_an_empty_home_with_nothing_written() {
     let golden = json!({
         "app_id": "extend",
         "accounts_url": "https://accounts.teamofsilicons.com",
-        "api_url": "https://backend.extend.teamofsilicons.com",
+        "api_url": "https://api.extend.teamofsilicons.com",
         "version": env!("CARGO_PKG_VERSION"),
         "client_id": "extend",
         "device_flow": true,

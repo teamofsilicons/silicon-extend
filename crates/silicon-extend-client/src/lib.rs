@@ -18,7 +18,7 @@
 //! use silicon_extend_client::{Client, DeviceQuery, auth::SignIn};
 //! let sign_in = SignIn::new("https://accounts.teamofsilicons.com")?;
 //! let tokens = sign_in.exchange_slt("slt_…").await?; // from `silicon-accounts login --app extend -q`
-//! let client = Client::connect("https://backend.extend.teamofsilicons.com").await?;
+//! let client = Client::connect("https://api.extend.teamofsilicons.com").await?;
 //! let me = client.authed(tokens.access_token.expose());
 //! for device in me.devices(DeviceQuery::default()).await?.items {
 //!     println!("{} {} online={}", device.device_id, device.name, device.online);

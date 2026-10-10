@@ -44,7 +44,7 @@ Everyone signs in with Silicon Accounts, with a personal account. Extend never a
   `verified` says whether Extend confirmed the sign-in just now; `--offline` reads only the file.
 
 `ACCOUNTS_URL` (default `https://accounts.teamofsilicons.com`) and `EXTEND_API_URL` (default
-`https://backend.extend.teamofsilicons.com`) choose where to sign in and which Extend to use; plain
+`https://api.extend.teamofsilicons.com`) choose where to sign in and which Extend to use; plain
 http is accepted only for this machine. A sign-in is used only for the Extend and Silicon Accounts it
 was made for. `extend version` says whether this CLI is current, deprecated or sunset, from Extend's
 compatibility matrix.

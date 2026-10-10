@@ -22,7 +22,7 @@ use silicon_extend_client::{Client, DeviceQuery, auth::SignIn};
 let sign_in = SignIn::new("https://accounts.teamofsilicons.com")?;
 let tokens = sign_in.exchange_slt(&slt).await?;
 
-let client = Client::connect("https://backend.extend.teamofsilicons.com").await?;
+let client = Client::connect("https://api.extend.teamofsilicons.com").await?;
 let me = client.authed(tokens.access_token.expose());
 let devices = me.devices(DeviceQuery::default()).await?;
 ```

@@ -5,7 +5,7 @@ types are in `crates/extend-protocol/src/frames.rs` and `model.rs`; this page is
 for apps written in other languages (the Android app is Kotlin). What changed in 1.1.0, and what a
 1.0 app still gets, is in section 5.
 
-Service URL: production `https://backend.extend.teamofsilicons.com`, local development
+Service URL: production `https://api.extend.teamofsilicons.com`, local development
 `http://127.0.0.1:8480` (the Android emulator reaches it as `http://10.0.2.2:8480`). WebSocket URLs
 are the same host with `ws://` / `wss://`.
 

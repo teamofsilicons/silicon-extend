@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const DEFAULT_SERVICE_URL: &str = "https://backend.extend.teamofsilicons.com";
+pub const DEFAULT_SERVICE_URL: &str = "https://api.extend.teamofsilicons.com";
 /// Directory name under home.
 pub const STATE_DIR_NAME: &str = ".extend-agent";
 /// The Extend website, whose `/download/<platform>` pages have the apps (`web/src/config.ts`).

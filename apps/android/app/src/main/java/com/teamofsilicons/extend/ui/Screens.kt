@@ -1193,7 +1193,7 @@ fun DeveloperSettingsScreen(extend: Extend, state: UiState, onClose: () -> Unit)
             ExtendTextField(url, { url = it }, "Extend service URL", keyboardType = KeyboardType.Uri, mono = true)
             Column {
                 Mono("Production")
-                Mono("https://backend.extend.teamofsilicons.com", color = Tokens.Ink)
+                Mono("https://api.extend.teamofsilicons.com", color = Tokens.Ink)
                 Gap(8.dp)
                 Mono("Emulator → this computer")
                 Mono("http://10.0.2.2:8480", color = Tokens.Ink)

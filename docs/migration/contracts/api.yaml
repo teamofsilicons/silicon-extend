@@ -75,7 +75,7 @@ info:
       `unsupported_on_device` and a failed command's answer add "<name> isn't awake (<state> since <time>). Its Carbon can
       wake it: extend device wake <id> --reason \"...\"". Awake never refuses anything by itself.
 servers:
-  - url: https://backend.extend.teamofsilicons.com
+  - url: https://api.extend.teamofsilicons.com
 security:
   - bearerAuth: []
 tags:

@@ -165,7 +165,7 @@ Parts, matching `UNDERSTANDING.md`:
 
 | Part | Tech | Where |
 |---|---|---|
-| Extend service | Rust, `axum` + `tokio`, PostgreSQL through `sqlx`, the official `silicon-accounts-client` crate | `backend.extend.teamofsilicons.com` |
+| Extend service | Rust, `axum` + `tokio`, PostgreSQL through `sqlx`, the official `silicon-accounts-client` crate | `api.extend.teamofsilicons.com` |
 | Configuration website | For Carbons: signs in with Silicon Accounts and calls the same public API from its own server (the browser never holds a token). A subset of the CLI. | `extend.teamofsilicons.com` |
 | Extend client | Rust crate `silicon-extend-client`, stateless | crates.io |
 | `extend` CLI | Rust, built only on `silicon-extend-client`, keeps its state on disk | `silicon-apps install extend` (Silicon Apps keeps it up to date) |

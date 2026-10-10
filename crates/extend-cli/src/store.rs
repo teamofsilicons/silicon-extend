@@ -174,7 +174,7 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "api_url",
         about: "Extend service URL: https, or http for this machine only (EXTEND_API_URL overrides it)",
-        default: "https://backend.extend.teamofsilicons.com",
+        default: "https://api.extend.teamofsilicons.com",
     },
     Setting {
         key: "accounts_url",

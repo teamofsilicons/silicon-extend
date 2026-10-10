@@ -281,7 +281,7 @@ mod tests {
         }
         // Extend 3's IAM sign-in.
         let old =
-            br#"{"api_url":"https://backend.extend.teamofsilicons.com","access_token":"oat_x","refresh_token":"ort_y",
+            br#"{"api_url":"https://api.extend.teamofsilicons.com","access_token":"oat_x","refresh_token":"ort_y",
             "expires_at":1,"member_id":"si:chef","member_kind":"silicon","teams":["acme"],"team":"acme"}"#;
         assert!(matches!(parse(old), Loaded::Legacy { id: Some(ref i) } if i == "si:chef"));
         assert!(matches!(parse(b"not json"), Loaded::Unreadable(ref w) if w.contains("not JSON")));

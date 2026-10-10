@@ -13,7 +13,7 @@ The production switch from Extend 3 to Extend 4 has its own runbook:
 [docs/migration/cutover.md](migration/cutover.md). How releases were made before Extend 4 is in
 [docs/history/deployment-1.x-3.x.md](history/deployment-1.x-3.x.md).
 
-## Service (`backend.extend.teamofsilicons.com`)
+## Service (`api.extend.teamofsilicons.com`)
 
 - Image: `docker build -t silicon-extend .` (see `Dockerfile`; `extend-service serve`, port 8080,
   healthcheck `/ready`). The image sets `EXTEND_ENVIRONMENT=production` and carries `LICENSE`,
@@ -36,7 +36,7 @@ plain-http URLs; `crates/extend-service/.env.example` lists every variable):
 |---|---|
 | `EXTEND_ENVIRONMENT` | `production`. Required everywhere: an unset value refuses to start rather than guess (`development` and `test` run with the local stand-ins). The Docker image sets it. |
 | `EXTEND_DATABASE_URL` | PostgreSQL URL |
-| `EXTEND_PUBLIC_URL` | `https://backend.extend.teamofsilicons.com` |
+| `EXTEND_PUBLIC_URL` | `https://api.extend.teamofsilicons.com` |
 | `ACCOUNTS_URL` | `https://accounts.teamofsilicons.com`: the Silicon Accounts public origin, every access token's `iss` |
 | `ACCOUNTS_API_URL` | Optional: how the service reaches Silicon Accounts server to server (defaults to `ACCOUNTS_URL`) |
 | `EXTEND_APP_ID`, `EXTEND_APP_SECRET` | Extend's app in Silicon Apps (`extend`) and its app secret, for introspection, lookups and proofs |
@@ -64,7 +64,7 @@ Extend is the app `extend` in Silicon Apps and Silicon Accounts (its app secret 
 
 - its sign-in setup: the website's callback (`https://extend.teamofsilicons.com/auth/callback`) and
   the CLI as a public client (device flow, and short-lived tokens from Silicons);
-- the webhook `https://backend.extend.teamofsilicons.com/webhooks/accounts` with the events
+- the webhook `https://api.extend.teamofsilicons.com/webhooks/accounts` with the events
   `account.id_changed`, `account.updated`, `account.deleted`, `membership.signed_out`,
   `membership.access_removed` and `silicon.custodian_changed`; its signing secret goes in
   `EXTEND_ACCOUNTS_WEBHOOK_SECRET`.
@@ -93,7 +93,7 @@ the browser never holds a token, and the app secret and the session key are serv
 settings, never in the repository. Silicon Accounts must list
 `https://extend.teamofsilicons.com/auth/callback` among Extend's redirect URIs. Its settings are
 the shared web kit's: `APP_ID` (`extend`), `APP_SECRET` (Extend's app secret), `ACCOUNTS_URL`
-(`https://accounts.teamofsilicons.com`), `APP_API_URL` (`https://backend.extend.teamofsilicons.com`),
+(`https://accounts.teamofsilicons.com`), `APP_API_URL` (`https://api.extend.teamofsilicons.com`),
 `SESSION_SECRET` (a new `openssl rand -base64 48`) and `PUBLIC_URL`
 (`https://extend.teamofsilicons.com`); `web/README.md` has how to run and check it. (The Next.js
 site is built in the migration's web stages; until it lands, `web/` still holds Extend 3's Vite

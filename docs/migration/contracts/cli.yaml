@@ -27,7 +27,7 @@ links:
   docs: https://extend.teamofsilicons.com/docs
   website: https://extend.teamofsilicons.com
   client_crate: https://crates.io/crates/silicon-extend-client
-  api: https://backend.extend.teamofsilicons.com
+  api: https://api.extend.teamofsilicons.com
 
 grammar:
   - Commands are a tree, noun then verb (`extend device ls`, `extend session end a3f`). Every node answers `--help`/`-h`
@@ -69,7 +69,7 @@ global_flags:
 environment:
   SILICON_HOME: 'Base directory. State lives in $SILICON_HOME/.extend/. Default ~.'
   ACCOUNTS_URL: 'The Silicon Accounts to sign in at (default https://accounts.teamofsilicons.com; https, or http for localhost, 127.0.0.1 or [::1]). Overrides the accounts_url setting. It must be the one the Extend service trusts.'
-  EXTEND_API_URL: 'The Extend service (default https://backend.extend.teamofsilicons.com; https, or http for this machine). Overrides the api_url setting.'
+  EXTEND_API_URL: 'The Extend service (default https://api.extend.teamofsilicons.com; https, or http for this machine). Overrides the api_url setting.'
   EXTEND_SESSION: 'Session id to use when --session is not given.'
   EXTEND_TELEMETRY: 'on|off. Overrides the config value for this process.'
   EXTEND_TEST_SECRET: 'Extend 3 only. Set, any command that would call Extend is refused (exit 2) and nothing is sent, so a script written for a test environment never reaches the real service.'
@@ -227,7 +227,7 @@ commands:
     summary: Read and change settings.
     takes:
       keys:
-        api_url: 'https://…, or http:// only for localhost, 127.0.0.1 or [::1] (default https://backend.extend.teamofsilicons.com); a trailing / is dropped. EXTEND_API_URL overrides it.'
+        api_url: 'https://…, or http:// only for localhost, 127.0.0.1 or [::1] (default https://api.extend.teamofsilicons.com); a trailing / is dropped. EXTEND_API_URL overrides it.'
         accounts_url: 'The Silicon Accounts to sign in at: https://…, or http:// only for this machine (default https://accounts.teamofsilicons.com). ACCOUNTS_URL overrides it.'
         telemetry: 'on|off (default on)'
         output: 'text|json (default text); json makes --json the default'
@@ -498,7 +498,7 @@ commands:
     summary: CLI version, client crate version, API version negotiated, and whether this CLI is current, deprecated or sunset (from the compatibility matrix).
     behaviour: 'Status is current (the API major is current and its cli range includes this CLI), deprecated (update before it is retired; says since when, the sunset rule and sunset_earliest_at), sunset (Extend answered api_version_sunset, or the matrix says so), unsupported (this CLI is outside the major''s cli range, or no API version in common), or unknown (Extend could not be asked, or the matrix does not list the major). Exits 0 in every case.'
     gives:
-      text: "extend 4.0.0 (silicon-extend-client 4.0.0), API v2 at https://backend.extend.teamofsilicons.com (service 4.0.0)\nStatus: current. API v2 is current, and it works with CLI >=4.0.0, <5.0.0, which includes 4.0.0."
+      text: "extend 4.0.0 (silicon-extend-client 4.0.0), API v2 at https://api.extend.teamofsilicons.com (service 4.0.0)\nStatus: current. API v2 is current, and it works with CLI >=4.0.0, <5.0.0, which includes 4.0.0."
       json: '{cli, client_crate, api_version, api_url, service_version, status, api_state, cli_range, deprecated_at, sunset_at, sunset_earliest_at, sunset_rule, message}'
     api: GET /api/version, GET /api/v2/contracts
 

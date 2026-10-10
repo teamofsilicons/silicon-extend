@@ -52,7 +52,7 @@ The access token is a Silicon Accounts JWT with `aud` = `extend`, valid for 30 m
 ```rust
 use silicon_extend_client::{Client, DeviceQuery};
 
-let client = Client::connect("https://backend.extend.teamofsilicons.com").await?; // negotiates API v2
+let client = Client::connect("https://api.extend.teamofsilicons.com").await?; // negotiates API v2
 let me = client.authed(tokens.access_token.expose());
 let who = me.me().await?;                              // uuid, id, kind, display name, custodian
 let info = client.accounts().await?;                   // no sign-in: the Silicon Accounts this Extend trusts

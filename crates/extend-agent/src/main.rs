@@ -22,7 +22,7 @@ use extend_driver::{Driver, Invocation};
     about = "Silicon Extend for Mac, Windows and Linux: lets the Silicons a Carbon chooses use this computer."
 )]
 struct Cli {
-    /// Extend service URL (default https://backend.extend.teamofsilicons.com; env EXTEND_API_URL).
+    /// Extend service URL (default https://api.extend.teamofsilicons.com; env EXTEND_API_URL).
     #[arg(long, global = true)]
     service_url: Option<String>,
     /// Where the device credentials are kept: auto, keyring or file (env EXTEND_AGENT_CREDENTIAL_STORE).

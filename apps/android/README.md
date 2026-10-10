@@ -37,7 +37,7 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 Gradle 8.14.3 (wrapper included), Kotlin 2.2.20, Compose BOM 2025.09.00, OkHttp 4.12,
 kotlinx.serialization 1.9.
 
-Service URL: release builds default to `https://backend.extend.teamofsilicons.com`. Debug builds
+Service URL: release builds default to `https://api.extend.teamofsilicons.com`. Debug builds
 default to the same unless built with `-PextendServiceUrl=http://10.0.2.2:8480`. Cleartext HTTP is
 allowed only for `10.0.2.2`, `localhost` and `127.0.0.1` (`res/xml/network_security_config.xml`).
 

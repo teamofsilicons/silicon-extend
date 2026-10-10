@@ -353,10 +353,10 @@ mod tests {
 
     #[test]
     fn ws_urls_follow_the_scheme() {
-        let c = ServiceClient::new(Url::parse("https://backend.extend.teamofsilicons.com/").unwrap());
+        let c = ServiceClient::new(Url::parse("https://api.extend.teamofsilicons.com/").unwrap());
         assert_eq!(
             c.ws_url("/api/v1/device/connect").as_str(),
-            "wss://backend.extend.teamofsilicons.com/api/v1/device/connect"
+            "wss://api.extend.teamofsilicons.com/api/v1/device/connect"
         );
         let c = ServiceClient::new(Url::parse("http://127.0.0.1:8480/").unwrap());
         assert_eq!(

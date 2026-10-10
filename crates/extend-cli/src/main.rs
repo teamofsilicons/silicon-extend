@@ -34,7 +34,7 @@ use error::{CliError, R};
 use output::{Colors, Out, Stream};
 use signin::{Loaded, Stored};
 
-const DEFAULT_API: &str = "https://backend.extend.teamofsilicons.com";
+const DEFAULT_API: &str = "https://api.extend.teamofsilicons.com";
 const USER_AGENT: &str = concat!("extend-cli/", env!("CARGO_PKG_VERSION"));
 /// How a Carbon signs in, and how a Silicon does.
 const CARBON_SIGN_IN: &str = "extend login";
@@ -885,7 +885,7 @@ fn check_sign_in_setup(ctx: &Ctx) -> R<()> {
     accounts::check_url(&ctx.api_url(), "The Extend service URL").map_err(|m| {
         CliError::usage(
             m,
-            "Set EXTEND_API_URL (or `extend config set api_url <url>`); production is https://backend.extend.teamofsilicons.com.",
+            "Set EXTEND_API_URL (or `extend config set api_url <url>`); production is https://api.extend.teamofsilicons.com.",
         )
     })?;
     signin::check_writable().map_err(|why| {
@@ -1838,7 +1838,7 @@ fn validate_setting(key: &str, v: &str) -> R<String> {
                 bad(
                     &why,
                     if key == "api_url" {
-                        "Example: extend config set api_url https://backend.extend.teamofsilicons.com (http only for localhost, 127.0.0.1 or [::1])"
+                        "Example: extend config set api_url https://api.extend.teamofsilicons.com (http only for localhost, 127.0.0.1 or [::1])"
                     } else {
                         "Example: extend config set accounts_url https://accounts.teamofsilicons.com (http only for localhost, 127.0.0.1 or [::1])"
                     },
@@ -5414,7 +5414,7 @@ mod tests {
             ("color", "never"),
             ("screenshot_scale", "0.01"),
             ("screenshot_scale", "1"),
-            ("api_url", "https://backend.extend.teamofsilicons.com"),
+            ("api_url", "https://api.extend.teamofsilicons.com"),
             ("api_url", "http://127.0.0.1:8480"),
             ("telemetry", "off"),
             ("output", "json"),

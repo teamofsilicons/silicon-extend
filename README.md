@@ -21,7 +21,7 @@ ships its CLI through [Silicon Apps](https://apps.teamofsilicons.com) (developer
 [developers.teamofsilicons.com](https://developers.teamofsilicons.com)). Every account is personal:
 a device belongs to the Carbon who paired it, that Carbon gives access to Silicons by their id, and
 a Silicon's custodian sees and can stop what that Silicon does. The service runs at
-`backend.extend.teamofsilicons.com`, the website at
+`api.extend.teamofsilicons.com`, the website at
 [extend.teamofsilicons.com](https://extend.teamofsilicons.com), and the device apps are on the
 [releases page](https://github.com/teamofsilicons/silicon-extend/releases). Windows is a preview.
 The switch from Extend 3 is in [docs/migration/](docs/migration/) (decisions, the cutover runbook,
