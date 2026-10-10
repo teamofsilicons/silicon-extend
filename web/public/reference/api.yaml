@@ -1,0 +1,3001 @@
+# Contract file. Agents: propose changes to a Carbon and get approval before editing.
+# Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Identifier formats and flows: TECHNICAL.md.
+# Brought up to date with the build after round 2 of fixes (2026-09-27): every route and field below is what the
+# service answers today. The additions of that round await a Carbon's review like the rest of the file.
+# 1.1.0 draft (2026-09-27), for the Carbon's approval: devices belong to the Carbons who paired them, several Carbons can
+# pair one device, waking a device, setup retry, and the device engine named Silicon Extend. It follows UNDERSTANDING.md
+# as the Carbon edited it on 2026-09-27 and the Carbon's decisions of that day (logout, requests routed to a Carbon,
+# the terminal on shared computers, visible Ting setup guidance). API v1 stays additive: no path, method, required field or
+# error code changed, and a 1.0 client ignores every new field.
+
+# Extend 4 review copy (2026-10-10), proposed for the Carbon's approval: understanding/api.yaml is unchanged. Extend
+# signs in with Silicon Accounts and has no Teams and no test environments. API v2 (`/api/v2/…`) carries every
+# account route with a Silicon Accounts access token; API v1 keeps only the device wire installed apps speak
+# (`/api/v1/device…`, `/api/v1/enrollments…`, `/api/v1/contracts`); every other `/api/v1` route answers `410
+# api_version_sunset` with the hint `silicon-apps update extend`.
+
+# Review copy reconciled with the 1.1 implementation on 2026-09-28; originals are unchanged.
+# Includes shared banner controls, stored display media, TV element clicks and verified Ting type semantics.
+
+openapi: 3.1.0
+info:
+  title: Silicon Extend API
+  version: 2.0.0-draft
+  description: |
+    Silicon Extend lets a Silicon use a Carbon's personal devices. This API is used by the `extend` CLI
+    (through the `silicon-extend-client` crate), the configuration website, and the Extend apps on devices.
+
+    Conventions
+    - Every JSON body is an envelope: `{"type": "<kind>", "data": {...}}`.
+    - Errors: `{"type": "error", "data": {"code", "message", "hint", "docs_url", "request_id", "details"}}`.
+      `code` is stable and machine-readable; `message` says what happened and why; `hint` says what to do next.
+    - Timestamps are RFC 3339 UTC with milliseconds. Durations carry their unit in the field name.
+    - Every response carries `X-Request-ID` and `Silicon-Extend-API-Version`.
+    - Lists are paged with `limit` and `cursor`; the response gives `next_cursor`, null on the last page. A page that
+      has a `next_cursor` is always full; only the last page can be short.
+    - Retry a POST after an uncertain result with the same `Idempotency-Key` and the identical body. The same key with
+      a different body is `409 conflict`.
+    - API majors (TECHNICAL.md section 10). Every `/api/v{n}/` request is checked before anything else: a major this
+      service doesn't serve is `400 api_version_unsupported`; a `Silicon-Extend-API-Version` pin naming another major
+      than the path is `400 api_version_mismatch`; a sunset major is `410 api_version_sunset`, whose hint says how to
+      update and whose `details` carry `{api_version, sunset_at, supported}`. Every response on a deprecated major
+      carries `Deprecation: @<unix seconds>` (RFC 9745, when it was deprecated) and `Sunset: <HTTP-date>` (RFC 8594,
+      the soonest it can be sunset: 7 consecutive days with zero requests after the later of its deprecation and its
+      last request).
+    - Signing in (Extend 4): every API v2 route takes a Silicon Accounts access token as `Authorization: Bearer`
+      (an EdDSA JWT whose `aud` is `extend` and whose `iss` is the Silicon Accounts this server trusts, verified with
+      its published keys). Carbons sign in to the CLI with the Silicon Accounts device flow, Silicons with a short-lived
+      token (`silicon-accounts login --app extend -q | extend login --slt-stdin`), the website with its own server.
+      Routes where a sign-out must take effect at once (pairing, granting or removing access, removing a device,
+      starting a session, commands, takeovers, requests, wake requests, file content) also ask Silicon Accounts
+      whether the sign-in is still active (cached for at most 30 s).
+    - API v1 (Extend 4): only the device wire stays. Every other `/api/v1` route answers `410 api_version_sunset`,
+      hint `silicon-apps update extend`, `details {retired, use_api_version: 2}`.
+    - There are no test environments: a request that still sends `X-Testing-Application-Secret` is `401
+      testing_secret_invalid` and nothing runs.
+    - Browsers reach the API through the website's own server, which adds the access token. Only the origins in
+      `EXTEND_CORS_ORIGINS` may call it from a page directly; CORS exposes `ETag`, `X-Request-ID`,
+      `Silicon-Extend-API-Version`, `Content-Disposition`, `Content-Range`, `Deprecation` and `Sunset`.
+
+    Accounts, devices and custodians (Extend 4)
+    - Every Carbon and Silicon is a personal Silicon Accounts account: a permanent `uuid` (short, case-sensitive) that
+      Extend keys everything on, and a public id (`c:ada`, `si:scout`) that can change. Answers carry both where a
+      person is named (`*_uuid` next to the id). A caller may name an account by either; ids resolve through Silicon
+      Accounts (current ids only), and an id nobody has is `422 invalid_input`.
+    - A device belongs to the Carbon who paired it. Several Carbons can pair one device (a family TV); each has their
+      own pair of it, with its own `device_id`, name, access list, lifetime and activity log. A device is private to
+      the Carbon who paired it and the Silicons they give access to: one grant per pair and Silicon.
+    - A Silicon has one custodian (a Carbon, set in Silicon Accounts). The custodian sees what its Silicons do in
+      Extend (`GET /api/v2/silicons`, their grants, sessions, files and requests) and can stop it; it never acts as the
+      Silicon. A Silicon, its custodian and the custodian's other Silicons are one circle: a Silicon is never reached
+      from outside its circle unasked (a request goes to the Carbon who gave the holder access instead).
+    - One Silicon uses a physical device at a time, across every pair. A viewer sees only their own side: another side's
+      Silicon shows as "in use" (`in_use_by_other`), never named.
+    - The wake hint: when a device is known not to be awake (or was not awake when last seen), `device_offline`,
+      `unsupported_on_device` and a failed command's answer add "<name> isn't awake (<state> since <time>). Its Carbon can
+      wake it: extend device wake <id> --reason \"...\"". Awake never refuses anything by itself.
+servers:
+  - url: https://backend.extend.teamofsilicons.com
+security:
+  - bearerAuth: []
+tags:
+  - {name: System, description: 'Health, version negotiation and contract discovery'}
+  - {name: Auth, description: 'Who is signed in with Silicon Accounts, looking up accounts, and signing out'}
+  - {name: Enrollment, description: An unpaired Extend app getting and rotating its pairing code}
+  - {name: Pairing, description: 'A Carbon claiming a pairing code, and devices paired through a host computer'}
+  - {name: Devices, description: 'Listing, inspecting and configuring paired devices'}
+  - {name: Access, description: Which Silicons can use a device}
+  - {name: Sessions, description: 'A Silicon using a device, one Silicon at a time'}
+  - {name: Commands, description: 'Device engine commands and Extend additions, run inside a session'}
+  - {name: Requests, description: 'A Silicon asking for a device in use, delivered through Ting to the Silicon using it or to the Carbon who gave that Silicon access'}
+  - {name: Waking, description: 'A Silicon asking its Carbon to wake a device, and the Carbon answering (1.1)'}
+  - {name: Ting, description: 'Whether Extend''s notifications reach you through Ting, and missing notification types observed on delivery'}
+  - {name: Silicons, description: 'The Silicons a Carbon looks after (custodian) or gave access to'}
+  - {name: Activity, description: Every action taken on a device}
+  - {name: Files, description: 'Screenshots, recordings, logs and replay scripts, stored in Briefcase'}
+  - {name: Device app, description: 'Endpoints used only by a paired Extend app, with its device credential'}
+  - {name: Accounts webhooks, description: Signed Silicon Accounts events}
+  - {name: Operations, description: Bug reports and telemetry}
+
+paths:
+
+  # ───────────────────────────── System ─────────────────────────────
+  /live:
+    get:
+      tags: [System]
+      operationId: live
+      summary: The process is running
+      security: []
+      responses:
+        '204': {description: Alive}
+  /ready:
+    get:
+      tags: [System]
+      operationId: ready
+      summary: Database and migrations ready
+      security: []
+      responses:
+        '204': {description: Ready}
+        '503': {description: A dependency is unavailable; the body names it}
+  /api/version:
+    get:
+      tags: [System]
+      operationId: negotiateVersion
+      summary: Agree an API major version
+      description: |
+        Unversioned so an old client can always reach it. The client lists every major it supports; the
+        service answers with the highest both support that is not sunset. The client then pins that version on every
+        request with `Silicon-Extend-API-Version`. No common version is `400 api_version_unsupported` listing both sides.
+        A client that speaks only majors Extend has retired gets `410 api_version_sunset`, saying when and why and what
+        to update. When the agreed major is deprecated, the answer carries `Deprecation` and `Sunset` headers.
+      security: []
+      parameters:
+        - name: Silicon-Extend-Supported-API-Versions
+          in: header
+          required: false
+          description: Every major the client supports. A client too old to send it is taken to support 1.
+          schema: {type: string, pattern: '^[1-9][0-9]*(, ?[1-9][0-9]*)*$'}
+          example: '1, 2'
+      responses:
+        '200':
+          description: Agreed version
+          headers:
+            Silicon-Extend-API-Version: {schema: {type: string}, description: The agreed major}
+            Vary: {schema: {type: string, const: Silicon-Extend-Supported-API-Versions}}
+            Deprecation: {$ref: '#/components/headers/Deprecation'}
+            Sunset: {$ref: '#/components/headers/Sunset'}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: version}
+                  data:
+                    type: object
+                    required: [api_version, supported, service_version]
+                    properties:
+                      api_version: {type: integer, example: 1}
+                      supported: {type: array, items: {type: integer}, example: [1], description: Majors a client can agree on (served and not sunset)}
+                      service_version: {type: string, example: 1.0.0}
+                      deprecated: {type: array, items: {type: integer}, description: The supported majors that are deprecated}
+        '400': {$ref: '#/components/responses/Error'}
+        '410': {description: 'api_version_sunset: every major the client speaks is retired', $ref: '#/components/responses/Error'}
+  /api/v1/contracts:
+    get:
+      tags: [System]
+      operationId: contracts
+      summary: Compatibility matrix and deprecation state
+      description: |
+        Built from live state, not a fixed list. Each major's lifecycle (`current` → `deprecated` → `sunset`) is kept in
+        `extend_global.api_versions`, shared by every instance: configuration deprecates a major
+        (`EXTEND_DEPRECATED_API_VERSIONS`, applied when an instance starts; the newest served major can't be
+        deprecated), and a deprecated major is sunset automatically after 7 consecutive days with zero requests
+        (requests are counted per major and UTC day; an instance re-checks every 5 minutes). Sunset is final. The client
+        crate and CLI ranges come from `EXTEND_API_V{n}_CLIENT_CRATE` and `EXTEND_API_V{n}_CLI` (default
+        `>={n}.0.0, <{n+1}.0.0`), and `device_app_min` from `EXTEND_DEVICE_APP_MIN_VERSION`. Retired majors stay listed
+        after their routes are gone. A request to this route counts as a request today for the major it came in on.
+        `extend version` reads this to say whether the CLI is current, deprecated or sunset.
+      security: []
+      responses:
+        '200':
+          description: Every API major, its state, and the client, CLI and app versions that work with it
+          headers:
+            Deprecation: {$ref: '#/components/headers/Deprecation'}
+            Sunset: {$ref: '#/components/headers/Sunset'}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: contracts}
+                  data:
+                    type: object
+                    required: [service_version, current, supported, deprecated, sunset_rule, versions]
+                    properties:
+                      service_version: {type: string, example: 1.0.0}
+                      current: {type: integer, example: 1, description: The newest major a client can agree on}
+                      supported: {type: array, items: {type: integer}, example: [1], description: Majors served and not sunset}
+                      deprecated: {type: array, items: {type: integer}, example: []}
+                      sunset_rule: {type: string, example: 'Sunset after 7 consecutive days with zero requests'}
+                      versions:
+                        type: array
+                        description: Every major with a lifecycle record, oldest first, including retired ones
+                        items:
+                          type: object
+                          required: [api_version, state, deprecated_at, sunset_at, sunset_earliest_at, last_request_on, sunset_rule, compatible]
+                          properties:
+                            api_version: {type: integer}
+                            state: {type: string, enum: [current, deprecated, sunset]}
+                            deprecated_at: {type: [string, 'null'], format: date-time}
+                            sunset_at: {type: [string, 'null'], format: date-time, description: When the sunset rule was met}
+                            sunset_earliest_at:
+                              type: [string, 'null']
+                              format: date-time
+                              description: 'Deprecated majors only: the soonest it can be sunset if no request arrives (the Sunset header)'
+                            last_request_on: {type: [string, 'null'], format: date, description: The last UTC day with a request}
+                            sunset_rule: {type: string, example: 'Sunset after 7 consecutive days with zero requests'}
+                            compatible:
+                              type: object
+                              required: [client_crate, cli, device_app_min]
+                              properties:
+                                client_crate: {type: string, example: '>=1.0.0, <2.0.0'}
+                                cli: {type: string, example: '>=1.0.0, <2.0.0'}
+                                device_app_min: {type: string, example: 1.0.0}
+              example:
+                type: contracts
+                data:
+                  service_version: 1.0.0
+                  current: 1
+                  supported: [1]
+                  deprecated: []
+                  sunset_rule: Sunset after 7 consecutive days with zero requests
+                  versions:
+                    - api_version: 1
+                      state: current
+                      deprecated_at: null
+                      sunset_at: null
+                      sunset_earliest_at: null
+                      last_request_on: '2026-09-27'
+                      sunset_rule: Sunset after 7 consecutive days with zero requests
+                      compatible: {client_crate: '>=1.0.0, <2.0.0', cli: '>=1.0.0, <2.0.0', device_app_min: 1.0.0}
+        '410': {description: 'api_version_sunset: the path''s major is retired', $ref: '#/components/responses/Error'}
+  /api/v2/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Sign out of Extend
+      description: |
+        Signs this sign-in out of Extend. Silicon Accounts revokes the refresh token sent in the body (the CLI and the
+        website hold it), or, without one, the sign-in of the access token used. Then:
+        - a Silicon's running sessions end at once (`silicon_logged_out`), its open wake requests are withdrawn, and the
+          proofs Extend held for it are revoked;
+        - a Carbon's sign-out ends the sessions of the Silicons they gave access to, through their own pairs only
+          (`access_removed`), never another Carbon's.
+        Pairs and grants stay. If Silicon Accounts can't be reached, nothing is revoked or ended and the error says so.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: logout}
+                data:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    refresh_token: {type: string, writeOnly: true, minLength: 1, description: 'The Silicon Accounts refresh token (sar_…) the client holds'}
+      responses:
+        '204': {description: Signed out}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {description: 'Silicon Accounts could not be reached; nothing was revoked or ended', $ref: '#/components/responses/Error'}
+  /api/v2/me:
+    get:
+      tags: [Auth]
+      operationId: me
+      summary: Who is signed in (what `extend login status --json` prints)
+      description: |
+        Who the access token belongs to: the account's permanent Silicon Accounts `uuid`, its current public id (which can
+        change; Extend keys nothing on it), its kind and, for a Silicon, its custodian.
+      responses:
+        '200':
+          description: The account the access token belongs to
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: me}
+                  data: {$ref: '#/components/schemas/AccountMe'}
+        '401': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Enrollment (unpaired app) ─────────────────────────────
+  /api/v1/enrollments:
+    post:
+      tags: [Enrollment]
+      operationId: createEnrollment
+      summary: An unpaired Extend app asks for a pairing code
+      description: |
+        No sign-in. An Extend app that isn't paired yet asks for a 6-character pairing code and an enrollment secret, then
+        holds `/api/v1/enrollments/{enrollment_id}/connect` open to get new codes and, once a Carbon claims one, its device
+        credential. An app older than `EXTEND_DEVICE_APP_MIN_VERSION` is `426 upgrade_required`. At most 10 enrollments per
+        address every 10 minutes. The device wire is unchanged in Extend 4: apps installed before it keep working.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: enrollment}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [os, app_version]
+                  properties:
+                    os: {$ref: '#/components/schemas/DeviceOs'}
+                    os_version: {type: string, maxLength: 64, example: '15'}
+                    model: {type: string, maxLength: 128, example: Pixel 9}
+                    app_version: {type: string, maxLength: 32, example: 1.1.0}
+                    engine_version: {type: string, maxLength: 32, description: 'The device engine''s version on a computer (1.1). 1.0 apps send it as agent_device_version, which is still read.'}
+                    agent_device_version: {type: string, maxLength: 32, deprecated: true, description: 'The 1.0 name of engine_version'}
+      responses:
+        '201':
+          description: Enrollment with its first code
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: enrollment}
+                  data:
+                    type: object
+                    required: [enrollment_id, enrollment_secret, pairing_code, code_expires_at, rotates_every_s]
+                    properties:
+                      enrollment_id: {type: string, format: uuid}
+                      enrollment_secret: {type: string, pattern: '^ees_[A-Za-z0-9_-]{43}$', description: Returned once}
+                      pairing_code: {$ref: '#/components/schemas/PairingCode'}
+                      code_expires_at: {type: string, format: date-time}
+                      rotates_every_s: {type: integer, const: 300}
+              example:
+                type: enrollment
+                data:
+                  enrollment_id: 01926f3a-5c1e-7b2d-9a40-3e5f8c7d1b22
+                  enrollment_secret: ees_Q2hhbmdlLW1lLXRoaXMtaXMtYS1zYW1wbGUtc2VjcmV
+                  pairing_code: 4F9C2A
+                  code_expires_at: '2026-09-26T10:05:00.000Z'
+                  rotates_every_s: 300
+        '401': {description: 'testing_secret_invalid: the request still selects a test environment (Extend 4 has none)', $ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input, for example an OS that pairs through a host (ios, tvos, samsung_tv…)', $ref: '#/components/responses/Error'}
+        '426': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/v1/enrollments/{enrollment_id}:
+    parameters:
+      - {$ref: '#/components/parameters/EnrollmentId'}
+    get:
+      tags: [Enrollment]
+      operationId: getEnrollment
+      summary: Current code, or the device credential once paired
+      description: |
+        The enrollment secret as `Authorization: Extend-Enrollment <secret>`. While unclaimed: the current code. Once a
+        Carbon claimed it: the device credential, exactly once; the enrollment is then gone and later reads are 404.
+      security:
+        - enrollmentSecret: []
+      responses:
+        '200':
+          description: Enrollment state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: enrollment}
+                  data: {$ref: '#/components/schemas/EnrollmentState'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Enrollment]
+      operationId: discardEnrollment
+      summary: The app stops waiting to be paired
+      security:
+        - enrollmentSecret: []
+      responses:
+        '204': {description: Discarded; its code no longer works}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/v1/enrollments/{enrollment_id}/connect:
+    parameters:
+      - {$ref: '#/components/parameters/EnrollmentId'}
+    get:
+      tags: [Enrollment]
+      operationId: enrollmentSocket
+      summary: WebSocket that pushes code rotations and the pairing result
+      description: |
+        Upgrade to WebSocket. Frames are JSON `{"type", "data"}`:
+        `code` `{pairing_code, code_expires_at}` every 300 s; `paired` `{device_id, device_credential, environment}`
+        once, then the server closes with 1000. Heartbeat as on the device socket.
+      security:
+        - enrollmentSecret: []
+      responses:
+        '101': {description: Switching protocols}
+        '401': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Pairing (Carbon) ─────────────────────────────
+  /api/v2/pairings:
+    post:
+      tags: [Pairing]
+      operationId: claimPairingCode
+      summary: A Carbon enters a device's pairing code
+      description: |
+        Carbons only. Claims a pairing code the Extend app shows: the device becomes the caller's pair of it. The code works
+        once. A wrong code never reveals whether it exists; 5 wrong codes in 15 minutes are `429 rate_limited`.
+        - `silicon_ids` gives those Silicons access at once: any active Silicon, by its current `si:` id or its Silicon
+          Accounts uuid. An id nobody has, a Carbon's id, or a Silicon its custodian hasn't accepted yet is `422
+          invalid_input`, and nothing is paired.
+        - A device is private to the Carbon who paired it and the Silicons they give access to: `visibility` other than
+          `personal` is `422 invalid_input`.
+        - The Carbon is enrolled to receive Extend's notifications through Ting (when it is on and they aren't yet).
+        "Pair with another Carbon" makes a second pair of the same physical device for another Carbon; each pair has its own
+        id, name, access list, lifetime and activity log.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: pairing}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [pairing_code, name]
+                  properties:
+                    pairing_code: {$ref: '#/components/schemas/PairingCodeInput'}
+                    name: {$ref: '#/components/schemas/DeviceName'}
+                    visibility: {$ref: '#/components/schemas/Visibility'}
+                    pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+                    silicon_ids:
+                      type: array
+                      maxItems: 100
+                      uniqueItems: true
+                      items: {$ref: '#/components/schemas/SiliconId'}
+                      description: Optional; give access now. Can be skipped and done later.
+            example: {type: pairing, data: {pairing_code: 4f9c2a, name: Saket's Pixel, silicon_ids: ['si:chef']}}
+      responses:
+        '201':
+          description: Paired. The device is in `setup` until its own setup steps finish.
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data: {$ref: '#/components/schemas/Device'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {description: 'pairing_code_invalid: wrong, expired or used', $ref: '#/components/responses/Error'}
+        '409': {description: 'test_device_limit; conflict (1.1: you already paired this device, named by your own id for it)', $ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input: an unknown or unaccepted Silicon in silicon_ids, or visibility other than personal', $ref: '#/components/responses/Error'}
+        '429': {description: 'rate_limited: too many wrong codes, or the test environment is busy adding other devices', $ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/attachments:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Pairing]
+      operationId: attachDevice
+      summary: Pair an iPhone, iPad, Apple TV or smart TV through a paired computer
+      description: |
+        Owner only: adds a device the caller's computer carries (an Apple TV, an iPhone, a smart TV) through the caller's
+        own pair of that computer. The host must be a computer that runs the app itself and is online; a carried device
+        can't carry others. `visibility` other than `personal` is `422`. The host is told to set it up (`attach`).
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: attachment}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [os, name]
+                  properties:
+                    os: {type: string, enum: [ios, ipados, tvos, samsung_tv, lg_tv]}
+                    name: {$ref: '#/components/schemas/DeviceName'}
+                    visibility: {$ref: '#/components/schemas/Visibility'}
+                    pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+      responses:
+        '201':
+          description: Attached device, in setup
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data: {$ref: '#/components/schemas/Device'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {description: test_device_limit, $ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {description: 'rate_limited: the test environment is busy adding other devices', $ref: '#/components/responses/Error'}
+        '503': {description: device_offline (the host), $ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/setup:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Pairing]
+      operationId: getSetup
+      summary: The device's setup steps and where each one stands
+      description: |
+        Owner only (the Carbon who paired this pair). Also answers for a removed device the caller paired.
+      responses:
+        '200':
+          description: Setup state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: setup}
+                  data: {$ref: '#/components/schemas/Setup'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/setup/code:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Pairing]
+      operationId: enterSetupCode
+      summary: Enter the code an Apple TV shows during setup
+      description: |
+        Owner only. The code is relayed to the Mac that carries the Apple TV. Checked in this order, each refusal with a
+        hint: the caller owns the device (a removed one is `404 device_not_found`); it is paired through a computer (a
+        device that runs the Extend app takes no code: `422 invalid_input`); it is an Apple TV (another carried device
+        takes no code: `422`); the code is 4 digits after trimming (`422`, echoing what was sent); the host is online
+        (`503 device_offline`, "The computer … pairs through is offline, so the code could not reach it.").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: setup_code}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [code]
+                  properties:
+                    code: {type: string, pattern: '^[0-9]{4}$', example: '4821'}
+      responses:
+        '200':
+          description: Accepted; setup continues
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: setup}
+                  data: {$ref: '#/components/schemas/Setup'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {description: device_offline (the host), $ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/setup/retry:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Pairing]
+      operationId: retrySetup
+      summary: Run a failed setup step again (`extend device setup <id> --retry`, the website's Retry) (1.1)
+      description: |
+        Carbons only: a Carbon who paired the device (the owner of this pair); a Silicon gets `403 carbon_only`, another
+        Carbon `404 device_not_found`. Body `{"step": "<key>"}` retries that step; `{}` or no body retries every failed
+        step. The service sends the device `setup_retry` (for a device a computer carries, to that computer with
+        `target`) and answers 202 with the keys it asked for. It changes no step itself: the device reports progress as
+        usual, and `GET .../setup` (or `extend device setup --watch`) follows it.
+
+        Refusals, each with a hint:
+        - `400 invalid_input`: the device has no step with that key; the message lists its steps.
+        - `409 conflict`: "Nothing to retry: no setup step has failed." (or the named step hasn't failed).
+        - `409 device_offline`: "<name> is offline. Setup carries on when it reconnects." For a carried device, when
+          the computer it pairs through is offline.
+        - `426 upgrade_required`: "<name> runs Silicon Extend <version>, which can't retry from here. Update it to 1.1,
+          or tap Retry on the device." The app (or, for a carried device, its computer's app) didn't list
+          `setup_retry` in its hello `features`.
+        - `429 rate_limited`: at most one retry per device every 5 s; `details.retry_after_s` says when.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/SetupRetryInput'
+                - type: object
+                  required: [type, data]
+                  properties:
+                    type: {const: setup_retry}
+                    data: {$ref: '#/components/schemas/SetupRetryInput'}
+            examples:
+              oneStep: {value: {step: wireless_debugging}}
+              everyFailedStep: {value: {}}
+      responses:
+        '202':
+          description: The device was asked to run these steps again
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: setup_retry}
+                  data: {$ref: '#/components/schemas/RetryResult'}
+              example: {type: setup_retry, data: {retrying: [wireless_debugging]}}
+        '400': {description: invalid_input (no step with that key), $ref: '#/components/responses/Error'}
+        '403': {description: carbon_only, $ref: '#/components/responses/Error'}
+        '404': {description: device_not_found, $ref: '#/components/responses/Error'}
+        '409': {description: 'conflict (nothing to retry); device_offline (the device, or the computer it pairs through)', $ref: '#/components/responses/Error'}
+        '426': {description: 'upgrade_required: the connected app can''t retry setup', $ref: '#/components/responses/Error'}
+        '429': {description: rate_limited, $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Devices ─────────────────────────────
+  /api/v2/devices:
+    get:
+      tags: [Devices]
+      operationId: listDevices
+      summary: List devices
+      description: |
+        - `mine` (a Carbon's default): every device the Carbon paired (each of their pairs).
+        - `accessible` (a Silicon's default): the devices the Silicon has a grant on. A device several Carbons paired and
+          gave it access to lists once per pair, each naming the others in `same_device`.
+        A device is private: there is no shared list, and any other `scope` is `422 invalid_input`. `include_removed=true`
+        (Carbons, scope `mine`) also lists their removed devices, so their activity logs stay readable. `online` filters
+        before paging, so every page but the last is full.
+      parameters:
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [mine, accessible]
+            description: '`mine` for a Carbon, `accessible` for a Silicon (each one''s default)'
+        - name: online
+          in: query
+          schema: {type: boolean}
+        - name: os
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceOs'}
+        - name: include_removed
+          in: query
+          description: With scope=mine, also list the caller's removed devices
+          schema: {type: boolean, default: false}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Devices; empty is still 200
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: devices}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Device'}}
+                      next_cursor: {type: [string, 'null']}
+              example:
+                type: devices
+                data:
+                  items:
+                    - device_id: 7c1e09ab
+                      name: Saket's Pixel
+                      os: android
+                      os_version: '15'
+                      kind: phone
+                      owner: {type: carbon, id: 'c:saket'}
+                      visibility: personal
+                      online: true
+                      awake: true
+                      awake_changed_at: '2026-09-26T09:57:40.120Z'
+                      wake_detectable: true
+                      last_seen_at: '2026-09-26T10:04:12.391Z'
+                      in_use: {silicon_id: 'si:chef', silicon_uuid: 8YnY5M4E, session_id: a3f, since: '2026-09-26T09:58:00.000Z'}
+                      last_used_at: '2026-09-26T10:04:10.002Z'
+                      pair_ttl_days: 14
+                      pair_expires_at: '2026-10-10T10:04:10.002Z'
+                      days_left: 14
+                      paired_by_others: false
+                      wake_muted: false
+                      open_wake_requests: 0
+                      state: ready
+                    - device_id: 0d44e1f2
+                      name: Living room TV
+                      os: android_tv
+                      kind: tv
+                      owner: {type: carbon, id: 'c:saket'}
+                      visibility: personal
+                      online: true
+                      awake: false
+                      sleep_state: standby
+                      awake_changed_at: '2026-09-26T08:10:02.000Z'
+                      wake_detectable: true
+                      in_use_by_other: true
+                      paired_by_others: true
+                      open_wake_requests: 1
+                      state: ready
+                  next_cursor: null
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Devices]
+      operationId: getDevice
+      summary: One device, with what a Silicon can do on it (`extend device show`)
+      description: |
+        The Carbon who paired it (this pair's owner), or a Silicon with a grant on it. Anyone else gets `404
+        device_not_found`, which never says whether the device exists. Each viewer sees their own side: another side's
+        Silicon (another Carbon's pair of the same device, or a Silicon outside the viewer's custodian circle) shows as "in
+        use" (`in_use_by_other`), never named.
+      responses:
+        '200':
+          description: Device with capabilities and the Extend commands they unlock
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data:
+                    allOf:
+                      - {$ref: '#/components/schemas/Device'}
+                      - type: object
+                        required: [capabilities, commands]
+                        properties:
+                          capabilities: {type: array, items: {$ref: '#/components/schemas/Capability'}}
+                          missing:
+                            type: array
+                            description: Capabilities this kind of device supports but this one lacks right now, with why
+                            items:
+                              type: object
+                              required: [capability, reason]
+                              properties:
+                                capability: {$ref: '#/components/schemas/Capability'}
+                                reason: {type: string, example: Screen Recording permission is off on this Mac}
+                          commands: {type: array, items: {type: string}, example: [snapshot, screenshot, click, fill, type, open, close, terminal]}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [Devices]
+      operationId: updateDevice
+      summary: Rename, change the pairing lifetime, or show/hide the shared in-use banner
+      description: |
+        Owner only: the name and lifetime are this Carbon's pair's own, so another Carbon who paired the same device
+        keeps theirs. Send only the fields that change. `visibility` is accepted and ignored (1.1): every device is
+        personal, and the answer says so. `in_use_indicator` is `shown` or `hidden` (1.1), and unlike the name and
+        lifetime belongs to the physical device: every Carbon's pair shares the choice. Only a Carbon who owns a live
+        pair may change it; a Silicon gets `403 carbon_only`. The current owner does not need every other owner's
+        approval. Changed values refresh the live pair connections, or update every carried alias through its host.
+        A 1.0 app may ignore the setting; its service-side value is still saved.
+      parameters:
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: device}
+                data:
+                  type: object
+                  additionalProperties: false
+                  minProperties: 1
+                  properties:
+                    name: {$ref: '#/components/schemas/DeviceName'}
+                    visibility: {$ref: '#/components/schemas/Visibility'}
+                    pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+                    in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
+      responses:
+        '200':
+          description: Updated
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device}
+                  data: {$ref: '#/components/schemas/Device'}
+        '403': {$ref: '#/components/responses/Error'}
+        '412': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Devices]
+      operationId: removeDevice
+      summary: Remove the device (dangerous)
+      description: |
+        Owner only. Ends this Carbon's pair of the device: any session running through it (`device_removed`; a
+        command in flight answers `409 session_ended` at once), every grant on it and its open wake requests; unpairs it
+        (`unpaired` goes to that pair's connection only), and keeps it readable to its owner as a removed device (see
+        `GET /api/v2/devices/{device_id}`), with its activity log. Other Carbons' pairs of the same device, and sessions
+        through them, are untouched (1.1). Clients must confirm with the Carbon first; the CLI needs `--yes`. For a host
+        computer, also removes every device paired through this pair. Removing a removed device again is
+        `404 device_not_found`, not 204.
+      parameters:
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '204': {description: Removed}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '412': {$ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/stop:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Devices]
+      operationId: stopDevice
+      summary: Stop the Silicon using the device now
+      description: |
+        Owner only. Ends the running session with `stopped_by_carbon`; a command in flight answers `409 session_ended`
+        at once and the device gets `cancel` for it. No running session is 409 `device_not_in_use`.
+
+        1.1: every Carbon who paired a device may stop the Silicon using it (UNDERSTANDING.md, Always visible), so the
+        stop ends the session on the physical device whichever Carbon's pair it runs through. For a computer it also ends
+        the sessions on carried devices the caller paired too. It never ends a session on a carried device the caller
+        didn't pair: when that is all that is busy, it answers `409 conflict`, "A device carried by Studio Mac is in use.
+        It can be stopped by the Carbon who paired it, or from Studio Mac's Extend app." (the computer's own Stop still
+        stops it). The answer is the stopped `session` when it ran through the caller's own pair (as in 1.0), and
+        otherwise `device_stopped` (the Silicon isn't named). On the stopped session's pair, the activity log says
+        `session_ended` by `extend`, `{"stopped_by": "another_carbon"}`, naming no one. A 1.0 client reads
+        `device_stopped` as an error after the stop succeeded; it can reach it only by a race, since it never sees
+        another side's session as in use.
+      responses:
+        '200':
+          description: The session that was ended (`session`), or `device_stopped` when it ran through another Carbon's pair
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [type, data]
+                    properties:
+                      type: {const: session}
+                      data: {$ref: '#/components/schemas/Session'}
+                  - type: object
+                    required: [type, data]
+                    properties:
+                      type: {const: device_stopped}
+                      data: {$ref: '#/components/schemas/DeviceStopped'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {description: 'device_not_in_use; conflict (only a carried device someone else paired is busy)', $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Access ─────────────────────────────
+  /api/v2/devices/{device_id}/access:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Access]
+      operationId: listAccess
+      summary: Silicons that can use the device
+      description: |
+        Owner only. Every grant on this pair, each with the Silicon's current id and permanent `silicon_uuid`, who gave it,
+        and `wake_muted`. A removed device the caller paired answers with no grants.
+      responses:
+        '200':
+          description: Access grants
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: access}
+                  data:
+                    type: object
+                    required: [items]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/AccessGrant'}}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/access/{silicon_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+      - {$ref: '#/components/parameters/SiliconIdPath'}
+    put:
+      tags: [Access]
+      operationId: grantAccess
+      summary: Give a Silicon access
+      description: |
+        Owner only. Gives a Silicon access through this pair: any active Silicon, named by its current `si:` id or its
+        Silicon Accounts uuid (resolved through Silicon Accounts). It is the Carbon's decision about their own device, so the
+        Silicon doesn't have to accept it; the grant shows to that Silicon and to its custodian. One grant per pair and
+        Silicon: repeating it returns the existing grant. An id nobody has, a Carbon's id, or a Silicon whose custodian hasn't
+        accepted it yet is `422 invalid_input`. The Carbon is enrolled with Ting at their first grant (when Ting is on).
+      responses:
+        '200':
+          description: Granted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: access_grant}
+                  data: {$ref: '#/components/schemas/AccessGrant'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Access]
+      operationId: revokeAccess
+      summary: Take a Silicon's access away
+      description: |
+        Owner only. If that Silicon is using the device through this pair, its session ends at once (`access_removed`): a
+        command in flight answers `409 session_ended` and the device gets `cancel` for it (the device stays paired). Its open
+        wake requests here are withdrawn.
+      responses:
+        '204': {description: 'Revoked, or there was no grant'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Sessions ─────────────────────────────
+  /api/v2/sessions:
+    post:
+      tags: [Sessions]
+      operationId: startSession
+      summary: Start using a device (`extend session new`)
+      description: |
+        Silicons only; the caller needs a grant on the device, and the device must be online and set up. One Silicon uses a
+        physical device at a time, across every pair of it. A computer and the devices it carries form one lock group: a
+        Silicon can't start on one of them while another Silicon holds another. When the device is in use:
+        - by a Silicon on the caller's own side (the same Carbon's pair) and in the caller's custodian circle (the same
+          custodian), or by the caller itself: `409 device_in_use` names the holder and its session;
+        - otherwise: "Device <id> (<name>) is in use. Only one Silicon can use a device at a time.", with `details
+          {in_use: {hidden: true}}` and the hint to ask for it with `extend request send <id> --reason "..."`.
+        Starting a session asks Silicon Accounts whether the sign-in is still active (cached for at most 30 s).
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: session}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [device_id]
+                  properties:
+                    device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+      responses:
+        '201':
+          description: Started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data: {$ref: '#/components/schemas/Session'}
+              example:
+                type: session
+                data:
+                  session_id: a3f
+                  device_id: 7c1e09ab
+                  silicon_id: 'si:chef'
+                  state: active
+                  started_at: '2026-09-26T10:00:00.000Z'
+                  last_command_at: null
+                  idle_ends_at: '2026-09-26T10:05:00.000Z'
+                  ended_at: null
+                  end_reason: null
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: The caller's sessions (`extend session ls`)
+      description: |
+        A Silicon sees its own sessions. A Carbon sees the sessions through their own pairs, or, with `?silicon=<si:id>`,
+        the sessions of a Silicon they look after (its custodian; `403 no_access` otherwise).
+      parameters:
+        - name: device_id
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceIdValue'}
+        - name: state
+          in: query
+          schema: {type: string, enum: [active, paused, ended]}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Sessions, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: sessions}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Session'}}
+                      next_cursor: {type: [string, 'null']}
+  /api/v2/sessions/{session_id}:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      summary: One session (used by `extend session connect` and `status`)
+      description: While a command runs, `idle_ends_at` is held at least 300 s after the command's deadline.
+      responses:
+        '200':
+          description: Session with its device and capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data:
+                    allOf:
+                      - {$ref: '#/components/schemas/Session'}
+                      - type: object
+                        required: [device, capabilities, commands]
+                        properties:
+                          device: {$ref: '#/components/schemas/Device'}
+                          capabilities: {type: array, items: {$ref: '#/components/schemas/Capability'}}
+                          commands: {type: array, items: {type: string}}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v2/sessions/{session_id}/end:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [Sessions]
+      operationId: endSession
+      summary: Finish and free the device (`extend session end`)
+      description: |
+        The session's Silicon ends its own (`ended_by_silicon`); a Silicon's custodian can end it for them
+        (`stopped_by_carbon`). The device's Carbon stops a session with `POST /api/v2/devices/{device_id}/stop`.
+      responses:
+        '200':
+          description: Ended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: session}
+                  data: {$ref: '#/components/schemas/Session'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v2/sessions/{session_id}/takeover:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [Sessions]
+      operationId: startTakeover
+      summary: Pause and hand the device to its Carbon (`extend takeover`)
+      description: |
+        The session becomes `paused`; commands get 423 `session_paused`. The device and website show the reason and a
+        Done button. The idle timer stops for up to 30 minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: takeover}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [reason]
+                  properties:
+                    reason: {type: string, minLength: 1, maxLength: 300, example: Please approve the Face ID prompt}
+      responses:
+        '201':
+          description: Paused
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: takeover}
+                  data: {$ref: '#/components/schemas/Takeover'}
+        '409': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [Sessions]
+      operationId: getTakeover
+      summary: Whether the session is paused for the Carbon (`extend takeover status`)
+      description: The session's Silicon, or the Carbon who owns the device (the website shows the reason and a Done button from this).
+      responses:
+        '200':
+          description: Current takeover, or `null`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: takeover}
+                  data: {oneOf: [{$ref: '#/components/schemas/Takeover'}, {type: 'null'}]}
+    delete:
+      tags: [Sessions]
+      operationId: releaseTakeover
+      summary: Resume the session (`extend takeover release`, or the Carbon's Done on the website)
+      description: The session's Silicon, or the Carbon who owns the device.
+      responses:
+        '204': {description: Resumed}
+        '409': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Commands ─────────────────────────────
+  /api/v2/sessions/{session_id}/commands:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [Commands]
+      operationId: runCommand
+      summary: Run one command on the device
+      description: |
+        Every device engine command Extend exposes, plus Extend's additions (`terminal`, `adb`, `display`,
+        `notifications`), goes through here. `command` is the top-level name as typed after `extend`, and `args` are
+        the remaining command-line tokens exactly as the device engine's command line accepts them, so the engine's own
+        parser stays the authority on arguments. Flags that pick a device or session inside the engine (`--platform`,
+        `--device`, `--udid`, `--serial`, `--target`, `--session`, `--remote`) are refused: Extend picks those.
+        `cli.yaml` lists every command and its arguments.
+
+        Awake is never a gate (1.1): the terminal, Android debugging and every other command run while the device isn't
+        awake. A command that needs the screen fails with the device's own error; when the device is known not to be
+        awake, the answer (a failed result, `unsupported_on_device` or `device_offline`) carries the wake hint. On a
+        computer several Carbons paired, `terminal` works only through the first pair (the Carbon who installed Silicon
+        Extend on it); through any other pair it is `422 unsupported_on_device` with that reason.
+
+        Before running, Extend checks that the caller's sign-in is still active (Silicon Accounts, cached for at most
+        30 s), that it still has its grant, that the session is theirs and `active`, that the device is online, and that
+        the command is in the device's capabilities. Commands in one
+        session run one at a time, in order; a command that waited behind another checks the session again when its
+        turn comes (`409 session_ended` or `423 session_paused`, never relayed). While the command runs,
+        `idle_ends_at` is held at `timeout_ms` + 2 s + 300 s from its start; when the answer comes (or the command times
+        out, or the device drops), the 300 s idle window restarts from then.
+
+        If the session ends while the command runs (the device removed, the pair revoked, access removed, a Stop by any
+        Carbon who paired the device or by the Silicon's custodian, a sign-out, the account deleted), the caller gets
+        `409 session_ended` at once (within about 200 ms), not at the deadline: "Session <id> ended while `<command>` was
+        running on <device>: <why>. `<command>` may have run.", a hint for that end reason, and
+        `details: {end_reason, command_id, may_have_run: true}`. The device gets `cancel` for it if still connected, and
+        the activity log records the outcome as `unknown`. A dropped socket or a passed deadline whose session had
+        ended answers the same way instead of `device_offline` or `command_timeout`.
+
+        Files the command makes are stored in Briefcase for the Silicon, shared with the device's owner, and returned
+        in `files`. `self_destruct_minutes` (1 to 43,200; default 1,440) applies to every file this command makes;
+        `permanent: true` keeps them. Small inputs a command reads from the caller's machine (a replay script, an
+        image to show on a TV, an APK to install) travel in `attachments`: at most 8 and 8 MiB in total.
+
+        For `display show --image` or `--video`, a 1.1 service also resolves `file:<file_id>`, a bare file UUID, the
+        stored Extend content link, or the exact Briefcase permanent URL recorded by Extend. These name files Extend
+        already stored for the calling Silicon; they do not authorize arbitrary
+        Briefcase entries. Expired, unknown or another Silicon's files give `404 file_not_found`. The recorded content
+        type must match image/video. Extend reads bounded bytes from Briefcase on the Silicon's behalf, checks visibility
+        again after the read and checks that the session is still active before forwarding. The resulting ordinary
+        attachment shares the same 8-file/8-MiB total with local inputs. No credentials or private media URL go to the
+        device. Unrelated public media URLs stay device-side URLs; this is not a service URL-fetch endpoint.
+        This resolution is for display media only; install, replay and screenshot baselines still require local inputs.
+
+        On Android TV apps 1.1 or later, a primary element `click` (`@ref` or selector) needs `screen.read`, rather than
+        pointer/touch injection. The service keeps the old requirement for apps older than 1.1 or with an unknown app
+        version. Coordinates, held/repeated or secondary clicks still need the corresponding native injection support;
+        no new pointer/touch capability is advertised. A missing/damaged image on the native TV returns a failed command
+        result (`action_failed`), rather than success while a blank image remains.
+
+        On a carried iPhone/iPad, the first plain screenshot binds an engine session to the current device with a bare
+        `open` when necessary, then retries the capture within the same command deadline. It launches no app and starts
+        no runner for a plain capture. Ref overlays or selector cropping may need the runner. This does not make the
+        device's lock state detectable or change the existing capture permission/setup requirements.
+
+        A file that can't be kept doesn't fail the command: `ok` is unchanged and `warnings` gets one entry per
+        problem, each saying what happened, why and what to do (a file the device listed under an upload id not issued
+        for this command, or never uploaded; Briefcase refused to store it; it was stored but not shared with the
+        device's Carbon; it was stored but Extend could not record it, in which case the warning gives its link and it
+        won't be listed or self-destruct). Warnings also go to the command's activity entry (`details.warnings`).
+
+        A result with `ok: false` ran on the device and failed there; `error.code` says how. Besides the device engine's own
+        codes, a device answers `command_failed` (a shell exited non-zero; `details.exit_code`), `action_failed`,
+        `upload_failed` (a file it made could not be uploaded), `cancelled` (Extend cancelled it), `session_ended` (the
+        Carbon pressed Stop or the session ended while it ran or waited) and, on Android, `device_not_ready` (Android
+        debugging was disconnected).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: command}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [command]
+                  properties:
+                    command: {type: string, example: click, description: Top-level command name}
+                    args: {type: array, items: {type: string}, default: [], example: ['@e2']}
+                    attachments:
+                      type: array
+                      maxItems: 8
+                      description: At most 8 attachments and 8 MiB (8,388,608 bytes) decoded in total per command.
+                      items:
+                        type: object
+                        required: [name, content_type, content_base64]
+                        properties:
+                          name: {type: string}
+                          content_type: {type: string}
+                          content_base64: {type: string, description: Counts toward the 8 MiB total}
+                    timeout_ms: {type: integer, minimum: 1000, maximum: 300000, default: 30000}
+                    self_destruct_minutes: {type: integer, minimum: 1, maximum: 43200, default: 1440}
+                    permanent: {type: boolean, default: false}
+            examples:
+              snapshot: {value: {type: command, data: {command: snapshot, args: ['-i']}}}
+              click: {value: {type: command, data: {command: click, args: ['@e2']}}}
+              fill: {value: {type: command, data: {command: fill, args: ['@e3', hello]}}}
+              screenshot: {value: {type: command, data: {command: screenshot, args: ['--scale', '0.5'], self_destruct_minutes: 10080}}}
+              tvRemote: {value: {type: command, data: {command: tv-remote, args: [press, select]}}}
+              terminal: {value: {type: command, data: {command: terminal, args: [run, 'ls -la ~/Downloads', '--cwd', '~'], timeout_ms: 20000}}}
+      responses:
+        '200':
+          description: The command ran. `ok` false means it ran and failed on the device (for example `is visible` was false); see `error`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: command_result}
+                  data: {$ref: '#/components/schemas/CommandResult'}
+              example:
+                type: command_result
+                data:
+                  command_id: 01926f40-1b2c-7d3e-8f40-5a6b7c8d9e0f
+                  session_id: a3f
+                  command: screenshot
+                  ok: true
+                  output: {width: 540, height: 1200}
+                  text: 'Saved screenshot (540x1200)'
+                  files:
+                    - file_id: 6e1f2a9c-3b4d-4e5f-8a7b-9c0d1e2f3a4b
+                      name: screenshot-a3f-2026-09-26T10-04-12Z.png
+                      kind: screenshot
+                      content_type: image/png
+                      size_bytes: 184223
+                      url: 'https://briefcase.teamofsilicons.com/org/Ch3fUu1d/apps/extend/screenshot-0192f3a1-7c2d-7e3f-8a4b-5c6d7e8f9a0b.png'
+                      self_destruct_at: '2026-09-27T10:04:12.391Z'
+                      permanent: false
+                  error: null
+                  started_at: '2026-09-26T10:04:12.001Z'
+                  duration_ms: 390
+                  idle_ends_at: '2026-09-26T10:09:12.391Z'
+                  warnings: []
+        '401': {description: 'token_expired, not_signed_in (see startSession: a refused Silicon''s sessions may end)', $ref: '#/components/responses/Error'}
+        '403': {description: 'access_removed, not_session_owner, silicon_only', $ref: '#/components/responses/Error'}
+        '404': {description: 'unknown_command (names the Extend replacement if any), session_not_found', $ref: '#/components/responses/Error'}
+        '409': {description: 'session_ended (details.end_reason; when it ended mid-command also command_id and may_have_run)', $ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input, unsupported_on_device (names the missing capability)', $ref: '#/components/responses/Error'}
+        '423': {description: session_paused, $ref: '#/components/responses/Error'}
+        '503': {description: device_offline, $ref: '#/components/responses/Error'}
+        '504': {description: command_timeout, $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Requests ─────────────────────────────
+  /api/v2/devices/{device_id}/requests:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Requests]
+      operationId: sendRequest
+      summary: Ask for a device another Silicon is using (`extend request send`)
+      description: |
+        A Silicon with a grant on the device asks for it while another Silicon is using it:
+        - when the Silicon using the device runs through the same pair and is in the asker's custodian circle (the same
+          custodian), the request goes to it, through Ting, naming the asker;
+        - otherwise it goes to the Carbon who gave the holder access, on their own pair, naming the asker and its reason;
+          the asker's side sees only that it went to "the Carbon who gave access to the Silicon using it". It never names
+          the Silicon using the device or its session. A Silicon is never reached from outside its circle unasked.
+        Every Ting is sent by Extend itself (an App verification proof). The same reason from the same Silicon for the same
+        device and session within 60 s returns the first request (200) and sends nothing. While Ting is off on the server
+        (`EXTEND_TING_URL` unset), the request is recorded as `failed` with why, and stays visible to its recipient on the
+        website, in the CLI and on the device. Undelivered requests are retried (30 s, then 1, 2, 4 and 8 minutes, then every
+        8 minutes) and fail after 6 attempts or 24 hours, with `last_error`.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: request}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [reason]
+                  properties:
+                    reason:
+                      type: string
+                      minLength: 1
+                      maxLength: 1000
+                      description: 1–300 Unicode scalar values after trimming; at most 1,000 with the surrounding whitespace, which is kept
+            example: {type: request, data: {reason: 'I need to check the order confirmation in the Swiggy app, 2 minutes'}}
+      responses:
+        '200':
+          description: A repeat of the same reason within 60 s; the existing request, nothing sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: request}
+                  data: {$ref: '#/components/schemas/Request'}
+        '201':
+          description: Sent, or stored as pending with last_error
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: request}
+                  data: {$ref: '#/components/schemas/Request'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {description: 'device_not_in_use; conflict (you are the one using it, or an Idempotency-Key reused with another body)', $ref: '#/components/responses/Error'}
+        '429': {description: rate_limited, $ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    get:
+      tags: [Requests]
+      operationId: listDeviceRequests
+      summary: Requests for this device, with reasons (device page)
+      description: |
+        Owner only: the requests made through this pair, and the requests routed to this Carbon because a Silicon they gave
+        access to holds the device.
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Requests, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RequestPage'}
+  /api/v2/requests:
+    get:
+      tags: [Requests]
+      operationId: listMyRequests
+      summary: Requests the calling Silicon sent or received (`extend request ls`)
+      description: |
+        A Silicon: the requests it sent, and the ones sent to it as the Silicon using a device. A Carbon: a Silicon's they
+        look after, with `?silicon=<si:id>`.
+      parameters:
+        - name: direction
+          in: query
+          schema: {type: string, enum: [sent, received, all], default: all}
+        - name: device_id
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceIdValue'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Requests, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RequestPage'}
+
+  # ───────────────────────────── Waking (1.1) ─────────────────────────────
+  /api/v2/devices/{device_id}/wake-requests:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Waking]
+      operationId: askToWake
+      summary: Ask the Carbon to wake a device that isn't awake (`extend device wake`)
+      description: |
+        A Silicon with a grant on this pair asks the Carbon who paired it to wake the device. Extend never wakes a device
+        itself. One open request per physical device and Silicon; asking again within 5 minutes is `429 rate_limited` (with
+        its own request), after that it refreshes the request. It expires 30 minutes after the last ask. While the device is
+        online and awake it is `409 conflict` ("start using it"). The device shows it where it can (`device_notice`), and
+        the Carbon gets one `extend.device.wake_requested` Ting per pair every 15 minutes (a later ask is `covered`), at most
+        6 an hour (later ones are `deferred`, which the Silicon sees as `pending`). When the device wakes, each Silicon that
+        asked gets its own `extend.device.woken` Ting, naming no one, with what it can do now.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: wake_request}
+                data: {$ref: '#/components/schemas/WakeCreate'}
+            example: {type: wake_request, data: {reason: 'I need the TV on to check the order screen'}}
+      responses:
+        '200':
+          description: Asked again after 5 minutes; the refreshed request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: wake_request}
+                  data: {$ref: '#/components/schemas/WakeRequest'}
+        '201':
+          description: Asked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: wake_request}
+                  data: {$ref: '#/components/schemas/WakeRequest'}
+        '403': {description: 'silicon_only, no_access', $ref: '#/components/responses/Error'}
+        '404': {description: device_not_found, $ref: '#/components/responses/Error'}
+        '409': {description: 'conflict (already awake, wake requests turned off, open through another pair of the same device); device_in_use', $ref: '#/components/responses/Error'}
+        '422': {description: invalid_input, $ref: '#/components/responses/Error'}
+        '429': {description: 'rate_limited: asked less than 5 minutes ago (details.retry_after_s, details.wake_request)', $ref: '#/components/responses/Error'}
+    get:
+      tags: [Waking]
+      operationId: listWakeRequests
+      summary: Wake requests on the device (`extend device wake-requests ls`)
+      description: |
+        The Carbon who paired this pair sees every request made through it; a Silicon sees its own. Anyone else gets 404.
+        Newest first.
+      parameters:
+        - name: state
+          in: query
+          schema: {type: string, enum: [open, all], default: all}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Wake requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: wake_requests}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/WakeRequest'}}
+                      next_cursor: {type: [string, 'null']}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/wake-requests/{wake_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+      - {$ref: '#/components/parameters/WakeId'}
+    delete:
+      tags: [Waking]
+      operationId: cancelWakeRequest
+      summary: Withdraw your own wake request (`extend device wake <id> --cancel`)
+      description: |
+        The Silicon that asked, or its custodian. The request ends as `withdrawn` (`cancelled`) and the device drops it.
+      responses:
+        '204': {description: Withdrawn}
+        '404': {description: request_not_found, $ref: '#/components/responses/Error'}
+        '409': {description: 'conflict: it already ended', $ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/wake-requests/answer:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [Waking]
+      operationId: answerWakeRequests
+      summary: The Carbon answers "It's awake" or "Decline" (`extend device wake-requests answer`, the website)
+      description: |
+        Owner only.
+        - `woken`: "It's awake" is a fact about the whole device: every open request on it ends (`confirmed_by_carbon`),
+          made through any Carbon's pair, and `wake_ids` is ignored. Each Silicon that asked gets its own
+          `extend.device.woken` Ting, naming no one. The answer lists only this Carbon's own pair's requests.
+        - `declined`: only this Carbon's pair's requests (all, or `wake_ids`); each asking Silicon gets
+          `extend.device.wake_declined`, naming this Carbon. A wake id not open on this pair is `422`.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: wake_answer}
+                data: {$ref: '#/components/schemas/WakeAnswer'}
+            examples:
+              woken: {value: {type: wake_answer, data: {answer: woken}}}
+              declined: {value: {type: wake_answer, data: {answer: declined}}}
+      responses:
+        '200':
+          description: Answered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: wake_answer}
+                  data: {$ref: '#/components/schemas/WakeAnswered'}
+        '403': {description: 'carbon_only, not_owner', $ref: '#/components/responses/Error'}
+        '404': {description: device_not_found, $ref: '#/components/responses/Error'}
+        '409': {description: 'conflict: nothing is open', $ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input: a wake_id that isn''t on this pair', $ref: '#/components/responses/Error'}
+  /api/v2/devices/{device_id}/wake-settings:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    put:
+      tags: [Waking]
+      operationId: setWakeSettings
+      summary: Turn wake requests off or on for a device, or for one Silicon (`extend device wake-requests mute|unmute`)
+      description: |
+        Owner only. Turns wake requests off (or on) for this pair, or for one Silicon on it (`silicon_id`, its current id or
+        uuid; a Silicon without a grant here is `422`). Turning them off withdraws the matching open requests (`muted`).
+        `team` is not a wake setting any more (`422`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: wake_settings}
+                data: {$ref: '#/components/schemas/WakeSettings'}
+            examples:
+              device: {value: {type: wake_settings, data: {muted: true}}}
+              oneSilicon: {value: {type: wake_settings, data: {muted: true, silicon_id: 'si:chef'}}}
+      responses:
+        '200':
+          description: The pair's wake settings now
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: wake_settings}
+                  data: {$ref: '#/components/schemas/WakeSettingsView'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '422': {description: 'invalid_input: the Silicon has no grant on this pair, or a team was sent', $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Ting (1.1) ─────────────────────────────
+  /api/v2/ting-registration:
+    get:
+      tags: [Ting]
+      operationId: tingRegistration
+      summary: Whether Extend's notifications reach you through Ting (`extend ting status`)
+      description: |
+        Any signed-in account, about themselves: whether Extend's notifications reach them through Ting. One enrolment per
+        account. `status` is `on`, `off` (Ting refused a delivery after Extend had enrolled them: they turned Extend off in
+        Ting) or `pending` (not enrolled yet; Extend enrols an account at its next use of Extend). `missing_types` lists
+        Extend's types Ting reported unknown; Ting registers an app's types, and a later delivery clears the observation.
+        `delivery_enabled` is false while this server sends no notifications through Ting (`EXTEND_TING_URL` unset).
+      responses:
+        '200':
+          description: The caller's enrolment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: ting_registration}
+                  data: {$ref: '#/components/schemas/TingRegistration'}
+        '401': {$ref: '#/components/responses/Error'}
+    put:
+      tags: [Ting]
+      operationId: tingTurnOn
+      summary: Turn Extend's notifications on for you (`extend ting on`, Settings' "Turn on")
+      description: |
+        "Turn on": enrols the caller with Ting again, with their own (live) sign-in, even after they turned Extend off in
+        Ting, and sends the notifications that waited for it. `503 service_unavailable` while Ting is off on this server.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: {const: ting_registration}
+                data: {type: object}
+      responses:
+        '200':
+          description: The enrolment now
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: ting_registration}
+                  data: {$ref: '#/components/schemas/TingRegistration'}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {description: 'service_unavailable: Ting is off on this server, or could not be reached; nothing changed', $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Activity ─────────────────────────────
+  /api/v2/devices/{device_id}/activity:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [Activity]
+      operationId: listActivity
+      summary: Every action on the device, which Silicon did it, and when
+      description: |
+        Owner only. Typed text and clipboard writes are redacted to `[redacted N chars]`. The log of a removed device
+        stays readable to the Carbon who paired it (find it with `GET /api/v2/devices?include_removed=true`).
+
+        The log is this Carbon's pair's own. It never names another Carbon, their Silicons or sessions: another Carbon
+        pairing the device is
+        `another_carbon_paired`, and a Stop by another Carbon who paired it is `session_ended` by `extend` with
+        `{"stopped_by": "another_carbon"}`. New actions are listed under `ActivityEntry`.
+      parameters:
+        - name: silicon_id
+          in: query
+          schema: {$ref: '#/components/schemas/SiliconId'}
+        - name: session_id
+          in: query
+          schema: {$ref: '#/components/schemas/SessionIdValue'}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+        - name: until
+          in: query
+          schema: {type: string, format: date-time}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Entries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: activity}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/ActivityEntry'}}
+                      next_cursor: {type: [string, 'null']}
+        '403': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Files ─────────────────────────────
+  /api/v2/files:
+    get:
+      tags: [Files]
+      operationId: listFiles
+      summary: Files made in the caller's sessions (Silicon) or on the caller's devices (Carbon)
+      description: |
+        The files the caller may see: a Silicon, the ones it made on devices it still has access to; a Carbon, the ones made
+        on their devices and the ones made by the Silicons they look after (narrowed with `?silicon=<si:id>`). Files past
+        their self-destruct time are not listed.
+      parameters:
+        - name: session_id
+          in: query
+          schema: {$ref: '#/components/schemas/SessionIdValue'}
+        - name: device_id
+          in: query
+          schema: {$ref: '#/components/schemas/DeviceIdValue'}
+        - name: kind
+          in: query
+          schema: {$ref: '#/components/schemas/FileKind'}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: |
+            Files, newest first. A file whose self-destruct time has passed is omitted at once, also while Extend is
+            still deleting it from Briefcase (its record stays until Briefcase confirms the deletion; failures are
+            retried, backing off from 1 minute to 1 hour).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: files}
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/File'}}
+                      next_cursor: {type: [string, 'null']}
+  /api/v2/files/{file_id}:
+    parameters:
+      - {$ref: '#/components/parameters/FileId'}
+    get:
+      tags: [Files]
+      operationId: getFile
+      summary: One file and its Briefcase link
+      responses:
+        '200':
+          description: File
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: file}
+                  data: {$ref: '#/components/schemas/File'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v2/files/{file_id}/keep:
+    parameters:
+      - {$ref: '#/components/parameters/FileId'}
+    post:
+      tags: [Files]
+      operationId: keepFile
+      summary: Make a file permanent before it self-destructs (`extend file keep`)
+      description: |
+        Cancels a file's self-destruct: the Silicon that made it, or its custodian.
+      responses:
+        '200':
+          description: Now permanent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: file}
+                  data: {$ref: '#/components/schemas/File'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v2/files/{file_id}/content:
+    parameters:
+      - {$ref: '#/components/parameters/FileId'}
+    get:
+      tags: [Files]
+      operationId: fileContent
+      summary: Download a file's bytes (`extend file get`, and every `--out`)
+      description: |
+        The Silicon that made the file (`created_by`), the Carbon who owns the pair it was made through, or the
+        Silicon's custodian, until its self-destruct time passes: the same check as `GET /api/v2/files/{file_id}`. The
+        bytes are read from Briefcase as the caller, with a User verification proof for them (scope
+        `briefcase.files.read`), so Briefcase's own sharing applies too (local disk in development). `HEAD` answers the
+        same headers without the body.
+
+        One byte range is honoured: `Range: bytes=F-L`, `bytes=F-` or `bytes=-N` answers 206; a range that starts past
+        the end answers 416. Several ranges, other units, malformed ranges, or L before F are ignored and the whole file
+        is served. The service holds the whole file in memory while it answers (files are at most 1 GiB).
+
+        Refusals: `404 file_not_found` for a file that is unknown, not visible to the caller, or already
+        self-destructed. Briefcase's own refusals keep their codes (`403 no_access`, `404 file_not_found`,
+        `429 rate_limited`, `503 service_unavailable`); for the device's Carbon, when sharing the file with them failed
+        when it was made, the hint says "Ask <creator> to share it with you in Briefcase."
+      parameters:
+        - name: Range
+          in: header
+          required: false
+          schema: {type: string, example: bytes=0-1023}
+      responses:
+        '200':
+          description: The whole file
+          headers:
+            Content-Type: {schema: {type: string}, description: 'The type the device reported when the file was made (else the store''s)'}
+            Content-Length: {schema: {type: integer}}
+            Content-Disposition:
+              schema: {type: string}
+              description: "attachment; filename=\"<name, with non-ASCII characters, quotes and backslashes as _>\"; filename*=UTF-8''<percent-encoded name> (RFC 8187)"
+              example: "attachment; filename=\"screenshot.png\"; filename*=UTF-8''screenshot.png"
+            Accept-Ranges: {schema: {type: string, const: bytes}}
+            Cache-Control: {schema: {type: string, const: 'private, no-store'}}
+            X-Content-Type-Options: {schema: {type: string, const: nosniff}}
+            Content-Security-Policy: {schema: {type: string, const: "sandbox; default-src 'none'"}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '206':
+          description: The requested range, with the same headers
+          headers:
+            Content-Range: {schema: {type: string}, example: bytes 0-7/67}
+            Content-Length: {schema: {type: integer}}
+            Content-Disposition: {schema: {type: string}}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {description: 'no_access (Briefcase)', $ref: '#/components/responses/Error'}
+        '404': {description: file_not_found, $ref: '#/components/responses/Error'}
+        '416':
+          description: 'The range starts past the end. Error envelope with code invalid_input and a hint about the Range header.'
+          headers:
+            Content-Range: {schema: {type: string}, example: bytes */67}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: error}
+                  data: {$ref: '#/components/schemas/Error'}
+        '429': {description: rate_limited (Briefcase), $ref: '#/components/responses/Error'}
+        '503': {description: service_unavailable (Briefcase), $ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Device app ─────────────────────────────
+  /api/v1/device:
+    get:
+      tags: [Device app]
+      operationId: deviceSelf
+      summary: What the Extend app shows once paired
+      description: |
+        The pair the credential belongs to. An app with several pairs reads it once per credential (docs/device-protocol.md
+        section 2). `team` is kept for installed apps: the Team a pair made before Extend 4 was recorded in, `''` for
+        pairs made since; it authorizes nothing. `environment` is always null since Extend 4. `in_use` is
+        set only when the session runs through this pair. 1.1 adds `instance_id` (the physical device; every pair of it
+        shares one), `hardware_salt` (computer pairs only: the world's key for `hardware_key` on carried devices) and
+        `first_pair` (true for the pair made by the app's first enrollment, whose Silicons get the terminal on a
+        computer several Carbons paired). `in_use_indicator` is the physical device's shared banner choice, with
+        `shown` as the default when absent. A 1.1 app preserves its saved local choice when a 1.0 service omits the field.
+
+        The device wire is unchanged in Extend 4: apps installed before it keep working with their credentials.
+      security:
+        - deviceCredential: []
+      responses:
+        '200':
+          description: Name, owner and who is using it
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: device_self}
+                  data:
+                    type: object
+                    required: [device_id, name, owner, team, in_use, environment]
+                    properties:
+                      device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+                      name: {$ref: '#/components/schemas/DeviceName'}
+                      owner: {$ref: '#/components/schemas/Member'}
+                      team: {type: string, description: 'Kept for installed apps: a pre-Extend 4 pair''s recorded Team, `''''` since; authorizes nothing'}
+                      os: {$ref: '#/components/schemas/DeviceOs'}
+                      in_use: {oneOf: [{$ref: '#/components/schemas/InUse'}, {type: 'null'}]}
+                      takeover: {oneOf: [{$ref: '#/components/schemas/Takeover'}, {type: 'null'}]}
+                      setup: {$ref: '#/components/schemas/Setup'}
+                      environment: {type: 'null', description: 'Always null since Extend 4 (no test environments); kept for installed apps'}
+                      instance_id: {type: string, format: uuid, description: '1.1: the physical device; every pair of it shares one'}
+                      hardware_salt: {type: string, description: '1.1, computer pairs only: the same for every computer in the world'}
+                      first_pair: {type: boolean, description: '1.1: made by the app''s first enrollment (the Carbon who installed Silicon Extend on the device)'}
+                      in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
+        '401': {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [Device app]
+      operationId: updateDeviceSelf
+      summary: Show or hide this physical device's in-use banner
+      description: |
+        Any live pair credential can change the shared physical device preference. The envelope is `device_self`;
+        a bare data object is also accepted. Send `in_use_indicator: shown|hidden`. No If-Match is needed. The setting
+        does not end a session, release the screen hold, hide takeover requests, or remove Stop from the app/website.
+        Changed values refresh every live pair. A 1.0 service has no PATCH handler; 1.1 native apps retain their local
+        choice and report that synchronization is unavailable or pending instead of treating an omitted GET field as
+        an instruction to reset it.
+      security:
+        - deviceCredential: []
+      requestBody:
+        $ref: '#/components/requestBodies/DeviceIndicatorPatch'
+      responses:
+        '200': {$ref: '#/paths/~1api~1v1~1device/get/responses/200'}
+        '401': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [Device app]
+      operationId: revokePair
+      summary: Revoke pair, from the device (dangerous)
+      description: |
+        Removes the device from the account of the Carbon whose pair the credential is, and ends the access of every
+        Silicon that Carbon gave access to (`pair_revoked`; a command in flight answers its caller `409 session_ended` at
+        once). Other Carbons' pairs of the device are untouched (1.1). The device stays readable to its Carbon as a
+        removed device. The app confirms with the Carbon first, naming them. There is no route yet for a host computer to revoke a device it
+        carries; its Carbon removes that one on the website or with `extend device rm`.
+      security:
+        - deviceCredential: []
+      responses:
+        '204': {description: Unpaired; the credential no longer works}
+        '401': {$ref: '#/components/responses/Error'}
+  /api/v1/device/attachments/{device_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    patch:
+      tags: [Device app]
+      operationId: updateAttachedDeviceIndicator
+      summary: A host app shows or hides a carried device's shared in-use banner
+      description: |
+        Uses the computer's live pair credential. The target must be carried by that exact host pair in the same
+        world and remain live after authorization is re-checked under the instance locks. Another Carbon's host pair,
+        an unrelated target or a removed target gets `404 device_not_found`. The response is the target's device_self.
+        The physical device preference updates every carried alias/host through attach frames without replacing a
+        live driver, session or recording. The native app may save an offline choice and synchronize it later.
+      security:
+        - deviceCredential: []
+      requestBody:
+        $ref: '#/components/requestBodies/DeviceIndicatorPatch'
+      responses:
+        '200': {$ref: '#/paths/~1api~1v1~1device/get/responses/200'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/device/stop:
+    post:
+      tags: [Device app]
+      operationId: deviceStop
+      summary: The Carbon tapped Stop on the device
+      description: |
+        Same as the `stop` frame on the socket, for when the socket is down: ends the running session with
+        `stopped_by_carbon` (a command in flight answers `409 session_ended` at once). A no-op when nothing runs. Client:
+        `Client::device_stop`. 1.1: it acts on the physical device, from any pair's credential: the session ends
+        whichever Carbon's pair it runs through, and on a computer every session on a device it carries ends too.
+      security:
+        - deviceCredential: []
+      responses:
+        '204': {description: 'Stopped, or nothing was running'}
+        '401': {description: 'unauthorized: the credential is not paired', $ref: '#/components/responses/Error'}
+  /api/v1/device/enrollments:
+    post:
+      tags: [Device app]
+      operationId: pairWithAnotherCarbon
+      summary: '"Pair with another Carbon": a paired app asks for a new pairing code (1.1)'
+      description: |
+        With the credential of any live pair of the device. The answer is shaped like `POST /api/v1/enrollments`; the app
+        follows it the same way (`GET /api/v1/enrollments/{id}` and `/enrollments/{id}/connect`). The code it shows
+        pairs the same physical device into the same world for whichever Carbon enters it on the website: a new pair,
+        with its own `device_id`, credential, name, access list and lifetime (docs/device-protocol.md section 1). The
+        app never names the device itself; holding a live credential is the proof, and only a Carbon can claim the code.
+
+        No body, `{}` or `{"type": "enrollment", "data": {}}`. Limits: the 60 enrollments per hour per address of
+        `POST /api/v1/enrollments`; at most 3 waiting codes per device (`429 rate_limited`, `details.retry_after_s`);
+        `409 conflict` when the device already has `EXTEND_MAX_PAIRS_PER_DEVICE` pairs (8 by default): "This device is
+        paired to 8 Carbons, the most Extend allows." A 1.0 service answers 404. A device paired through a computer has
+        no credential, so it can't call this: its second Carbon pairs the computer and adds the device through it.
+      security:
+        - deviceCredential: []
+      responses:
+        '201':
+          description: Enrollment with its first code
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: enrollment}
+                  data:
+                    type: object
+                    required: [enrollment_id, enrollment_secret, pairing_code, code_expires_at, rotates_every_s]
+                    properties:
+                      enrollment_id: {type: string, format: uuid}
+                      enrollment_secret: {type: string, pattern: '^ees_[A-Za-z0-9_-]{43}$', description: Returned once}
+                      pairing_code: {$ref: '#/components/schemas/PairingCode'}
+                      code_expires_at: {type: string, format: date-time}
+                      rotates_every_s: {type: integer, const: 300}
+        '401': {$ref: '#/components/responses/Error'}
+        '409': {description: 'conflict: the device has the most pairs Extend allows', $ref: '#/components/responses/Error'}
+        '429': {description: rate_limited, $ref: '#/components/responses/Error'}
+  /api/v1/device/connect:
+    get:
+      tags: [Device app]
+      operationId: deviceSocket
+      summary: The paired device's WebSocket to Extend
+      description: |
+        Upgrade to WebSocket with `Authorization: Extend-Device <device_credential>`. Flat JSON frames
+        `{"type": ..., <fields>}`; every frame and field is in docs/device-protocol.md (Rust: extend-protocol frames.rs). Ping every 15 s; offline after 45 s
+        without a pong. One connection per pair (1.1): an app with several pairs opens one for each credential. A new
+        connection for a pair replaces the old one, which gets `superseded`; when the old one had answered a ping in
+        the last 30 s, the pair's activity log records `connection_replaced`. A credential rotated by a `credential`
+        frame but not yet confirmed also connects, and connecting with it confirms it. Close codes: 4401 credential invalid or unpaired, 4409 superseded by a newer connection,
+        4426 app too old (upgrade required). The first frame is `environment` with a null environment (kept for
+        installed apps).
+      security:
+        - deviceCredential: []
+      responses:
+        '101': {description: Switching protocols}
+        '401': {$ref: '#/components/responses/Error'}
+        '426': {$ref: '#/components/responses/Error'}
+  /api/v1/device/artifacts/{upload_id}:
+    put:
+      tags: [Device app]
+      operationId: uploadArtifact
+      summary: Upload a file a command produced
+      description: |
+        `upload_id` comes with the command. Single use, valid until the command's deadline, at most 1 GiB. Extend
+        streams it to Briefcase and answers once Briefcase has it.
+      security:
+        - deviceCredential: []
+      parameters:
+        - name: upload_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Content-Type
+          in: header
+          required: true
+          schema: {type: string, example: image/png}
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+        - name: X-File-Name
+          in: header
+          required: true
+          schema: {type: string, maxLength: 255}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '201': {description: Stored}
+        '404': {description: 'Unknown, used or expired upload id'}
+        '413': {description: Larger than 1 GiB}
+        '422': {description: Digest does not match the bytes}
+
+  # ───────────────────────────── Operations ─────────────────────────────
+  /api/v2/reports:
+    post:
+      tags: [Operations]
+      operationId: reportBug
+      summary: Report a bug, optionally with a PR that fixes it (`extend report`)
+      description: Stored, then emailed through Postmark to the bug list. Simulated in a test environment. 10 reports per member per hour.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: report}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [message, client_version]
+                  properties:
+                    message: {type: string, minLength: 1, maxLength: 60000}
+                    pr: {type: [string, 'null'], format: uri}
+                    client_version: {type: string, maxLength: 100}
+                    context:
+                      type: object
+                      description: Optional; the CLI attaches OS, CLI version, last command, session id and request ids
+                      additionalProperties: true
+      responses:
+        '202':
+          description: Stored; email queued, sent or simulated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: report}
+                  data:
+                    type: object
+                    required: [report_id, notification, repository_url]
+                    properties:
+                      report_id: {type: string, format: uuid}
+                      notification: {type: string, enum: [queued, sent, simulated]}
+                      repository_url: {type: string, format: uri}
+        '429': {$ref: '#/components/responses/Error'}
+  /api/v2/telemetry:
+    post:
+      tags: [Operations]
+      operationId: telemetry
+      summary: Forward a telemetry event to Space Station
+      description: |
+        So the CLI and apps never hold the Space Station ingest key. `X-Extend-Telemetry: off` drops it, and on
+        any other route it keeps the service from recording that request (for example a command's event).
+        Never accepts typed text, screen contents, tokens, codes or secrets.
+      parameters:
+        - {name: X-Extend-Telemetry, in: header, schema: {type: string, enum: ['on', 'off']}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, data]
+              properties:
+                type: {const: telemetry}
+                data:
+                  type: object
+                  additionalProperties: false
+                  required: [source, event, step, success, duration_ms]
+                  properties:
+                    source: {type: string, enum: [cli, client, app, web]}
+                    event: {type: string, maxLength: 64, example: command}
+                    step: {type: string, maxLength: 128, example: session.command.relay}
+                    success: {type: boolean}
+                    duration_ms: {type: integer, minimum: 0}
+                    error_code: {type: [string, 'null'], maxLength: 64}
+                    command: {type: [string, 'null'], maxLength: 64}
+                    device_os: {oneOf: [{$ref: '#/components/schemas/DeviceOs'}, {type: 'null'}]}
+                    session_id: {oneOf: [{$ref: '#/components/schemas/SessionIdValue'}, {type: 'null'}]}
+                    request_id: {type: [string, 'null']}
+                    client_version: {type: string, maxLength: 32}
+      responses:
+        '204': {description: Accepted or dropped because telemetry is off}
+
+  # ───────────────────────────── Extend 4: accounts and custodians ─────────────────────────────
+  /api/v2/contracts:
+    get:
+      tags: [System]
+      operationId: contractsV2
+      summary: Compatibility matrix and deprecation state (the same answer as /api/v1/contracts)
+      security: []
+      responses:
+        '200': {description: 'Every API major, its state, and the client, CLI and app versions that work with it'}
+        '410': {description: 'api_version_sunset: the path''s major is retired', $ref: '#/components/responses/Error'}
+  /api/v2/accounts:
+    get:
+      tags: [Auth]
+      operationId: accountsInfo
+      summary: Where Extend's accounts come from, and where everything else is
+      description: |
+        No sign-in. The CLI reads it to sign in: Carbons with the Silicon Accounts device flow at `accounts_url`,
+        Silicons with a short-lived token (`silicon-accounts login --app extend -q | extend login --slt-stdin`).
+        `ting_enabled` is false while this server sends no notifications through Ting (`EXTEND_TING_URL` unset):
+        requests and wake requests are then only on the website, in the CLI and on the device.
+      security: []
+      responses:
+        '200':
+          description: Extend's app id in Silicon Accounts and its links
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: accounts}
+                  data: {$ref: '#/components/schemas/AccountsInfo'}
+  /api/v2/accounts/lookup:
+    get:
+      tags: [Auth]
+      operationId: lookupAccount
+      summary: Who an id belongs to (`c:ada`, `si:scout`), through Silicon Accounts
+      description: |
+        Any signed-in account. Current ids only: an account that changed its id is found by its new one. An id nobody
+        has is `422 invalid_input`, "No account si:… exists in Silicon Accounts".
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string, example: 'si:scout'}}
+      responses:
+        '200':
+          description: The account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: account}
+                  data: {$ref: '#/components/schemas/AccountRef'}
+        '401': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v2/silicons:
+    get:
+      tags: [Silicons]
+      operationId: listSilicons
+      summary: The Silicons a Carbon looks after, then the ones they gave access to
+      description: |
+        Carbons only. A Silicon a Carbon looks after (they are its custodian in Silicon Accounts) shows `looked_after:
+        true` with how many grants and running sessions it has. A Silicon they gave access to shows how many of their
+        devices it can use. Nobody else's Silicons are listed: there is no directory to browse.
+      responses:
+        '200':
+          description: Silicons
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: silicons}
+                  data:
+                    type: object
+                    required: [items]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/SiliconSummary'}}
+        '403': {description: carbon_only, $ref: '#/components/responses/Error'}
+  /api/v2/silicons/{silicon}:
+    parameters:
+      - {$ref: '#/components/parameters/SiliconPath'}
+    get:
+      tags: [Silicons]
+      operationId: showSilicon
+      summary: One Silicon the caller looks after or gave access to
+      responses:
+        '200':
+          description: The Silicon
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: silicon}
+                  data: {$ref: '#/components/schemas/SiliconSummary'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v2/silicons/{silicon}/grants:
+    parameters:
+      - {$ref: '#/components/parameters/SiliconPath'}
+    get:
+      tags: [Silicons]
+      operationId: siliconGrants
+      summary: Every device a Silicon the caller looks after can use, whoever gave the access
+      description: |
+        The Silicon's custodian only (`403 no_access` otherwise). Each grant names the device, its OS and the Carbon
+        who paired it. The custodian sees what its Silicon does in Extend and can stop it (renounce a grant, end a
+        session, withdraw a wake request, keep a file); it never acts as the Silicon.
+      responses:
+        '200':
+          description: Grants
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, data]
+                properties:
+                  type: {const: access}
+                  data:
+                    type: object
+                    required: [items]
+                    properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/AccessGrant'}}
+        '403': {$ref: '#/components/responses/Error'}
+  /api/v2/silicons/{silicon}/grants/{device_id}:
+    parameters:
+      - {$ref: '#/components/parameters/SiliconPath'}
+      - {$ref: '#/components/parameters/DeviceId'}
+    delete:
+      tags: [Silicons]
+      operationId: renounceGrant
+      summary: Give up a Silicon's access to a device (its custodian, or the Silicon itself)
+      description: |
+        Its running session on the device ends (`access_removed`) and its open wake requests there are withdrawn. The
+        device's Carbon is told in the device's activity log.
+      responses:
+        '204': {description: Renounced}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+
+  # ───────────────────────────── Silicon Accounts webhooks ─────────────────────────────
+  /webhooks/accounts:
+    post:
+      tags: [Accounts webhooks]
+      operationId: accountsWebhook
+      summary: Silicon Accounts' signed events about the accounts that use Extend
+      description: |
+        `X-Accounts-Signature: v1=<hex HMAC-SHA256>` over `"{X-Accounts-Timestamp}.{raw body}"` with
+        `EXTEND_ACCOUNTS_WEBHOOK_SECRET` (then `EXTEND_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET` during a rotation), 5 minutes of
+        tolerance, verified over the exact raw body before anything is read: otherwise `401`. A signed body that isn't
+        an event is `400`. Deliveries are deduplicated on `event_id`; effects are idempotent, and a failed one answers
+        `500` so Silicon Accounts retries it. Types Extend doesn't act on are acknowledged (`204`).
+
+        - `account.id_changed`, `account.updated` (in version order): the cached id, name and photo; everything stays
+          keyed on the uuid.
+        - `silicon.custodian_changed`: the new custodian sees the Silicon; the grants the previous custodian gave it
+          end (sessions there end `access_removed`); other Carbons' grants stay.
+        - `membership.signed_out` (except `app_revoked`) and `membership.access_removed`: tokens issued before the
+          event are refused; a Silicon's sessions end (`silicon_logged_out`), a Carbon's Silicons' sessions on their
+          pairs end (`access_removed`); proofs Extend held for the account are revoked.
+        - `membership.signed_out` with `app_revoked` (Extend revoked one sign-in: a logout): what
+          `POST /api/v2/auth/logout` ends, for sessions started before the logout; other sign-ins stay valid.
+        - `account.deleted`: as above, and a Carbon's pairs end (the devices are unpaired), a Silicon's grants end
+          and its wake requests are withdrawn; others' history shows "deleted account".
+      security: []
+      parameters:
+        - {name: X-Accounts-Timestamp, in: header, required: true, schema: {type: string, example: '1790000000'}}
+        - {name: X-Accounts-Signature, in: header, required: true, schema: {type: string, example: 'v1=5d41…'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_id, type]
+              properties:
+                event_id: {type: string}
+                type: {type: string, example: membership.signed_out}
+                occurred_at: {type: string, format: date-time}
+                app_id: {type: string, example: extend}
+                data: {type: object}
+      responses:
+        '204': {description: 'Applied, already applied, or a type Extend doesn''t act on'}
+        '400': {description: 'invalid_input: not a Silicon Accounts event', $ref: '#/components/responses/Error'}
+        '401': {description: 'unauthorized: bad, missing or stale signature', $ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        A Silicon Accounts access token for the app `extend`: an EdDSA-signed JWT whose `aud` is `extend` and whose
+        `iss` is the Silicon Accounts this server trusts (`ACCOUNTS_URL`), verified with its published keys. Carbons get
+        one with the Silicon Accounts device flow (the CLI) or the authorization-code flow (the website's server),
+        Silicons by exchanging a short-lived token from `silicon-accounts login --app extend -q`. Tokens issued before
+        a sign-out, removed access or deleted account are refused.
+    enrollmentSecret:
+      type: http
+      scheme: bearer
+      bearerFormat: 'Enrollment secret (ees_). Sent as "Authorization: Extend-Enrollment <secret>".'
+    deviceCredential:
+      type: http
+      scheme: bearer
+      bearerFormat: 'Device credential (edc_). Sent as "Authorization: Extend-Device <credential>".'
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, pattern: '^[!-~]{8,255}$'}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: The device version from its ETag. Stale is 412. Without it the change applies to the current version.
+      schema: {type: string, pattern: '^"?[1-9][0-9]*"?$'}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string}
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/DeviceIdValue'}
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/SessionIdValue'}
+    SiliconIdPath:
+      name: silicon_id
+      in: path
+      required: true
+      description: The Silicon's current `si:` id, or its Silicon Accounts uuid
+      schema: {type: string, example: 'si:chef'}
+    SiliconPath:
+      name: silicon
+      in: path
+      required: true
+      description: A Silicon the caller looks after or gave access to, by its current `si:` id or its Silicon Accounts uuid
+      schema: {type: string, example: 'si:chef'}
+    EnrollmentId:
+      name: enrollment_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    FileId:
+      name: file_id
+      in: path
+      required: true
+      description: Briefcase entry id
+      schema: {type: string, format: uuid}
+    WakeId:
+      name: wake_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+
+  headers:
+    Deprecation:
+      description: 'On a deprecated API major only: when it was deprecated, as @<unix seconds> (RFC 9745)'
+      schema: {type: string, pattern: '^@[0-9]+$', example: '@1790000000'}
+    Sunset:
+      description: 'On a deprecated API major only: the soonest it can be sunset, as an HTTP-date (RFC 8594)'
+      schema: {type: string, example: 'Thu, 01 Oct 2026 00:00:00 GMT'}
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [type, data]
+            properties:
+              type: {const: error}
+              data: {$ref: '#/components/schemas/Error'}
+          example:
+            type: error
+            data:
+              code: device_in_use
+              message: 'Device 7c1e09ab (Saket''s Pixel) is being used by si:chef in session a3f since 2026-09-26T09:58:00Z. Only one Silicon can use a device at a time.'
+              hint: 'Ask for it with: extend request send 7c1e09ab --reason "<why, up to 300 characters>"'
+              docs_url: https://extend.teamofsilicons.com/docs/cli#error-device_in_use
+              request_id: 01926f41-0a1b-7c2d-8e3f-4a5b6c7d8e9f
+              details: {in_use: {silicon_id: 'si:chef', session_id: a3f, since: '2026-09-26T09:58:00.000Z'}}
+          # When the Silicon using the device is on another side (another Carbon's pair, or outside the caller's custodian
+          # circle), Extend names no one: "Device 7c1e09ab (Living room TV) is in use. Only one Silicon can use a device
+          # at a time.", hint 'Ask for it: extend request send 7c1e09ab --reason "..."', details {in_use: {hidden: true}}.
+
+  requestBodies:
+    DeviceIndicatorPatch:
+      required: true
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - type: object
+                required: [type, data]
+                properties:
+                  type: {const: device_self}
+                  data: {$ref: '#/components/schemas/DeviceSelfPatch'}
+              - {$ref: '#/components/schemas/DeviceSelfPatch'}
+  schemas:
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: Stable. The full list is in cli.yaml under errors.
+          example: device_in_use
+        message: {type: string, description: 'What happened and why, in full'}
+        hint: {type: [string, 'null'], description: 'What to do next, often an exact command'}
+        docs_url: {type: [string, 'null'], format: uri}
+        request_id: {type: string}
+        details: {type: object, additionalProperties: true}
+
+    PairingCode: {type: string, pattern: '^[0-9A-F]{6}$', example: 4F9C2A, description: 6 hexadecimal characters; rotates every 300 s; works once}
+    PairingCodeInput: {type: string, pattern: '^[0-9A-Fa-f]{6}$', example: 4f9c2a, description: Case-insensitive}
+    DeviceIdValue: {type: string, pattern: '^[0-9a-f]{8}$', example: 7c1e09ab}
+    SessionIdValue: {type: string, pattern: '^[0-9a-f]{3,}$', example: a3f, description: '3 hexadecimal characters, growing to 4 and more once every shorter id is used; never reused'}
+    InUseIndicator:
+      type: string
+      enum: [shown, hidden]
+      default: shown
+      description: |
+        1.1: shared by every pair of a physical device. Shown displays the in-use banner/notification for 10 seconds
+        per session (the desktop icon stays changed until the session ends); hidden suppresses those announcements
+        and icon changes. Takeover requests remain until answered and Stop remains in the app and website. Android's
+        quiet running notification, Apple's Automation Running banner and test-environment disclosure are separate.
+        Old responses omit this field; readers default to shown unless preserving an explicit saved native choice.
+        A future unknown value is read as shown; writes accept only shown or hidden.
+    DeviceSelfPatch:
+      type: object
+      required: [in_use_indicator]
+      properties:
+        in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
+    CarbonId: {type: string, pattern: '^c:', example: 'c:alice'}
+    SiliconId: {type: string, pattern: '^si:', example: 'si:chef'}
+    DeviceName: {type: string, minLength: 1, maxLength: 64, example: Saket's Pixel}
+    Visibility:
+      type: string
+      enum: [personal]
+      deprecated: true
+      description: 'A device is private to the Carbon who paired it and the Silicons they give access to: every device reads personal, and any other value sent is 422 invalid_input.'
+    PairTtlDays: {type: integer, minimum: 1, maximum: 30, default: 14}
+    DeviceOs:
+      type: string
+      enum: [android, android_tv, macos, windows, linux, ios, ipados, tvos, samsung_tv, lg_tv]
+      description: android_tv covers Android TV, Google TV and Fire OS
+    Capability:
+      type: string
+      enum: [screen.read, screen.capture, screen.record, input.touch, input.pointer, input.text, input.keyboard, input.remote,
+        nav.system, apps.launch, apps.list, apps.install, alerts, clipboard, logs, replay, takeover, notifications, adb, terminal,
+        display, links]
+    FileKind: {type: string, enum: [screenshot, recording, log, replay_script, diff, other]}
+
+    Member:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [carbon, silicon]}
+        id: {type: string, example: 'c:alice', description: 'The current public id; it can change'}
+        display_name: {type: [string, 'null']}
+        uuid: {type: string, example: 750mDPTu, description: 'The permanent Silicon Accounts uuid (API v2; never on the device wire)'}
+
+    AccountRef:
+      type: object
+      required: [uuid, id, type]
+      description: A Carbon or Silicon, by permanent uuid and current public id
+      properties:
+        uuid: {type: string, example: 8YnY5M4E}
+        id: {type: string, example: 'si:chef', description: 'The current public id, or "deleted account <uuid>"'}
+        type: {type: string, enum: [carbon, silicon]}
+        display_name: {type: string}
+        pfp_url: {type: string, format: uri}
+
+    AccountMe:
+      type: object
+      required: [uuid, id, type]
+      properties:
+        uuid: {type: string}
+        id: {type: string, example: 'si:chef'}
+        type: {type: string, enum: [carbon, silicon]}
+        display_name: {type: string}
+        pfp_url: {type: string, format: uri}
+        custodian: {allOf: [{$ref: '#/components/schemas/AccountRef'}], description: 'A Silicon''s custodian'}
+
+    AccountsInfo:
+      type: object
+      required: [app_id, accounts_url, api_base_url, website_url, docs_url, repository_url, ting_enabled]
+      properties:
+        app_id: {type: string, example: extend, description: Extend's app id in Silicon Accounts and Silicon Apps}
+        accounts_url: {type: string, format: uri, example: 'https://accounts.teamofsilicons.com', description: 'The `iss` of every access token Extend accepts'}
+        api_base_url: {type: string, format: uri}
+        website_url: {type: string, format: uri}
+        docs_url: {type: string, format: uri}
+        repository_url: {type: string, format: uri}
+        ting_enabled: {type: boolean, description: 'Whether this server delivers notifications through Ting'}
+
+    SiliconSummary:
+      type: object
+      required: [uuid, id, looked_after, granted_by_you]
+      properties:
+        uuid: {type: string}
+        id: {type: string, example: 'si:chef'}
+        display_name: {type: string}
+        pfp_url: {type: string, format: uri}
+        looked_after: {type: boolean, description: 'The caller is its custodian: they see its grants, sessions, files and requests, and can stop them'}
+        granted_by_you: {type: integer, minimum: 0, description: 'How many of the caller''s devices it can use'}
+        grants: {type: integer, minimum: 0, description: 'Custodian views: every grant it holds, whoever gave it'}
+        running_sessions: {type: integer, minimum: 0, description: 'Custodian views'}
+
+    InUse:
+      type: object
+      required: [silicon_id, session_id, since]
+      description: 'Only on the viewer''s own side (1.1): the owner sees it when the session runs through their pair; a Silicon when the Silicon using it is on its side.'
+      properties:
+        silicon_id: {$ref: '#/components/schemas/SiliconId'}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        since: {type: string, format: date-time}
+        paused: {type: boolean, default: false}
+        silicon_uuid: {type: string, description: 'API v2: the Silicon''s permanent uuid; never on the device wire'}
+
+    EndReason:
+      type: string
+      description: 'Why a session ended, or (as `removed_reason`) why a pair ended. `left_team`, `environment_disabled` and `environment_cleaned` appear only on sessions from before Extend 4.'
+      enum: [ended_by_silicon, idle_timeout, stopped_by_carbon, access_removed, device_removed, pair_revoked, pair_expired,
+        silicon_logged_out, left_team, device_offline, environment_disabled, environment_cleaned]
+
+    Device:
+      type: object
+      required: [device_id, name, os, kind, owner, visibility, online, state]
+      description: |
+        One Carbon's pair of a device. A removed device (readable only by the Carbon who paired it) has `removed_at` and
+        `removed_reason`, `online` false, and no `in_use`, `pair_expires_at` or `days_left`. `visibility` is always
+        `personal`. Fields marked "owner" appear only in the view of the Carbon who paired this pair.
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        name: {$ref: '#/components/schemas/DeviceName'}
+        os: {$ref: '#/components/schemas/DeviceOs'}
+        os_version: {type: [string, 'null']}
+        model: {type: [string, 'null']}
+        kind: {type: string, enum: [phone, tablet, tv, computer]}
+        owner: {$ref: '#/components/schemas/Member'}
+        visibility: {$ref: '#/components/schemas/Visibility'}
+        host_device_id: {oneOf: [{$ref: '#/components/schemas/DeviceIdValue'}, {type: 'null'}], description: Set for devices paired through a computer}
+        state: {type: string, enum: [setup, ready], description: 'setup: its own setup steps are not finished yet'}
+        online: {type: boolean}
+        last_seen_at: {type: [string, 'null'], format: date-time}
+        in_use: {oneOf: [{$ref: '#/components/schemas/InUse'}, {type: 'null'}]}
+        last_used_at: {type: [string, 'null'], format: date-time, description: 'Owner: when a Silicon last used this pair (1.1: not in Silicon views)'}
+        paired_at: {type: string, format: date-time}
+        pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+        pair_expires_at: {type: string, format: date-time, description: 'The pair ends after pair_ttl_days without activity on the device: a session or command through any Carbon''s pair keeps every pair of it alive (1.1)'}
+        days_left: {type: integer, minimum: 0}
+        access_count: {type: integer, minimum: 0, description: 'Grants on this pair (owner views)'}
+        app_version: {type: [string, 'null']}
+        version: {type: integer, minimum: 1}
+        removed_at: {type: string, format: date-time, description: 'Removed devices only: when the pair ended'}
+        removed_reason:
+          allOf: [{$ref: '#/components/schemas/EndReason'}]
+          description: 'Removed devices only: why the pair ended (device_removed, pair_revoked, pair_expired; left_team or environment_cleaned for pairs ended before Extend 4)'
+        engine_version: {type: string, description: '1.1: the device engine''s version on the device (for a carried device, on its computer)'}
+        agent_device_version: {type: string, deprecated: true, description: 'The same value under its 1.0 name, kept for API v1 readers'}
+        awake:
+          type: boolean
+          description: |
+            1.1: whether the device is awake (screen on and unlocked; a computer awake and unlocked; a TV on). Absent while
+            it is offline, or while an online device hasn't said (apps older than 1.1 never do). Never a gate.
+        sleep_state: {$ref: '#/components/schemas/SleepState'}
+        last_sleep_state: {allOf: [{$ref: '#/components/schemas/SleepState'}], description: '1.1: an offline device''s last report, when it was not awake'}
+        awake_changed_at: {type: string, format: date-time, description: '1.1, owner: when awake last changed'}
+        wake_detectable: {type: boolean, description: '1.1: whether Extend can tell when it wakes (false for iPhone, iPad and apps older than 1.1)'}
+        in_use_by_other: {type: boolean, description: '1.1: a Silicon the viewer can''t see (another side) is using it, or for a computer a device it carries. `in_use` is then absent. Left out when false.'}
+        in_use_by_other_carried: {type: boolean, description: '1.1, owner views of a computer: what is busy is a carried device the viewer didn''t pair. A remote Stop can''t end it; the computer''s own Stop can. Left out when false.'}
+        open_wake_requests: {type: integer, minimum: 0, description: '1.1: open wake requests the viewer may see (every one on the owner''s pair; a Silicon''s own)'}
+        wake_requests: {type: array, items: {$ref: '#/components/schemas/WakeRequest'}, description: '1.1, single reads: those open requests'}
+        wake_muted: {type: boolean, description: '1.1, owner: wake requests are turned off for this pair'}
+        in_use_indicator: {$ref: '#/components/schemas/InUseIndicator'}
+        paired_by_others: {type: boolean, description: '1.1, owner: another Carbon also paired this device. Never says who.'}
+        same_device: {type: array, items: {$ref: '#/components/schemas/DeviceIdValue'}, description: '1.1, Silicon views: other Carbons'' pairs of this same physical device that the Silicon has access to'}
+
+    Setup:
+      type: object
+      required: [state, steps]
+      properties:
+        state: {type: string, enum: [in_progress, needs_carbon, complete]}
+        steps:
+          type: array
+          items:
+            type: object
+            required: [key, title, status]
+            properties:
+              key: {type: string, example: wireless_debugging, description: 'Stable; what `POST .../setup/retry` names. 1.1 adds duplicate_device and recognising for a carried device'}
+              title: {type: string, example: Turn on wireless debugging}
+              status: {type: string, enum: [todo, in_progress, needs_carbon, done, failed]}
+              help: {type: [string, 'null'], description: Where to find it on this device}
+              input: {type: [string, 'null'], enum: [code, null], description: 'What the Carbon enters on the website for this step: "code" for the PIN an Apple TV shows'}
+              error:
+                type: [string, 'null']
+                description: |
+                  Why it failed, in one or two sentences for the Carbon: what is wrong and what to do ("The iPhone is locked or
+                  not connected by cable. Unlock it and keep it plugged in."). Never environment variables, file paths,
+                  build commands, exit codes or stack traces: those are in the app's log.
+
+    EnrollmentState:
+      oneOf:
+        - type: object
+          required: [state, pairing_code, code_expires_at]
+          properties:
+            state: {const: waiting}
+            pairing_code: {$ref: '#/components/schemas/PairingCode'}
+            code_expires_at: {type: string, format: date-time}
+        - type: object
+          required: [state, device_id, device_credential]
+          properties:
+            state: {const: paired}
+            device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+            device_credential: {type: string, pattern: '^edc_[A-Za-z0-9_-]{43}$', description: Returned once}
+            environment: {type: 'null', description: 'Always null since Extend 4; kept for installed apps'}
+
+    AccessGrant:
+      type: object
+      required: [device_id, silicon_id, granted_by, granted_at]
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        silicon_id: {$ref: '#/components/schemas/SiliconId'}
+        granted_by: {$ref: '#/components/schemas/CarbonId'}
+        granted_at: {type: string, format: date-time}
+        last_used_at: {type: [string, 'null'], format: date-time}
+        wake_muted: {type: boolean, description: '1.1: the owner turned this Silicon''s wake requests off on this pair'}
+        silicon_uuid: {type: string, description: 'The Silicon''s permanent uuid (`silicon_id` is its current id)'}
+        granted_by_uuid: {type: string, description: 'The granting Carbon''s permanent uuid'}
+        device_name: {allOf: [{$ref: '#/components/schemas/DeviceName'}], description: 'Custodian views (GET /api/v2/silicons/{silicon}/grants)'}
+        device_os: {allOf: [{$ref: '#/components/schemas/DeviceOs'}], description: Custodian views}
+        owner: {allOf: [{$ref: '#/components/schemas/Member'}], description: 'Custodian views: the Carbon who paired the device'}
+
+    Session:
+      type: object
+      required: [session_id, device_id, silicon_id, state, started_at, last_command_at, idle_ends_at, ended_at, end_reason]
+      properties:
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        silicon_id: {$ref: '#/components/schemas/SiliconId'}
+        state: {type: string, enum: [active, paused, ended]}
+        started_at: {type: string, format: date-time}
+        last_command_at: {type: [string, 'null'], format: date-time}
+        idle_ends_at: {type: [string, 'null'], format: date-time, description: Null once ended}
+        ended_at: {type: [string, 'null'], format: date-time}
+        end_reason:
+          type: [string, 'null']
+          enum: [ended_by_silicon, idle_timeout, stopped_by_carbon, access_removed, device_removed, pair_revoked, pair_expired,
+            silicon_logged_out, left_team, device_offline, environment_disabled, environment_cleaned, null]
+        command_count: {type: integer, minimum: 0}
+        silicon_uuid: {type: string, description: 'The Silicon''s permanent uuid (`silicon_id` is its current id)'}
+
+    Takeover:
+      type: object
+      required: [takeover_id, session_id, reason, started_at, expires_at]
+      properties:
+        takeover_id: {type: string, format: uuid}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        reason: {type: string, maxLength: 300}
+        started_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, description: started_at + 30 minutes; the session ends then}
+
+    CommandResult:
+      type: object
+      required: [command_id, session_id, command, ok, output, files, error, started_at, duration_ms, idle_ends_at]
+      properties:
+        command_id: {type: string, format: uuid}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        command: {type: string}
+        ok: {type: boolean}
+        output: {description: 'The device engine''s structured result for this command (for snapshot, the node tree and refs)'}
+        text: {type: [string, 'null'], description: 'The device engine''s plain-text rendering, what the CLI prints without --json'}
+        files: {type: array, items: {$ref: '#/components/schemas/File'}}
+        error:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [code, message]
+              properties:
+                code: {type: string, example: wait_target_absent}
+                message: {type: string}
+                details: {type: object, additionalProperties: true}
+        started_at: {type: string, format: date-time}
+        duration_ms: {type: integer}
+        idle_ends_at: {type: string, format: date-time}
+        warnings:
+          type: array
+          items: {type: string}
+          default: []
+          description: |
+            What went wrong around the command without failing it, one entry per problem, each saying what happened,
+            why and what to do: chiefly a file the device made that Extend couldn't store in Briefcase, share with the
+            device's Carbon, or record. The service always sends it (empty when all went well); older services leave it
+            out, so read a missing one as empty. `ok` does not change because of a warning.
+          example: ['screenshot.png was not stored: Saket''s Pixel made it but never uploaded it (the upload failed or was cut off). Run the command again; if it keeps happening, report it with `extend report`.']
+
+    File:
+      type: object
+      required: [file_id, name, kind, content_type, size_bytes, url, self_destruct_at, permanent]
+      properties:
+        file_id: {type: string, format: uuid, description: Briefcase entry id}
+        name: {type: string, description: 'The name the device gave the file. In Briefcase the file has its own unique name (for example screenshot-20260926-153307-2228fc1d.png), which `url` uses.'}
+        kind: {$ref: '#/components/schemas/FileKind'}
+        content_type: {type: string}
+        size_bytes: {type: integer}
+        url: {type: string, format: uri, description: 'Briefcase URL of the file in the Silicon''s Extend folder; opens only for accounts it is shared with'}
+        self_destruct_at: {type: [string, 'null'], format: date-time}
+        permanent: {type: boolean}
+        session_id: {$ref: '#/components/schemas/SessionIdValue'}
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        command_id: {type: string, format: uuid}
+        created_by: {$ref: '#/components/schemas/SiliconId'}
+        shared_with: {allOf: [{$ref: '#/components/schemas/CarbonId'}], description: 'The Carbon who gave the Silicon access (the owner of the pair it used)'}
+        created_at: {type: string, format: date-time}
+        created_by_uuid: {type: string, description: 'The Silicon''s permanent uuid'}
+        shared_with_uuid: {type: string, description: 'The Carbon''s permanent uuid'}
+
+    Request:
+      type: object
+      required: [request_id, device_id, from, to, reason, created_at, delivery]
+      properties:
+        request_id: {type: string, format: uuid}
+        device_id: {allOf: [{$ref: '#/components/schemas/DeviceIdValue'}], description: 'The viewer''s own id for the device (the Carbon a request was routed to sees their own pair''s id)'}
+        from: {type: string, description: 'The requesting Silicon. (REQUEST_FROM_HIDDEN, "a Silicon another Carbon gave access to", only when from_hidden; a 1.1.0 service never hides it.)'}
+        to: {type: string, description: 'The Silicon using the device (routed_to holder), or, for the requester''s side of a request routed to a Carbon, "the Carbon who gave access to the Silicon using it" (to_hidden). The Carbon it was routed to sees their own id.'}
+        session_id: {allOf: [{$ref: '#/components/schemas/SessionIdValue'}], description: 'The session the requester asked for; never shown to the requester''s side of a routed request'}
+        reason: {type: string, maxLength: 1000, description: 'Exactly as sent, surrounding whitespace included'}
+        created_at: {type: string, format: date-time}
+        delivery: {type: string, enum: [pending, delivered, failed]}
+        last_error:
+          type: string
+          description: 'While pending, or once failed: why the last delivery through Ting failed, and what to do. Left out once delivered.'
+        from_uuid: {type: string, description: 'The requesting Silicon''s permanent uuid'}
+        to_uuid: {type: string, description: 'The recipient''s permanent uuid, when the viewer may see who it is'}
+        routed_to: {type: string, enum: [holder, carbon], description: '1.1: to the Silicon using the device, or to the Carbon who gave it access'}
+        to_hidden: {type: boolean, description: '1.1: `to` is the hidden text; left out when false'}
+        from_hidden: {type: boolean, description: '1.1: `from` is the hidden text; left out when false. Never set by a 1.1.0 service.'}
+    RequestPage:
+      type: object
+      required: [type, data]
+      properties:
+        type: {const: requests}
+        data:
+          type: object
+          required: [items, next_cursor]
+          properties:
+            items: {type: array, items: {$ref: '#/components/schemas/Request'}}
+            next_cursor: {type: [string, 'null']}
+
+    ActivityEntry:
+      type: object
+      required: [id, at, actor, action]
+      properties:
+        id: {type: string, format: uuid}
+        at: {type: string, format: date-time}
+        actor: {$ref: '#/components/schemas/Member'}
+        action:
+          type: string
+          example: click
+          examples: [paired, renamed, access_granted, access_revoked, session_started, session_ended, command, takeover_started,
+            takeover_released, stopped, request_sent, request_failed, pair_revoked, removed, pair_expired,
+            another_carbon_paired, request_received, device_linked, duplicate_device, connection_replaced,
+            wake_requested, wake_refreshed, woken, woke_without_input, wake_confirmed, wake_declined, wake_cancelled,
+            wake_expired, wake_withdrawn, wake_muted, wake_unmuted]
+          description: |
+            A command name, or a device event. 1.1 adds: `another_carbon_paired` (another Carbon paired this device, `{}`,
+            never naming them); `paired` with `{"with_existing_pairs": true}`; `request_received` (a request routed to
+            this Carbon, on their pair); `device_linked` and `duplicate_device` (`{"kind": "same_carbon" |
+            "other_computer"}`) for carried devices; `connection_replaced` (`{"while_in_use_by_other": bool}`); the wake
+            events; and `session_ended` by `extend` with `{"stopped_by": "another_carbon"}`.
+        session_id: {oneOf: [{$ref: '#/components/schemas/SessionIdValue'}, {type: 'null'}]}
+        command: {type: [string, 'null']}
+        args: {type: [array, "null"], items: {type: string}, description: Redacted}
+        outcome: {type: [string, 'null'], enum: [ok, failed, timeout, unknown, null]}
+        files: {type: array, items: {type: string, format: uuid}}
+        details:
+          type: object
+          additionalProperties: true
+          description: 'For a command: `warnings` when the result had any, `error` (for example session_ended with outcome unknown). For request_failed: {request_id, from, to, error}. Never another side''s Silicon, Carbon or session.'
+
+    DeviceStopped:
+      type: object
+      required: [device_id, stopped_at, in_use_by_other]
+      description: 'A Stop ended a session that ran through another Carbon''s pair of the device, so the Silicon isn''t named (1.1)'
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        stopped_at: {type: string, format: date-time}
+        in_use_by_other: {type: boolean, const: true}
+
+    SetupRetryInput:
+      type: object
+      additionalProperties: false
+      description: 'Contract A (1.1): the step to run again, or {} for every failed step'
+      properties:
+        step: {type: string, example: wireless_debugging, description: A setup step's key}
+    RetryResult:
+      type: object
+      required: [retrying]
+      properties:
+        retrying: {type: array, items: {type: string}, description: The keys of the steps the device was asked to run again}
+
+    SleepState:
+      type: string
+      enum: [screen_off, locked, asleep, standby, other_session]
+      description: |
+        1.1: why an online device isn't awake. Shown as "screen off", "locked", "asleep", "standby" and "another account".
+        Read a value you don't know as "not awake": later versions may add some.
+    HostDevice:
+      type: object
+      required: [device_id, name, online]
+      description: 'The computer a carried device pairs through (the Carbon''s own pair of it); it must be awake too'
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        name: {type: string}
+        online: {type: boolean}
+    WakeCreate:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: 1–300 Unicode scalar values after trimming, at most 1,000 raw; kept exactly as written
+    WakeRequest:
+      type: object
+      required: [wake_id, device_id, from, to, reason, created_at, last_asked_at, asks, expires_at, state, wake_detectable, device_notice]
+      description: |
+        A Silicon's request that its Carbon wake a device (1.1). The Carbon who paired the pair sees every request on it;
+        a Silicon sees its own. Read enum values you don't know as the nearest general case: later versions may
+        add some.
+      properties:
+        wake_id: {type: string, format: uuid}
+        device_id: {allOf: [{$ref: '#/components/schemas/DeviceIdValue'}], description: The pair the Silicon asked through}
+        from: {allOf: [{$ref: '#/components/schemas/SiliconId'}], description: 'The asking Silicon (its current id)'}
+        from_uuid: {type: string}
+        to_uuid: {type: string}
+        to: {allOf: [{$ref: '#/components/schemas/CarbonId'}], description: The Carbon who gave the Silicon access (the pair's owner)}
+        reason: {type: string, description: 'The latest ask''s reason, exactly as written'}
+        created_at: {type: string, format: date-time}
+        last_asked_at: {type: string, format: date-time}
+        asks: {type: integer, minimum: 1, description: 'Asking again after 5 minutes refreshes the request and counts here'}
+        expires_at: {type: string, format: date-time, description: 30 minutes after the last ask}
+        state: {type: string, enum: [open, woken, expired, withdrawn, declined]}
+        ended_at: {type: string, format: date-time}
+        end_reason:
+          type: string
+          enum: [woken_on_device, confirmed_by_carbon, expired, cancelled, declined, session_started, access_removed, left_team,
+            device_removed, muted, rollback]
+          description: '`left_team`: withdrawn when Extend 4 merged one open request per Team into one per device and Silicon'
+        wake_detectable: {type: boolean, description: 'Whether Extend can tell when the device wakes; when false, its Carbon answers "It''s awake"'}
+        device_notice:
+          type: string
+          enum: [sent, shown, not_shown, offline, unsupported]
+          description: 'What the device did with it. unsupported: a carried device or an app older than 1.1, so Ting is the only way it reaches the Carbon.'
+        device_notice_note: {type: string, maxLength: 300, example: Notifications are off for Silicon Extend on this phone.}
+        ting:
+          type: string
+          enum: [pending, deferred, delivered, failed, covered]
+          description: 'The Ting to the Carbon. covered: an earlier Ting for the same pair covers it (ting_covered_by). A Silicon sees deferred as pending.'
+        ting_covered_by: {type: string, format: uuid}
+        ting_last_error: {type: string, description: 'Why the Ting isn''t delivered yet (for example, notifications through Ting are off on this server)'}
+        answer_ting: {type: string, enum: [pending, deferred, delivered, failed, covered], description: The Ting back to the Silicon once woken or declined}
+        answer_ting_last_error: {type: string}
+        host: {$ref: '#/components/schemas/HostDevice'}
+    WakeAnswer:
+      type: object
+      additionalProperties: false
+      required: [answer]
+      properties:
+        answer: {type: string, enum: [woken, declined]}
+        wake_ids: {type: array, items: {type: string, format: uuid}, description: 'declined only: which requests (all on this pair when absent)'}
+    WakeAnswered:
+      type: object
+      required: [answer, ended]
+      properties:
+        answer: {type: string, enum: [woken, declined]}
+        ended: {type: array, items: {$ref: '#/components/schemas/WakeRequest'}, description: 'The requests on the answering Carbon''s own pair that ended; other Carbons'' are never listed'}
+    WakeSettings:
+      type: object
+      additionalProperties: false
+      required: [muted]
+      properties:
+        muted: {type: boolean}
+        silicon_id: {type: string, description: 'One Silicon instead of the whole pair (its current id or uuid)'}
+    WakeSettingsView:
+      type: object
+      required: [device_id, muted, silicons_muted]
+      properties:
+        device_id: {$ref: '#/components/schemas/DeviceIdValue'}
+        muted: {type: boolean, description: Wake requests are off for the whole pair}
+        silicons_muted:
+          type: array
+          items:
+            type: object
+            required: [silicon_id]
+            properties:
+              silicon_id: {$ref: '#/components/schemas/SiliconId'}
+
+    TingRegistration:
+      type: object
+      required: [member, status, missing_types]
+      description: Whether Extend's notifications reach an account through Ting (one enrolment per account)
+      properties:
+        member: {type: string, example: 'c:alice'}
+        member_uuid: {type: string}
+        delivery_enabled: {type: boolean, description: 'False while this server sends no notifications through Ting'}
+        status: {type: string, enum: ['on', 'off', pending]}
+        registered_at: {type: string, format: date-time}
+        refused_at: {type: string, format: date-time}
+        last_error: {type: string, example: 'Not enrolled yet: Extend enrols you at your next use of Extend.'}
+        missing_types:
+          type: array
+          items: {type: string}
+          example: [extend.device.wake_requested]
+          description: 'Extend''s types Ting answered unknown, by full name. Ting registers an app''s types; turning notifications on doesn''t clear these.'
+

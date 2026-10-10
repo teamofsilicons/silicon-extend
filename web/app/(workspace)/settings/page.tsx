@@ -1,0 +1,2 @@
+import {Settings} from "@/components/product/account-pages";import type {Account} from "@/lib/product/types";import {tryApiFetch} from "@/lib/server/rsc";import {ErrorAlert} from "@/components/foundation/feedback/error-alert";import type {Envelope} from "@/components/product/common";
+export default async function Route(){const r=await tryApiFetch<Envelope<Account>>("/api/v2/me");return r.error?<ErrorAlert error={r.error}/>:<Settings me={r.data.data}/>;}

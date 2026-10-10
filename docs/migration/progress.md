@@ -526,3 +526,7 @@ Every one is intentional:
 - No process from this stage is left running (`.mig/pids` empty, nothing listening on 4220–4239),
   and every database it made on 5460 was dropped (`extend_ship_e2e` and the suites' throwaway
   databases, with `e2e/clean-test-dbs.sh`).
+
+## Recovery completion — Accounts rehearsal and Next.js website (2026-10-10)
+
+The inherited local Accounts stack scripts are completed and committed. Real Accounts/CLI/native-wire checks passed 31/31, including proof verification and restart/revocation. Next/Arc management pages replace Solid while preserving native API handlers and device download releases. TypeScript/lint, 45 frontend units and production build passed; generic/full browser suite passed 25/25 and the expanded populated session/file journey passed 2/2. See [web-verification.md](web-verification.md) for paths, exact coverage and remaining production gates. No production changes.

@@ -57,14 +57,16 @@ jobs:
       - uses: pnpm/action-setup@v4
         with: {version: 10}
       - uses: actions/setup-node@v4
-        with: {node-version: 22, cache: pnpm, cache-dependency-path: web/pnpm-lock.yaml}
+        with: {node-version: 24, cache: pnpm, cache-dependency-path: web/pnpm-lock.yaml}
       - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
       - name: Desktop banner browser controls
         run: node --test ../apps/desktop/banner-ui.e2e.mjs
-      - run: pnpm test:e2e
+      # Real Accounts + native-device browser E2E is the migration/release gate; see web/README.md.
   # The device engine (vendor/extend-engine) and the desktop packaging that stamps and wraps it.
   fork:
     runs-on: ubuntu-24.04
