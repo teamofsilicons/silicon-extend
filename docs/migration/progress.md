@@ -228,7 +228,8 @@ the CLI contract's review copy is [contracts/cli.yaml](contracts/cli.yaml).
 | `f344676` | Document the CLI and client on Silicon Accounts |
 | `98513ee` | Regenerate third-party licences and describe the fixtures by major |
 | `dcdd0bf` | Say what replaced Extend 3's groupings without naming them as a concept |
-| (this) | Record the client and CLI stage |
+| `8597303` | Record the client and CLI stage |
+| (this) | Keep Silicon IAM, Honeycomb and Teams out of what the CLI prints and the crates' docs |
 
 ### Tests
 
@@ -241,9 +242,10 @@ All with `CARGO_TARGET_DIR=$PWD/target/mig CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCRE
 | `cargo fmt --all -- --check` | clean |
 | `EXTEND_TEST_ADMIN_URL=… cargo test -p extend-service --test contracts` | 16 passed: the 57 v2 client fixtures replay against a real service; 3.1.1 and older client fixtures still get the 410; device fixtures replay |
 | `EXTEND_CONTRACTS_WRITE=1 cargo test -p silicon-extend-client --test contract_fixtures`, then without it | fixtures written, then 3 passed |
-| `cargo package --list --allow-dirty --offline -p silicon-extend-{protocol,client,cli}` | lists as expected (sources, README, CHANGELOG, tests) |
+| `cargo package --list --allow-dirty --offline -p <crate>` for `silicon-extend-protocol`, `silicon-extend-client`, `silicon-extend-cli` | each lists its sources and README; protocol and client their CHANGELOG; client and CLI their tests (the CLI's shared harness `tests/common/mod.rs` included) |
 | `cargo about generate about.hbs -o THIRD_PARTY_LICENSES.txt` | only the client and CLI versions change |
 | `ruby -ryaml -e 'YAML.load_file("docs/migration/contracts/cli.yaml")'` | parses: 45 commands, 38 device commands |
+| After the last commit's rewording (messages, changelogs, rustdoc, the review copy): `cargo fmt --all -- --check`; `cargo test -p silicon-extend-cli --locked`; `cargo test -p silicon-extend-protocol -p silicon-extend-client --locked`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; the YAML parse again | clean; 34 + 1 + 15 + 28 + 8 + 2 passed; 32 + 5 and 9 + 3 + 1 + 1 + 8 + 3 doc tests passed; clean; 45 / 38 |
 
 New coverage. `crates/silicon-extend-client/tests/sign_in.rs` (axum stand-in for Silicon Accounts):
 device flow pending → slow_down (interval 1 → 6 s) → tokens; denied; expired (server and local
@@ -285,11 +287,12 @@ appear only as SHA-256 prefixes. Run 1603606:
    --slt-stdin` exit 0 → "Signed in to Extend as si:extend-cli-s-1603606 (…), a Silicon looked after
    by c:extend-cli-c-1603606."; `login status --json` →
    `{"authenticated":true,"custodian":{"id":"c:extend-cli-c-1603606","uuid":"lP8"},"id":"si:extend-cli-s-1603606","kind":"silicon","method":"slt","uuid":"X9R","verified":true,…}`;
-   auth.json `0o600`, no `slt_` in it. The same SLT again → exit 3 `slt_invalid`/`slt_already_used`
+   auth.json `0o600`, without the SLT in it. The same SLT again → exit 3 `slt_invalid`/`slt_already_used`
    ("…already used; each one works once."); an SLT minted for remind → `slt_wrong_app` ("…issued
-   for the app 'remind', not for 'extend'…"); `slt_not-a-real-token-at-all` → `slt_unknown`; still
-   signed in afterwards; an SLT used after 125 s → `slt_expired` ("…expired at … (they last 120
-   seconds)…"). The token never appeared in any output.
+   for the app 'remind', not for 'extend'…"); `--slt slt_not-a-real-token-at-all` → exit 3 `slt_invalid`, "The
+   short-lived token is not known: it is mistyped or was never issued."; still signed in afterwards; an SLT used after 125 s → `slt_expired` ("…expired at … (they last 120
+   seconds)…"). No printed output holds a token (checked by pattern on both run outputs; the
+   automated suites assert it).
 3. **Carbon** (device flow): `extend login --json` in the background printed
    `{"event":"device_code","user_code":"84CX-7XAY","verification_uri":"http://localhost:9590/device","expires_in":600,"interval":5}`;
    `mint.mts approve --email extend-cli-c-1603606@example.test --code 84CX-7XAY` → 204; the CLI

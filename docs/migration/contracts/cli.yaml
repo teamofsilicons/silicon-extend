@@ -1,7 +1,7 @@
 # Contract file. Agents: propose changes to a Carbon and get approval before editing.
 # Extend 4 review copy (2026-10-10), proposed for the Carbon's approval; understanding/cli.yaml is unchanged. Everyone
-# signs in with Silicon Accounts (Carbons approve a code, Silicons hand over a short-lived token), there are no Teams and
-# no test environments, the account calls use API v2, and Silicon Apps installs and updates the CLI. Removed: --team,
+# signs in with Silicon Accounts (Carbons approve a code, Silicons hand over a short-lived token), devices aren't shared
+# through groups any more, there are no test environments, the account calls use API v2, and Silicon Apps installs and updates the CLI. Removed: --team,
 # --test, team, permission, env, config test, login contexts/use, device import/importable/visibility; each is refused
 # with exit 2 and what to do instead. Kept for the Silicon runtime for one release: `extend login <slt>` and a hidden
 # `extend iam --json` (the same answer as `extend accounts --json`).
@@ -53,7 +53,7 @@ grammar:
   - Destructive commands need `--yes`. Without it they print what would happen and exit 2.
   - Errors say exactly what failed, why, and the command to run next. Never "something went wrong". Every usage error
     (exit 2) has a hint.
-  - Commands Extend suggests (in a message, a hint or a Ting) are plain `extend ...`: there are no Teams to name.
+  - Commands Extend suggests (in a message, a hint or a Ting) are plain `extend ...`.
   - Commands and flags Extend 4 removed (--team, --test, team, permission, env, config test, login contexts|use, device
     import|importable|visibility, --visibility, --team-visible, --all-teams, --only-team) are refused with exit 2, saying
     why they are gone and what to run instead.
@@ -82,7 +82,7 @@ state_files:
   - '{home}/.extend/sessions/acct-<hex of the account uuid>/current  the connected session id'
   - '{home}/.extend/sessions/acct-<hex of the account uuid>/<id>.json  the session''s device, capabilities, commands and missing capabilities, as last read'
   - '{default home}/.extend/home     written by `extend config home <dir>`: the directory whose .extend/ holds the state'
-  - 'Extend 3 left contexts/, test/ and per-organization session caches; Extend 4 never reads them and deletes them at the next sign-in or sign-out.'
+  - 'Extend 3 left contexts/, test/ and older session caches; Extend 4 never reads them and deletes them at the next sign-in or sign-out.'
 
 exit_codes:
   0: success
@@ -235,7 +235,7 @@ commands:
         self_destruct: 'default file self-destruct, e.g. 1d, 90m, 30d (1m–30d, default 1d)'
         download_dir: 'an existing directory, saved as an absolute path: where `extend file get` saves without --out (default the current directory)'
         color: 'auto|always|never (default auto: colour on a terminal unless NO_COLOR is set)'
-    behaviour: 'Every value is checked when set; an out-of-range value, or an unknown key in get, set or unset, is refused with exit 2 and a hint listing what is accepted. An Extend 3 team value is ignored; `extend config unset team` clears it.'
+    behaviour: 'Every value is checked when set; an out-of-range value, or an unknown key in get, set or unset, is refused with exit 2 and a hint listing what is accepted. An Extend 3 `team` value is ignored; `extend config unset team` clears it.'
     gives: {text: '`config get <key>` prints the value, or "<default> (default)"', json: 'get: {key, value, default, effective}; ls: {settings, state_dir, keys: [{key, about, default, value}]}'}
 
   # ───────────────────────────── Devices (Carbon manages, Silicon lists) ─────────────────────────────

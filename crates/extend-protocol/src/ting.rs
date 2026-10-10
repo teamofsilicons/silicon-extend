@@ -3,7 +3,8 @@
 //! Ting knows each app's notification types by their full name (`extend.device.woken`). The API's
 //! `missing_types` lists the ones Ting reported unknown when Extend sent a Ting; the CLI and the
 //! website list them with [`TingType::description`], so whoever runs Extend can register them in
-//! Ting. (2.0: the 1.x `register_command`, a `ting --org` command for a Team, is gone with Teams.)
+//! Ting. (2.0: the 1.x `register_command`, which built Extend 3's Ting registration command, is
+//! gone.)
 
 use uuid::Uuid;
 

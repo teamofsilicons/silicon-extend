@@ -646,7 +646,7 @@ fn an_extend_3_sign_in_is_never_used_and_is_replaced_at_the_next_sign_in() {
     let o = cli.run(&["device", "ls"]);
     assert_eq!(o.status.code(), Some(3));
     assert!(
-        stderr(&o).contains("from Extend 3 (Silicon IAM)") && stderr(&o).contains("--slt-stdin"),
+        stderr(&o).contains("is from Extend 3, which Extend 4 no longer accepts") && stderr(&o).contains("--slt-stdin"),
         "{}",
         stderr(&o)
     );

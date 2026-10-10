@@ -2,10 +2,11 @@
 
 ## 4.0.0
 
-Extend 4 signs everyone in with Silicon Accounts and has no Teams and no test environments. This
-release speaks API v2 (`/api/v2/…`) for every account call; the device-side calls keep API v1, the
-wire the installed Extend apps speak. A 3.x client gets `410 api_version_sunset` on its account
-calls from an Extend 4 service.
+Extend 4 signs everyone in with Silicon Accounts with a personal account; devices aren't shared
+through groups any more, and there are no test environments. This release speaks API v2
+(`/api/v2/…`) for every account call; the device-side calls keep API v1, the wire the installed
+Extend apps speak. A 3.x client gets `410 api_version_sunset` on its account calls from an Extend 4
+service.
 
 ### New
 
@@ -26,8 +27,8 @@ calls from an Extend 4 service.
 
 ### Changed
 
-- `Client::authed(token)` takes only the access token (no Team).
-- `ting_registration()` and `ting_turn_on()` take no Team: one registration per account.
+- `Client::authed(token)` takes only the access token.
+- `ting_registration()` and `ting_turn_on()` take no arguments: one registration per account.
 - The version handshake offers 2; each request pins the major its path names
   (`Silicon-Extend-API-Version: 1` on `/api/v1/…`, 2 on `/api/v2/…`). `SUPPORTED_API_VERSIONS` is
   `[2]`; `DEVICE_API_VERSION` is 1.
@@ -36,7 +37,7 @@ calls from an Extend 4 service.
 
 ### Removed
 
-- `Client::login`, `refresh`, `logout` and `iam` (Silicon IAM sign-in through the service): use
+- `Client::login`, `refresh`, `logout` and `iam` (Extend 3's sign-in through the service): use
   `auth::SignIn` and `Authed::sign_out`.
 - `ClientBuilder::testing_secret`, `Client::testing_secret`, `Client::testing_environment`: there are
   no test environments.

@@ -2,11 +2,12 @@
 
 ## 2.0.0
 
-Extend 4: every account signs in with Silicon Accounts, and there are no Teams and no test
-environments. The account API moves to v2 (`/api/v2/…`); the device wire (`/api/v1/device…`,
-`/api/v1/enrollments…`, the WebSocket frames) is byte-for-byte unchanged, so installed Extend apps
-keep working. No `ErrorCode`, `EndReason`, `Capability`, `Visibility` or `DeviceOs` value was added
-or removed, because installed apps refuse values they don't know.
+Extend 4: everyone signs in with Silicon Accounts with a personal account, devices aren't shared
+through groups any more, and there are no test environments. The account API moves to v2
+(`/api/v2/…`); the device wire (`/api/v1/device…`, `/api/v1/enrollments…`, the WebSocket frames) is
+byte-for-byte unchanged, so installed Extend apps keep working. No `ErrorCode`, `EndReason`,
+`Capability`, `Visibility` or `DeviceOs` value was added or removed, because installed apps refuse
+values they don't know.
 
 ### New
 
@@ -28,10 +29,10 @@ or removed, because installed apps refuse values they don't know.
 
 ### Removed
 
-- The Silicon IAM sign-in and Team types of the v1 account API: `LoginInput`, `RefreshInput`,
+- The v1 account API's Extend 3 sign-in and group-sharing types: `LoginInput`, `RefreshInput`,
   `LogoutInput`, `AuthSession`, `Me`, `IamInfo`, `TeamSilicon`, `TeamSilicons`, `TeamReach`,
   `DeviceImport`, and `TEAM_HEADER`.
-- `ting::register_command` and `ting::OWNER_TEAM_PLACEHOLDER` (a `ting --org` command for a Team).
+- `ting::register_command` and `ting::OWNER_TEAM_PLACEHOLDER` (they built Extend 3's Ting registration command).
 
 ## 1.1.0
 

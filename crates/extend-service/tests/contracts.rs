@@ -2330,8 +2330,8 @@ async fn replay(kind: &str) {
     );
 }
 
-/// A published 1.x–3.x client against 4.0: its device-wire requests still work as before; every
-/// account route answers 410 with `silicon-apps update extend`.
+/// The current client (4.x): its device-side calls (`v1/client`) and its account calls
+/// (`v2/client`) must all be accepted. The released 1.x–3.x clients' frozen fixtures follow.
 #[tokio::test]
 async fn client_fixtures_replay_or_are_told_to_update() {
     replay("client").await;

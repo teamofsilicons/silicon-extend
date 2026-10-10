@@ -201,7 +201,7 @@ impl Ctx {
             Some(Unusable::Legacy { id }) => CliError::new(
                 ErrorCode::NotSignedIn,
                 format!(
-                    "The saved sign-in{} is from Extend 3 (Silicon IAM), which Extend 4 no longer accepts.",
+                    "The saved sign-in{} is from Extend 3, which Extend 4 no longer accepts.",
                     id.as_deref().map(|i| format!(" for {i}")).unwrap_or_default()
                 ),
             )
@@ -1146,7 +1146,7 @@ async fn login(ctx: &mut Ctx, args: &[String]) -> R<i32> {
             ));
         }
         if !cleaned.is_empty() {
-            t.push_str("\n  Removed the sign-ins Extend 3 saved here (Silicon IAM, no longer used).");
+            t.push_str("\n  Removed the sign-ins Extend 3 saved here, which Extend 4 doesn't use.");
         }
         t.push_str(if s.is_silicon() {
             "\nNext: extend device ls"
@@ -1499,7 +1499,7 @@ async fn logout_unused(ctx: &mut Ctx) -> R<i32> {
             let cleaned = store::remove_legacy_state();
             ctx.emit(
                 json!({"signed_out": true, "authenticated": false, "revoked": false, "extend_3": true, "id": id, "removed_extend_3_state": cleaned}),
-                || "Removed the Extend 3 sign-in (Silicon IAM), which Extend 4 no longer uses.".into(),
+                || "Removed the Extend 3 sign-in, which Extend 4 no longer uses.".into(),
             );
         }
         Some(Unusable::Unreadable(why)) => {
