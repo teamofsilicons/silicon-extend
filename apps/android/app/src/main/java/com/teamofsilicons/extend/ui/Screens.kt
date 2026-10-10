@@ -642,8 +642,8 @@ private fun CarbonsCard(extend: Extend, state: UiState) {
         CardTitle(if (several) "Carbons who paired this $noun" else "The Carbon who paired this $noun")
         Gap(4.dp)
         Muted(
-            if (several) "Each Carbon configures this $noun once and imports it into their organizations on the Extend website. Devices are visible to their organization by default. Hidden devices are visible only to their owner and Silicons explicitly granted access in that organization. Revoking a pair removes it from every organization."
-            else "Import this configured $noun into your organizations and choose visibility on the Extend website. Devices are visible to their organization by default. Hidden devices are visible only to you and Silicons explicitly granted access in that organization. Another Carbon can pair it to their account below.",
+            if (several) "Each Carbon names this $noun, gives access to their own Silicons and can end their own pair. Only one Silicon uses it at a time, and any of them can stop it."
+            else "Another Carbon, like someone else in your home, can pair this $noun to their own account too, with the button below.",
         )
         state.pairs.forEachIndexed { i, pair ->
             Gap(14.dp)
@@ -689,7 +689,7 @@ private fun CarbonsCard(extend: Extend, state: UiState) {
             title = { Text("Revoke pair?", style = Type.cardTitle(s)) },
             text = {
                 Muted(
-                    "This removes ${pair.name ?: "this $noun"} from every organization in ${pair.carbon}'s account and ends access for the Silicons ${pair.carbon} gave access to, " +
+                    "This removes ${pair.name ?: "this $noun"} from ${pair.carbon}'s account and ends access for the Silicons ${pair.carbon} gave access to, " +
                         "including a session of theirs running now. " +
                         (if (others) "The other Carbons' pairs stay. " else "") +
                         "To pair it to ${pair.carbon} again, you'll need a new code.",

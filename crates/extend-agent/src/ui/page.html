@@ -915,7 +915,7 @@
         <h2 id="pairs-title">Paired to.</h2>
         <button class="button secondary" id="pair-another" data-action="ask_pair_another">Pair with another Carbon</button>
       </div>
-      <p class="fine">Each Carbon configures this <span class="word"></span> once. On the Extend website, import it into your organizations and choose its visibility. Devices are visible to their organization by default. Hidden devices are visible only to their owner and Silicons explicitly granted access in that organization.</p>
+      <p class="fine">Each Carbon who pairs this <span class="word"></span> has their own pair: their own name for it, their own Silicons, and their own Revoke pair.</p>
       <ol class="rows" id="pair-list"></ol>
     </section>
 
@@ -947,7 +947,7 @@
     <div class="modal-sheet">
       <p class="eyebrow">Revoke pair</p>
       <h2 id="confirm-title">Unpair this <span class="word"></span>?</h2>
-      <p class="body">This removes this <span class="word"></span> from every organization in <span id="confirm-owner">the Carbon's</span> account and ends the access of every Silicon <span id="confirm-who">that Carbon</span> gave access to, right away.</p>
+      <p class="body">This removes this <span class="word"></span> from <span id="confirm-owner">the Carbon's</span> account and ends the access of every Silicon <span id="confirm-who">that Carbon</span> gave access to, right away.</p>
       <p class="fine" id="confirm-after">Afterwards this <span class="word"></span> shows a new pairing code, so you can pair it again.</p>
       <div class="modal-actions">
         <button class="button secondary" id="confirm-cancel" data-action="cancel_revoke">Cancel</button>
@@ -1424,10 +1424,10 @@
     var paired = !!d && !pairing && (phase === 'online' || phase === 'reconnecting');
     var many = pairs.length > 1;
     document.body.classList.toggle('pairing', pairing);
-    // Each fact once: the top bar has the Team (as Interface's breadcrumb does) and the status,
-    // the title the device's name, the Carbons card who it's paired to, the band the session.
-    // Several Carbons each name it and pick a Team: the top bar then says how many.
-    var crumb = many ? pairs.length + ' Carbons' : d && d.team && !pairing ? d.team : 'This ' + word;
+    // Each fact once: the top bar has the status, the title the device's name, the Carbons card
+    // who it's paired to, the band the session. Several Carbons each name it: the top bar then says
+    // how many. A pair's stored grouping (DeviceSelf.team, from before Extend 4) is never shown.
+    var crumb = many ? pairs.length + ' Carbons' : 'This ' + word;
     $('crumb-name').textContent = crumb;
 
     // The headline: a sentence for each state, or the name once paired.
@@ -1509,7 +1509,7 @@
         ? '<div class="row-sub">Silicons this Carbon gives access to use the screen, keyboard and apps. Only the Carbon who installed Silicon Extend here gives the terminal.</div>'
         : '';
       return '<li><span class="row-dot">' + dot(kind) + '</span><div class="row-main"><div class="row-title">' + who + named + '</div>' +
-        '<div class="row-sub">' + (p.team ? 'Team ' + esc(p.team) + ' · ' : '') + 'device <span class="mono">' + esc(p.device_id) + '</span></div>' +
+        '<div class="row-sub">device <span class="mono">' + esc(p.device_id) + '</span></div>' +
         phaseLine + terminal + '</div><div class="row-side pair-side">' + side + '</div></li>';
     }).join('');
     // Pair with another Carbon: the warning first (the page's own sheet), then the code card.
