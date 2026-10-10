@@ -22,7 +22,8 @@ A scheduler in the service runs every 2 seconds:
 - Self-destruct deletes a file as the Silicon that made it, with the Briefcase proof Extend keeps
   for that Silicon (its refresh token sealed with `EXTEND_DELEGATION_ENCRYPTION_KEY` in the
   database, so it survives restarts and the Silicon needn't be using Extend). Without a usable
-  proof (the Silicon signed out of Extend or removed its access) the file waits and is tried again.
+  proof (a file stored before 4.0, or the Silicon signed out of Extend or removed its access) the
+  file waits, and is trashed after the Silicon next uses Extend.
   A file's record is deleted only once Briefcase confirms (a 404 counts as gone); a failure is
   logged at `warn` with `file_id`, `tries`, `retry_in_s`, the error and a hint, and retried after
   1 minute, doubling to 1 hour. Up to 100 files per pass, not counting ones still backing off. A

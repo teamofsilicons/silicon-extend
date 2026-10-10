@@ -70,7 +70,7 @@ expect_exit 2 as nobody team ls; ok "a removed command (team) exits 2"
 # ── Signing in ──
 signin alice c:alice
 [ "$(as alice login status --json | jq_ '(d["authenticated"], d["id"], d["kind"], d["method"], d["verified"])')" = "(True, 'c:alice', 'carbon', 'slt', True)" ] && ok "Carbon signed in with a short-lived token; login status --json says who, checked with Extend"
-[ "$(stat -f %Lp "$WORK/alice/.extend/auth.json" 2>/dev/null || stat -c %a "$WORK/alice/.extend/auth.json")" = 600 ] && ok "the saved sign-in is readable by its owner only (0600)"
+[ "$(python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$WORK/alice/.extend/auth.json")" = 600 ] && ok "the saved sign-in is readable by its owner only (0600)"
 SLT=$(slt si:chef c:alice)
 printf %s "$SLT" | as chef login --slt-stdin | grep -q "a Silicon looked after by c:alice" && ok "Silicon signed in with --slt-stdin; the CLI names its custodian"
 grep -rq "$SLT" "$WORK/chef" && die "the short-lived token was written to disk" || ok "the short-lived token is never written to disk"

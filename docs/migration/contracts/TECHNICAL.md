@@ -57,8 +57,11 @@ Carbon and Silicon in with Silicon Accounts (personal accounts keyed by a perman
 Teams and no Honeycomb test environments, and reaches Briefcase and Ting with Silicon Accounts
 proofs. The sections rewritten for it are: identifiers owned by other services (§1), the 4.0 data
 model (§3), files (§6), test environments (§8, removed), sign-in, sign-out and account changes (§9)
-and API v2 (§10). Where an untouched section still speaks of Teams, IAM logins or test
-environments, it describes 1.x–3.x and these sections win. Decisions behind each change:
+and API v2 (§10); the ship stage (2026-10-10) brought the architecture (§2), the start of the data
+model (§3), command relay (§5) and the device close codes (§7) up to date. Where an untouched
+section still speaks of Teams, IAM logins or test environments, it describes 1.x–3.x and these
+sections win; such passages remain in §4, §5, §7 and §11–§13, so this copy needs an editorial pass
+before it is published as a docs page. Decisions behind each change:
 `docs/migration/decisions.md`.
 
 ---
@@ -66,7 +69,8 @@ environments, it describes 1.x–3.x and these sections win. Decisions behind ea
 ## 1. Identifiers and values
 
 Every identifier, token and bounded value that crosses a wire. Regexes are anchored. "World"
-means one isolated data plane: production, or one Honeycomb test environment.
+means one isolated data plane; since 4.0 there is only production (until 3.1 each test environment
+was a world of its own).
 
 ### Extend-issued identifiers
 
@@ -152,19 +156,19 @@ Extend stores and passes these. It never mints or parses beyond the prefix rules
                               │   │    │    │            └── Extend app on a Mac or computer, acting as host
                               │   │    │    │                  └── iPhone, iPad, Apple TV, Samsung/LG TV
                               │   │    │    └── Space Station (telemetry)
-                              │   │    └── Ting (requests for a device, wake requests)
-                              │   └── Briefcase (files, through OBO)
-                              └── Silicon IAM (login, live authorization, webhooks)
+                              │   │    └── Ting (requests for a device, wake requests; off until Ting accepts proofs)
+                              │   └── Briefcase (files, with Silicon Accounts proofs)
+                              └── Silicon Accounts (sign-in, introspection, lookups, proofs, webhooks)
 ```
 
 Parts, matching `UNDERSTANDING.md`:
 
 | Part | Tech | Where |
 |---|---|---|
-| Extend service | Rust, `axum` + `tokio`, PostgreSQL through `sqlx`, official `silicon-iam-client` crate | `backend.extend.teamofsilicons.com` |
-| Configuration website | Uses the Extend client over the same public API. A subset of the CLI. | `extend.teamofsilicons.com` |
+| Extend service | Rust, `axum` + `tokio`, PostgreSQL through `sqlx`, the official `silicon-accounts-client` crate | `backend.extend.teamofsilicons.com` |
+| Configuration website | For Carbons: signs in with Silicon Accounts and calls the same public API from its own server (the browser never holds a token). A subset of the CLI. | `extend.teamofsilicons.com` |
 | Extend client | Rust crate `silicon-extend-client`, stateless | crates.io |
-| `extend` CLI | Rust, built only on `silicon-extend-client`, keeps its state on disk | `honeycomb install 'extend'` |
+| `extend` CLI | Rust, built only on `silicon-extend-client`, keeps its state on disk | `silicon-apps install extend` (Silicon Apps keeps it up to date) |
 | Extend apps | Per OS, see §7. The Mac and Linux apps run the device engine. | Downloads on the website |
 | The device engine | Silicon Extend's fork of an MIT-licensed device automation project, in `vendor/extend-engine` (package `silicon-extend-engine`; `FORK.md` names the project and lists every change). Its settings are `EXTEND_ENGINE_*` (the fork's own `AGENT_DEVICE_*` names still work). | Ships inside the Mac and Linux apps |
 
@@ -183,10 +187,11 @@ to reach the device immediately and can't wait for the device to poll.
 
 ## 3. Data model
 
-One PostgreSQL schema per world: `extend` for production and `extend_test_<environment_id without dashes>`
-for each test environment. The same migrations run in each. Cleaning a test environment truncates
-its schema; permanent removal drops it. Keeping worlds in separate schemas makes it impossible for a
-missing `WHERE` clause to leak data between them.
+Extend's data is in the PostgreSQL schema `extend` (production, the only world since 4.0). Until 3.1
+each test environment had a schema of its own (`extend_test_<environment_id without dashes>`) with
+the same migrations; 4.0 stops reading them and leaves them for a manual cleanup. The rest of this
+section, down to "4.0", describes the schema as 1.0–3.1 built it; the 4.0 subsection says what
+changed.
 
 The two tables that must span worlds live in `extend_global`:
 
@@ -522,10 +527,10 @@ Carbon who gave the Silicon using the device access, who can stop the session:
 
 1. The CLI posts `{command, args, timeout_ms}` with the Silicon's access token. `args` are the
    command-line tokens after the name, exactly as the device engine's command line takes them.
-2. The service introspects the token with IAM (cached no longer than 30 s, and dropped immediately
-   on a relevant IAM webhook), then checks: the session is the caller's, it is `active`, the caller
-   still has access (1.1: its grant in the session's Team, and the owner-active check of §9), the
-   device is online, and the command is in the device's capabilities.
+2. The service verifies the Silicon Accounts access token and introspects it (cached no longer than
+   30 s, and dropped at once by any webhook about the account), then checks: the session is the
+   caller's, it is `active`, the caller still has its grant on the session's pair, the device is
+   online, and the command is in the device's capabilities.
 3. The service sends `{"type":"command","id":<command_id>,"timeout_ms":…,"command":…,"args":[…],"upload_ids":[…]}`
    down the device's WebSocket and waits for the matching `result`.
 4. The app runs it (on Mac and Linux, through the device engine) and replies. Files it produced (screenshots, recordings,
@@ -777,10 +782,10 @@ notification, keeping an awake screen on during a session, and setup retry (docs
   own credential, and each is a 1.0 connection plus the 1.1 frames). A new connection replaces the
   old one, which gets `superseded`; when the old one had answered a ping within 30 s, the pair's log
   records `connection_replaced`, so a takeover of a pair's connection is visible to its Carbon.
-- Close codes (as built): `4401` unpaired, `4409` superseded, `4426` upgrade required, and `4503`
-  when the device's test environment closes (disabled, or waiting for Honeycomb's readiness): the
-  pair is kept and the app reconnects with backoff. The handshake and the device's HTTP routes
-  answer `503 testing_environment_not_ready` for such an environment.
+- Close codes (as built): `4401` unpaired, `4409` superseded, `4426` upgrade required. Until 3.1 a
+  device in a closed test environment also got `4503` (and `503 testing_environment_not_ready` on its
+  HTTP routes), keeping its pair; 4.0 never sends them, and apps still keep the credential and
+  reconnect with backoff if they see one.
 
 | Direction | `type` | Meaning |
 |---|---|---|
@@ -1067,29 +1072,36 @@ As built (2026-09-27, `crates/extend-service/src/versions.rs`):
 - **Home:** `$SILICON_HOME` if set, else `~`. State lives in `{home}/.extend/`. `extend config home <dir>`
   moves it; it refuses a path that isn't an existing directory (`not a directory: <path>`). The
   chosen location is recorded in `{default home}/.extend/home` so later runs find it. As built, the
-  login, settings, test environments and sessions move with it, and a directory that already holds
-  Extend state is refused unless `--use-existing` switches to it.
-- **Files** (all `0600`, directory `0700`):
-  `auth.json` (tokens, team), `config.toml`, `sessions/current`, `sessions/{session_id}.json`
-  (device, capabilities), `test/{environment_id}.json` (test app secret and that world's tokens).
-- **Token refresh** is serialised with a lock file, `refresh.lock` (created exclusively; one older
-  than 30 s is taken as left by a dead process). A process that can't get it within 10 s refreshes
-  anyway: the refresh sends an idempotency key derived from the refresh token, so two refreshes of
-  one token get the same answer. A process only removes a lock it created. The replacement pair is
-  written atomically (write temporary, `fsync`, rename), as IAM's client docs require.
+  sign-in, settings and sessions move with it, and a directory that already holds Extend state is
+  refused unless `--use-existing` switches to it.
+- **Files** (all `0600`, directory `0700`): `auth.json` (format 4: Extend's Silicon Accounts tokens,
+  the account's uuid, id, kind, name and custodian, how it signed in, and the Silicon Accounts and
+  Extend URLs it is for; it is never sent anywhere else), `config.toml`,
+  `sessions/acct-<hex of the uuid>/current` and `…/{session_id}.json` (device, capabilities; keyed by
+  the account, in hex because uuids are case-sensitive and some file systems aren't). Extend 3's
+  files are never used: its `auth.json` reads as "sign in again", and the next `login` or `logout`
+  deletes its `contexts/` and `test/`.
+- **Token refresh** happens when less than 60 s are left, under an operating-system lock on
+  `refresh.lock` (released if the process dies). After taking it the process reads `auth.json`
+  again and uses another process's fresh tokens if there are any; otherwise it refreshes with
+  `client_id` alone and saves the new pair (atomically) before using it. It waits up to 60 s for the
+  lock and then fails rather than refreshing without it, because presenting a used refresh token
+  ends the sign-in. A refused refresh means the sign-in is over: the file is deleted and the command
+  exits 3 (`token_expired`, reason `sign_in_ended`).
 - **No daemon** is needed: each command is one HTTPS request. See Open question 7.
 - **Session selection**, first match wins: `--session <id>`, then `EXTEND_SESSION`, then the
   connected session.
 - **Output:** text by default; `--json` gives exactly one JSON document on stdout. Progress,
   warnings and the test-environment line go to stderr so stdout stays safe for scripts and binary
   output. As built (2026-09-27), following the house convention of the sibling CLIs: on success the
-  data itself, with no wrapper (`extend iam --json` has `app_id` at the top, `extend login status
-  --json` has `authenticated`); on failure `{"error": {code, message, hint, request_id, docs_url,
-  details, exit_code}}` on stderr and nothing on stdout. `login status` exits 0 whether or not a
-  login works, as `dm login status` does (Open question C7).
-- **Test secrets for scripts:** `EXTEND_TEST_SECRET` may stand in for `extend config test add`; it is
-  checked to belong to `--test`'s environment and never written to disk, and without `--test` any
-  command that would call Extend is refused, so a test script never reaches production.
+  data itself, with no wrapper (`extend accounts --json` has `app_id` at the top, `extend login
+  status --json` has `authenticated`); on failure `{"error": {code, message, hint, request_id,
+  docs_url, details, exit_code}}` on stderr and nothing on stdout. `login status --json` always exits
+  0 and is exactly `{"authenticated":false}` when no one is signed in; without `--json` it exits 1
+  when signed out.
+- **No test environments:** `--test`, `extend config test` and `extend env` exit 2 with what replaced
+  them, and while `EXTEND_TEST_SECRET` is set every command that would call Extend is refused before
+  anything is sent, so a script written for a test environment never reaches the real service.
 - **The package has what the CLI has:** attachment building and the 8 MiB limits live in the client
   crate (`silicon_extend_client::attachments`), and file downloads use the client's
   `file_content`/`file_download`.
@@ -1163,14 +1175,18 @@ Differences from the first draft, each deliberate:
 - **Packaged runtime identity.** Mac and Linux packages stamp the device engine's version with a
   content digest and install an entry that replaces a daemon started from another install path,
   so an update or a moved app never keeps running old code.
-- **Local stand-ins** for Silicon IAM, Briefcase and Ting (`EXTEND_IAM_MODE=local` etc.) exist for
-  development and tests and are refused in production.
-- **Extra endpoints:** `GET /api/v1/team/silicons` (access picker), `iam_login_url` in
-  `GET /api/v1/iam`, and `input` on setup steps (`"code"` for an Apple TV).
+- **Local stand-ins** for Silicon Accounts, Briefcase and Ting (`EXTEND_ACCOUNTS_MODE=local`,
+  `EXTEND_FILES_MODE=local`, `EXTEND_TING_MODE=local`) exist for development and tests and are
+  refused in production. Since 4.0 the Silicon Accounts stand-in also mints short-lived tokens and
+  answers the token and revoke endpoints, so the CLI signs in to a local service as it does to
+  Silicon Accounts.
+- **Extra endpoints:** `GET /api/v2/accounts/lookup` and `GET /api/v2/silicons…` (the website's
+  access picker and the custodian's views; Extend 3 had `GET /api/v1/team/silicons` and
+  `iam_login_url` in `GET /api/v1/iam`), and `input` on setup steps (`"code"` for an Apple TV).
 - **ISI:** when the CLI runs with `ISI` set, it's sent as `X-Silicon-ISI` and recorded with session
   starts and commands in the activity log. Nothing depends on it.
-- **Telemetry** goes to each world's outbox table and is exported to Space Station when
-  `EXTEND_SPACE_STATION_KEY` (and, per test environment, `EXTEND_TEST_TELEMETRY_KEYS`) is set.
+- **Telemetry** goes to the outbox table and is exported to Space Station when
+  `EXTEND_SPACE_STATION_KEY` is set (until 3.1, test environments had their own keys).
 
 Added by the second round (2026-09-27), each described in its section above:
 
@@ -1236,13 +1252,21 @@ unless marked settled. Naming, signing and publishing decisions are in `docs/com
 - **C1. Logging out elsewhere ends access by a heuristic.** IAM sends applications no logout or
   revocation events, so Extend ends a Silicon's sessions 15 s after IAM first refuses its login on a
   session route, and only notices at that call (§9). Accept 15 s and "at the next session call", or
-  ask IAM for logout and revocation webhooks for the `extend` app.
+  ask IAM for logout and revocation webhooks for the `extend` app. *Resolved by 4.0:* Silicon
+  Accounts sends `membership.signed_out`, `membership.access_removed` and `account.deleted` to
+  Extend's webhook, and the routes that must see a sign-out at once introspect (cached at most
+  30 s); the heuristic is gone (§9).
 - **C2. Self-destruct depends on logins Extend saw.** After a service restart, or once the
   Silicon's token has expired, a due file waits (hidden) until the Silicon uses Extend again (§6).
   A durable fix needs one of: Extend's own Briefcase credential, a durable OBO delegation, or
   Briefcase taking the self-destruct time itself through OBO (questions 1–2). Pending Ting requests
   have the same limit, but fail instead of waiting: with no login held, each 30-second retry still
-  counts, so the request is marked failed after about 2.5 minutes, saying why.
+  counts, so the request is marked failed after about 2.5 minutes, saying why. *Resolved by 4.0:*
+  Extend keeps the Briefcase proof it got for each Silicon, its refresh token sealed in the
+  database, so self-destruct survives restarts and needs no live sign-in (a file whose Silicon has
+  no proof, such as one stored before 4.0 or after the Silicon signed out, waits for its next use of
+  Extend), and every Ting goes from Extend itself with an App verification proof, so no one's
+  sign-in is needed for a retry (§6, §9).
   *1.1 changes the Ting side:* every Ting goes from a member who took part (the asking Silicon, the
   answering Carbon, or the recipient Carbon to themselves), never from a bystander such as the
   Silicon using the device; each has a chain of such actors to try. An attempt with no login held
@@ -1265,17 +1289,21 @@ unless marked settled. Naming, signing and publishing decisions are in `docs/com
   itself is 1–300 without it). Confirm the cap or change it.
 - **C4. The `activate` participant action.** Extend opens a test environment when IAM accepts its
   secret, or on a participant `activate`, which Honeycomb doesn't send today. Keep it as an Extend
-  extension, ask Honeycomb to send it, or drop it and rely on IAM alone.
+  extension, ask Honeycomb to send it, or drop it and rely on IAM alone. *Obsolete in 4.0:* there
+  are no test environments (§8).
 - **C5. IAM event ids and aggregate versions survive a clean.** They hold no test data, and keeping
-  them stops a replayed event from applying twice. Confirm.
+  them stops a replayed event from applying twice. Confirm. *Obsolete in 4.0:* there are no cleans;
+  Silicon Accounts' events are de-duplicated by `event_id` in `accounts_events`.
 - **C6. The bug-report address.** `UNDERSTANDING.md` lists `shubhastro2@gmails.com`; the build sends
   to `shubhastro2@gmail.com`. Confirm the address and correct `UNDERSTANDING.md` (Carbon-only).
 - **C7. The CLI's JSON and `login status`.** `--json` now prints the data itself (errors as
   `{"error": …}` on stderr), and `login status` exits 0 when not signed in, following `dm`. This
-  changed `cli.yaml` (it said `{ok, data}` and exit 3). Confirm.
+  changed `cli.yaml` (it said `{ok, data}` and exit 3). Confirm. *4.0:* `login status --json` still
+  always exits 0, as Silicon Apps requires; without `--json` it exits 1 when signed out (§11).
 - **C8. Sign-up.** The website's "Create an account" goes to IAM's `/signup` beside its `/login`
   (or `iam_signup_url` if `GET /api/v1/iam` ever returns one). Confirm IAM's sign-up address, or
-  have Extend return it.
+  have Extend return it. *Resolved by 4.0:* Silicon Accounts' hosted pages sign Carbons up and in;
+  the website only sends them there.
 - **C9. Carbon logout (question 4).** *Settled for 1.1 on 2026-09-27:* a Carbon signing out of the
   website or the CLI ends the running sessions of the Silicons that Carbon gave access to, only on
   that Carbon's side (§9). The build ends them as `access_removed` (the Silicon's hint says the Carbon
