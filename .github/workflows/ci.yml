@@ -26,8 +26,8 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL && df -h /
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libxdo-dev
       - run: cargo fmt --check
-      - name: Deployment environment renderer
-        run: python3 deploy/aws/test_render_env.py
+      - name: Deployment environment renderer and host helper refresh
+        run: python3 -m unittest discover -s deploy/aws -p 'test_*.py'
       # The Silicon Apps packager's refusals and discovery checks (the full pack with the real
       # packer runs in release.yml, which installs silicon-apps).
       - name: Silicon Apps packager
