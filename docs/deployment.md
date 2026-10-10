@@ -9,7 +9,7 @@ How the pieces ship:
 - the `extend` CLI, through Silicon Apps, which installs it and keeps it up to date;
 - the device apps, on the [releases page](https://github.com/teamofsilicons/silicon-extend/releases).
 
-The production switch from Extend 3 (Silicon IAM, Honeycomb) to Extend 4 has its own runbook:
+The production switch from Extend 3 to Extend 4 has its own runbook:
 [docs/migration/cutover.md](migration/cutover.md). How releases were made before Extend 4 is in
 [docs/history/deployment-1.x-3.x.md](history/deployment-1.x-3.x.md).
 

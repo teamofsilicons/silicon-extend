@@ -72,7 +72,7 @@ Parameters:
   DatabaseEngineVersion:
     Type: String
     Default: '17.9'
-    Description: Matches the sibling fleet (IAM, DM, Briefcase, Remind are on 17.9); Extend needs 16+
+    Description: Matches the sibling fleet (DM, Briefcase, Remind and the others are on 17.9); Extend needs 16+
   DatabaseInstanceClass:
     Type: String
     Default: db.t4g.micro

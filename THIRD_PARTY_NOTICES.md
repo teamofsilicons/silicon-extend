@@ -99,10 +99,10 @@ What ships where:
   in `apps/android/gradle/verification-metadata.xml`. Whether this approach is sufficient is
   listed for the Carbon's confirmation in `docs/history/completion-work.md`.
 
-### silicon-accounts-client 0.4.0 (Extend service)
+### silicon-accounts-client 0.4.0 (Extend service, client and CLI)
 
 - Team of Silicons' own Silicon Accounts client crate, used from crates.io
-  (https://crates.io/crates/silicon-accounts-client). It replaced `silicon-iam-client` in Extend 4.
+  (https://crates.io/crates/silicon-accounts-client).
 - Licence: **MIT**; its text is in `THIRD_PARTY_LICENSES.txt`.
 
 ## Fonts

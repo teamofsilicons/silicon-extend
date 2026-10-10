@@ -1,6 +1,6 @@
 name: Release
-# The extend CLI: each of its six targets is built on the runner that built it for Honeycomb before
-# (Linux natively on Ubuntu 24.04, so its glibc floor is 2.39), checked where it was built (the
+# The extend CLI: each of its six targets is built on the runner Extend 3's releases used (Linux
+# natively on Ubuntu 24.04, so its glibc floor is 2.39), checked where it was built (the
 # native format, the glibc ceiling on Linux, and the three discovery commands Silicon Apps runs:
 # `extend --help`, `extend accounts --json`, `extend login status --json`, signed out in an empty
 # home, wherever the runner can run the binary), then one Linux job packs one Silicon Apps archive
