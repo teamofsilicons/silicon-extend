@@ -95,7 +95,7 @@ tags:
   - {name: Files, description: 'Screenshots, recordings, logs and replay scripts, stored in Briefcase'}
   - {name: Device app, description: 'Endpoints used only by a paired Extend app, with its device credential'}
   - {name: Accounts webhooks, description: Signed Silicon Accounts events}
-  - {name: Operations, description: Bug reports and telemetry}
+  - {name: Operations, description: Bug reports}
 
 paths:
 
@@ -2127,44 +2127,6 @@ paths:
                       notification: {type: string, enum: [queued, sent, simulated]}
                       repository_url: {type: string, format: uri}
         '429': {$ref: '#/components/responses/Error'}
-  /api/v2/telemetry:
-    post:
-      tags: [Operations]
-      operationId: telemetry
-      summary: Forward a telemetry event to Space Station
-      description: |
-        So the CLI and apps never hold the Space Station ingest key. `X-Extend-Telemetry: off` drops it, and on
-        any other route it keeps the service from recording that request (for example a command's event).
-        Never accepts typed text, screen contents, tokens, codes or secrets.
-      parameters:
-        - {name: X-Extend-Telemetry, in: header, schema: {type: string, enum: ['on', 'off']}}
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [type, data]
-              properties:
-                type: {const: telemetry}
-                data:
-                  type: object
-                  additionalProperties: false
-                  required: [source, event, step, success, duration_ms]
-                  properties:
-                    source: {type: string, enum: [cli, client, app, web]}
-                    event: {type: string, maxLength: 64, example: command}
-                    step: {type: string, maxLength: 128, example: session.command.relay}
-                    success: {type: boolean}
-                    duration_ms: {type: integer, minimum: 0}
-                    error_code: {type: [string, 'null'], maxLength: 64}
-                    command: {type: [string, 'null'], maxLength: 64}
-                    device_os: {oneOf: [{$ref: '#/components/schemas/DeviceOs'}, {type: 'null'}]}
-                    session_id: {oneOf: [{$ref: '#/components/schemas/SessionIdValue'}, {type: 'null'}]}
-                    request_id: {type: [string, 'null']}
-                    client_version: {type: string, maxLength: 32}
-      responses:
-        '204': {description: Accepted or dropped because telemetry is off}
 
   # ───────────────────────────── Extend 4: accounts and custodians ─────────────────────────────
   /api/v2/contracts:

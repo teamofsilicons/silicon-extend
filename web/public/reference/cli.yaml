@@ -71,7 +71,6 @@ environment:
   ACCOUNTS_URL: 'The Silicon Accounts to sign in at (default https://accounts.teamofsilicons.com; https, or http for localhost, 127.0.0.1 or [::1]). Overrides the accounts_url setting. It must be the one the Extend service trusts.'
   EXTEND_API_URL: 'The Extend service (default https://api.extend.teamofsilicons.com; https, or http for this machine). Overrides the api_url setting.'
   EXTEND_SESSION: 'Session id to use when --session is not given.'
-  EXTEND_TELEMETRY: 'on|off. Overrides the config value for this process.'
   EXTEND_TEST_SECRET: 'Extend 3 only. Set, any command that would call Extend is refused (exit 2) and nothing is sent, so a script written for a test environment never reaches the real service.'
   NO_COLOR: 'Set to anything but empty: no colour, when the color setting is auto (the default). color = always or never overrides it (no-color.org). Colour is used only on a terminal, and never with --json.'
 
@@ -229,7 +228,6 @@ commands:
       keys:
         api_url: 'https://…, or http:// only for localhost, 127.0.0.1 or [::1] (default https://api.extend.teamofsilicons.com); a trailing / is dropped. EXTEND_API_URL overrides it.'
         accounts_url: 'The Silicon Accounts to sign in at: https://…, or http:// only for this machine (default https://accounts.teamofsilicons.com). ACCOUNTS_URL overrides it.'
-        telemetry: 'on|off (default on)'
         output: 'text|json (default text); json makes --json the default'
         screenshot_scale: 'a number from 0.01 to 1, default 1; applied to screenshot when --scale is not given'
         self_destruct: 'default file self-destruct, e.g. 1d, 90m, 30d (1m–30d, default 1d)'
