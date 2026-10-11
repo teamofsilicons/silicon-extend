@@ -97,6 +97,10 @@ const TRANSPORT_HEADERS: &[&str] = &[
     "connection",
 ];
 
+/// Headers no Extend service reads any more: `x-extend-telemetry: off`, which the client sends on
+/// every call only so that an Extend service from before 4.1 records no telemetry either.
+const IGNORED_HEADERS: &[&str] = &["x-extend-telemetry"];
+
 fn placeholders(s: &str) -> String {
     let mut out = s.to_owned();
     for (sentinel, placeholder) in PLACEHOLDERS {
@@ -275,7 +279,7 @@ type Fut<'a> = Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>>;
 
 struct Ctx {
     client: Client,
-    /// Built with an internal Silicon id and telemetry off.
+    /// Built with an internal Silicon id.
     options: Client,
 }
 
@@ -1134,12 +1138,6 @@ fn ops() -> Vec<Op> {
                 context: json!({"command": "snapshot"}),
             })
         ),
-        op!("telemetry.send", "Authed::telemetry", [], 204, "", None, |c| c
-            .silicon()
-            .telemetry(json!({
-                "source": "cli", "event": "command", "step": "device ls", "success": true, "duration_ms": 120,
-                "error_code": null, "command": "device ls", "client_version": "1.0.0"
-            }))),
     ]
 }
 
@@ -1156,6 +1154,10 @@ const NOT_API_CALLS: &[(&str, &str)] = &[
     (
         "content",
         "FileDownload::content reads the answer to a file_download request already made",
+    ),
+    (
+        "telemetry",
+        "Authed::telemetry is a deprecated no-op that sends nothing: Extend records no telemetry",
     ),
     (
         "start_device",
@@ -1264,7 +1266,7 @@ fn api_of(target: &str) -> u32 {
 fn fixture(op: &Op, seen: &Seen, required: Vec<String>, non_null: Vec<String>) -> Value {
     let mut headers = BTreeMap::new();
     for (k, v) in &seen.headers {
-        if TRANSPORT_HEADERS.contains(&k.as_str()) {
+        if TRANSPORT_HEADERS.contains(&k.as_str()) || IGNORED_HEADERS.contains(&k.as_str()) {
             continue;
         }
         let v = match k.as_str() {
@@ -1368,12 +1370,7 @@ async fn fixtures_match_what_the_client_sends() {
     );
     let ctx = Ctx {
         client: Client::connect(&base).await.unwrap(),
-        options: Client::builder(&base)
-            .isi(Some(ISI.into()))
-            .telemetry(false)
-            .connect()
-            .await
-            .unwrap(),
+        options: Client::builder(&base).isi(Some(ISI.into())).connect().await.unwrap(),
     };
     // Fixtures by the major their path names.
     let mut generated: BTreeMap<u32, BTreeMap<String, Value>> = BTreeMap::new();
@@ -1443,6 +1440,39 @@ async fn fixtures_match_what_the_client_sends() {
          `EXTEND_CONTRACTS_WRITE=1 cargo test -p silicon-extend-client --test contract_fixtures` and commit contracts/. \
          The service's `contracts` test then checks the service still accepts them.",
         problems.join("\n")
+    );
+}
+
+/// Extend records no telemetry: the deprecated `telemetry` calls change nothing and send nothing,
+/// and every call says `x-extend-telemetry: off`, so an Extend service from before 4.1 records
+/// nothing either.
+#[tokio::test]
+#[allow(deprecated)]
+async fn telemetry_calls_send_nothing_and_every_call_says_off() {
+    let (base, stub) = Stub::start().await;
+    stub.reply(
+        200,
+        "version",
+        Some(&json!({"api_version": 2, "supported": [1, 2], "service_version": "4.0.0"})),
+    );
+    let client = Client::builder(&base).telemetry(true).connect().await.unwrap();
+    stub.reply(200, "me", Some(&json!({"id": "si:chef"})));
+    let me = client.authed(SILICON_TOKEN);
+    me.telemetry(json!({"source": "cli", "event": "command"}))
+        .await
+        .unwrap();
+    assert!(stub.take().is_empty(), "the telemetry call sent a request");
+    let _ = me.me().await;
+    let seen = stub.take();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].target, "/api/v2/me");
+    assert!(
+        seen[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k == "x-extend-telemetry" && v == "off"),
+        "{:?}",
+        seen[0].headers
     );
 }
 

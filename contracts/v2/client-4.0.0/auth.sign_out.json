@@ -1,0 +1,31 @@
+{
+  "api_version": 2,
+  "call": "Authed::sign_out",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "auth.sign_out",
+  "request": {
+    "body": {
+      "data": {
+        "refresh_token": "sar_contract-fixture-refresh-token"
+      },
+      "type": "logout"
+    },
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "content-type": "application/json",
+      "idempotency-key": "{idempotency_key}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "POST",
+    "path": "/api/v2/auth/logout"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

@@ -83,7 +83,7 @@ def cli(who, *command, expect_json=True, stdin=None):
     home = work / ('cli-' + who)
     home.mkdir(exist_ok=True)
     env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url,
-               ACCOUNTS_URL=args.service_url + '/dev/accounts', EXTEND_TELEMETRY='off')
+               ACCOUNTS_URL=args.service_url + '/dev/accounts')
     cmd = [str(ROOT / 'target/debug/extend'), '--timeout', '90000', *command]
     if expect_json:
         cmd.append('--json')

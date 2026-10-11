@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.1.0
+
+Extend records no telemetry.
+
+- `Authed::telemetry` is deprecated and sends nothing: it returns `Ok(())` without a request (the
+  service no longer has `POST /api/v2/telemetry`).
+- `ClientBuilder::telemetry` is deprecated and does nothing.
+- Every call to Extend says `X-Extend-Telemetry: off`, so an Extend service from before 4.1 records
+  nothing about it either.
+- `auth::SignIn` asks Silicon Accounts to record no telemetry: every call carries
+  `X-Accounts-Telemetry: off`.
+
 ## 4.0.0
 
 Extend 4 signs everyone in with Silicon Accounts with a personal account; devices aren't shared

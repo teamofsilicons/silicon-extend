@@ -61,6 +61,8 @@ impl SdkApi {
             .timeout(Duration::from_secs(15))
             .connect_timeout(Duration::from_secs(5))
             .user_agent(concat!("silicon-extend/", env!("CARGO_PKG_VERSION")))
+            // Extend records no telemetry, and asks Silicon Accounts to record none for its calls
+            // (`X-Accounts-Telemetry: off` on every request).
             .telemetry(false)
             .build()
             .map_err(|e| anyhow::anyhow!("ACCOUNTS_API_URL / ACCOUNTS_URL {api_url:?}: {}", e.message()))?;
@@ -198,6 +200,7 @@ impl AccountsApi for SdkApi {
             .post(format!("{}/v1/proofs/refresh", self.api_url))
             .basic_auth(&self.app_id, Some(&self.app_secret))
             .header("Idempotency-Key", key)
+            .header(silicon_accounts_client::TELEMETRY_HEADER, "off")
             .json(&serde_json::json!({ "proof_refresh_token": proof_refresh_token.trim() }))
             .send()
             .await

@@ -182,11 +182,6 @@ pub const SETTINGS: &[Setting] = &[
         default: "https://accounts.teamofsilicons.com",
     },
     Setting {
-        key: "telemetry",
-        about: "on|off",
-        default: "on",
-    },
-    Setting {
         key: "output",
         about: "text|json; json makes --json the default",
         default: "text",
@@ -230,6 +225,8 @@ pub fn load_config() -> BTreeMap<String, String> {
             let (k, v) = l.split_once('=')?;
             Some((k.trim().to_owned(), v.trim().trim_matches('"').replace("\\\"", "\"")))
         })
+        // Extend records no telemetry: an old `telemetry` value means nothing and goes at the next save.
+        .filter(|(k, _)| k != "telemetry")
         .collect()
 }
 
@@ -358,7 +355,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         let (from, to) = (base.join("old/.extend"), base.join("new/.extend"));
         write_private(&from.join("auth.json"), b"{\"member_id\":\"si:chef\"}").unwrap();
-        write_private(&from.join("config.toml"), b"telemetry = \"off\"\n").unwrap();
+        write_private(&from.join("config.toml"), b"output = \"json\"\n").unwrap();
         write_private(&from.join("test/9b3e.json"), b"{}").unwrap();
         write_private(&from.join("sessions/current"), b"a3f").unwrap();
         write_private(&from.join("sessions/test-9b3e/current"), b"b4c").unwrap();
@@ -369,7 +366,7 @@ mod tests {
         assert_eq!(copied, vec!["auth.json", "config.toml", "test", "sessions"]);
         assert_eq!(
             fs::read_to_string(to.join("config.toml")).unwrap(),
-            "telemetry = \"off\"\n"
+            "output = \"json\"\n"
         );
         assert_eq!(
             fs::read_to_string(to.join("sessions/test-9b3e/current")).unwrap(),

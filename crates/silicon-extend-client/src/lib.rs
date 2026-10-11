@@ -100,9 +100,13 @@ pub struct ClientBuilder {
     base_url: String,
     timeout: Duration,
     user_agent: String,
-    telemetry: bool,
     isi: Option<String>,
 }
+
+/// The header an Extend service before 4.1 read to keep no telemetry about a request. Extend
+/// records no telemetry now; the client still says `off` on every call so an older service records
+/// nothing either.
+const LEGACY_TELEMETRY_HEADER: &str = "X-Extend-Telemetry";
 
 impl ClientBuilder {
     /// The internal Silicon (ISI) acting, recorded with the Silicon's actions. Optional.
@@ -118,9 +122,12 @@ impl ClientBuilder {
         self.user_agent = ua.into();
         self
     }
-    /// Sends `X-Extend-Telemetry: off` when false.
-    pub fn telemetry(mut self, on: bool) -> Self {
-        self.telemetry = on;
+    /// Does nothing: Extend records no telemetry, so there is nothing to turn on or off.
+    #[deprecated(
+        since = "4.1.0",
+        note = "Extend records no telemetry; there is nothing to turn on or off"
+    )]
+    pub fn telemetry(self, _on: bool) -> Self {
         self
     }
 
@@ -140,7 +147,6 @@ impl ClientBuilder {
             http,
             base,
             api_version: ACCOUNT_API_VERSION,
-            telemetry: self.telemetry,
             isi: self.isi,
         };
         let supported: Vec<String> = SUPPORTED_API_VERSIONS.iter().map(u32::to_string).collect();
@@ -166,7 +172,6 @@ pub struct Client {
     http: reqwest::Client,
     base: String,
     api_version: u32,
-    telemetry: bool,
     isi: Option<String>,
 }
 
@@ -235,7 +240,6 @@ impl Client {
             base_url: base_url.into(),
             timeout: Duration::from_secs(330),
             user_agent: concat!("silicon-extend-client/", env!("CARGO_PKG_VERSION")).into(),
-            telemetry: true,
             isi: None,
         }
     }
@@ -265,10 +269,8 @@ impl Client {
         let mut r = self
             .http
             .request(method, format!("{}{path}", self.base))
-            .header(API_VERSION_HEADER, pin.to_string());
-        if !self.telemetry {
-            r = r.header("X-Extend-Telemetry", "off");
-        }
+            .header(API_VERSION_HEADER, pin.to_string())
+            .header(LEGACY_TELEMETRY_HEADER, "off");
         if let Some(isi) = &self.isi {
             r = r.header("X-Silicon-ISI", isi);
         }

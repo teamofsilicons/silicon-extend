@@ -1,4 +1,4 @@
-//! Bug reports (emailed through Postmark) and telemetry.
+//! Bug reports (emailed through Postmark). Extend records no telemetry.
 
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use axum::response::Response;
 use extend_protocol::model::{ReportInput, ReportReceipt};
 use uuid::Uuid;
 
-use super::{Body, envelope, hash_json, idempotent, no_content};
+use super::{Body, hash_json, idempotent};
 use crate::error::{AppError, AppResult};
 use crate::state::{AppState, Auth, Shared};
 
@@ -128,55 +128,4 @@ pub async fn report(
         Ok((StatusCode::ACCEPTED, "report", serde_json::to_value(receipt).map_err(AppError::internal)?))
     })
     .await
-}
-
-const TELEMETRY_FIELDS: &[&str] = &[
-    "source",
-    "event",
-    "step",
-    "success",
-    "duration_ms",
-    "error_code",
-    "command",
-    "device_os",
-    "session_id",
-    "request_id",
-    "client_version",
-];
-
-pub async fn telemetry(
-    State(state): State<Shared>,
-    auth: Auth,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
-) -> AppResult<Response> {
-    if crate::telemetry::opted_out(&headers) {
-        return Ok(no_content());
-    }
-    let data: serde_json::Value = super::parse_envelope(&body)?;
-    let obj = data
-        .as_object()
-        .ok_or_else(|| AppError::invalid("telemetry data must be an object"))?;
-    if let Some(k) = obj.keys().find(|k| !TELEMETRY_FIELDS.contains(&k.as_str())) {
-        return Err(AppError::invalid(format!(
-            "telemetry field {k:?} is not accepted; allowed: {}",
-            TELEMETRY_FIELDS.join(", ")
-        )));
-    }
-    for required in ["source", "event", "step", "success", "duration_ms"] {
-        if !obj.contains_key(required) {
-            return Err(AppError::invalid(format!("telemetry needs {required}")));
-        }
-    }
-    tracing::info!(target: "telemetry", member = auth.p.uuid(), event = %data, "telemetry");
-    sqlx::query(sql!(
-        "INSERT INTO {} (member_id, event) VALUES ($1, $2)",
-        auth.world.t("telemetry")
-    ))
-    .bind(auth.p.uuid())
-    .bind(&data)
-    .execute(&state.pool)
-    .await?;
-    let _ = envelope::<()>;
-    Ok(no_content())
 }

@@ -2,7 +2,7 @@
   "api_version": 2,
   "call": "Client::contracts",
   "consumer": "silicon-extend-client",
-  "consumer_version": "4.0.0",
+  "consumer_version": "4.1.0",
   "contract": 1,
   "given": [],
   "operation": "contracts.get",

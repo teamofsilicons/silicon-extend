@@ -80,7 +80,7 @@ try:
     print('PASS public stop recovers after daemon SIGKILL, discloses lost touch events and removes the worker status',flush=True)
     if os.environ.get('EXTEND_RECORD_DRIVER'):
         agent = os.environ['EXTEND_RECORD_DRIVER']
-        driver_env = dict(os.environ, SILICON_HOME=str(work/'extend-home'), EXTEND_ENGINE=str(root/'vendor/extend-engine/bin/extend-engine.mjs'), EXTEND_TELEMETRY='off')
+        driver_env = dict(os.environ, SILICON_HOME=str(work/'extend-home'), EXTEND_ENGINE=str(root/'vendor/extend-engine/bin/extend-engine.mjs'))
         probe = subprocess.run([agent,'probe','--json'],env=driver_env,capture_output=True,text=True,check=True,timeout=30)
         report = json.loads(probe.stdout)
         assert 'screen.record' in report['capabilities'], report

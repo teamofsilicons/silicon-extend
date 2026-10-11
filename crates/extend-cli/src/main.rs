@@ -93,14 +93,6 @@ impl Ctx {
             .to_owned()
     }
 
-    fn telemetry_on(&self) -> bool {
-        let v = std::env::var("EXTEND_TELEMETRY")
-            .ok()
-            .or_else(|| self.cfg.get("telemetry").cloned())
-            .unwrap_or_else(|| "on".into());
-        v != "off"
-    }
-
     fn verbose_failure(&self, label: &str, e: &CliError, t: Instant) {
         self.out.verbose(|| {
             format!(
@@ -148,7 +140,6 @@ impl Ctx {
         let url = self.api_url();
         let b = Client::builder(url.clone())
             .user_agent(USER_AGENT)
-            .telemetry(self.telemetry_on())
             .isi(std::env::var("ISI").ok());
         let t = Instant::now();
         let c = match b.connect().await {
@@ -492,12 +483,11 @@ async fn run(argv: Vec<String>) -> i32 {
     };
     load_sign_in(&mut ctx);
     let started = Instant::now();
-    let result = dispatch(&mut ctx, rest.clone()).await;
+    let result = dispatch(&mut ctx, rest).await;
     let code = match &result {
         Ok(c) => *c,
         Err(e) => ctx.out.fail(e),
     };
-    telemetry(&mut ctx, &rest, &result, started.elapsed()).await;
     ctx.out
         .verbose(|| format!("finished in {} ms with exit code {code}", ms(started)));
     code
@@ -517,131 +507,6 @@ fn load_sign_in(ctx: &mut Ctx) {
         }
         Loaded::Legacy { id } => ctx.unusable = Some(Unusable::Legacy { id }),
         Loaded::Unreadable(why) => ctx.unusable = Some(Unusable::Unreadable(why)),
-    }
-}
-
-async fn telemetry(ctx: &mut Ctx, rest: &[String], result: &R<i32>, took: Duration) {
-    if !ctx.telemetry_on() || ctx.auth.is_none() || ctx.client.is_none() {
-        return;
-    }
-    let (command, step) = telemetry_step(rest);
-    let event = json!({
-        "source": "cli",
-        "event": "command",
-        "step": step,
-        "success": matches!(result, Ok(0)),
-        "duration_ms": took.as_millis() as u64,
-        "error_code": result.as_ref().err().map(|e| e.code.as_str()),
-        "command": command,
-        "client_version": env!("CARGO_PKG_VERSION"),
-    });
-    let (Some(client), Some(auth)) = (ctx.client.clone(), ctx.auth.clone()) else {
-        return;
-    };
-    // Never refreshes for telemetry: an expired token just means no event.
-    if auth.seconds_left(now_s()) <= 0 {
-        return;
-    }
-    let _ = tokio::time::timeout(Duration::from_millis(800), async move {
-        client.authed(&auth.access_token).telemetry(event).await
-    })
-    .await;
-}
-
-/// Sub-command words that may appear in telemetry after a known command.
-const TELEMETRY_WORDS: &[&str] = &[
-    "ls",
-    "show",
-    "pair",
-    "attach",
-    "setup",
-    "setup-code",
-    "rename",
-    "visibility",
-    "ttl",
-    "stop",
-    "rm",
-    "access",
-    "activity",
-    "requests",
-    "new",
-    "connect",
-    "disconnect",
-    "status",
-    "end",
-    "release",
-    "send",
-    "get",
-    "keep",
-    "set",
-    "unset",
-    "home",
-    "renounce",
-    "wake",
-    "wake-requests",
-    "on",
-    "start",
-    "mark",
-    "clear",
-    "run",
-    "read",
-    "write",
-    "dismiss",
-    "accept",
-    "wait",
-    "shell",
-    "exec-out",
-    "logcat",
-    "push",
-    "pull",
-    "install",
-    "uninstall",
-    "get-state",
-    "text",
-    "attrs",
-    "snapshot",
-    "screenshot",
-    "press",
-    "longpress",
-    "visible",
-    "hidden",
-    "exists",
-    "absent",
-    "editable",
-    "selected",
-    "focused",
-    "up",
-    "down",
-    "left",
-    "right",
-    "pan",
-    "fling",
-    "drag",
-    "pinch",
-    "rotate",
-    "transform",
-    "label",
-    "role",
-    "list",
-    "click",
-    "fill",
-];
-
-/// The `command` and `step` telemetry reports: the command name and a known sub-command word, never
-/// an argument (a short-lived token, a pairing code, typed text, a path).
-fn telemetry_step(rest: &[String]) -> (String, String) {
-    let mut words = rest.iter().map(String::as_str).filter(|s| !s.starts_with('-'));
-    let command = match words.next() {
-        Some(c) if help::find(c).is_some() || capability::command(c).is_some() || c == "help" => c,
-        Some(_) => "unknown",
-        None => return (String::new(), "cli".into()),
-    };
-    let redacted = capability::command(command).is_some_and(|c| c.redact_text);
-    match words.next() {
-        Some(sub) if !redacted && TELEMETRY_WORDS.contains(&sub) => {
-            (command.to_owned(), format!("cli.{command}.{sub}"))
-        }
-        _ => (command.to_owned(), format!("cli.{command}")),
     }
 }
 
@@ -1803,6 +1668,24 @@ async fn silicon(ctx: &mut Ctx, args: &[String]) -> R<i32> {
 
 // ───────────────────────────── Settings ─────────────────────────────
 
+/// What `extend config get|set|unset telemetry` says: the setting is kept as a hidden no-op so
+/// scripts that turned it off keep working.
+const TELEMETRY_REMOVED: &str = "Telemetry was removed from Extend; there is nothing to turn on or off.";
+
+/// `extend config get|set|unset telemetry [on|off]`: nothing to do. `store::load_config` already
+/// leaves an old value out; `set` and `unset` also drop it from the file.
+fn telemetry_removed(ctx: &mut Ctx, sub: &str, a: &Args) -> R<i32> {
+    a.at_most(2)?;
+    if sub != "get" && store::root().join("config.toml").exists() {
+        store::save_config(&ctx.cfg)?;
+    }
+    ctx.emit(
+        json!({"key": "telemetry", "removed": true, "message": TELEMETRY_REMOVED}),
+        || TELEMETRY_REMOVED.into(),
+    );
+    Ok(0)
+}
+
 fn unknown_setting(k: &str) -> CliError {
     if k == "team" {
         return CliError::usage(
@@ -1844,7 +1727,6 @@ fn validate_setting(key: &str, v: &str) -> R<String> {
                     },
                 )
             }),
-        "telemetry" => one_of(&["on", "off"]),
         "output" => one_of(&["text", "json"]),
         "color" => one_of(&["auto", "always", "never"]),
         "screenshot_scale" => match v.parse::<f64>() {
@@ -1880,6 +1762,9 @@ async fn config(ctx: &mut Ctx, args: &[String]) -> R<i32> {
         return Err(unknown_sub("config", &sub));
     }
     let a = Args::parse(rest, &path)?;
+    if matches!(sub.as_str(), "get" | "set" | "unset") && a.pos.first().is_some_and(|k| k == "telemetry") {
+        return telemetry_removed(ctx, &sub, &a);
+    }
     match sub.as_str() {
         "ls" => {
             a.at_most(0)?;
@@ -5234,35 +5119,6 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_never_carries_arguments() {
-        let step = |argv: &[&str]| telemetry_step(&strings(argv));
-        assert_eq!(
-            step(&["login", "oac_short_lived_token"]),
-            ("login".into(), "cli.login".into())
-        );
-        assert_eq!(step(&["login", "status"]), ("login".into(), "cli.login.status".into()));
-        assert_eq!(step(&["type", "hunter2"]), ("type".into(), "cli.type".into()));
-        assert_eq!(
-            step(&["type", "start"]),
-            ("type".into(), "cli.type".into()),
-            "typed text is never reported"
-        );
-        assert_eq!(
-            step(&["device", "pair", "4f9c2a", "--name", "x"]),
-            ("device".into(), "cli.device.pair".into())
-        );
-        assert_eq!(
-            step(&["adb", "--out", "/Users/me/private.bin", "pull", "/sdcard/x"]),
-            ("adb".into(), "cli.adb".into())
-        );
-        assert_eq!(step(&["adb", "shell", "id"]), ("adb".into(), "cli.adb.shell".into()));
-        assert_eq!(
-            step(&["oac_pasted_as_command"]),
-            ("unknown".into(), "cli.unknown".into())
-        );
-    }
-
-    #[test]
     fn install_and_push_refuse_what_is_not_a_local_file() {
         let dir = scratch("not-local");
         let apk = dir.join("app.apk");
@@ -5399,7 +5255,6 @@ mod tests {
             ("api_url", "ftp://x"),
             ("api_url", "http://example.com"),
             ("api_url", "http://localhost.evil.com"),
-            ("telemetry", "maybe"),
             ("output", "yaml"),
             ("self_destruct", "31d"),
             ("team", "acme"),
@@ -5416,7 +5271,6 @@ mod tests {
             ("screenshot_scale", "1"),
             ("api_url", "https://api.extend.teamofsilicons.com"),
             ("api_url", "http://127.0.0.1:8480"),
-            ("telemetry", "off"),
             ("output", "json"),
             ("self_destruct", "90m"),
             ("accounts_url", "https://accounts.teamofsilicons.com"),

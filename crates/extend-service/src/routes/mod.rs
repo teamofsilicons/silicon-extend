@@ -132,7 +132,6 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v2/files/{file_id}/keep", post(files::keep))
         .route("/api/v2/files/{file_id}/content", get(files::content))
         .route("/api/v2/reports", post(ops::report))
-        .route("/api/v2/telemetry", post(ops::telemetry))
         // ── Silicon Accounts' events ──
         .route("/webhooks/accounts", post(webhook::receive))
         .route("/webhook/", post(webhook::retired))

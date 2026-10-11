@@ -1,7 +1,8 @@
 //! Extend against a stand-in Silicon Accounts served over HTTP, through the official client
 //! (`SdkApi`): JWKS (and a rotated key fetched once, rate limited), introspection and lookups with
 //! Extend's app credentials, and proofs issued, reused, refreshed with an `Idempotency-Key` derived
-//! from the refresh token, sealed at rest and revoked.
+//! from the refresh token, sealed at rest and revoked. Every call with app credentials must carry
+//! `X-Accounts-Telemetry: off`: Extend records no telemetry and asks Silicon Accounts to record none.
 
 mod common;
 
@@ -41,12 +42,22 @@ fn stamp(t: time::OffsetDateTime) -> String {
     t.to_offset(time::UtcOffset::UTC).format(&f).unwrap()
 }
 
-/// The refusal of a call without Extend's app credentials (HTTP Basic, as the client sends them).
+/// The refusal of a call without Extend's app credentials (HTTP Basic, as the client sends them), or
+/// without `X-Accounts-Telemetry: off`.
 fn refused(h: &HeaderMap) -> Option<Response> {
     let want = format!(
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(format!("extend:{SECRET}"))
     );
+    if h.get("x-accounts-telemetry").and_then(|v| v.to_str().ok()) != Some("off") {
+        return Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"code": "telemetry_not_off", "message": "Extend must send X-Accounts-Telemetry: off"}})),
+            )
+                .into_response(),
+        );
+    }
     if h.get("authorization").and_then(|v| v.to_str().ok()) == Some(want.as_str()) {
         None
     } else {

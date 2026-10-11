@@ -49,5 +49,17 @@ class IsolationTests(unittest.TestCase):
             self.assertNotIn("COMMIT_APP_SECRET", worker)
             self.assertNotIn("COMMIT_ACCOUNTS_WEBHOOK_SECRET", worker)
 
+    def test_no_telemetry_settings_reach_extend(self):
+        if installer.APP != "extend":
+            self.skipTest("Extend's settings only")
+        value = self.fixture()
+        value["legacy_shared_service_settings"] = {"EXTEND_SPACE_STATION_KEY": "fixture-key",
+                                                   "EXTEND_POSTMARK_SERVER_TOKEN": "fixture-token"}
+        api, _, migration = installer.make_settings(value)
+        for environment in [api, migration]:
+            self.assertNotIn("EXTEND_SPACE_STATION_KEY", environment)
+            self.assertFalse(any("TELEMETRY" in key or "SPACE_STATION" in key for key in environment))
+            self.assertEqual(environment["EXTEND_POSTMARK_SERVER_TOKEN"], "fixture-token")
+
 if __name__ == "__main__":
     unittest.main()

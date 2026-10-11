@@ -2,7 +2,7 @@
   "api_version": 2,
   "call": "Authed::me",
   "consumer": "silicon-extend-client",
-  "consumer_version": "4.0.0",
+  "consumer_version": "4.1.0",
   "contract": 1,
   "given": [],
   "operation": "auth.me.options",
@@ -11,7 +11,6 @@
     "headers": {
       "authorization": "Bearer {silicon_token}",
       "silicon-extend-api-version": "2",
-      "x-extend-telemetry": "off",
       "x-silicon-isi": "{isi}"
     },
     "method": "GET",

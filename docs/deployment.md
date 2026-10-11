@@ -117,7 +117,7 @@ the runner that built it, and packs the archives with `scripts/package-apps.sh`.
 
 ```sh
 cargo build --release --locked -p silicon-extend-cli
-scripts/package-apps.sh 4.0.0 macos-aarch64 target/release/extend   # dist/apps/extend-4.0.0-macos-aarch64.tar.gz
+scripts/package-apps.sh 4.1.0 macos-aarch64 target/release/extend   # dist/apps/extend-4.1.0-macos-aarch64.tar.gz
 ```
 
 The script refuses a version other than the CLI crate's, a binary built for another system or
@@ -132,12 +132,12 @@ tests it (the full pack only where `silicon-apps` 0.2 is installed:
 ```sh
 silicon-apps login --slt "$(silicon-accounts login --app silicon-apps -q)"
 sha256sum --check SHA256SUMS                     # in the downloaded artifact
-silicon-apps upload extend --target linux-x86_64 extend-4.0.0-linux-x86_64.tar.gz
-silicon-apps upload extend --target linux-aarch64 extend-4.0.0-linux-aarch64.tar.gz
+silicon-apps upload extend --target linux-x86_64 extend-4.1.0-linux-x86_64.tar.gz
+silicon-apps upload extend --target linux-aarch64 extend-4.1.0-linux-aarch64.tar.gz
 silicon-apps packages extend                     # both accepted: the three commands passed on their workers
-silicon-apps release extend --version 4.0.0 --package <linux-x86_64 id> --package <linux-aarch64 id>
+silicon-apps release extend --version 4.1.0 --package <linux-x86_64 id> --package <linux-aarch64 id>
 silicon-apps install 'extend>dev' --yes          # on a test machine: the development release works
-silicon-apps promote extend <development release id> --version 4.0.0
+silicon-apps promote extend <development release id> --version 4.1.0
 ```
 
 Today Silicon Apps validates only Linux targets (the Silicon fleet runs `linux-x86_64` and

@@ -266,8 +266,9 @@ pub async fn deleted(state: &AppState, world: &World, uuid: &str, at: OffsetDate
         }
         None => {}
     }
-    // The account's own details go: telemetry no longer names it, and its Ting enrolment record
-    // (when and why it was enrolled) is dropped.
+    // The account's own details go: rows of the old telemetry table (kept before 4.1; Extend records
+    // no telemetry) no longer name it, and its Ting enrolment record (when and why it was enrolled)
+    // is dropped.
     sqlx::query(sql!(
         "UPDATE {} SET member_id = NULL WHERE member_id = $1",
         world.t("telemetry")

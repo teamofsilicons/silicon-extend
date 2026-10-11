@@ -1,0 +1,45 @@
+{
+  "api_version": 2,
+  "call": "Authed::files",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "file"
+  ],
+  "operation": "files.list.silicon",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "GET",
+    "path": "/api/v2/files?silicon={silicon_id}&limit=20"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/content_type",
+      "/items/*/file_id",
+      "/items/*/kind",
+      "/items/*/name",
+      "/items/*/permanent",
+      "/items/*/size_bytes",
+      "/items/*/url"
+    ],
+    "required": [
+      "/items",
+      "/items/*/content_type",
+      "/items/*/file_id",
+      "/items/*/kind",
+      "/items/*/name",
+      "/items/*/permanent",
+      "/items/*/self_destruct_at",
+      "/items/*/size_bytes",
+      "/items/*/url"
+    ],
+    "status": "2xx",
+    "type": "files"
+  }
+}

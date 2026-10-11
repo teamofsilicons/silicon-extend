@@ -215,9 +215,10 @@ sign in again, which replaces it and deletes Extend 3's `contexts/` and `test/`.
 
 ## Settings
 
-`extend config ls` shows them all: `api_url`, `accounts_url`, `telemetry` (on by default), `output`,
-`screenshot_scale`, `self_destruct`, `download_dir`, `color`. `EXTEND_API_URL` and `ACCOUNTS_URL`
-override the two URLs.
+`extend config ls` shows them all: `api_url`, `accounts_url`, `output`, `screenshot_scale`,
+`self_destruct`, `download_dir`, `color`. `EXTEND_API_URL` and `ACCOUNTS_URL` override the two URLs.
+Extend records no telemetry; `extend config set telemetry off` still exits 0 for old scripts and
+says there is nothing to turn off.
 
 ### In-use banner (1.1)
 

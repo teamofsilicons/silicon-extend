@@ -615,14 +615,6 @@ impl V2<'_> {
     pub async fn report(&self, input: &ReportInput) -> Result<ReportReceipt> {
         self.post("/api/v2/reports", "report", input, true).await
     }
-
-    /// Sends one telemetry event (fields listed in api.yaml); errors are the caller's to ignore.
-    pub async fn telemetry(&self, event: serde_json::Value) -> Result<()> {
-        let r = self
-            .req(Method::POST, "/api/v2/telemetry")
-            .json(&env("telemetry", event));
-        expect_empty(self.send(r).await?).await
-    }
 }
 
 /// The file name in a `Content-Disposition` header: the RFC 8187 `filename*` when present,

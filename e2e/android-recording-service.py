@@ -36,7 +36,7 @@ def cli(who, *command, json_output=True, stdin=None):
     home = work / who
     home.mkdir(exist_ok=True)
     env = dict(os.environ, SILICON_HOME=str(home), EXTEND_API_URL=args.service_url,
-               ACCOUNTS_URL=args.service_url + '/dev/accounts', EXTEND_TELEMETRY='off')
+               ACCOUNTS_URL=args.service_url + '/dev/accounts')
     cmd = [str(ROOT / 'target/debug/extend'), '--timeout', '90000', *command]
     if json_output:
         cmd.append('--json')

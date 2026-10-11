@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEV=${1:?Pass the paired Android test device id}
-export EXTEND_API_URL=${2:-http://127.0.0.1:8480} EXTEND_TELEMETRY=off
+export EXTEND_API_URL=${2:-http://127.0.0.1:8480}
 # The local service's Silicon Accounts stand-in (e2e/dev.env): accounts sign in with a short-lived
 # token from it, exactly as with Silicon Accounts.
 export ACCOUNTS_URL="$EXTEND_API_URL/dev/accounts"
