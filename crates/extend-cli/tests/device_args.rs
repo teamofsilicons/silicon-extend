@@ -126,7 +126,6 @@ impl Cli {
             .env("EXTEND_API_URL", &self.service.url)
             .env("ACCOUNTS_URL", &self.service.url)
             .env("EXTEND_SESSION", "a3f")
-            .env("EXTEND_TELEMETRY", "off")
             .output()
             .unwrap()
     }

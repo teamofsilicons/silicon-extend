@@ -12,7 +12,9 @@
 //!   answer must still carry every field the app reads. A 1.x–3.x client's fixtures for the
 //!   device wire still replay; its account routes (Silicon IAM sign-in) must get the exact 4.0
 //!   answer: `410 api_version_sunset` with the update command. Honeycomb's test-environment
-//!   instructions are retired with test environments (`contracts/retired/honeycomb`): 404.
+//!   instructions are retired with test environments (`contracts/retired/honeycomb`): 404. Extend
+//!   records no telemetry (4.1): every released client's telemetry call
+//!   (`contracts/retired/telemetry`) is gone, 404 on API v2 and the sunset answer on API v1.
 //!   `contracts/README.md` describes the fixture format and the provider states named in `given`.
 //!
 //! Needs a PostgreSQL the tests can create databases on:
@@ -1522,7 +1524,8 @@ fn still_served(path: &str) -> bool {
 
 /// A fixture of a retired route: it gets the 4.0 answer. An API v1 account route answers `410
 /// api_version_sunset` with the update command (or, while it still selects a test environment,
-/// `testing_secret_invalid`); Honeycomb's test-environment instructions are gone (404).
+/// `testing_secret_invalid`); Honeycomb's test-environment instructions are gone (404), and so is
+/// the API v2 telemetry route 4.1 removed.
 async fn replay_retired(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     p.fill_retired();
     let req = &f["request"];
@@ -1548,7 +1551,7 @@ async fn replay_retired(p: &mut Provider<'_>, f: &Value) -> Result<(), String> {
     let status = resp.status().as_u16();
     let body: Value = resp.json().await.unwrap_or(Value::Null);
     let e = &body["data"];
-    if path.starts_with("/internal/") {
+    if path.starts_with("/internal/") || path.starts_with("/api/v2/") {
         return if status == 404 {
             Ok(())
         } else {
@@ -2363,6 +2366,50 @@ async fn client_1_3_0_ordinary_fixtures_replay_or_are_told_to_update() {
 #[tokio::test]
 async fn client_3_1_1_fixtures_replay_or_are_told_to_update() {
     replay("client-3.1.1").await;
+}
+
+/// The released 4.0.0 client, frozen before 4.1 regenerated the live fixtures.
+#[tokio::test]
+async fn client_4_0_0_fixtures_replay_or_are_told_to_update() {
+    replay("client-4.0.0").await;
+}
+
+/// Extend records no telemetry (4.1): the telemetry call of every released client is answered as
+/// gone (404 on API v2, the sunset answer on API v1), and nothing is kept.
+#[tokio::test]
+async fn telemetry_calls_of_released_clients_are_gone() {
+    let svc = Svc::start(default_policy(), real_clock(), "1.0.0").await;
+    let root = contracts_dir().join("retired/telemetry");
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    dirs.sort();
+    let mut problems = Vec::new();
+    let mut n = 0;
+    for dir in dirs {
+        for (name, f) in load(&dir) {
+            n += 1;
+            let mut p = Provider::new(&svc).await;
+            if let Err(e) = replay_retired(&mut p, &f).await {
+                problems.push(format!("{}/{name}: {e}", dir.display()));
+            }
+        }
+    }
+    assert!(n >= 6, "no telemetry fixtures under {}", root.display());
+    assert!(
+        problems.is_empty(),
+        "A released client's telemetry call is still answered:\n{}",
+        problems.join("\n")
+    );
+    let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM extend.telemetry")
+        .fetch_one(&svc.pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0, "nothing is recorded");
 }
 
 /// Installed device apps: the device wire is unchanged in 4.0, so every fixture still replays.

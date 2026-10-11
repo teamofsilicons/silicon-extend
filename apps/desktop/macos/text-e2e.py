@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix="extend-text-e2e-", dir=fixture_root) as
     peer_app = None
     remote_session = None
     remote_env = {**os.environ, "EXTEND_API_URL": args.service_url, "ACCOUNTS_URL": args.service_url + "/dev/accounts",
-                  "SILICON_HOME": str(work / "cli-home"), "EXTEND_TELEMETRY": "off"}
+                  "SILICON_HOME": str(work / "cli-home")}
 
     def remote_cli(*command, stdin=None):
         result = subprocess.run([str(ROOT / "target/debug/extend"), *command], env=remote_env, capture_output=True, text=True, timeout=120, input=stdin)

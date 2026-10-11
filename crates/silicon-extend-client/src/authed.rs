@@ -662,12 +662,10 @@ impl<'a> Authed<'a> {
         self.post("/api/v2/reports", "report", input, true).await
     }
 
-    /// Sends one telemetry event (fields listed in api.yaml); errors are the caller's to ignore.
-    pub async fn telemetry(&self, event: serde_json::Value) -> Result<()> {
-        let r = self
-            .req(Method::POST, "/api/v2/telemetry")
-            .json(&env("telemetry", event));
-        expect_empty(self.c.send(r).await?).await
+    /// Sends nothing and returns `Ok(())`: Extend records no telemetry.
+    #[deprecated(since = "4.1.0", note = "Extend records no telemetry; this sends nothing")]
+    pub async fn telemetry(&self, _event: serde_json::Value) -> Result<()> {
+        Ok(())
     }
 }
 

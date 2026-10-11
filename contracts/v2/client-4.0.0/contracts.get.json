@@ -1,0 +1,23 @@
+{
+  "api_version": 2,
+  "call": "Client::contracts",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "contracts.get",
+  "request": {
+    "body": null,
+    "headers": {
+      "silicon-extend-api-version": "2"
+    },
+    "method": "GET",
+    "path": "/api/v2/contracts"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": "contracts"
+  }
+}

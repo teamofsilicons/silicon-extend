@@ -34,13 +34,15 @@ On the host:
   `EXTEND_APP_ID` (default `extend`), `EXTEND_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET` (during a rotation),
   `EXTEND_TING_URL` (no default: notifications through Ting are off until it is set),
   `EXTEND_BRIEFCASE_URL`, `EXTEND_BRIEFCASE_WEB_URL`, `EXTEND_WEBSITE_URL`, `EXTEND_DOCS_URL`,
-  `EXTEND_REPOSITORY_URL`, `EXTEND_CORS_ORIGINS`, `EXTEND_SPACE_STATION_KEY`,
+  `EXTEND_REPOSITORY_URL`, `EXTEND_CORS_ORIGINS`,
   `EXTEND_DEVICE_APP_MIN_VERSION`, `EXTEND_LOG`, `EXTEND_MAX_PAIRS_PER_DEVICE`, and the API versioning
   pairs `EXTEND_DEPRECATED_API_VERSIONS`, `EXTEND_API_V{n}_CLI`, `EXTEND_API_V{n}_CLIENT_CRATE`.
 
 Extend 3's keys (`EXTEND_IAM_*`, `EXTEND_HONEYCOMB_SERVICE_TOKEN`, the membership and test settings)
 are never passed on; the renderer names any it finds, without their values, so they can be removed
-once a release no longer needs them for a rollback. Any other key is ignored and named the same way.
+once a release no longer needs them for a rollback. Extend records no telemetry, so
+`EXTEND_SPACE_STATION_KEY` (the key of the export 4.1 removed) is never passed on either and is named
+the same way; delete it from the secret. Any other key is ignored and named the same way.
 
 ## First deploy
 

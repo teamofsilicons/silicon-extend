@@ -64,6 +64,9 @@ def make_settings(secret):
         migrator = {**base, 'COMMIT_SCHEMA_OWNER': 'commit_accounts_migrator',
                     'COMMIT_MIGRATOR_DATABASE_URL': dburl('commit_accounts_migrator')}
     elif APP == 'extend':
+        # Extend records no telemetry: the Space Station key of the export it removed never
+        # reaches the service.
+        shared = {k: v for k, v in shared.items() if k != 'EXTEND_SPACE_STATION_KEY'}
         api = {**accounts, **shared, 'EXTEND_ENVIRONMENT': 'production',
                'EXTEND_BIND': '0.0.0.0:8080', 'EXTEND_PUBLIC_URL': 'https://api.extend.teamofsilicons.com',
                'EXTEND_DATABASE_URL': dburl('extend_accounts_app'), 'EXTEND_DATA_DIR': '/var/lib/extend/data',

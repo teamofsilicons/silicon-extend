@@ -99,6 +99,14 @@ class RuntimeRendererTests(unittest.TestCase):
             self.assertNotIn(value, log)
         self.assertNotIn("ignoring unknown keys", log)
 
+    def test_the_space_station_key_never_reaches_the_service(self):
+        values, log = self.render({"EXTEND_SPACE_STATION_KEY": "fixture-private-space-station"})
+        self.assertNotIn("EXTEND_SPACE_STATION_KEY", values)
+        self.assertIn("it records no telemetry", log)
+        self.assertIn("EXTEND_SPACE_STATION_KEY", log)
+        self.assertNotIn("fixture-private-space-station", log)
+        self.assertNotIn("ignoring unknown keys", log)
+
     def test_tuning_controls_reach_the_service(self):
         values, log = self.render(self.tuning)
         self.assertEqual({key: values.get(key) for key in self.tuning}, self.tuning)

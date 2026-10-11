@@ -339,10 +339,13 @@ impl SignIn {
             || concat!("silicon-extend-client/", env!("CARGO_PKG_VERSION")).to_owned(),
             |ua| format!("{ua} silicon-extend-client/{}", env!("CARGO_PKG_VERSION")),
         );
+        // Extend records no telemetry, and asks Silicon Accounts to record none for its calls
+        // (`X-Accounts-Telemetry: off` on every request, here and in `post_form`).
         let accounts = AccountsClient::builder()
             .base_url(&base)
             .user_agent(product.clone())
             .timeout(TIMEOUT)
+            .telemetry(false)
             .build()
             .map_err(|e| {
                 AuthError::new(
@@ -526,6 +529,7 @@ impl SignIn {
         let resp = self
             .http
             .post(&url)
+            .header(silicon_accounts_client::TELEMETRY_HEADER, "off")
             .form(form)
             .send()
             .await

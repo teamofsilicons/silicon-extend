@@ -108,7 +108,8 @@ impl Default for Tuning {
     }
 }
 
-/// Variables Extend read before it moved to Silicon Accounts and Silicon Apps.
+/// Variables Extend read before it moved to Silicon Accounts and Silicon Apps, and the Space Station
+/// key of the telemetry export 4.1 removed (Extend records no telemetry).
 pub const OBSOLETE_VARIABLES: &[&str] = &[
     "EXTEND_IAM_MODE",
     "EXTEND_IAM_BASE_URL",
@@ -128,6 +129,7 @@ pub const OBSOLETE_VARIABLES: &[&str] = &[
     "EXTEND_OWNER_CHECK_AT_USE",
     "EXTEND_TEST_LINK_WINDOW_S",
     "EXTEND_TEST_TELEMETRY_KEYS",
+    "EXTEND_SPACE_STATION_KEY",
 ];
 
 /// Checks a Silicon Accounts URL: an absolute https URL, or http for this machine only (the local
@@ -617,13 +619,15 @@ mod tests {
             ("EXTEND_ENVIRONMENT", "development"),
             ("EXTEND_IAM_APP_SECRET", "ask_x"),
             ("EXTEND_HONEYCOMB_SERVICE_TOKEN", "hck_x"),
+            ("EXTEND_SPACE_STATION_KEY", "ssk_x"),
         ])
         .unwrap();
         assert_eq!(
             c.obsolete,
             vec![
                 "EXTEND_IAM_APP_SECRET".to_owned(),
-                "EXTEND_HONEYCOMB_SERVICE_TOKEN".to_owned()
+                "EXTEND_HONEYCOMB_SERVICE_TOKEN".to_owned(),
+                "EXTEND_SPACE_STATION_KEY".to_owned()
             ]
         );
     }

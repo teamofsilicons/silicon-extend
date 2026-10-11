@@ -105,11 +105,9 @@ pairing or grant, a Silicon at its sessions and wake requests, anyone with "Turn
 are never logged. `connection_replaced` in a pair's activity log means another connection with that
 pair's credential took over a live one: on a computer several Carbons paired, suspect a copied
 credential (the next rotation, at the end of the next session there, makes the copy useless). Every response has `X-Request-ID`; errors carry it too,
-so a CLI error message can be traced to its log lines. Telemetry events arrive at
-`/api/v2/telemetry`, are stored in `telemetry` and logged under target `telemetry`, and name the
-account by its uuid and current id. They are exported to Space Station when
-`EXTEND_SPACE_STATION_KEY` is set; no ingest key has been available, so the export has not been seen
-working against Space Station.
+so a CLI error message can be traced to its log lines. Extend records no telemetry (since 4.1): the
+`telemetry` table of earlier releases stays in the database untouched, nothing writes to it, and the
+service names `EXTEND_SPACE_STATION_KEY` at startup as a variable to remove.
 
 ## Rate limits
 

@@ -36,7 +36,7 @@ def mint(*args):
  if p.returncode:raise RuntimeError('Accounts identity setup failed: '+p.stderr[-300:])
  return json.loads(p.stdout)
 def cli(home,*args,input=None,ok=True):
- env={**os.environ,'SILICON_HOME':str(OUT/home),'EXTEND_API_URL':API,'ACCOUNTS_URL':STACK['accounts_public_url'],'EXTEND_TELEMETRY':'off'}
+ env={**os.environ,'SILICON_HOME':str(OUT/home),'EXTEND_API_URL':API,'ACCOUNTS_URL':STACK['accounts_public_url']}
  p=subprocess.run([str(BIN/'extend'),*args],env=env,input=input,capture_output=True,text=True,timeout=40)
  if ok and p.returncode:raise RuntimeError('CLI '+args[0]+' failed: '+p.stderr[-500:])
  return p
@@ -61,7 +61,7 @@ try:
  silicon=created['silicon'];slt=mint('slt','--silicon',silicon['id'],'--stk',created['stk'],'--app','extend')['slt']
  cli('silicon','login','--slt-stdin',input=slt+'\n');status=json.loads(cli('silicon','login','status','--json').stdout);check('Silicon CLI sign-in and custody',status['authenticated'] and status['uuid']==silicon['uuid'])
  # First-party device flow approval uses the Carbon's existing token and spends no email code.
- env={**os.environ,'SILICON_HOME':str(OUT/'carbon-cli'),'EXTEND_API_URL':API,'ACCOUNTS_URL':STACK['accounts_public_url'],'EXTEND_TELEMETRY':'off'}
+ env={**os.environ,'SILICON_HOME':str(OUT/'carbon-cli'),'EXTEND_API_URL':API,'ACCOUNTS_URL':STACK['accounts_public_url']}
  log=OUT/'device-flow.log'
  with log.open('w') as f:login=subprocess.Popen([str(BIN/'extend'),'login'],env=env,stdout=f,stderr=f)
  code=wait(lambda: (re.search(r'\b[A-Z0-9]{4}-[A-Z0-9]{4}\b',log.read_text()) or [None])[0])

@@ -1,0 +1,26 @@
+{
+  "api_version": 2,
+  "call": "Authed::renounce",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [
+    "device"
+  ],
+  "operation": "silicons.renounce",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "DELETE",
+    "path": "/api/v2/silicons/{silicon_id}/grants/{device_id}"
+  },
+  "response": {
+    "non_null": [],
+    "required": [],
+    "status": "2xx",
+    "type": null
+  }
+}

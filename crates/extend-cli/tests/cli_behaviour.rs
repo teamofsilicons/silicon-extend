@@ -328,13 +328,55 @@ fn unknown_flags_and_settings_are_refused_with_the_choices() {
             "{args:?}: every usage error says what to do"
         );
     }
-    let o = cli.run(&["config", "get", "telemetry"]);
-    assert_eq!(stdout(&o).trim(), "on (default)");
     let o = cli.run(&["config", "set", "accounts_url", "http://localhost:9590/"]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(
         stdout(&cli.run(&["config", "get", "accounts_url"])).trim(),
         "http://localhost:9590"
+    );
+}
+
+/// Extend records no telemetry: the CLI sends no events, and the old setting is a quiet no-op so
+/// scripts that turned it off keep working.
+#[test]
+fn telemetry_is_gone_and_its_setting_is_a_quiet_no_op() {
+    let fake = Fake::start(|r| {
+        (r.path_only() == "/api/v2/devices").then(|| ok("devices", json!({"items": [], "next_cursor": null})))
+    });
+    let cli = Cli::new("no-telemetry", &fake.url)
+        .signed_in("si:chef")
+        .env("EXTEND_TELEMETRY", "on");
+    // An Extend 4.0 setting that turned telemetry off.
+    std::fs::write(cli.state().join("config.toml"), "telemetry = \"off\"\n").unwrap();
+    let ls = json_out(&cli.run(&["config", "ls", "--json"]));
+    assert!(ls["settings"].get("telemetry").is_none(), "{ls}");
+    assert!(
+        ls["keys"].as_array().unwrap().iter().all(|k| k["key"] != "telemetry"),
+        "{ls}"
+    );
+    for args in [
+        &["config", "get", "telemetry"][..],
+        &["config", "set", "telemetry", "on"],
+        &["config", "set", "telemetry", "off"],
+        &["config", "unset", "telemetry"],
+    ] {
+        let o = cli.run(args);
+        assert_eq!(o.status.code(), Some(0), "{args:?}: {}", stderr(&o));
+        assert_eq!(
+            stdout(&o).trim(),
+            "Telemetry was removed from Extend; there is nothing to turn on or off.",
+            "{args:?}"
+        );
+    }
+    let saved = std::fs::read_to_string(cli.state().join("config.toml")).unwrap();
+    assert!(!saved.contains("telemetry"), "{saved}");
+    let o = cli.run(&["device", "ls"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let seen = fake.seen.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    assert!(
+        seen.iter().all(|r| !r.path.contains("telemetry")),
+        "no telemetry is sent"
     );
 }
 
@@ -517,7 +559,7 @@ fn a_reader_that_goes_away_does_not_crash_the_command() {
 fn config_home_moves_the_sign_in_and_settings() {
     let fake = Fake::start(|r| (r.path_only() == "/api/v2/me").then(|| ok("me", me("si:chef"))));
     let cli = Cli::new("home-move", &fake.url).signed_in("si:chef");
-    assert!(cli.run(&["config", "set", "telemetry", "off"]).status.success());
+    assert!(cli.run(&["config", "set", "screenshot_scale", "0.5"]).status.success());
     let target = cli.home.join("elsewhere");
     std::fs::create_dir_all(&target).unwrap();
     let o = cli.run(&["config", "home", target.to_str().unwrap()]);
@@ -535,7 +577,7 @@ fn config_home_moves_the_sign_in_and_settings() {
         "the sign-in came along: {}",
         stderr(&o)
     );
-    assert_eq!(stdout(&cli.run(&["config", "get", "telemetry"])).trim(), "off");
+    assert_eq!(stdout(&cli.run(&["config", "get", "screenshot_scale"])).trim(), "0.5");
     let new_root = target.canonicalize().unwrap().join(".extend");
     assert!(new_root.join("auth.json").exists() && new_root.join("config.toml").exists());
     assert!(!cli.state().join("auth.json").exists(), "the old copy is gone");

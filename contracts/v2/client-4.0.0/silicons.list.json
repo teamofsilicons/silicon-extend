@@ -1,0 +1,34 @@
+{
+  "api_version": 2,
+  "call": "Authed::silicons",
+  "consumer": "silicon-extend-client",
+  "consumer_version": "4.0.0",
+  "contract": 1,
+  "given": [],
+  "operation": "silicons.list",
+  "request": {
+    "body": null,
+    "headers": {
+      "authorization": "Bearer {carbon_token}",
+      "silicon-extend-api-version": "2"
+    },
+    "method": "GET",
+    "path": "/api/v2/silicons"
+  },
+  "response": {
+    "non_null": [
+      "/items",
+      "/items/*/granted_by_you",
+      "/items/*/id",
+      "/items/*/looked_after",
+      "/items/*/uuid"
+    ],
+    "required": [
+      "/items",
+      "/items/*/id",
+      "/items/*/uuid"
+    ],
+    "status": "2xx",
+    "type": "silicons"
+  }
+}

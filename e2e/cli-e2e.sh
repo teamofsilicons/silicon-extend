@@ -23,7 +23,7 @@ EXTEND="$TARGET/debug/extend"
 FAKE="$TARGET/debug/examples/fake_device"
 WORK=$(mktemp -d)
 trap '{ kill $(jobs -p) || true; wait; } 2>/dev/null; rm -rf "$WORK"' EXIT
-export EXTEND_API_URL=$API ACCOUNTS_URL=$API/dev/accounts EXTEND_TELEMETRY=off
+export EXTEND_API_URL=$API ACCOUNTS_URL=$API/dev/accounts
 unset EXTEND_TEST_SECRET EXTEND_SESSION NO_COLOR
 
 pass=0
@@ -256,11 +256,12 @@ signin alice c:alice
 
 # ── State directory ──
 signin mover si:chef c:alice
-as mover config set telemetry off >/dev/null
+as mover config set screenshot_scale 0.5 >/dev/null
 mkdir -p "$WORK/mover-new"
 as mover config home "$WORK/mover-new" | grep -q "si:chef" && ok "config home moves the state"
 [ "$(as mover login status --json | jq_ 'd["authenticated"]')" = True ] && ok "the sign-in survived the move"
-[ "$(as mover config get telemetry)" = off ] && ok "settings survived the move"
+[ "$(as mover config get screenshot_scale)" = 0.5 ] && ok "settings survived the move"
+[ "$(as mover config set telemetry off)" = "Telemetry was removed from Extend; there is nothing to turn on or off." ] && ok "config set telemetry is a quiet no-op (Extend records no telemetry)"
 [ ! -e "$WORK/mover/.extend/auth.json" ] && ok "nothing is left behind"
 
 # ── No test environments ──

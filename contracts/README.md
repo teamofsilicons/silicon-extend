@@ -14,8 +14,11 @@ contracts/
   v1/client-1.2.0/    the released 1.2.0 client's fixtures, frozen before managed selection in 1.3.0
   v1/client-1.3.0/    the released 1.3.0 ordinary API fixtures, frozen before 2.0.0
   v1/client-3.1.1/    the released 3.1.1 client's fixtures, frozen before Extend 4 (Silicon Accounts)
+  v1/client-4.0.0/    the released 4.0.0 client's device-side calls, frozen before 4.1
+  v2/client-4.0.0/    the released 4.0.0 client's account calls, frozen before 4.1
   retired/client-1.3.0/  withdrawn optional selection contract, retained as history only
   retired/honeycomb/  Honeycomb's test-environment lifecycle instructions, retired with test environments in 4.0
+  retired/telemetry/  every released client's telemetry call, withdrawn in 4.1: Extend records no telemetry
   v1/device/          the Android app (android.*) and the Mac, Windows and Linux app (agent.*), every supported version
 ```
 
@@ -47,6 +50,18 @@ release adds fixtures instead of editing the old ones:
   new file, named for a new operation (`android.device.socket.wake.json`) or with the version in its
   name (`android.device.self.1_1.json`, `agent.enrollments.create.1_1.json`), and says
   `"consumer_version": "1.1.0"`.
+
+## Telemetry withdrawn in 4.1
+
+At the Carbon's request, Extend records no telemetry from 4.1: `POST /api/v2/telemetry` is gone
+(404) and the service records nothing about commands. Every released client's telemetry fixture
+(1.0.0 to 3.1.1 on API v1, 4.0.0 on API v2) moved byte for byte to `retired/telemetry/client-<version>/`.
+The 4.0 CLI sent the event after each command, waited at most 800 ms and ignored the answer (and
+API v1's account routes already answer every 1.x–3.x client with the sunset), so nothing a Carbon or
+Silicon sees changes. `cargo test -p extend-service --test contracts
+telemetry_calls_of_released_clients_are_gone` replays them: 404 on API v2, the API v1 sunset answer
+on API v1, and nothing kept. The 4.1 client's `Authed::telemetry` is a deprecated no-op that sends
+nothing, so it has no fixture.
 
 ## Explicit retirement in 2.0.0
 

@@ -349,7 +349,6 @@ impl Cli {
             .env("HOME", &self.home)
             .env("EXTEND_API_URL", &self.url)
             .env("ACCOUNTS_URL", &self.accounts)
-            .env("EXTEND_TELEMETRY", "off")
             .env_remove("EXTEND_SESSION")
             .env_remove("EXTEND_TEST_SECRET")
             .env_remove("NO_COLOR");

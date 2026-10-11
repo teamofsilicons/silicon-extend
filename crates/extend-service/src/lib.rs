@@ -24,7 +24,6 @@ pub mod proofs;
 pub mod routes;
 pub mod scheduler;
 pub mod state;
-pub mod telemetry;
 pub mod ting;
 pub mod versions;
 pub mod wake;
@@ -37,10 +36,14 @@ use state::{AppState, Shared};
 /// Builds the shared state from configuration: connects the database, runs migrations, and wires
 /// Silicon Accounts, Briefcase and Ting (or their local stand-ins).
 pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
-    // Space Station's HTTP stack needs a process-wide TLS provider.
+    // More than one rustls crypto provider is compiled in (sqlx uses ring), so pick one for the
+    // process before anything opens a TLS connection.
     let _ = rustls::crypto::ring::default_provider().install_default();
     for v in &cfg.obsolete {
-        tracing::warn!(variable = %v, "this variable belonged to Silicon IAM or Honeycomb and is no longer read; remove it");
+        tracing::warn!(
+            variable = %v,
+            "this variable belonged to an earlier Extend (Silicon IAM, Honeycomb or the telemetry export) and is no longer read; remove it"
+        );
     }
     let pool = db::connect(&cfg.database_url).await?;
     db::migrate_global(&pool).await?;

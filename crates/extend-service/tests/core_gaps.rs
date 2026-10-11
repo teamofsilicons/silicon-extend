@@ -863,8 +863,10 @@ async fn an_expired_token_followed_by_a_fresh_one_keeps_the_session() {
     );
 }
 
+/// Extend records no telemetry: a command leaves no event (whether or not the caller still sends an
+/// older client's `X-Extend-Telemetry` header), and the old telemetry route is gone.
 #[tokio::test]
-async fn a_silicon_that_turned_telemetry_off_leaves_no_command_events() {
+async fn commands_leave_no_telemetry_and_the_telemetry_route_is_gone() {
     let env = start().await;
     let token = login(&env, "si:chef").await;
     let device = Device::pair(&env, "c:alice", DeviceOs::Android, &["si:chef"])
@@ -877,15 +879,9 @@ async fn a_silicon_that_turned_telemetry_off_leaves_no_command_events() {
         .unwrap()
         .session_id
         .to_string();
-    let count = || async {
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.telemetry WHERE event->>'event' = 'command'")
-            .fetch_one(&env.pool)
-            .await
-            .unwrap()
-    };
     assert!(on.run(&sid, &cmd("snapshot", &[])).await.unwrap().ok);
-    assert_eq!(count().await, 1, "telemetry on: the command is recorded");
-    let quiet = reqwest::Client::new()
+    let http = reqwest::Client::new();
+    let quiet = http
         .post(format!("{}/api/v2/sessions/{sid}/commands", env.base))
         .bearer_auth(&token)
         .header("x-extend-telemetry", "off")
@@ -894,7 +890,27 @@ async fn a_silicon_that_turned_telemetry_off_leaves_no_command_events() {
         .await
         .unwrap();
     assert_eq!(quiet.status(), 200);
-    assert_eq!(count().await, 1, "telemetry off: nothing more is recorded");
+    let rows = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.telemetry")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "nothing is recorded");
+    let gone = http
+        .post(format!("{}/api/v2/telemetry", env.base))
+        .bearer_auth(&token)
+        .header("silicon-extend-api-version", "2")
+        .json(&serde_json::json!({"type": "telemetry", "data": {
+            "source": "cli", "event": "command", "step": "cli.device.ls", "success": true, "duration_ms": 1
+        }}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+    let rows = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM extend.telemetry")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "an older client's event is not kept either");
 }
 
 // ───────────────────────────── Ting ─────────────────────────────

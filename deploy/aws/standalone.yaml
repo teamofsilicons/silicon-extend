@@ -139,7 +139,7 @@ Resources:
         - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: ACME HTTP-01 and redirect to HTTPS}
         - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS API and device WebSockets}
       SecurityGroupEgress:
-        - {IpProtocol: '-1', CidrIp: 0.0.0.0/0, Description: Silicon Accounts Briefcase Ting Postmark Space Station ECR RDS}
+        - {IpProtocol: '-1', CidrIp: 0.0.0.0/0, Description: Silicon Accounts Briefcase Ting Postmark ECR RDS}
       Tags:
         - {Key: Name, Value: silicon-extend-production}
         - {Key: Service, Value: silicon-extend}
@@ -339,7 +339,7 @@ Resources:
                         'EXTEND_DELEGATION_ENCRYPTION_KEY', 'EXTEND_POSTMARK_SERVER_TOKEN',
                         'EXTEND_REPORT_RECIPIENTS')
             optional = ('ACCOUNTS_URL', 'ACCOUNTS_API_URL', 'EXTEND_APP_ID',
-                        'EXTEND_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET', 'EXTEND_SPACE_STATION_KEY',
+                        'EXTEND_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET',
                         'EXTEND_BRIEFCASE_URL', 'EXTEND_BRIEFCASE_WEB_URL', 'EXTEND_TING_URL',
                         'EXTEND_WEBSITE_URL', 'EXTEND_DOCS_URL', 'EXTEND_REPOSITORY_URL',
                         'EXTEND_CORS_ORIGINS', 'EXTEND_DEVICE_APP_MIN_VERSION', 'EXTEND_LOG',
@@ -353,6 +353,9 @@ Resources:
                        'EXTEND_TEST_TELEMETRY_KEYS', 'EXTEND_MEMBERSHIP_SWEEP_HOURS',
                        'EXTEND_OWNER_CHECK_CACHE_S', 'EXTEND_OWNER_CHECK_AT_USE',
                        'EXTEND_TEST_LINK_WINDOW_S')
+            # Extend records no telemetry (4.1): the Space Station key of the old export never
+            # reaches the service either.
+            removed = ('EXTEND_SPACE_STATION_KEY',)
             def clean(key, value):
                 if not isinstance(value, str) or not value or any(ord(c) in (0, 10, 13) for c in value):
                     raise SystemExit('runtime secret value missing or malformed: ' + key)
@@ -366,7 +369,11 @@ Resources:
             if kept:
                 print('extend-render-env: not passing Extend 3 settings to the service (remove them from the '
                       'runtime secret once 4.0 is confirmed): ' + ', '.join(kept))
-            ignored = sorted(k for k in source if k not in values and k not in retired)
+            dropped = sorted(k for k in source if k in removed)
+            if dropped:
+                print('extend-render-env: not passing settings Extend no longer reads (it records no telemetry; '
+                      'remove them from the runtime secret): ' + ', '.join(dropped))
+            ignored = sorted(k for k in source if k not in values and k not in retired and k not in removed)
             if ignored:
                 print('extend-render-env: ignoring unknown keys in the runtime secret: ' + ', '.join(ignored))
             if 'sslmode=verify-full' not in values['EXTEND_DATABASE_URL']:

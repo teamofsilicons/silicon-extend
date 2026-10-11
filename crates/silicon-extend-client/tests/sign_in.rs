@@ -1,6 +1,8 @@
 //! `auth::SignIn` against a stand-in Silicon Accounts: the device flow (pending, slow_down,
 //! approval, denial, expiry), short-lived token exchange (each refusal), refresh rotation, revoke,
 //! and that nothing is sent but `client_id`: no secret, no Authorization header, no token echoed.
+//! Every call says `X-Accounts-Telemetry: off`: Extend records no telemetry and asks Silicon Accounts
+//! to record none.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,6 +25,8 @@ struct Stub {
     refresh: HashMap<String, String>,
     /// Every form posted, with whether it carried an Authorization header.
     forms: Vec<(String, HashMap<String, String>, bool)>,
+    /// Calls that came without `X-Accounts-Telemetry: off`.
+    telemetry_not_off: Vec<String>,
     expires_in: u64,
     interval: u64,
 }
@@ -53,6 +57,12 @@ fn oauth(status: StatusCode, error: &str, description: &str) -> Response {
         .into_response()
 }
 
+fn note_telemetry(st: &mut Stub, what: &str, headers: &HeaderMap) {
+    if headers.get("x-accounts-telemetry").and_then(|v| v.to_str().ok()) != Some("off") {
+        st.telemetry_not_off.push(what.to_owned());
+    }
+}
+
 fn form_of(body: &str) -> HashMap<String, String> {
     url::form_urlencoded::parse(body.as_bytes()).into_owned().collect()
 }
@@ -66,6 +76,7 @@ async fn authorize(State(s): State<Shared>, headers: HeaderMap, body: String) ->
                 .collect()
         })
         .unwrap_or_else(|_| form_of(&body));
+    note_telemetry(&mut st, "authorize", &headers);
     st.forms
         .push(("authorize".into(), f, headers.contains_key("authorization")));
     axum::Json(json!({"device_code": "sad_stub_device_code", "user_code": "MVHB-KQAW",
@@ -77,6 +88,7 @@ async fn authorize(State(s): State<Shared>, headers: HeaderMap, body: String) ->
 async fn token(State(s): State<Shared>, headers: HeaderMap, body: String) -> Response {
     let f = form_of(&body);
     let mut st = s.lock().unwrap();
+    note_telemetry(&mut st, "token", &headers);
     st.forms
         .push(("token".into(), f.clone(), headers.contains_key("authorization")));
     let bad = StatusCode::BAD_REQUEST;
@@ -145,9 +157,9 @@ async fn token(State(s): State<Shared>, headers: HeaderMap, body: String) -> Res
 
 async fn revoke(State(s): State<Shared>, headers: HeaderMap, body: String) -> Response {
     let f = form_of(&body);
-    s.lock()
-        .unwrap()
-        .forms
+    let mut st = s.lock().unwrap();
+    note_telemetry(&mut st, "revoke", &headers);
+    st.forms
         .push(("revoke".into(), f, headers.contains_key("authorization")));
     axum::Json(json!({"revoked": true})).into_response()
 }
@@ -174,9 +186,16 @@ fn stub(polls: Vec<&'static str>) -> Stub {
     }
 }
 
-/// Every form went with `client_id=extend`, no secret, and no Authorization header.
+/// Every form went with `client_id=extend`, no secret, no Authorization header, and
+/// `X-Accounts-Telemetry: off`.
 fn assert_public_client(s: &Shared) {
-    for (what, form, authorization) in &s.lock().unwrap().forms {
+    let st = s.lock().unwrap();
+    assert!(
+        st.telemetry_not_off.is_empty(),
+        "sent without X-Accounts-Telemetry: off: {:?}",
+        st.telemetry_not_off
+    );
+    for (what, form, authorization) in &st.forms {
         assert_eq!(
             form.get("client_id").map(String::as_str),
             Some("extend"),

@@ -125,13 +125,13 @@ The tokens are kept in the state directory (auth.json, readable only by you) and
         usage: "extend config ls | get <key> | set <key> <value> | unset <key> | home <dir> [--use-existing]",
         who: "anyone",
         purpose: "Read and change CLI settings, and where state is kept.",
-        used_with: "Settings (each value is checked): api_url and accounts_url (https, or http for localhost, 127.0.0.1 or [::1]; EXTEND_API_URL and ACCOUNTS_URL override them), telemetry on|off, output text|json, screenshot_scale 0.01–1, self_destruct 1m–30d, download_dir <existing directory>, color auto|always|never. \
+        used_with: "Settings (each value is checked): api_url and accounts_url (https, or http for localhost, 127.0.0.1 or [::1]; EXTEND_API_URL and ACCOUNTS_URL override them), output text|json, screenshot_scale 0.01–1, self_destruct 1m–30d, download_dir <existing directory>, color auto|always|never. \
 `extend config home <dir>` moves the saved sign-in, settings and sessions to <dir>/.extend (default $SILICON_HOME/.extend or ~/.extend); if <dir> already holds Extend state it refuses, unless --use-existing switches to that state and leaves this one where it is.",
         flags: &[(
             "--use-existing",
             "config home: switch to the state already in <dir> instead of moving this one there",
         )],
-        examples: &["extend config set telemetry off", "extend config home /data/si-chef"],
+        examples: &["extend config set output json", "extend config home /data/si-chef"],
     },
     Node {
         path: "device",
