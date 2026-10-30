@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
     try { response = await fetch(`${env.appApiUrl}/api/v2/auth/logout`, {method:"POST",headers:{"Authorization":`Bearer ${session.at}`,"Content-Type":"application/json"},body:JSON.stringify({type:"logout",data:{refresh_token:session.rt}}),signal:AbortSignal.timeout(15000)}); }
     catch { return json(503,errorBody("sign_out_failed","Extend could not be reached, so device sessions have not ended.","Try signing out again.")); }
     if (!response.ok && response.status !== 401) return json(503,errorBody("sign_out_failed","Extend could not end the active device sessions.","Try signing out again."));
-    if (response.status === 401) await revokeSession(session,clientHeaders(request));
+    try { await revokeSession(session, clientHeaders(request)); }
+    catch { return json(503, errorBody("sign_out_unavailable", "Sign-out could not be saved. Please retry shortly.")); }
   }
   const wantsPage = (request.headers.get("accept") ?? "").includes("text/html") && request.headers.get("sec-fetch-mode") === "navigate";
   const response = wantsPage ? redirectTo(new URL("/sign-in?signed_out=1", env.publicUrl)) : new NextResponse(null, { status: 204, headers: { "Cache-Control": "no-store" } });
