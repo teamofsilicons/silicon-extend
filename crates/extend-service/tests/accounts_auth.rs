@@ -107,19 +107,15 @@ async fn tokens_that_are_not_for_extend_now_are_refused() {
 }
 
 #[tokio::test]
-async fn sensitive_routes_ask_silicon_accounts_whether_the_sign_in_is_still_active() {
+async fn reads_and_writes_reject_a_revoked_sign_in_before_a_webhook_arrives() {
     let env = start().await;
     let alice = login(&env, "c:alice").await;
     let (d, _) = pair(&env, &alice, DeviceOs::Android, "Pixel", &[]).await;
-    // alice signs out in Silicon Accounts; the event hasn't reached Extend, and the last answer
-    // Extend cached (at most 30 s) is gone.
+    // Accounts signs Alice out. Extend has received no webhook.
     env.accounts().sign_out(&uuid("c:alice"));
-    env.state.accounts.forget(&uuid("c:alice")).await;
-    // Reading needs only the token's signature.
-    let (s, _) = api(&env, "GET", "/api/v2/devices", &alice, None).await;
-    assert_eq!(s, 200);
-    // Changing access, or removing a device, asks first.
     for (method, path) in [
+        ("GET", "/api/v2/devices".to_owned()),
+        ("GET", format!("/api/v2/devices/{d}")),
         ("PUT", format!("/api/v2/devices/{d}/access/si:chef")),
         ("DELETE", format!("/api/v2/devices/{d}")),
     ] {

@@ -29,8 +29,8 @@ test("a page load refreshes a token in its last two minutes, and the render uses
   expect(response?.status()).toBe(200);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   const { session: after } = await storedSession(context);
-  expect(after.rt).not.toBe(before.rt);
-  expect(after.at).not.toBe(before.at);
+  expect(after.rt !== before.rt, "refresh token rotated").toBe(true);
+  expect(after.at !== before.at, "access token rotated").toBe(true);
   expect(after.ae).toBeGreaterThan(Date.now() + 25 * 60_000);
   expect(after.acct.uuid).toBe(before.acct.uuid);
 });
@@ -40,12 +40,12 @@ test("a request still carrying the spent refresh token gets the same new tokens,
   await putSession(context, current, 60_000);
   await page.goto(appConfig.home);
   const { session: rotated } = await storedSession(context);
-  expect(rotated.rt).not.toBe(current.rt);
+  expect(rotated.rt !== current.rt, "refresh token rotated").toBe(true);
   // A tab that sent the old cookie a moment later: the server answers from its memo instead of presenting it again.
   await putSession(context, current, 60_000);
   await page.goto(appConfig.home);
   const { session: again } = await storedSession(context);
-  expect(again.rt).toBe(rotated.rt);
+  expect(again.rt === rotated.rt, "same refresh successor").toBe(true);
   // Had the spent token reached Accounts, the whole sign-in would be revoked now; it is not.
   await putSession(context, again, 60_000);
   await page.goto(appConfig.home);
@@ -61,7 +61,7 @@ test("the session keeper refreshes inside its five minutes, and only then", asyn
   const body = await response.json();
   expect(Date.parse(body.expires_at)).toBeGreaterThan(Date.now() + 25 * 60_000);
   const { session: after } = await storedSession(context);
-  expect(after.rt).not.toBe(before.rt);
+  expect(after.rt !== before.rt, "refresh token rotated").toBe(true);
   const quiet = await page.request.post("/auth/refresh", { headers: sameOrigin() });
   expect((await quiet.json()).expires_at).toBe(body.expires_at);
 });

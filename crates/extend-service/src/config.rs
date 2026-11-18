@@ -58,6 +58,8 @@ pub struct Config {
     pub database_url: String,
     pub public_url: String,
     pub website_url: String,
+    pub contacts_url: String,
+    pub organizations_url: String,
     pub docs_url: String,
     pub repository_url: String,
     pub data_dir: PathBuf,
@@ -383,6 +385,14 @@ impl Config {
             database_url: var("EXTEND_DATABASE_URL").context("EXTEND_DATABASE_URL is required")?,
             public_url,
             website_url,
+            contacts_url: accounts_origin(
+                "EXTEND_CONTACTS_URL",
+                &var_or("EXTEND_CONTACTS_URL", "https://contacts.teamofsilicons.com"),
+            )?,
+            organizations_url: accounts_origin(
+                "EXTEND_ORGANIZATIONS_URL",
+                &var_or("EXTEND_ORGANIZATIONS_URL", "https://organizations.teamofsilicons.com"),
+            )?,
             docs_url: var_or("EXTEND_DOCS_URL", "https://extend.teamofsilicons.com/docs"),
             repository_url: var_or(
                 "EXTEND_REPOSITORY_URL",

@@ -130,9 +130,11 @@ pub async fn create(
     headers: HeaderMap,
     Body(input): Body<WakeCreate>,
 ) -> AppResult<Response> {
-    auth.require_silicon()?;
     let (d, access) = domain::visible_device(&state, &auth.world, &device_id, &auth.p).await?;
-    if access != Access::Silicon {
+    if d.organization_id().is_none() {
+        auth.require_silicon()?;
+    }
+    if !crate::organizations::can_use(&d, Some(access)) {
         let owner = state.accounts.directory.public_id(&d.owner_id).await;
         return Err(AppError::new(
             ErrorCode::NoAccess,
@@ -143,7 +145,6 @@ pub async fn create(
             auth.p.public_id()
         )));
     }
-    auth.live(&state).await?;
     super::devices::check_reason(&input.reason)?;
     let hash = hash_json(&input);
     let (st, world, p) = (state.clone(), auth.world.clone(), auth.p.clone());
@@ -186,15 +187,7 @@ async fn ask(
     let mut tx = state.pool.begin().await?;
     let group = domain::lock_group(&mut *tx, world, d.instance_id).await?;
     domain::lock_instances(&mut tx, world, &group.members).await?;
-    let granted: bool = sqlx::query_scalar(sql!(
-        "SELECT EXISTS (SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2)",
-        world.t("device_access")
-    ))
-    .bind(&d.device_id)
-    .bind(me)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !granted {
+    if !crate::organizations::usable_locked(state, p, &d.device_id, &mut tx).await? {
         return Err(AppError::new(
             ErrorCode::NoAccess,
             format!("{} has no access to {} any more.", p.public_id(), d.name),
@@ -334,7 +327,9 @@ async fn ask(
     if keep {
         cover = open.as_ref().and_then(|w| w.ting_covered_by);
     }
-    let ting: Option<&str> = if keep {
+    let ting: Option<&str> = if d.organization_id().is_some() {
+        None
+    } else if keep {
         open.as_ref().and_then(|w| w.ting_delivery.as_deref())
     } else if cover.is_some() {
         None
@@ -494,15 +489,20 @@ pub async fn cancel(
     };
     let id: Uuid = wake_id.parse().map_err(|_| not_found())?;
     let w = wake::load(&state, &auth.world, id).await.ok_or_else(not_found)?;
-    let allowed = if auth.p.is_silicon() {
+    if w.device_id != device_id {
+        return Err(not_found());
+    }
+    let d = domain::load_device(&state, &auth.world, &device_id)
+        .await?
+        .ok_or_else(not_found)?;
+    let allowed = if d.organization_id().is_some() || auth.p.is_silicon() {
         w.from_id == auth.p.uuid()
-            && domain::visible_device(&state, &auth.world, &device_id, &auth.p)
-                .await
-                .is_ok()
+            && d.removed_at.is_none()
+            && domain::access_of(&state, &auth.world, &d, &auth.p).await?.is_some()
     } else {
         state.accounts.directory.is_custodian(auth.p.uuid(), &w.from_id).await
     };
-    if !allowed || w.device_id != device_id {
+    if !allowed {
         return Err(not_found());
     }
     if w.state != "open" {
@@ -531,7 +531,7 @@ pub async fn answer(
     headers: HeaderMap,
     Body(input): Body<WakeAnswer>,
 ) -> AppResult<Response> {
-    auth.require_carbon()?;
+    domain::require_personal_carbon(&state, &auth, &device_id).await?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let hash = hash_json(&input);
     let (st, world, p) = (state.clone(), auth.world.clone(), auth.p.clone());
@@ -618,7 +618,7 @@ pub async fn settings(
     Path(device_id): Path<String>,
     Body(input): Body<WakeSettings>,
 ) -> AppResult<Response> {
-    auth.require_carbon()?;
+    domain::require_personal_carbon(&state, &auth, &device_id).await?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let world = &auth.world;
     if input.team.is_some() {
@@ -776,7 +776,6 @@ pub async fn ting_turn_on(State(state): State<Shared>, auth: Auth) -> AppResult<
         return Err(AppError::new(ErrorCode::ServiceUnavailable, crate::ting::OFF)
             .hint("Requests and wake requests are on the website, in the CLI and on the device."));
     }
-    auth.live(&state).await?;
     delivery::register(&state, &auth.world, &auth.p, true).await?;
     // The Tings that waited for this enrolment go now.
     let (st, world) = (state.clone(), auth.world.clone());

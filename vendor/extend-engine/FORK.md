@@ -17,6 +17,12 @@ the packaged runtime's `bin/extend-engine.mjs` and ships this fork's entry besid
 `bin/extend-engine-cli.mjs`; it also appends `+extend.<sha256>` to the packaged `package.json`
 version. Neither changes the fork's source; see `apps/desktop/README.md`.
 
+## 2026-11-18 — Browser cleanup test on Linux runners
+
+`packages/platform-web/src/agent-browser-lifecycle.test.ts` records the PID of a child that
+has exited. The test can then verify cleanup of a stale browser record on hosts where PID 101
+belongs to a running process.
+
 ## 2026-09-27 — 1.1.0 integration: the unit suite passes in full (*uncommitted*)
 
 The rename left upstream tests reading files the rename removed, and six tests still pinned upstream

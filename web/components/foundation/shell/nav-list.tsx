@@ -6,6 +6,7 @@
  * page changes slide in the direction of travel down or up the list (lib/navigation.ts).
  */
 import Link from "next/link";
+import { useSessionView } from "@/lib/client/session";
 import { usePathname } from "next/navigation";
 import { LayoutGroup, motion } from "motion/react";
 import { ArrowUpRight, BookOpen, Store } from "lucide-react";
@@ -17,10 +18,11 @@ import styles from "./shell.module.css";
 export function NavList({ id, onNavigate }: { id: string; onNavigate?: () => void }) {
   const pathname = usePathname();
   const current = navItemFor(pathname);
+  const { account } = useSessionView();
   return (
     <LayoutGroup id={id}>
       <ul role="list" className={styles.navList}>
-        {appConfig.nav.map(item => {
+        {appConfig.nav.filter(item => item.href !== "/silicons" || account?.kind === "carbon").map(item => {
           const active = current?.href === item.href;
           const Icon = item.icon;
           return (

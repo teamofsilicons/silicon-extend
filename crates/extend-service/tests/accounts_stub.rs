@@ -121,7 +121,7 @@ fn stub_router(stub: Shared) -> Router {
                     let token = f.get("token").cloned().unwrap_or_default();
                     record(&mut s, "introspect", &h, json!({"token": token}));
                     let sub = sub_of(&token);
-                    Json(json!({"active": !s.inactive.contains(&sub), "sub": sub, "token_type": "access_token"}))
+                    Json(json!({"active": !s.inactive.contains(&sub), "sub": sub, "client_id": "extend", "token_type": "access_token"}))
                         .into_response()
                 },
             ),
@@ -332,15 +332,9 @@ async fn introspection_and_lookups_use_extends_app_credentials() {
         .filter(|c| c.0 == "introspect")
         .count();
     assert_eq!(introspected, 1);
-    // The answer is cached; once it is gone, a signed-out sign-in is refused.
+    // Revocation applies to ordinary reads on the very next request.
     stub.lock().unwrap().inactive.insert(ada.uuid.clone());
-    assert_eq!(
-        common::api(&env, "PUT", "/api/v2/ting-registration", &token, None)
-            .await
-            .0,
-        200
-    );
-    env.state.accounts.forget(&ada.uuid).await;
+    assert_eq!(common::api(&env, "GET", "/api/v2/me", &token, None).await.0, 401);
     let (s, e) = common::api(&env, "PUT", "/api/v2/ting-registration", &token, None).await;
     assert_eq!((s, e["data"]["code"].as_str()), (401, Some("token_expired")), "{e}");
     stub.lock().unwrap().inactive.clear();

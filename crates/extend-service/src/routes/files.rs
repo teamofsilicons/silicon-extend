@@ -78,8 +78,8 @@ pub struct ListQuery {
 /// Who sees a file (`$1` is the caller's uuid): the Silicon that made it, while it has access to
 /// the device; the Carbon who paired the device it was made on; the custodian of the Silicon that
 /// made it.
-fn who(auth: &Auth) -> String {
-    if auth.p.is_silicon() {
+fn who(auth: &Auth, org_ids: &str) -> String {
+    let personal = if auth.p.is_silicon() {
         format!(
             "f.created_by = $1 AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id = f.device_id AND a.silicon_id = $1)",
             auth.world.t("device_access")
@@ -91,7 +91,10 @@ fn who(auth: &Auth) -> String {
             auth.world.t("devices"),
             auth.world.t("accounts")
         )
-    }
+    };
+    format!(
+        "((({personal}) AND NOT EXISTS(SELECT 1 FROM extend.devices d WHERE d.device_id=f.device_id AND d.owner_id LIKE 'organization:%')) OR (f.device_id=ANY({org_ids}) AND f.created_by=$1))"
+    )
 }
 
 pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQuery>) -> AppResult<Response> {
@@ -114,7 +117,7 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
            AND ($5::uuid IS NULL OR f.file_id < $5) AND ($7::text IS NULL OR f.created_by = $7)
          ORDER BY f.file_id DESC LIMIT $6",
         auth.world.t("files"),
-        who(&auth)
+        who(&auth,"$8")
     ))
     .bind(auth.p.uuid())
     .bind(&q.session_id)
@@ -123,6 +126,7 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
     .bind(before)
     .bind(lim + 1)
     .bind(&creator)
+    .bind(crate::organizations::visible_ids(&state,&auth.p).await?.0)
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > lim;
@@ -138,10 +142,11 @@ async fn visible(state: &Shared, auth: &Auth, file_id: Uuid) -> AppResult<FileRo
     sqlx::query_as(sql!(
         "SELECT {COLS} FROM {} f WHERE f.file_id = $2 AND {} AND (f.self_destruct_at IS NULL OR f.self_destruct_at > now())",
         auth.world.t("files"),
-        who(auth)
+        who(auth,"$3")
     ))
     .bind(auth.p.uuid())
     .bind(file_id)
+    .bind(crate::organizations::visible_ids(state,&auth.p).await?.0)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(not_found)
@@ -349,7 +354,6 @@ pub async fn content(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let f = visible(&state, &auth, file_id).await?;
-    auth.live(&state).await?;
     // Read through Briefcase as the caller, so Briefcase's own sharing applies too.
     let (bytes, stored_type) = match state.files.read(&auth.p, file_id).await {
         Ok(found) => found,

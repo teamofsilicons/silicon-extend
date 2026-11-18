@@ -50,10 +50,6 @@ export async function GET(request: NextRequest) {
     console.warn(`sign-in: the code exchange failed: ${result.status} ${result.error}: ${result.description}`);
     return failed(env.publicUrl, result.error === "accounts_unreachable" ? "accounts_unreachable" : "exchange_failed", pending, state, entry.r);
   }
-  if(result.session.acct.kind !== "carbon") {
-    await revokeSession(result.session,headers);
-    return failed(env.publicUrl,"carbon_required",pending,state,entry.r);
-  }
   const replaced = readSession(request);
   if (replaced && replaced.rt !== result.session.rt) await revokeSession(replaced, headers);
 

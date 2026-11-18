@@ -3,6 +3,7 @@ FROM rust:1.98.0-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+COPY web/public/reference/api.yaml ./web/public/reference/api.yaml
 RUN cargo build --locked --release -p extend-service --bin extend-service
 
 FROM debian:bookworm-slim AS runtime

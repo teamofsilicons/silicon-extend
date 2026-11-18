@@ -4,10 +4,7 @@
 //!   Accounts issued to Extend (`aud` = Extend's app id, `iss` = `ACCOUNTS_URL`). It is verified
 //!   locally against the cached JWKS, which is fetched again (at most every 10 s) when a token names
 //!   a key Extend doesn't have yet ([`Accounts::authenticate`]).
-//! - Revocation: a token issued before the account's `revoked_before` (set by the
-//!   `membership.signed_out`, `membership.access_removed` and `account.deleted` webhooks) is
-//!   refused at once; the sensitive routes also ask Silicon Accounts live, with the answer cached
-//!   for at most 30 s and dropped by any webhook about the account ([`Accounts::require_live`]).
+//! - Every authenticated request checks the live access-token type, app and subject at Accounts.
 //! - Extend keys everything on the account `uuid` and shows the current public id. The `accounts`
 //!   table caches each account's id, name, photo, custodian and status, from token claims,
 //!   lookups (at most 600 a minute, the Accounts limit) and webhooks ([`directory`]).
@@ -16,22 +13,19 @@ pub mod api;
 pub mod directory;
 pub mod local;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use extend_protocol::ErrorCode;
 use extend_protocol::model::{Member, MemberKind};
 use silicon_accounts_client::{Claims, Jwks, TokenError, VerifyOptions};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 pub use directory::AccountRow;
 
 use crate::error::{AppError, AppResult};
 use api::AccountsApi;
 
-/// How long Silicon Accounts' live answer about a token is reused.
-pub const INTROSPECTION_TTL: Duration = Duration::from_secs(30);
 /// The fewest seconds between two JWKS fetches caused by an unknown `kid`.
 pub const JWKS_REFETCH_EVERY: Duration = Duration::from_secs(10);
 /// A fetched JWKS is refreshed in the background after this long.
@@ -112,8 +106,6 @@ pub struct Accounts {
     /// The stand-in, in local mode (tests mint tokens with it).
     pub local: Option<Arc<local::LocalAccounts>>,
     jwks: Mutex<JwksCache>,
-    /// token digest → (checked at, active, account uuid).
-    introspections: RwLock<HashMap<String, (Instant, bool, String)>>,
     pub directory: directory::Directory,
 }
 
@@ -132,7 +124,6 @@ impl Accounts {
             api,
             local,
             jwks: Mutex::default(),
-            introspections: RwLock::default(),
         })
     }
 
@@ -183,7 +174,8 @@ impl Accounts {
     pub async fn authenticate(&self, token: &str) -> AppResult<Principal> {
         let token = token.trim();
         let kid = jsonwebtoken::decode_header(token).ok().and_then(|h| h.kid);
-        let options = VerifyOptions::for_app(&self.app_id).with_issuer(self.issuer.clone());
+        let mut options = VerifyOptions::for_app(&self.app_id).with_issuer(self.issuer.clone());
+        options.leeway_seconds = 0;
         let mut keys = self.keys(kid.as_deref()).await?;
         let mut verified = silicon_accounts_client::verify_access_token(&keys, token, &options);
         if let Err(silicon_accounts_client::Error::Token(TokenError::UnknownKey { kid: Some(k) })) = &verified {
@@ -193,6 +185,7 @@ impl Accounts {
         }
         let claims = verified.map_err(|e| token_refused(&e, &self.app_id, &self.issuer))?;
         let principal = principal_of(&claims, token)?;
+        self.require_live(&principal).await?;
         let row = self.directory.on_sign_in(&principal).await?;
         if let Some(before) = row.revoked_before
             && principal.issued_at.is_none_or(|iat| iat < before.unix_timestamp())
@@ -220,15 +213,8 @@ impl Accounts {
         })
     }
 
-    /// Asks Silicon Accounts whether the sign-in behind `p` is still active (cached for at most
-    /// [`INTROSPECTION_TTL`]). Used on the routes where a sign-out must take effect at once.
-    pub async fn require_live(&self, p: &Principal) -> AppResult<()> {
-        let digest = extend_protocol::ids::secret_digest(&p.token);
-        if let Some((at, active, _)) = self.introspections.read().await.get(&digest)
-            && at.elapsed() < INTROSPECTION_TTL
-        {
-            return if *active { Ok(()) } else { Err(inactive(p)) };
-        }
+    /// Check revocation and token type before touching any account or resource state.
+    async fn require_live(&self, p: &Principal) -> AppResult<()> {
         let answer = self.api.introspect(&p.token).await.map_err(|e| {
             AppError::new(
                 ErrorCode::ServiceUnavailable,
@@ -239,18 +225,18 @@ impl Accounts {
             )
             .hint("Retry in a moment.")
         })?;
-        let active = answer.active && answer.sub.as_deref() == Some(p.uuid.as_str());
-        let mut cache = self.introspections.write().await;
-        if cache.len() > 50_000 {
-            cache.retain(|_, (at, _, _)| at.elapsed() < INTROSPECTION_TTL);
+        if answer.active
+            && answer.token_type.as_deref() == Some("access_token")
+            && answer.client_id.as_deref() == Some(self.app_id.as_str())
+            && answer.sub.as_deref() == Some(p.uuid.as_str())
+        {
+            Ok(())
+        } else {
+            Err(inactive(p))
         }
-        cache.insert(digest, (Instant::now(), active, p.uuid.clone()));
-        if active { Ok(()) } else { Err(inactive(p)) }
     }
 
-    /// Drops every cached live answer for an account (a webhook named it).
     pub async fn forget(&self, uuid: &str) {
-        self.introspections.write().await.retain(|_, (_, _, u)| u != uuid);
         self.directory.forget(uuid).await;
     }
 }

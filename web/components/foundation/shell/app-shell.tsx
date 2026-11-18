@@ -72,14 +72,14 @@ export function AppShell({ account, accountsUrl, children }: AppShellProps) {
   }, []);
 
   useRegisterCommands(() => [
-    ...appConfig.nav.map(item => {
+    ...appConfig.nav.filter(item => item.href !== "/silicons" || account.kind === "carbon").map(item => {
       const Icon = item.icon;
       return { id: `go.${item.href}`, label: item.label, group: "Go to", icon: <Icon size={16} strokeWidth={1.75} />, keywords: item.keywords, run: () => router.push(item.href, { transitionTypes: [navigationType(window.location.pathname, item.href)] }) };
     }),
     { id: "go.docs", label: `${appConfig.name} docs`, description: "Opens in a new tab", group: "Go to", icon: <BookOpen size={16} strokeWidth={1.75} />, keywords: ["docs", "help", "guide"], run: () => void window.open(appConfig.links.docs, "_blank", "noopener") },
     { id: "go.account", label: "Your account", description: "Silicon Accounts, in a new tab", group: "Go to", icon: <CircleUserRound size={16} strokeWidth={1.75} />, keywords: ["account", "profile", "photo"], run: () => void window.open(accountsUrl, "_blank", "noopener") },
     { id: "account.signout", label: "Sign out", description: `Sign this browser out of ${appConfig.name}`, group: "Account", icon: <LogOut size={16} strokeWidth={1.75} />, keywords: ["logout", "log out", "sign out"], run: () => void signOut().catch(failure => notifyError(failure, "Could not sign out")) },
-  ], [router, accountsUrl, signOut]);
+  ], [router, accountsUrl, signOut, account.kind]);
 
   return (
     <div className={styles.shell}>

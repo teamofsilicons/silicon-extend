@@ -192,7 +192,6 @@ pub async fn renounce(
     } else {
         looked_after(&state, &auth, &silicon).await?
     };
-    auth.live(&state).await?;
     let gone = domain::revoke_grants(
         &state,
         &auth.world,

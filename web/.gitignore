@@ -26,3 +26,7 @@ npm-debug.log*
 /blob-report/
 
 /screens/
+
+.dev/
+
+/.vercel/
