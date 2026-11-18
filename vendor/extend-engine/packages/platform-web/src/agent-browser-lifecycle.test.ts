@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runCmdSync } from '@agent-device/host-kit/command';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { installFakeManagedAgentBrowser, mkdtempForTestSync } from './__tests__/test-utils.ts';
 
@@ -205,6 +206,10 @@ test('cleanup does not treat the shared socket directory mtime as browser activi
 });
 
 test('cleanup reads recorded browser identities without reconstructing a process tree', async () => {
+  const exitedChild = runCmdSync(process.execPath, ['-p', 'process.pid']);
+  assert.equal(exitedChild.exitCode, 0);
+  const exitedPid = Number(exitedChild.stdout.trim());
+  assert.ok(Number.isSafeInteger(exitedPid) && exitedPid > 0);
   const stateDir = mkdtempForTestSync('agent-device-web-life-');
   const originalIdleTimeout = process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS;
   process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS = '1';
@@ -216,9 +221,9 @@ test('cleanup reads recorded browser identities without reconstructing a process
         status: 'decoded' as const,
         records: [
           {
-            pid: 101,
-            startTime: 'start-101',
-            command: 'command-101',
+            pid: exitedPid,
+            startTime: `start-${exitedPid}`,
+            command: `command-${exitedPid}`,
             purpose: 'managed-web-browser',
           },
         ],
@@ -235,7 +240,7 @@ test('cleanup reads recorded browser identities without reconstructing a process
       ownedProcessRecords,
     });
 
-    assert.deepEqual(result.pids, [101]);
+    assert.deepEqual(result.pids, [exitedPid]);
     assert.deepEqual(result.signalPids, []);
     assert.equal(mockRunCmd.mock.calls.length, 0);
     expect(ownedProcessRecords.clear).toHaveBeenCalledOnce();
