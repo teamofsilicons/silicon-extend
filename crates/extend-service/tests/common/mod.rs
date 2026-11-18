@@ -104,6 +104,8 @@ pub fn config(database_url: String, bind: SocketAddr, data_dir: PathBuf, tuning:
         bind,
         database_url,
         public_url: base.clone(),
+        contacts_url: base.clone(),
+        organizations_url: base.clone(),
         website_url: "http://localhost:4220".into(),
         docs_url: "http://localhost:4220/docs".into(),
         repository_url: "https://github.com/teamofsilicons/silicon-extend".into(),

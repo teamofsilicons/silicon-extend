@@ -166,15 +166,16 @@ pub async fn start(
     headers: HeaderMap,
     Body(input): Body<SessionCreate>,
 ) -> AppResult<Response> {
-    auth.require_silicon()?;
     let device_id = input.device_id.to_string();
     let d = domain::load_device(&state, &auth.world, &device_id)
         .await?
         .ok_or_else(|| domain::device_not_found(&device_id))?;
-    if domain::access_of(&state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
+    if d.organization_id().is_none() {
+        auth.require_silicon()?;
+    }
+    if !crate::organizations::can_use(&d, domain::access_of(&state, &auth.world, &d, &auth.p).await?) {
         return Err(domain::device_not_found(&device_id));
     }
-    auth.live(&state).await?;
     let hash = hash_json(&input);
     let world = auth.world.clone();
     let st = state.clone();
@@ -229,15 +230,7 @@ pub async fn start(
             // instance first too) either sees this session or this start sees no grant.
             let group = domain::lock_group(&mut *tx, &world, d.instance_id).await?;
             domain::lock_instances(&mut tx, &world, &group.members).await?;
-            let granted: Option<(i32,)> = sqlx::query_as(sql!(
-                "SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2",
-                world.t("device_access")
-            ))
-            .bind(&device_id)
-            .bind(p.uuid())
-            .fetch_optional(&mut *tx)
-            .await?;
-            if granted.is_none() {
+            if !crate::organizations::usable_locked(&st, &p, &device_id, &mut tx).await? {
                 return Err(AppError::new(
                     ErrorCode::NoAccess,
                     format!("{} has no access to {} ({device_id}).", p.public_id(), d.name),
@@ -440,6 +433,10 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
             )));
         }
     };
+    let (org_visible, org_managed) = crate::organizations::visible_ids(&state, &auth.p).await?;
+    let who = format!(
+        "((({who}) AND NOT EXISTS(SELECT 1 FROM extend.devices od WHERE od.device_id=s.device_id AND od.owner_id LIKE 'organization:%')) OR ($8::boolean AND ((s.device_id=ANY($6) AND s.silicon_id=$1) OR s.device_id=ANY($7))))"
+    );
     let rows: Vec<SessionRow> = sqlx::query_as(sql!(
         "SELECT {} FROM {} s WHERE {who}
            AND ($2::text IS NULL OR s.device_id = $2) AND ($3::text IS NULL OR s.state = $3)
@@ -454,6 +451,7 @@ pub async fn list(State(state): State<Shared>, auth: Auth, Query(q): Query<ListQ
     .bind(&state_filter)
     .bind(&before)
     .bind(lim + 1)
+    .bind(org_visible).bind(org_managed).bind(q.silicon.is_none())
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > lim;
@@ -503,11 +501,13 @@ async fn visible_session(
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(not_found)?;
-    let seer = if d.is_owner(&auth.p) {
+    let access = domain::access_of(state, &auth.world, &d, &auth.p).await?;
+    let seer = if s.silicon_id == auth.p.uuid() && crate::organizations::can_use(&d, access) {
+        Some(Seer::Silicon)
+    } else if access == Some(Access::Owner) {
         Some(Seer::Owner)
-    } else if auth.p.is_silicon() && s.silicon_id == auth.p.uuid() {
-        (domain::access_of(state, &auth.world, &d, &auth.p).await? == Some(Access::Silicon)).then_some(Seer::Silicon)
-    } else if auth.p.is_carbon()
+    } else if d.organization_id().is_none()
+        && auth.p.is_carbon()
         && state
             .accounts
             .directory
@@ -591,7 +591,6 @@ pub async fn takeover_start(
         let shown = state.accounts.directory.public_id(&s.silicon_id).await;
         return Err(not_session_owner(&s, &shown));
     }
-    auth.live(&state).await?;
     match s.state.as_str() {
         "ended" => return Err(session_ended(&s)),
         "paused" => {
@@ -822,7 +821,6 @@ async fn authorized_session(
     auth: &Auth,
     session_id: &str,
 ) -> AppResult<(SessionRow, domain::DeviceRow)> {
-    auth.require_silicon()?;
     let (s, d, seer) = visible_session(state, auth, session_id).await?;
     if seer != Seer::Silicon {
         let shown = state.accounts.directory.public_id(&s.silicon_id).await;
@@ -830,9 +828,8 @@ async fn authorized_session(
     }
     refuse_unless_active(state, &s, &d).await?;
     // A sign-out anywhere ends access at once, even in the middle of a session.
-    auth.live(state).await?;
     // Access is re-checked on every command, not only at session start.
-    if domain::access_of(state, &auth.world, &d, &auth.p).await? != Some(Access::Silicon) {
+    if !crate::organizations::can_use(&d, domain::access_of(state, &auth.world, &d, &auth.p).await?) {
         domain::end_session(
             state,
             &auth.world,
@@ -1131,7 +1128,7 @@ pub async fn command(
     // stored (or shared with the device's Carbon) is reported in `warnings`, never dropped quietly.
     let mut files = Vec::new();
     let mut warnings = Vec::new();
-    let owner_id = if outcome.files.is_empty() {
+    let owner_id = if outcome.files.is_empty() || d.organization_id().is_some() {
         String::new()
     } else {
         state.accounts.directory.public_id(&d.owner_id).await
@@ -1167,10 +1164,10 @@ pub async fn command(
                     name: &f.name,
                     content_type: &f.content_type,
                     bytes,
-                    owner_carbon: Recipient {
+                    owner_carbon: d.organization_id().is_none().then_some(Recipient {
                         uuid: &d.owner_id,
                         id: &owner_id,
-                    },
+                    }),
                 },
             )
             .await;

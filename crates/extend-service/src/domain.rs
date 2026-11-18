@@ -58,6 +58,8 @@ pub struct DeviceRow {
     pub team: String,
     /// The Carbon who paired it (uuid).
     pub owner_id: String,
+    pub organization_paired_by: Option<String>,
+    pub shared_teams: Vec<String>,
     pub name: String,
     pub os: String,
     pub os_version: Option<String>,
@@ -132,6 +134,10 @@ pub struct OpenWake {
 }
 
 impl DeviceRow {
+    pub fn organization_id(&self) -> Option<&str> {
+        self.owner_id.strip_prefix(crate::organizations::PREFIX)
+    }
+
     pub fn os(&self) -> DeviceOs {
         serde_json::from_value(serde_json::Value::String(self.os.clone())).unwrap_or(DeviceOs::Linux)
     }
@@ -264,7 +270,7 @@ impl DeviceRow {
 
 pub fn device_select(world: &World) -> String {
     format!(
-        "SELECT d.device_id, d.team, d.owner_id, d.name, d.os, d.os_version, d.model, d.address, d.visibility, d.pair_ttl_days,
+        "SELECT d.device_id, d.team, d.owner_id, d.organization_paired_by, d.shared_teams, d.name, d.os, d.os_version, d.model, d.address, d.visibility, d.pair_ttl_days,
                 d.paired_at, d.last_activity_at, d.last_used_at, d.last_seen_at, d.version, d.host_device_id, d.state, d.setup,
                 d.capabilities, d.missing, d.app_version,
                 COALESCE(d.agent_device_version, hp.agent_device_version) AS engine_version,
@@ -393,6 +399,11 @@ pub enum Access {
 
 /// The access `p` has to a pair: its Carbon, or a Silicon granted on it. Nobody else sees it.
 pub async fn access_of(state: &AppState, world: &World, d: &DeviceRow, p: &Principal) -> AppResult<Option<Access>> {
+    if d.organization_id().is_some() {
+        return Ok(crate::organizations::context(state, p)
+            .await?
+            .access(&d.owner_id, &d.shared_teams));
+    }
     if d.is_owner(p) {
         return Ok(Some(Access::Owner));
     }
@@ -457,7 +468,7 @@ pub async fn readable_device(
         .await?
         .ok_or_else(|| device_not_found(device_id))?;
     if d.is_removed() {
-        return if d.is_owner(p) {
+        return if access_of(state, world, &d, p).await? == Some(Access::Owner) {
             Ok((d, Access::Owner))
         } else {
             Err(device_not_found(device_id))
@@ -602,10 +613,10 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
     let online = !removed && is_online(state, world, d).await;
     let owner_view = viewer.access == Access::Owner;
     let directory = &state.accounts.directory;
-    let mut owner = directory.member(MemberKind::Carbon, &d.owner_id).await;
-    owner.kind = MemberKind::Carbon;
+    let account = d.organization_paired_by.as_deref().unwrap_or(&d.owner_id);
+    let mut owner = directory.member(MemberKind::Carbon, account).await;
     if viewer.device_wire {
-        owner = Member::new(MemberKind::Carbon, owner.id);
+        owner = Member::new(owner.kind, owner.id);
     }
     let expires = d.last_activity_at + time::Duration::days(i64::from(d.pair_ttl_days));
     let days_left = ((expires - OffsetDateTime::now_utc()).whole_hours() as f64 / 24.0)
@@ -696,6 +707,20 @@ pub async fn device_view(state: &AppState, world: &World, d: &DeviceRow, viewer:
         model: d.model.clone(),
         kind: os.kind(),
         owner,
+        organization: d.organization_id().filter(|_| !viewer.device_wire).map(|org| {
+            extend_protocol::model::DeviceOrganization {
+                id: org.into(),
+                team_ids: if owner_view {
+                    crate::organizations::ids(&d.shared_teams)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
+                } else {
+                    vec![]
+                },
+                can_manage: owner_view,
+            }
+        }),
         team: None,
         visibility: Visibility::Personal,
         host_device_id: if owner_view {

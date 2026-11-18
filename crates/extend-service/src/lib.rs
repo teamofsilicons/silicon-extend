@@ -20,6 +20,7 @@ pub mod files;
 pub mod hub;
 pub mod identity;
 pub mod lifecycle;
+pub mod organizations;
 pub mod proofs;
 pub mod routes;
 pub mod scheduler;
@@ -116,6 +117,11 @@ pub async fn build(cfg: Config) -> anyhow::Result<Shared> {
         local_ting,
         hub: hub::Hub::default(),
         http: reqwest::Client::new(),
+        integration_http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(4))
+            .timeout(std::time::Duration::from_secs(20))
+            .build()?,
         session_principals: Default::default(),
         limits: Default::default(),
     }))

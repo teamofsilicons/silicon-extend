@@ -130,9 +130,11 @@ pub async fn create(
     headers: HeaderMap,
     Body(input): Body<WakeCreate>,
 ) -> AppResult<Response> {
-    auth.require_silicon()?;
     let (d, access) = domain::visible_device(&state, &auth.world, &device_id, &auth.p).await?;
-    if access != Access::Silicon {
+    if d.organization_id().is_none() {
+        auth.require_silicon()?;
+    }
+    if !crate::organizations::can_use(&d, Some(access)) {
         let owner = state.accounts.directory.public_id(&d.owner_id).await;
         return Err(AppError::new(
             ErrorCode::NoAccess,
@@ -143,7 +145,6 @@ pub async fn create(
             auth.p.public_id()
         )));
     }
-    auth.live(&state).await?;
     super::devices::check_reason(&input.reason)?;
     let hash = hash_json(&input);
     let (st, world, p) = (state.clone(), auth.world.clone(), auth.p.clone());
@@ -186,15 +187,7 @@ async fn ask(
     let mut tx = state.pool.begin().await?;
     let group = domain::lock_group(&mut *tx, world, d.instance_id).await?;
     domain::lock_instances(&mut tx, world, &group.members).await?;
-    let granted: bool = sqlx::query_scalar(sql!(
-        "SELECT EXISTS (SELECT 1 FROM {} WHERE device_id = $1 AND silicon_id = $2)",
-        world.t("device_access")
-    ))
-    .bind(&d.device_id)
-    .bind(me)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !granted {
+    if !crate::organizations::usable_locked(state, p, &d.device_id, &mut tx).await? {
         return Err(AppError::new(
             ErrorCode::NoAccess,
             format!("{} has no access to {} any more.", p.public_id(), d.name),
@@ -334,7 +327,9 @@ async fn ask(
     if keep {
         cover = open.as_ref().and_then(|w| w.ting_covered_by);
     }
-    let ting: Option<&str> = if keep {
+    let ting: Option<&str> = if d.organization_id().is_some() {
+        None
+    } else if keep {
         open.as_ref().and_then(|w| w.ting_delivery.as_deref())
     } else if cover.is_some() {
         None
@@ -776,7 +771,6 @@ pub async fn ting_turn_on(State(state): State<Shared>, auth: Auth) -> AppResult<
         return Err(AppError::new(ErrorCode::ServiceUnavailable, crate::ting::OFF)
             .hint("Requests and wake requests are on the website, in the CLI and on the device."));
     }
-    auth.live(&state).await?;
     delivery::register(&state, &auth.world, &auth.p, true).await?;
     // The Tings that waited for this enrolment go now.
     let (st, world) = (state.clone(), auth.world.clone());

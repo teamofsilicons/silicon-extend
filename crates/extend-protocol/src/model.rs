@@ -96,6 +96,13 @@ pub struct InUse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceOrganization {
+    pub id: String,
+    pub team_ids: Vec<String>,
+    pub can_manage: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Device {
     pub device_id: DeviceId,
     pub name: String,
@@ -106,6 +113,8 @@ pub struct Device {
     pub model: Option<String>,
     pub kind: DeviceKind,
     pub owner: Member,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<DeviceOrganization>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     pub visibility: Visibility,

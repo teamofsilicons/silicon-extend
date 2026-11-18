@@ -12,13 +12,14 @@ mod accounts;
 mod auth;
 mod dev;
 mod device_app;
-mod devices;
+pub(crate) mod devices;
 mod display_files;
 pub mod enroll;
 mod files;
 mod idempotency;
 pub use idempotency::idempotent;
 mod ops;
+mod people;
 pub mod sessions;
 mod silicons;
 mod system;
@@ -75,6 +76,13 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .route("/api/v2/contracts", get(system::contracts))
         .route("/api/v2/accounts", get(system::accounts))
         .route("/api/v2/accounts/lookup", get(accounts::lookup))
+        .route("/api/v2/organizations", get(crate::organizations::me))
+        .route("/api/v2/devices/{device_id}/teams", put(crate::organizations::share))
+        .route("/api/v2/people", get(people::people))
+        .route("/api/v2/people/resolve", get(people::resolve))
+        .route("/api/v2/contacts", get(people::list).post(people::save))
+        .route("/api/v2/contacts/connection", get(people::status).put(people::connect))
+        .route("/api/v2/contacts/photos/{id}", get(people::photo))
         .route("/api/v2/me", get(auth::me))
         .route("/api/v2/auth/logout", post(auth::logout))
         .route("/api/v2/pairings", post(devices::claim))
@@ -156,6 +164,15 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         ));
 
     let mut app = Router::new()
+        .route(
+            "/openapi.json",
+            get(|| async {
+                (
+                    [(http::header::CONTENT_TYPE, "application/json")],
+                    include_str!(concat!(env!("OUT_DIR"), "/openapi.json")),
+                )
+            }),
+        )
         .route("/live", get(system::live))
         .route("/ready", get(system::ready))
         .route("/api/version", get(system::negotiate))
@@ -178,7 +195,12 @@ pub fn router(state: Shared, versions: Arc<Registry>) -> Router {
         .layer(axum::middleware::from_fn(request_id_layer))
         .layer(
             CorsLayer::new()
-                .allow_origin(AllowOrigin::list(origins))
+                .allow_origin(AllowOrigin::predicate(move |origin, parts| {
+                    let path = parts.uri.path();
+                    path.starts_with("/api/v2/")
+                        || matches!(path, "/openapi.json" | "/api/version")
+                        || origins.contains(origin)
+                }))
                 .allow_methods(AllowMethods::mirror_request())
                 .allow_headers(AllowHeaders::mirror_request())
                 .expose_headers([

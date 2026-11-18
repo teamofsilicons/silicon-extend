@@ -1,9 +1,6 @@
 //! Shared state and the request extractors every handler uses.
 //!
-//! - [`Auth`]: a Carbon or Silicon signed in with Silicon Accounts (`Authorization: Bearer
-//!   <access token>`, verified locally; see crate::accounts). [`Auth::live`] also asks Silicon
-//!   Accounts whether the sign-in is still active, on the routes where a sign-out must take
-//!   effect at once.
+//! - Auth verifies the caller and checks its access token live with Accounts.
 //! - [`DeviceAuth`]: a paired device app (`Authorization: Extend-Device <credential>`). The
 //!   device wire is unchanged from 1.x.
 //!
@@ -42,6 +39,7 @@ pub struct AppState {
     pub local_ting: Option<Arc<crate::ting::LocalNotifier>>,
     pub hub: Hub,
     pub http: reqwest::Client,
+    pub integration_http: reqwest::Client,
     /// The Silicon behind each running session: `ended_while_running` watches it, and the
     /// session's files are stored as it.
     pub session_principals: RwLock<HashMap<(String, String), Principal>>,
@@ -176,13 +174,6 @@ impl Auth {
             )
             .hint("Give a Silicon access with `extend device access grant <device_id> <si:id>`."))
         }
-    }
-
-    /// Asks Silicon Accounts whether this sign-in is still active (cached for at most 30 s and
-    /// dropped by any webhook about the account): pairing, granting or removing access, removing a
-    /// device, starting a session, commands, takeovers, requests, wake requests and file content.
-    pub async fn live(&self, state: &AppState) -> AppResult<()> {
-        state.accounts.require_live(&self.p).await
     }
 }
 

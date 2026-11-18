@@ -242,10 +242,10 @@ async fn a_silicons_files_go_to_its_briefcase_with_its_own_proof() {
                 name: "shot.png",
                 content_type: "image/png",
                 bytes: b"\x89PNG".to_vec(),
-                owner_carbon: Recipient {
+                owner_carbon: Some(Recipient {
                     uuid: &alice,
                     id: "c:alice",
-                },
+                }),
             },
         )
         .await

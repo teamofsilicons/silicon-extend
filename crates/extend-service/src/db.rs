@@ -303,6 +303,14 @@ CREATE TABLE IF NOT EXISTS {s}.iam_aggregates (
     crate::identity::WORLD_4_0_ACCOUNTS,
     WORLD_UUID128,
     WORLD_UUID128_DELIVERY_FENCE,
+    r#"
+CREATE TABLE IF NOT EXISTS {s}.contacts_connections (
+    account_uuid text PRIMARY KEY REFERENCES {s}.accounts(uuid) ON DELETE CASCADE
+);
+ALTER TABLE {s}.devices ADD COLUMN IF NOT EXISTS organization_paired_by text;
+ALTER TABLE {s}.devices ADD COLUMN IF NOT EXISTS shared_teams text[] NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS devices_shared_teams ON {s}.devices USING gin (shared_teams) WHERE removed_at IS NULL;
+"#,
 ];
 
 /// Schema version 6 (3.0): IAM feature approvals and OBO grants. Inert since 4.0 (Silicon
@@ -525,7 +533,7 @@ ALTER TABLE {s}.device_instances ADD COLUMN IF NOT EXISTS in_use_indicator text 
 "#;
 
 /// The schema version this service brings the world to (4.0: Silicon Accounts, no Teams).
-pub const WORLD_VERSION: i32 = 11;
+pub const WORLD_VERSION: i32 = 12;
 
 /// Brings the global schema up to date, then the `extend` schema ([`ensure_world`]).
 pub async fn migrate_global(pool: &PgPool) -> anyhow::Result<()> {

@@ -1,29 +1,13 @@
-# Contract file. Agents: propose changes to a Carbon and get approval before editing.
-# Draft for Carbon review, 2026-09-26. Product intent: UNDERSTANDING.md. Identifier formats and flows: TECHNICAL.md.
-# Brought up to date with the build after round 2 of fixes (2026-09-27): every route and field below is what the
-# service answers today. The additions of that round await a Carbon's review like the rest of the file.
-# 1.1.0 draft (2026-09-27), for the Carbon's approval: devices belong to the Carbons who paired them, several Carbons can
-# pair one device, waking a device, setup retry, and the device engine named Silicon Extend. It follows UNDERSTANDING.md
-# as the Carbon edited it on 2026-09-27 and the Carbon's decisions of that day (logout, requests routed to a Carbon,
-# the terminal on shared computers, visible Ting setup guidance). API v1 stays additive: no path, method, required field or
-# error code changed, and a 1.0 client ignores every new field.
-
-# Extend 4 review copy (2026-10-10), proposed for the Carbon's approval: understanding/api.yaml is unchanged. Extend
-# signs in with Silicon Accounts and has no Teams and no test environments. API v2 (`/api/v2/…`) carries every
-# account route with a Silicon Accounts access token; API v1 keeps only the device wire installed apps speak
-# (`/api/v1/device…`, `/api/v1/enrollments…`, `/api/v1/contracts`); every other `/api/v1` route answers `410
-# api_version_sunset` with the hint `silicon-apps update extend`.
-
-# Review copy reconciled with the 1.1 implementation on 2026-09-28; originals are unchanged.
-# Includes shared banner controls, stored display media, TV element clicks and verified Ting type semantics.
-
 openapi: 3.1.0
 info:
   title: Silicon Extend API
-  version: 2.0.0-draft
+  version: 2.1.0
   description: |
-    Silicon Extend lets a Silicon use a Carbon's personal devices. This API is used by the `extend` CLI
-    (through the `silicon-extend-client` crate), the configuration website, and the Extend apps on devices.
+    A standalone interface uses the Accounts token in apps["extend"].access_token.
+    Send Authorization: Bearer TOKEN to https://api.extend.teamofsilicons.com.
+    Account API v2 covers personal devices and organization devices shared with teams.
+    Device agents keep their separate pairing and device credentials on API v1.
+    Integration guide: https://extend.teamofsilicons.com/docs/interfaces
 
     Conventions
     - Every JSON body is an envelope: `{"type": "<kind>", "data": {...}}`.
@@ -46,30 +30,29 @@ info:
       (an EdDSA JWT whose `aud` is `extend` and whose `iss` is the Silicon Accounts this server trusts, verified with
       its published keys). Carbons sign in to the CLI with the Silicon Accounts device flow, Silicons with a short-lived
       token (`silicon-accounts login --app extend -q | extend login --slt-stdin`), the website with its own server.
-      Routes where a sign-out must take effect at once (pairing, granting or removing access, removing a device,
-      starting a session, commands, takeovers, requests, wake requests, file content) also ask Silicon Accounts
-      whether the sign-in is still active (cached for at most 30 s).
+      Each authenticated request verifies the signature, issuer, audience and expiry and checks active status,
+      access-token type, client ID and subject through Accounts introspection. Revocation applies on the next request.
     - API v1 (Extend 4): only the device wire stays. Every other `/api/v1` route answers `410 api_version_sunset`,
       hint `silicon-apps update extend`, `details {retired, use_api_version: 2}`.
     - There are no test environments: a request that still sends `X-Testing-Application-Secret` is `401
       testing_secret_invalid` and nothing runs.
-    - Browsers reach the API through the website's own server, which adds the access token. Only the origins in
-      `EXTEND_CORS_ORIGINS` may call it from a page directly; CORS exposes `ETag`, `X-Request-ID`,
-      `Silicon-Extend-API-Version`, `Content-Disposition`, `Content-Range`, `Deprecation` and `Sunset`.
+    - Interface frontends can send a bearer token cross-origin without cookies. Secret keys stay on the interface backend.
+      Cross-origin reads expose ETag, X-Request-ID, Silicon-Extend-API-Version, Content-Disposition, Content-Range, Deprecation and Sunset.
+
 
     Accounts, devices and custodians (Extend 4)
     - Every Carbon and Silicon is a personal Silicon Accounts account: a permanent `uuid` (a canonical lowercase 128-bit UUIDv4) that
       Extend keys everything on, and a public id (`c:ada`, `si:scout`) that can change. Answers carry both where a
       person is named (`*_uuid` next to the id). A caller may name an account by either; ids resolve through Silicon
       Accounts (current ids only), and an id nobody has is `422 invalid_input`.
-    - A device belongs to the Carbon who paired it. Several Carbons can pair one device (a family TV); each has their
+    - A personal device belongs to the Carbon who paired it. An organization device belongs to the organization. Several Carbons can pair one device (a family TV); each has their
       own pair of it, with its own `device_id`, name, access list, lifetime and activity log. A device is private to
       the Carbon who paired it and the Silicons they give access to: one grant per pair and Silicon.
     - A Silicon has one custodian (a Carbon, set in Silicon Accounts). The custodian sees what its Silicons do in
       Extend (`GET /api/v2/silicons`, their grants, sessions, files and requests) and can stop it; it never acts as the
       Silicon. A Silicon, its custodian and the custodian's other Silicons are one circle: a Silicon is never reached
       from outside its circle unasked (a request goes to the Carbon who gave the holder access instead).
-    - One Silicon uses a physical device at a time, across every pair. A viewer sees only their own side: another side's
+    - One authorized account uses a physical device at a time, across every pair. A viewer sees only their own side: another side's
       Silicon shows as "in use" (`in_use_by_other`), never named.
     - The wake hint: when a device is known not to be awake (or was not awake when last seen), `device_offline`,
       `unsupported_on_device` and a failed command's answer add "<name> isn't awake (<state> since <time>). Its Carbon can
@@ -79,6 +62,8 @@ servers:
 security:
   - bearerAuth: []
 tags:
+  - {name: People, description: Account previews and the caller’s saved address book}
+  - {name: Organizations, description: Organization devices and current team access}
   - {name: System, description: 'Health, version negotiation and contract discovery'}
   - {name: Auth, description: 'Who is signed in with Silicon Accounts, looking up accounts, and signing out'}
   - {name: Enrollment, description: An unpaired Extend app getting and rotating its pairing code}
@@ -98,6 +83,446 @@ tags:
   - {name: Operations, description: Bug reports}
 
 paths:
+  "/openapi.json":
+    get:
+      tags:
+      - System
+      operationId: openApi
+      summary: Complete public HTTP contract
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 document
+          content:
+            application/json:
+              schema:
+                type: object
+  "/api/v2/people":
+    get:
+      tags:
+      - People
+      operationId: suggestPeople
+      summary: Find Carbons and Silicons by fuzzy name or ID, highest saved trust first
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: people
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          "$ref": "#/components/schemas/Person"
+                      contacts_connected:
+                        type: boolean
+                    required:
+                    - items
+                    - contacts_connected
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+      parameters:
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: kind
+        in: query
+        required: false
+        schema:
+          enum:
+          - carbon
+          - silicon
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 12
+  "/api/v2/people/resolve":
+    get:
+      tags:
+      - People
+      operationId: resolvePerson
+      summary: Preview a current account by public ID or UUID, with the caller’s saved
+        name and photo
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: person
+                  data:
+                    "$ref": "#/components/schemas/Person"
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+      parameters:
+      - name: id
+        in: query
+        required: true
+        schema:
+          type: string
+  "/api/v2/contacts/connection":
+    get:
+      tags:
+      - People
+      operationId: contactsConnection
+      summary: Read the caller’s address-book connection
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: contacts_connection
+                  data:
+                    type: object
+                    properties:
+                      connected:
+                        type: boolean
+                    required:
+                    - connected
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+    put:
+      tags:
+      - People
+      operationId: setContactsConnection
+      summary: Connect or disconnect Silicon Contacts for this account
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: contacts_connection
+                  data:
+                    type: object
+                    properties:
+                      connected:
+                        type: boolean
+                    required:
+                    - connected
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  const: contacts_connection
+                data:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                  required:
+                  - enabled
+              required:
+              - type
+              - data
+  "/api/v2/contacts":
+    get:
+      tags:
+      - People
+      operationId: listContacts
+      summary: List saved contacts from the caller’s connected address book
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: contacts
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          "$ref": "#/components/schemas/Person"
+                      offset:
+                        type: integer
+                      limit:
+                        type: integer
+                      total:
+                        type: integer
+                    required:
+                    - items
+                    - offset
+                    - limit
+                    - total
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+      parameters:
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+    post:
+      tags:
+      - People
+      operationId: saveContact
+      summary: Save a contact’s name and trust in Silicon Contacts
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: contact
+                  data:
+                    "$ref": "#/components/schemas/Person"
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  const: contact
+                data:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    trust:
+                      type: integer
+                      minimum: 1
+                      maximum: 255
+                  required:
+                  - id
+                  - name
+                  - trust
+              required:
+              - type
+              - data
+  "/api/v2/contacts/photos/{id}":
+    get:
+      tags:
+      - People
+      operationId: contactPhoto
+      summary: Read one private contact photo in the connected address book
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Private PNG
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        default:
+          "$ref": "#/components/responses/Error"
+  "/api/v2/organizations":
+    get:
+      tags:
+      - Organizations
+      operationId: organizations
+      summary: List current organizations, roles, memberships and eligible team targets
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: organizations
+                  data:
+                    type: object
+                    properties:
+                      account_uuid:
+                        type: string
+                      organizations:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            org_id:
+                              type: string
+                            name:
+                              type: string
+                            capabilities:
+                              type: object
+                              properties:
+                                admin:
+                                  type: boolean
+                                owner:
+                                  type: boolean
+                              required:
+                              - admin
+                              - owner
+                          required:
+                          - org_id
+                          - name
+                          - capabilities
+                      groups:
+                        type: array
+                        items:
+                          type: string
+                      share_targets:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            type:
+                              type: string
+                            id:
+                              type: string
+                            org_id:
+                              type: string
+                            name:
+                              type: string
+                          required:
+                          - type
+                          - id
+                          - org_id
+                          - name
+                    required:
+                    - account_uuid
+                    - organizations
+                    - groups
+                    - share_targets
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+  "/api/v2/devices/{device_id}/teams":
+    put:
+      tags:
+      - Organizations
+      operationId: setDeviceTeams
+      summary: Replace an organization device’s team shares as a current owner or admin
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type:
+                    const: team_access
+                  data:
+                    type: object
+                    properties:
+                      organization_id:
+                        type: string
+                      team_ids:
+                        type: array
+                        items:
+                          type: string
+                      version:
+                        type: integer
+                    required:
+                    - organization_id
+                    - team_ids
+                    - version
+                required:
+                - type
+                - data
+        default:
+          "$ref": "#/components/responses/Error"
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: If-Match
+        in: header
+        schema:
+          type: string
+        description: Quote the device version to guard against a concurrent edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  const: team_access
+                data:
+                  type: object
+                  properties:
+                    team_ids:
+                      type: array
+                      items:
+                        type: string
+                  required:
+                  - team_ids
+              required:
+              - type
+              - data
 
   # ───────────────────────────── System ─────────────────────────────
   /live:
@@ -416,7 +841,7 @@ paths:
       operationId: claimPairingCode
       summary: A Carbon enters a device's pairing code
       description: |
-        Carbons only. Claims a pairing code the Extend app shows: the device becomes the caller's pair of it. The code works
+        A Carbon pairs a personal device. A current organization owner or admin of either account kind can pair an organization device and choose its teams. Claims a pairing code the Extend app shows: the device becomes the caller's pair of it. The code works
         once. A wrong code never reveals whether it exists; 5 wrong codes in 15 minutes are `429 rate_limited`.
         - `silicon_ids` gives those Silicons access at once: any active Silicon, by its current `si:` id or its Silicon
           Accounts uuid. An id nobody has, a Carbon's id, or a Silicon its custodian hasn't accepted yet is `422
@@ -446,6 +871,8 @@ paths:
                     name: {$ref: '#/components/schemas/DeviceName'}
                     visibility: {$ref: '#/components/schemas/Visibility'}
                     pair_ttl_days: {$ref: '#/components/schemas/PairTtlDays'}
+                    organization_id: {type: string, description: "Organization to own this pairing. Requires current organization administration."}
+                    team_ids: {type: array, items: {type: string}, description: "Stable team IDs within organization_id. Personal silicon_ids cannot be combined with these."}
                     silicon_ids:
                       type: array
                       maxItems: 100
@@ -657,11 +1084,12 @@ paths:
         (Carbons, scope `mine`) also lists their removed devices, so their activity logs stay readable. `online` filters
         before paging, so every page but the last is full.
       parameters:
+        - {name: organization_id, in: query, schema: {type: string}, description: Limit to a specific organization}
         - name: scope
           in: query
           schema:
             type: string
-            enum: [mine, accessible]
+            enum: [all, mine, accessible, organization]
             description: '`mine` for a Carbon, `accessible` for a Silicon (each one''s default)'
         - name: online
           in: query
@@ -2441,6 +2869,43 @@ components:
                   data: {$ref: '#/components/schemas/DeviceSelfPatch'}
               - {$ref: '#/components/schemas/DeviceSelfPatch'}
   schemas:
+    Person:
+      type: object
+      properties:
+        uuid:
+          type: string
+        id:
+          type: string
+        type:
+          enum:
+          - carbon
+          - silicon
+        display_name:
+          type: string
+        pfp_url:
+          type:
+          - string
+          - 'null'
+        contact_photo_url:
+          type:
+          - string
+          - 'null'
+          description: Authenticated path on this API; fetch with the Extend bearer token.
+        trust:
+          type: integer
+          minimum: 0
+          maximum: 255
+        blocked:
+          type: boolean
+      required:
+      - uuid
+      - id
+      - type
+      - display_name
+      - pfp_url
+      - contact_photo_url
+      - trust
+      - blocked
     Error:
       type: object
       required: [code, message, request_id]
@@ -2576,6 +3041,13 @@ components:
         `removed_reason`, `online` false, and no `in_use`, `pair_expires_at` or `days_left`. `visibility` is always
         `personal`. Fields marked "owner" appear only in the view of the Carbon who paired this pair.
       properties:
+        organization:
+          type: object
+          required: [id, team_ids, can_manage]
+          properties:
+            id: {type: string}
+            team_ids: {type: array, items: {type: string}, description: Visible to current managers}
+            can_manage: {type: boolean}
         device_id: {$ref: '#/components/schemas/DeviceIdValue'}
         name: {$ref: '#/components/schemas/DeviceName'}
         os: {$ref: '#/components/schemas/DeviceOs'}

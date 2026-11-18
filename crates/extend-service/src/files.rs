@@ -57,7 +57,7 @@ pub struct NewFile<'a> {
     pub name: &'a str,
     pub content_type: &'a str,
     pub bytes: Vec<u8>,
-    pub owner_carbon: Recipient<'a>,
+    pub owner_carbon: Option<Recipient<'a>>,
 }
 
 #[async_trait]
@@ -416,6 +416,14 @@ impl FileStore for BriefcaseFiles {
         let url = self.file_url(silicon.uuid(), &name);
         // The Carbon is named by uuid (Briefcase takes a uuid or a current id; the uuid can't
         // have moved to someone else since the device was paired).
+        let Some(owner) = file.owner_carbon else {
+            return Ok(Stored {
+                file_id,
+                url,
+                shared_with: None,
+                share_error: None,
+            });
+        };
         let share = self
             .call(
                 &proof,
@@ -424,17 +432,17 @@ impl FileStore for BriefcaseFiles {
                     "operation_id": trash_operation_id(file.operation_id),
                     "entry_id": file_id,
                     "invitation": {
-                        "principal": {"type": "carbon", "id": file.owner_carbon.uuid},
+                        "principal": {"type": "carbon", "id": owner.uuid},
                         "access": ["read", "update"],
                         "inherit": true,
                     },
                 }),
-                &format!("share {} with {}", file.name, file.owner_carbon.id),
+                &format!("share {} with {}", file.name, owner.id),
                 who,
             )
             .await;
         let (shared_with, share_error) = match share {
-            Ok(_) => (Some(file.owner_carbon.uuid.to_owned()), None),
+            Ok(_) => (Some(owner.uuid.to_owned()), None),
             Err(e) => (None, Some(format!("{} {}", e.0.message, e.0.hint.unwrap_or_default()))),
         };
         Ok(Stored {
@@ -533,7 +541,7 @@ impl FileStore for LocalFiles {
         Ok(Stored {
             file_id,
             url: format!("{}/dev/files/{file_id}", self.public_url),
-            shared_with: Some(file.owner_carbon.uuid.to_owned()),
+            shared_with: file.owner_carbon.map(|r| r.uuid.to_owned()),
             share_error: None,
         })
     }
