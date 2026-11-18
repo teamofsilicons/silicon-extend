@@ -592,10 +592,10 @@ pub async fn update(
     headers: HeaderMap,
     Body(patch): Body<DevicePatch>,
 ) -> AppResult<Response> {
-    let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
-    if patch.in_use_indicator.is_some() && d.organization_id().is_none() {
-        auth.require_carbon()?;
+    if patch.in_use_indicator.is_some() {
+        domain::require_personal_carbon(&state, &auth, &device_id).await?;
     }
+    let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     if patch.name.is_none() && patch.pair_ttl_days.is_none() && patch.in_use_indicator.is_none() {
         if patch.visibility.is_some() {
             check_visibility(patch.visibility)?;
@@ -800,6 +800,7 @@ pub async fn attach(
     headers: HeaderMap,
     Body(input): Body<AttachmentCreate>,
 ) -> AppResult<Response> {
+    domain::require_personal_carbon(&state, &auth, &host_id).await?;
     let host = domain::owned_device(&state, &auth.world, &host_id, &auth.p).await?;
     check_visibility(input.visibility)?;
     if !input.os.needs_host() {
@@ -995,6 +996,7 @@ pub async fn setup_retry(
     Path(device_id): Path<String>,
     body: Bytes,
 ) -> AppResult<Response> {
+    domain::require_personal_carbon(&state, &auth, &device_id).await?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let input: SetupRetryInput = if body.iter().all(u8::is_ascii_whitespace) {
         SetupRetryInput::all()
@@ -1551,10 +1553,11 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
         Some(s) => super::silicons::looked_after(&state, &auth, s).await?.uuid,
     };
     let dir = q.direction.as_deref().unwrap_or("all");
+    let recipient = "((r.to_id=$1 AND r.routed_to='holder') OR (r.routed_to_id=$1 AND r.routed_to='carbon'))";
     let who = match dir {
-        "sent" => "r.from_id = $1",
-        "received" => "(r.to_id = $1 AND r.routed_to = 'holder')",
-        "all" => "(r.from_id = $1 OR (r.to_id = $1 AND r.routed_to = 'holder'))",
+        "sent" => "r.from_id = $1".to_owned(),
+        "received" => recipient.to_owned(),
+        "all" => format!("(r.from_id = $1 OR {recipient})"),
         other => {
             return Err(AppError::invalid(format!(
                 "direction must be sent, received or all; got {other:?}."
@@ -1573,7 +1576,7 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
     ];
     let mut cond = format!(
         "{who} AND EXISTS (SELECT 1 FROM {devices} d WHERE d.device_id = {pair} AND (
-            (d.owner_id NOT LIKE 'organization:%' AND EXISTS (SELECT 1 FROM {grants} a WHERE a.device_id=d.device_id AND a.silicon_id=$1))
+            (d.owner_id NOT LIKE 'organization:%' AND (d.owner_id=$1 OR EXISTS (SELECT 1 FROM {grants} a WHERE a.device_id=d.device_id AND a.silicon_id=$1)))
             OR d.device_id IN (SELECT jsonb_array_elements_text($2::jsonb))))",
         devices=auth.world.t("devices"), grants=auth.world.t("device_access")
     );

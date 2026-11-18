@@ -482,6 +482,12 @@ pub async fn readable_device(
 
 async fn require_owner(state: &AppState, d: DeviceRow, access: Access) -> AppResult<DeviceRow> {
     if access != Access::Owner {
+        if d.organization_id().is_some() {
+            return Err(AppError::new(
+                ErrorCode::NotOwner,
+                "Only an owner or admin of this organization can manage the device.",
+            ));
+        }
         let owner = state.accounts.directory.public_id(&d.owner_id).await;
         return Err(AppError::new(
             ErrorCode::NotOwner,
@@ -489,6 +495,22 @@ async fn require_owner(state: &AppState, d: DeviceRow, access: Access) -> AppRes
         ));
     }
     Ok(d)
+}
+
+/// The legacy personal management routes require a Carbon even before a pair is visible.
+pub async fn require_personal_carbon(state: &AppState, auth: &crate::state::Auth, id: &str) -> AppResult<()> {
+    if auth.p.is_silicon() {
+        let organization: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM extend.devices WHERE device_id=$1 AND owner_id LIKE 'organization:%')",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !organization {
+            auth.require_carbon()?;
+        }
+    }
+    Ok(())
 }
 
 /// A paired device the caller owns, for changing it.

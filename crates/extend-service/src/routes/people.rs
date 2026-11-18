@@ -290,10 +290,10 @@ async fn exact(state: &AppState, p: &Principal, id: &str, with_contacts: bool) -
         }
     }
     // Contacts has directory permission for public names/photos of accounts new to Extend.
-    if row.pfp_url.as_deref().unwrap_or("").is_empty() {
-        if let Ok(a) = upstream(state, p, &["lookup"], &[("q", row.uuid.clone())], None).await {
-            return Person::from_account(&a);
-        }
+    if row.pfp_url.as_deref().unwrap_or("").is_empty()
+        && let Ok(a) = upstream(state, p, &["lookup"], &[("q", row.uuid.clone())], None).await
+    {
+        return Person::from_account(&a);
     }
     Ok(Person {
         id: row.id.clone(),

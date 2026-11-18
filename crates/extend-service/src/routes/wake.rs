@@ -531,6 +531,7 @@ pub async fn answer(
     headers: HeaderMap,
     Body(input): Body<WakeAnswer>,
 ) -> AppResult<Response> {
+    domain::require_personal_carbon(&state, &auth, &device_id).await?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let hash = hash_json(&input);
     let (st, world, p) = (state.clone(), auth.world.clone(), auth.p.clone());
@@ -617,6 +618,7 @@ pub async fn settings(
     Path(device_id): Path<String>,
     Body(input): Body<WakeSettings>,
 ) -> AppResult<Response> {
+    domain::require_personal_carbon(&state, &auth, &device_id).await?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let world = &auth.world;
     if input.team.is_some() {
