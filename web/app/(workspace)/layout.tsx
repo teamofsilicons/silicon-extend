@@ -3,7 +3,6 @@
  * hosted sign-in, coming back to this page), then the providers (query client, toasts, squircles, the session keeper)
  * and the app shell (sidebar, top bar, ⌘K, account menu). One instance stays mounted while you move between pages.
  */
-import {redirect} from "next/navigation";
 import type { ReactNode } from "react";
 import { Providers } from "@/components/foundation/providers";
 import { AppShell } from "@/components/foundation/shell/app-shell";
@@ -12,7 +11,6 @@ import { accountsOrigin } from "@/lib/server/site";
 
 export default async function WorkspaceLayout({ children }: { children: ReactNode }) {
   const session = await requireSession();
-  if(session.account.kind !== "carbon") redirect("/sign-in?error=carbon_required");
   return (
     <Providers session={{ signedIn: true, account: session.account, expiresAt: session.expiresAt }}>
       <AppShell account={session.account} accountsUrl={accountsOrigin()}>
