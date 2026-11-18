@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { appConfig } from "../lib/app.config";
 import { seal, unseal } from "../lib/server/seal";
+import { locateSession } from "../lib/server/refresh-state";
 import type { StoredSession } from "../lib/server/session";
 
 export { appConfig };
@@ -142,6 +143,12 @@ export async function storedSession(context: BrowserContext): Promise<{ session:
 export async function putSession(context: BrowserContext, session: StoredSession, expiresInMs?: number): Promise<void> {
   const cookie = (await context.cookies(BASE)).find(entry => entry.name === SESSION_COOKIE)!;
   const value = expiresInMs === undefined ? session : { ...session, ae: Date.now() + expiresInMs };
+  if (expiresInMs !== undefined) {
+    const {store, key, entry} = await locateSession(session);
+    if (entry.value.session.rt === session.rt) {
+      expect(await store.write(key, entry.version, {...entry.value, session: value}, value.re)).toBe(true);
+    }
+  }
   await context.addCookies([{ ...cookie, value: seal(value, "session", process.env.E2E_SESSION_SECRET!) }]);
 }
 
