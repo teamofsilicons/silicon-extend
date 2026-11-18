@@ -1546,19 +1546,9 @@ pub async fn requests_for_device(
 /// A Silicon's requests: those it sent, and those sent to it, on devices it still has access to.
 /// A Carbon sees a Silicon they look after this way with `?silicon=`.
 pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Query<PageQuery>) -> AppResult<Response> {
-    let silicon = match (&q.silicon, auth.p.is_silicon()) {
-        (None, true) => auth.p.uuid().to_owned(),
-        (Some(s), false) => super::silicons::looked_after(&state, &auth, s).await?.uuid,
-        (Some(_), true) => {
-            return Err(AppError::invalid(
-                "A Silicon sees its own requests; leave out ?silicon=.",
-            ));
-        }
-        (None, false) => {
-            return Err(AppError::invalid(
-                "A Carbon sees the requests on their devices with GET /api/v2/devices/{device_id}/requests, or a Silicon they look after's with ?silicon=<si:id>.",
-            ));
-        }
+    let subject = match &q.silicon {
+        None => auth.p.uuid().to_owned(),
+        Some(s) => super::silicons::looked_after(&state, &auth, s).await?.uuid,
     };
     let dir = q.direction.as_deref().unwrap_or("all");
     let who = match dir {
@@ -1571,17 +1561,27 @@ pub async fn my_requests(State(state): State<Shared>, auth: Auth, Query(q): Quer
             )));
         }
     };
-    let mut binds = vec![silicon.clone()];
+    let org_devices = if q.silicon.is_none() {
+        crate::organizations::visible_ids(&state, &auth.p).await?.0
+    } else {
+        Vec::new()
+    };
+    let pair = "CASE WHEN r.from_id = $1 THEN r.device_id ELSE COALESCE(r.holder_device_id, r.device_id) END";
+    let mut binds = vec![
+        subject.clone(),
+        serde_json::to_string(&org_devices).map_err(AppError::internal)?,
+    ];
     let mut cond = format!(
-        "{who} AND EXISTS (SELECT 1 FROM {} a WHERE a.device_id = CASE WHEN r.from_id = $1 THEN r.device_id ELSE COALESCE(r.holder_device_id, r.device_id) END
-                                              AND a.silicon_id = $1)",
-        auth.world.t("device_access")
+        "{who} AND EXISTS (SELECT 1 FROM {devices} d WHERE d.device_id = {pair} AND (
+            (d.owner_id NOT LIKE 'organization:%' AND EXISTS (SELECT 1 FROM {grants} a WHERE a.device_id=d.device_id AND a.silicon_id=$1))
+            OR d.device_id IN (SELECT jsonb_array_elements_text($2::jsonb))))",
+        devices=auth.world.t("devices"), grants=auth.world.t("device_access")
     );
     if let Some(d) = &q.device_id {
         binds.push(d.clone());
-        cond.push_str(" AND r.device_id = $2");
+        cond.push_str(" AND r.device_id = $3");
     }
-    request_page(&state, &auth.world, &silicon, &cond, binds, &q).await
+    request_page(&state, &auth.world, &subject, &cond, binds, &q).await
 }
 
 /// Longest a request reason may be including the whitespace around it, which is kept and
@@ -1713,7 +1713,10 @@ pub async fn request_send(
                 ));
             }
             let directory = &st.accounts.directory;
-            let to_holder = holder_pair == d.device_id && directory.same_circle(p.uuid(), &holder).await;
+            if holder_pair != d.device_id && (d.organization_id().is_some() || holder_carbon.starts_with(crate::organizations::PREFIX)) {
+                return Err(AppError::new(ErrorCode::DeviceInUse, "This device is in use through another pairing. Try again after that session ends."));
+            }
+            let to_holder = holder_pair == d.device_id && (d.organization_id().is_some() || directory.same_circle(p.uuid(), &holder).await);
             let fold_key = serde_json::to_string(&(&device_id, p.uuid(), &session, &reason)).map_err(AppError::internal)?;
             let app_id = st.notifier.app_id().to_owned();
             let mut tx = begin_request_fold(&st, &fold_key).await?;

@@ -158,6 +158,11 @@ pub async fn share(
     let org = device
         .organization_id()
         .ok_or_else(|| AppError::invalid("Choose an organization-owned device."))?;
+    if device.host_device_id.is_some() {
+        return Err(AppError::invalid(
+            "Change team access on the host device. Attached devices inherit its teams.",
+        ));
+    }
     let ctx = context(&state, &auth.p).await?;
     let teams = ctx.team_keys(org, &update.team_ids)?;
     crate::routes::devices::if_match(&headers, device.version)?;
@@ -171,6 +176,8 @@ pub async fn share(
             "Device settings changed. Refresh the device and retry.",
         )
     })?;
+    sqlx::query("UPDATE extend.devices SET shared_teams=$2, version=version+1 WHERE host_device_id=$1 AND owner_id=$3 AND removed_at IS NULL")
+        .bind(&id).bind(&teams).bind(&device.owner_id).execute(&mut *tx).await?;
     tx.commit().await?;
     domain::log(
         &state,

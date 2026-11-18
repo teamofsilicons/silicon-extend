@@ -40,7 +40,9 @@ info:
       Cross-origin reads expose ETag, X-Request-ID, Silicon-Extend-API-Version, Content-Disposition, Content-Range, Deprecation and Sunset.
 
 
-    Accounts, devices and custodians (Extend 4)
+    Organization work accounts use their own Accounts UUID. Owners and admins manage organization pairings. Every current Carbon and Silicon in a shared team can operate the device. Attached devices inherit team changes from their host.
+
+    Personal accounts, devices and custodians (Extend 4)
     - Every Carbon and Silicon is a personal Silicon Accounts account: a permanent `uuid` (a canonical lowercase 128-bit UUIDv4) that
       Extend keys everything on, and a public id (`c:ada`, `si:scout`) that can change. Answers carry both where a
       person is named (`*_uuid` next to the id). A caller may name an account by either; ids resolve through Silicon

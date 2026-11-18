@@ -489,15 +489,20 @@ pub async fn cancel(
     };
     let id: Uuid = wake_id.parse().map_err(|_| not_found())?;
     let w = wake::load(&state, &auth.world, id).await.ok_or_else(not_found)?;
-    let allowed = if auth.p.is_silicon() {
+    if w.device_id != device_id {
+        return Err(not_found());
+    }
+    let d = domain::load_device(&state, &auth.world, &device_id)
+        .await?
+        .ok_or_else(not_found)?;
+    let allowed = if d.organization_id().is_some() || auth.p.is_silicon() {
         w.from_id == auth.p.uuid()
-            && domain::visible_device(&state, &auth.world, &device_id, &auth.p)
-                .await
-                .is_ok()
+            && d.removed_at.is_none()
+            && domain::access_of(&state, &auth.world, &d, &auth.p).await?.is_some()
     } else {
         state.accounts.directory.is_custodian(auth.p.uuid(), &w.from_id).await
     };
-    if !allowed || w.device_id != device_id {
+    if !allowed {
         return Err(not_found());
     }
     if w.state != "open" {
@@ -526,7 +531,6 @@ pub async fn answer(
     headers: HeaderMap,
     Body(input): Body<WakeAnswer>,
 ) -> AppResult<Response> {
-    auth.require_carbon()?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let hash = hash_json(&input);
     let (st, world, p) = (state.clone(), auth.world.clone(), auth.p.clone());
@@ -613,7 +617,6 @@ pub async fn settings(
     Path(device_id): Path<String>,
     Body(input): Body<WakeSettings>,
 ) -> AppResult<Response> {
-    auth.require_carbon()?;
     let d = domain::owned_device(&state, &auth.world, &device_id, &auth.p).await?;
     let world = &auth.world;
     if input.team.is_some() {

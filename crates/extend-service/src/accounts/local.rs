@@ -583,7 +583,7 @@ impl AccountsApi for LocalAccounts {
         });
         let value = match active {
             Some(c) => {
-                json!({"active": true, "sub": c["sub"], "aud": c["aud"], "client_id": c["aud"], "exp": c["exp"], "iat": c["iat"],
+                json!({"active": true, "sub": c["sub"], "aud": c["aud"], "client_id": self.app_id, "exp": c["exp"], "iat": c["iat"],
                               "kind": c["kind"], "id": c["id"], "token_type": "access_token", "iss": self.issuer})
             }
             None => json!({"active": false}),

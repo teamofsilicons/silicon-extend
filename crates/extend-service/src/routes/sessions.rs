@@ -502,6 +502,16 @@ async fn visible_session(
         .await?
         .ok_or_else(not_found)?;
     let access = domain::access_of(state, &auth.world, &d, &auth.p).await?;
+    if s.silicon_id == auth.p.uuid() && d.organization_id().is_some() && access.is_none() && s.ended_at.is_none() {
+        domain::end_session(
+            state,
+            &auth.world,
+            session_id,
+            EndReason::AccessRemoved,
+            &domain::system_member(),
+        )
+        .await?;
+    }
     let seer = if s.silicon_id == auth.p.uuid() && crate::organizations::can_use(&d, access) {
         Some(Seer::Silicon)
     } else if access == Some(Access::Owner) {
@@ -821,6 +831,19 @@ async fn authorized_session(
     auth: &Auth,
     session_id: &str,
 ) -> AppResult<(SessionRow, domain::DeviceRow)> {
+    if auth.p.is_carbon() {
+        let own_org_session: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM extend.sessions s JOIN extend.devices d USING (device_id)
+                WHERE s.session_id=$1 AND s.silicon_id=$2 AND d.owner_id LIKE 'organization:%')",
+        )
+        .bind(session_id)
+        .bind(auth.p.uuid())
+        .fetch_one(&state.pool)
+        .await?;
+        if !own_org_session {
+            auth.require_silicon()?;
+        }
+    }
     let (s, d, seer) = visible_session(state, auth, session_id).await?;
     if seer != Seer::Silicon {
         let shown = state.accounts.directory.public_id(&s.silicon_id).await;
